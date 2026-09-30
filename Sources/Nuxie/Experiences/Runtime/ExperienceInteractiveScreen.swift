@@ -1147,10 +1147,35 @@ final class ExperiencePresentationWarmReservation: @unchecked Sendable {
     }
 }
 
+/// Releases evicted native preparations away from the caller's thread.
+///
+/// A prepared release owns a pinned native thread whose deinit joins that
+/// thread (`NuxieRuntimePinnedThreadExecutor.deinit` calls `stopAndWait`).
+/// The final reference must never drop on the cache actor's cooperative
+/// thread or on the main thread, so evicted entries are handed here and
+/// released on a serial utility queue.
+enum NativePreparationDisposer {
+    private static let queue = DispatchQueue(
+        label: "com.nuxie.preparation.disposal",
+        qos: .utility
+    )
+
+    static func dispose(_ values: [any Sendable]) {
+        guard !values.isEmpty else { return }
+        queue.async {
+            withExtendedLifetime(values) {}
+        }
+    }
+}
+
 /// Coalesces immutable native preparation independently from mutable screen
 /// sessions. Portable catalog inspection is keyed by the authenticated scene
 /// digest, while configured preparation is keyed by the exact signed release
 /// provenance supplied by the loader.
+///
+/// There is no count or byte cap. An entry leaves only through
+/// `retainPreparations(for:)`, `removeAll()`, or its own failure; the owner
+/// (JourneyPreparedReleaseStore) decides which releases stay prepared.
 actor ExperienceInteractivePreparationCache {
     typealias Inspector = @Sendable (
         Data
@@ -1181,25 +1206,19 @@ actor ExperienceInteractivePreparationCache {
 
     private var inspectionsByRIVDigest: [String: InspectionEntry] = [:]
     private var preparationsByProvenance: [String: PreparationEntry] = [:]
-    private var completedRIVInspections: Set<String> = []
     private var preparedProvenances: Set<String> = []
-    private var preparationReservations: [String: Set<UUID>] = [:]
     private var resourceMetricsByProvenance: [
         String: JourneyReleaseResourceMetrics
     ] = [:]
     private var unreportedResourceMetricsByProvenance: [
         String: UnreportedResourceMetrics
     ] = [:]
-    private var inspectionRecency: [String] = []
-    private var preparationRecency: [String] = []
     private var inspectionCount = 0
     private var configuredPreparationCount = 0
-    private let maximumRetainedPreparations: Int
     private let inspectAssets: Inspector
     private let preparePayload: Preparer
 
     init(
-        maximumRetainedPreparations: Int = 4,
         inspectAssets: @escaping Inspector = { bytes in
             try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
         },
@@ -1210,8 +1229,6 @@ actor ExperienceInteractivePreparationCache {
             )
         }
     ) {
-        precondition(maximumRetainedPreparations > 0)
-        self.maximumRetainedPreparations = maximumRetainedPreparations
         self.inspectAssets = inspectAssets
         self.preparePayload = preparePayload
     }
@@ -1222,7 +1239,6 @@ actor ExperienceInteractivePreparationCache {
         resourceMetricOwner: JourneyReleaseResourceMetricOwner = .presentation
     ) async throws -> ExperienceInteractivePreparation {
         if let existing = preparationsByProvenance[provenance] {
-            markPreparationRecentlyUsed(provenance)
             return try await preparationValue(existing, provenance: provenance)
         }
         let entry = PreparationEntry(
@@ -1241,7 +1257,6 @@ actor ExperienceInteractivePreparationCache {
             }
         )
         preparationsByProvenance[provenance] = entry
-        markPreparationRecentlyUsed(provenance)
         configuredPreparationCount += 1
         return try await preparationValue(entry, provenance: provenance)
     }
@@ -1255,7 +1270,6 @@ actor ExperienceInteractivePreparationCache {
             guard preparationsByProvenance[provenance]?.id == entry.id else {
                 throw CancellationError()
             }
-            markPreparationRecentlyUsed(provenance)
             preparedProvenances.insert(provenance)
             if resourceMetricsByProvenance[provenance] == nil {
                 let ownsInspection = inspectionsByRIVDigest[entry.rivDigest]?
@@ -1279,36 +1293,39 @@ actor ExperienceInteractivePreparationCache {
                         metrics: metrics
                     )
             }
-            evictPreparationsBeyondLimit()
             return value
         } catch {
             if preparationsByProvenance[provenance]?.id == entry.id {
-                evictPreparation(provenance)
+                NativePreparationDisposer.dispose(evictPreparation(provenance))
             }
             throw error
         }
     }
 
     func removeAll() {
-        for entry in inspectionsByRIVDigest.values { entry.task.cancel() }
-        for entry in preparationsByProvenance.values { entry.task.cancel() }
+        var removed: [any Sendable] = []
+        for entry in inspectionsByRIVDigest.values {
+            entry.task.cancel()
+            removed.append(entry.task)
+        }
+        for entry in preparationsByProvenance.values {
+            entry.task.cancel()
+            removed.append(entry.task)
+        }
         inspectionsByRIVDigest.removeAll()
-        completedRIVInspections.removeAll()
-        inspectionRecency.removeAll()
         preparationsByProvenance.removeAll()
-        preparationRecency.removeAll()
         preparedProvenances.removeAll()
-        preparationReservations.removeAll()
         resourceMetricsByProvenance.removeAll()
         unreportedResourceMetricsByProvenance.removeAll()
+        NativePreparationDisposer.dispose(removed)
     }
 
     func retainPreparations(for provenances: Set<String>) {
-        let evicted = preparationsByProvenance.filter {
-            !provenances.contains($0.key)
-        }
-        for (provenance, _) in evicted {
-            evictPreparation(provenance)
+        var removed: [any Sendable] = []
+        for provenance in Array(preparationsByProvenance.keys) where
+            !provenances.contains(provenance)
+        {
+            removed.append(contentsOf: evictPreparation(provenance))
         }
         preparedProvenances.formIntersection(provenances)
         resourceMetricsByProvenance = resourceMetricsByProvenance.filter {
@@ -1324,75 +1341,26 @@ actor ExperienceInteractivePreparationCache {
         for rivDigest in Array(inspectionsByRIVDigest.keys) where
             !retainedRIVDigests.contains(rivDigest)
         {
-            evictInspection(rivDigest)
+            removed.append(contentsOf: evictInspection(rivDigest))
         }
+        NativePreparationDisposer.dispose(removed)
     }
 
-    private func markPreparationRecentlyUsed(_ provenance: String) {
-        preparationRecency.removeAll { $0 == provenance }
-        preparationRecency.append(provenance)
-    }
-
-    private func evictPreparationsBeyondLimit() {
-        while preparedProvenances.count > maximumRetainedPreparations,
-              let leastRecentlyUsed = preparationRecency.first(where: {
-                  preparedProvenances.contains($0)
-                      && preparationReservations[$0, default: []].isEmpty
-              }) {
-            evictPreparation(leastRecentlyUsed)
-        }
-    }
-
-    private func evictPreparation(_ provenance: String) {
-        preparationsByProvenance.removeValue(forKey: provenance)?.task.cancel()
-        preparationRecency.removeAll { $0 == provenance }
+    /// Removes one provenance and returns its task so the caller hands the
+    /// final reference to `NativePreparationDisposer`.
+    private func evictPreparation(_ provenance: String) -> [any Sendable] {
+        let removed = preparationsByProvenance.removeValue(forKey: provenance)
+        removed?.task.cancel()
         preparedProvenances.remove(provenance)
-        preparationReservations[provenance] = nil
         resourceMetricsByProvenance[provenance] = nil
         unreportedResourceMetricsByProvenance[provenance] = nil
+        return removed.map { [$0.task] } ?? []
     }
 
-    func reservePrepared(
-        provenance: String
-    ) -> ExperiencePresentationWarmReservation? {
-        guard preparedProvenances.contains(provenance),
-              preparationsByProvenance[provenance] != nil else {
-            return nil
-        }
-        let id = UUID()
-        preparationReservations[provenance, default: []].insert(id)
-        markPreparationRecentlyUsed(provenance)
-        return ExperiencePresentationWarmReservation { [weak self] in
-            Task { await self?.releaseReservation(id, provenance: provenance) }
-        }
-    }
-
-    private func releaseReservation(_ id: UUID, provenance: String) {
-        preparationReservations[provenance]?.remove(id)
-        if preparationReservations[provenance]?.isEmpty == true {
-            preparationReservations[provenance] = nil
-        }
-        evictPreparationsBeyondLimit()
-    }
-
-    private func markInspectionRecentlyUsed(_ rivDigest: String) {
-        inspectionRecency.removeAll { $0 == rivDigest }
-        inspectionRecency.append(rivDigest)
-    }
-
-    private func evictInspectionsBeyondLimit() {
-        while completedRIVInspections.count > maximumRetainedPreparations,
-              let leastRecentlyUsed = inspectionRecency.first(where: {
-                  completedRIVInspections.contains($0)
-              }) {
-            evictInspection(leastRecentlyUsed)
-        }
-    }
-
-    private func evictInspection(_ rivDigest: String) {
-        inspectionsByRIVDigest.removeValue(forKey: rivDigest)?.task.cancel()
-        completedRIVInspections.remove(rivDigest)
-        inspectionRecency.removeAll { $0 == rivDigest }
+    private func evictInspection(_ rivDigest: String) -> [any Sendable] {
+        let removed = inspectionsByRIVDigest.removeValue(forKey: rivDigest)
+        removed?.task.cancel()
+        return removed.map { [$0.task] } ?? []
     }
 
     func status(for provenance: String) -> ExperienceInteractivePreparationCacheStatus {
@@ -1446,7 +1414,6 @@ actor ExperienceInteractivePreparationCache {
         bytes: Data
     ) async throws -> [NuxieNativeFileAssetDescriptor] {
         if let existing = inspectionsByRIVDigest[rivDigest] {
-            markInspectionRecentlyUsed(rivDigest)
             return try await existing.task.value
         }
         let entry = InspectionEntry(
@@ -1458,20 +1425,16 @@ actor ExperienceInteractivePreparationCache {
             }
         )
         inspectionsByRIVDigest[rivDigest] = entry
-        markInspectionRecentlyUsed(rivDigest)
         inspectionCount += 1
         do {
             let value = try await entry.task.value
             guard inspectionsByRIVDigest[rivDigest]?.id == entry.id else {
                 throw CancellationError()
             }
-            markInspectionRecentlyUsed(rivDigest)
-            completedRIVInspections.insert(rivDigest)
-            evictInspectionsBeyondLimit()
             return value
         } catch {
             if inspectionsByRIVDigest[rivDigest]?.id == entry.id {
-                evictInspection(rivDigest)
+                NativePreparationDisposer.dispose(evictInspection(rivDigest))
             }
             throw error
         }
@@ -1495,10 +1458,6 @@ struct ExperienceInteractivePreparationHandle: Sendable {
 
     func status() async -> ExperienceInteractivePreparationCacheStatus {
         await cache.status(for: provenance)
-    }
-
-    func reserveIfPrepared() async -> ExperiencePresentationWarmReservation? {
-        await cache.reservePrepared(provenance: provenance)
     }
 
     func resourceMetrics() async -> JourneyReleaseResourceMetrics {
