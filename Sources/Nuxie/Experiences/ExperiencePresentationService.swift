@@ -259,15 +259,26 @@ final class ExperiencePresentationService {
         let shell = experienceViewController.experience.shellContract(
             screenId: initialScreenID
         )
-        try await requireOwnedPresentation(
-            presentationID,
-            attemptGeneration: attemptGeneration,
-            fallbackWindow: window
+        // Hold the prepared release for the whole show, so later screens hit
+        // the same prepared release, and learn whether this show can skip the
+        // loading shimmer.
+        let preparedRelease = await experienceService.reservePreparedRelease(
+            for: experienceViewController.experience
         )
+        do {
+            try await requireOwnedPresentation(
+                presentationID,
+                attemptGeneration: attemptGeneration,
+                fallbackWindow: window
+            )
+        } catch {
+            preparedRelease.reservation?.release()
+            throw error
+        }
         experienceViewController.configurePresentationShell(
             shell,
-            suppressLoadingTreatment: false,
-            warmReservation: nil
+            readiness: preparedRelease.readiness,
+            warmReservation: preparedRelease.reservation
         )
 
         // Every presentation builds a new controller and owns freshly opened
@@ -284,7 +295,10 @@ final class ExperiencePresentationService {
         // 6. Present experience
         let shellPresentationSpan = traceContext?.begin(
             .displayPresentation,
-            attributes: ["phase": "shell"]
+            attributes: [
+                "phase": "shell",
+                "readiness": preparedRelease.readiness.rawValue,
+            ]
         )
         await window.present(experienceViewController, shell: shell)
         do {
