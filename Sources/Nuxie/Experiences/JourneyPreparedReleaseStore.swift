@@ -327,6 +327,25 @@ actor JourneyPreparedReleaseStore {
         }
     }
 
+    /// Read-only view of the store's bookkeeping, for tests.
+    struct Inspection: Equatable, Sendable {
+        let ownerDistinctId: String?
+        let armed: Set<String>
+        let pending: [String]
+        let entries: Set<String>
+        let reserved: Set<String>
+    }
+
+    func inspection() -> Inspection {
+        Inspection(
+            ownerDistinctId: ownerDistinctId,
+            armed: armed,
+            pending: pending,
+            entries: Set(entries.keys),
+            reserved: Set(reservations.keys)
+        )
+    }
+
     // MARK: - Lane
 
     private var retainedDescriptors: Set<String> {
