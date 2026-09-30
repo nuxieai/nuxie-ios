@@ -32,6 +32,7 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: CoreText.framework
       - sdk: ImageIO.framework
+      - sdk: CoreVideo.framework
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime
@@ -61,6 +62,7 @@ targets:
       - sdk: CoreText.framework
       - sdk: CryptoKit.framework
       - sdk: ImageIO.framework
+      - sdk: CoreVideo.framework
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.macos
@@ -102,6 +104,7 @@ targets:
       - sdk: Metal.framework
       - sdk: CoreGraphics.framework
       - sdk: ImageIO.framework
+      - sdk: CoreVideo.framework
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk
@@ -148,6 +151,7 @@ targets:
       - sdk: Metal.framework
       - sdk: CoreGraphics.framework
       - sdk: ImageIO.framework
+      - sdk: CoreVideo.framework
       - sdk: Security.framework
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.macos
