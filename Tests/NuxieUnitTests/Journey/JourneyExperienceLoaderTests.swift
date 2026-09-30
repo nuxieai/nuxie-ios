@@ -4,6 +4,98 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyExperienceLoaderTests: JourneyTestCase {
+    #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    /// A show of a release the background lane already prepared is a lookup.
+    /// Disk and network are made physically unavailable before the show, so
+    /// its success proves it read nothing.
+    func testPreparedShowReadsNothingAndPreparesNothing() async throws {
+        let directory = temporaryDirectory()
+        defer {
+            StubURLProtocol.reset()
+            removeTemporaryDirectoryIfPresent(directory)
+        }
+        let fixture = experiencePreparationRepositoryRoot()
+            .appendingPathComponent("fixtures/journeys/rendered-purchase-navigation")
+        let requests = JourneyArtifactRequestCounter()
+        let snapshot = try await authenticatedFixtureSnapshot(
+            at: fixture,
+            profileBytes: signedReleaseEntryProfileBytes(
+                fixture: fixture,
+                host: "purchase.sdk-fixtures.nuxie.test"
+            ),
+            onRequest: { requests.increment() }
+        )
+        let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
+        let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
+        let acquisition = JourneyReleaseAcquisitionStore(
+            cacheDirectory: directory,
+            urlSession: TestURLSessionProvider.createTestSession()
+        )
+        let experiences = ExperienceService(
+            productService: ProductService(),
+            eventLog: MockEventLog(),
+            transactionServiceProvider: {
+                fatalError("preparation needs no transaction service")
+            },
+            systemEventSink: DiscardingSystemEventSink(),
+            releaseStore: acquisition,
+            automaticPreparation: true
+        )
+        let store = experiences.preparedReleaseStore
+
+        let preparedProfile = try await experiences.prepareJourneyProfile(snapshot)
+        let committed = await experiences.commitJourneyProfile(
+            preparedProfile,
+            ownerDistinctId: "customer",
+            generation: 1,
+            admission: nil
+        )
+        XCTAssertTrue(committed)
+        await experiences.waitForPreparationIdle()
+        let preparedStatus = await store.cache.status(for: release.descriptorSHA256)
+        XCTAssertEqual(preparedStatus, .prepared)
+        let metricsBefore = await store.cache.metrics()
+        let requestsBefore = requests.value
+        XCTAssertGreaterThan(requestsBefore, 0)
+
+        for file in try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) {
+            try FileManager.default.removeItem(at: file)
+        }
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: { _ in true }) { _ in
+            requests.increment()
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let presentation = try await acquisition.preparePresentation(
+            release: release,
+            delivery: snapshot.profile.delivery,
+            pinnedArtifacts: nil,
+            preparedReleases: store,
+            productResolver: { _ in [] }
+        )
+        let artifact = try await presentation.artifactLoader(
+            presentation.experience,
+            nil,
+            screenID
+        )
+        _ = try await artifact.interactivePreparation.preparation()
+
+        XCTAssertEqual(requests.value, requestsBefore)
+        XCTAssertEqual(artifact.resourceMetrics, .zero)
+        XCTAssertEqual(artifact.preparedReleaseOutcome, .hit)
+        let metricsAfter = await store.cache.metrics()
+        XCTAssertEqual(
+            metricsAfter.configuredPreparationCount,
+            metricsBefore.configuredPreparationCount
+        )
+        await experiences.shutdownPreparation()
+    }
+    #endif
+
     func testRenderedProductBoundScreenResolvesItsAuthenticatedStoreKitPlacements() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }

@@ -129,6 +129,92 @@ private actor RejectingHighWaterCommitStore {
 extension RejectingHighWaterCommitStore: JourneyReleaseHighWaterStore {}
 
 final class JourneyProfileServiceTests: JourneyTestCase {
+    #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    /// Profile admission hands releases to background preparation as
+    /// bookkeeping only: the commit lands while the preparer is still held.
+    /// A later withdrawal drops the prepared release.
+    func testCommitDoesNotWaitForPreparationAndWithdrawalDropsPreparedReleases() async throws {
+        let directory = temporaryDirectory()
+        defer {
+            StubURLProtocol.reset()
+            removeTemporaryDirectoryIfPresent(directory)
+        }
+        let fixture = experiencePreparationRepositoryRoot()
+            .appendingPathComponent("Tests/ExperienceRuntimeHostApp/Fixtures/multi-screen")
+        let profileBytes = try Data(contentsOf: fixture.appendingPathComponent("profile.json"))
+        let profile = try JourneyPlaneProfile.decode(profileBytes)
+        let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
+        StubURLProtocol.reset()
+        serveSignedFixtureObjects(at: fixture, host: host)
+        let firstEntry = try XCTUnwrap(profile.releases.first)
+        let authority = ProfileDeliveryAuthority(
+            appId: firstEntry.locator.appId,
+            environment: firstEntry.locator.environment
+        )
+        let gate = ConcurrencyProbeGate(holding: .all)
+        let experiences = ExperienceService(
+            productService: ProductService(),
+            eventLog: MockEventLog(),
+            transactionServiceProvider: {
+                fatalError("preparation needs no transaction service")
+            },
+            systemEventSink: DiscardingSystemEventSink(),
+            releaseStore: JourneyReleaseAcquisitionStore(
+                cacheDirectory: directory,
+                urlSession: TestURLSessionProvider.createTestSession()
+            ),
+            automaticPreparation: true,
+            preparationCache: probedPreparationCache(gate)
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let runtime = RecordingJourneyProfileConsumer()
+        let service = ProfileService(
+            cache: InMemoryCachedProfileStore(ttl: nil),
+            authorityStore: InMemoryProfileAuthorityBindingStore(),
+            identity: identity,
+            api: JourneyProfileSequenceAPI(
+                [.response(ProfileResponse(planeProfile: profile))],
+                authority: authority
+            ),
+            experiences: experiences,
+            journeyProfiles: JourneyProfileCatalog(
+                authorizationKeys: try JourneyTrustRoots.keys(for: .development),
+                supportedRuntime: JourneyReleaseRuntime.current,
+                highWaterStore: InMemoryJourneyReleaseHighWaterStore()
+            ),
+            journeyRuntime: runtime,
+            dateProvider: MockDateProvider(),
+            localeProvider: ConfigurationLocaleIdentifierProvider(
+                configuredLocale: { "en_US" }
+            )
+        )
+
+        _ = try await service.refetchProfile(distinctId: "customer")
+        await gate.waitForStarts(1)
+
+        let commits = await runtime.commits
+        XCTAssertEqual(commits.count, 1)
+        let descriptorSHA256 = try XCTUnwrap(commits.first?.releasesByDigest.keys.first)
+        let held = await gate.heldCount
+        XCTAssertEqual(held, 1, "admission finished while preparation was still held")
+        let preparing = await experiences.preparedReleaseStore.cache.status(
+            for: descriptorSHA256
+        )
+        XCTAssertEqual(preparing, .preparing)
+
+        await service.localeDidChange()
+
+        let withdrawn = await experiences.preparedReleaseStore.cache.status(
+            for: descriptorSHA256
+        )
+        XCTAssertEqual(withdrawn, .miss)
+        let inspection = await experiences.preparedReleaseStore.inspection()
+        XCTAssertEqual(inspection.armed, [])
+        await experiences.shutdownPreparation()
+    }
+    #endif
+
     func testEmptyDeliveryReplacesDiskCacheAndRestoresAfterOfflineRestart() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let empty = JourneyPlaneProfile(

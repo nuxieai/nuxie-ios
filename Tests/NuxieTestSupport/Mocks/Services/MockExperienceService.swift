@@ -14,6 +14,8 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
         case transfer(from: String, to: String)
         case shutdown
         case waitForIdle
+        /// The catalog's commercial clear, recorded for ordering.
+        case clearCache
     }
 
     private let lock = NSRecursiveLock()
@@ -212,6 +214,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             mockViewControllers.removeAll()
             defaultMockViewController = nil
         }
+        record(.clearCache)
     }
 
     func configureEagerProductAuthorityAdmission(
