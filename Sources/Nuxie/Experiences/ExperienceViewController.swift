@@ -442,6 +442,7 @@ class ExperienceViewController: NuxiePlatformViewController {
     private var presentationInitialScreenID: String?
     private(set) var presentationShellContract: ExperienceShellContract?
     private(set) var suppressesLoadingTreatmentForPresentation = false
+    private(set) var presentationReadiness: ExperiencePresentationReadiness = .cold
     private var presentationWarmReservation: ExperiencePresentationWarmReservation?
     var presentationRevealGeneration: UInt64 = 0
     private(set) var experienceContentIsHidden = true
@@ -591,17 +592,35 @@ class ExperienceViewController: NuxiePlatformViewController {
         ))
     }
 
+    /// Configures the shell for one show. A show whose release is already
+    /// prepared skips the loading shimmer and shows the screen's background
+    /// until reveal. The reservation keeps the release prepared until
+    /// `shutdownRuntime()`, so every screen of the show hits it.
     func configurePresentationShell(
         _ contract: ExperienceShellContract?,
-        suppressLoadingTreatment: Bool = false,
+        readiness: ExperiencePresentationReadiness,
         warmReservation: ExperiencePresentationWarmReservation? = nil
     ) {
         presentationWarmReservation?.release()
         presentationWarmReservation = warmReservation
         presentationShellContract = contract
-        suppressesLoadingTreatmentForPresentation = suppressLoadingTreatment
+        presentationReadiness = readiness
+        suppressesLoadingTreatmentForPresentation = readiness != .cold
         guard isViewLoaded else { return }
         platformApplyPresentationShell(contract)
+    }
+
+    /// Host-scenario form: `true` is a prepared show, `false` a cold one.
+    func configurePresentationShell(
+        _ contract: ExperienceShellContract?,
+        suppressLoadingTreatment: Bool = false,
+        warmReservation: ExperiencePresentationWarmReservation? = nil
+    ) {
+        configurePresentationShell(
+            contract,
+            readiness: suppressLoadingTreatment ? .prepared : .cold,
+            warmReservation: warmReservation
+        )
     }
 
     /// Resets presentation-scoped state and starts fresh interactive screens.
@@ -1267,6 +1286,7 @@ class ExperienceViewController: NuxiePlatformViewController {
                         "entry_screen_id": self.presentationInitialScreenID
                             ?? artifact.renderPlan.entry.screenId,
                         "prepared_riv_status": preparedRIVStatus.rawValue,
+                        "readiness": self.presentationReadiness.rawValue,
                         "riv_sha256": artifact.renderPlan.scene.sha256,
                     ]
                 )
@@ -1512,7 +1532,6 @@ class ExperienceViewController: NuxiePlatformViewController {
             scheduleRecoveryAffordancesIfNeeded()
 
         case .loaded:
-            releasePresentationWarmReservation()
             cancelRecoveryAffordances()
             setExperienceContentHidden(false)
             platformStopLoadingIndicator()
@@ -1521,7 +1540,6 @@ class ExperienceViewController: NuxiePlatformViewController {
             notifyPresentationRevealIfVisible()
 
         case .timedOut:
-            releasePresentationWarmReservation()
             platformCancelPresentationRevealTransition()
             contentIsRevealed = false
             // The runtime surface stays visible so it keeps producing
@@ -1539,7 +1557,6 @@ class ExperienceViewController: NuxiePlatformViewController {
             platformBringPresentationShellToFront()
 
         case .error:
-            releasePresentationWarmReservation()
             platformCancelPresentationRevealTransition()
             contentIsRevealed = false
             setExperienceContentHidden(true)
