@@ -55,35 +55,18 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     private func purchaseFixtureArtifact(navigation: Bool) async throws -> (Experience, LoadedExperienceArtifact) {
-        let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = experiencePreparationRepositoryRoot()
             .appendingPathComponent(navigation ? "fixtures/journeys/rendered-purchase-navigation" : "fixtures/journeys/rendered-purchase-scopes")
         let entry = try XCTUnwrap(JSONSerialization.jsonObject(with:
             Data(contentsOf: fixture.appendingPathComponent("release-entry.json"))) as? [String: Any])
-        let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         let descriptorBytes = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
         try JourneyReleaseSchemaValidator.validate(try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any]))
-        let profile: [String: Any] = [
-            "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
-            "delivery": ["renderBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/",
-                         "assetBaseUrl": "https://purchase.sdk-fixtures.nuxie.test/"],
-            "features": [], "facts": ["properties": [:], "memberships": [:], "assignments": [:]],
-            "armedLegs": [[
-                "reference": [
-                    "experienceId": try XCTUnwrap(locator["experienceId"]),
-                    "versionId": try XCTUnwrap(locator["experienceVersionId"]),
-                    "legId": try XCTUnwrap(locator["legId"]),
-                    "descriptorSha256": try XCTUnwrap(envelope["descriptorSha256"]),
-                ],
-                "binding": ["type": "new"],
-                "entryCondition": ["type": "app_foregrounded"],
-                "context": ["event": [:], "responses": [:]],
-            ]], "releases": [entry],
-        ]
         return try await authenticatedFixtureArtifact(at: fixture,
-            profileBytes: JSONSerialization.data(withJSONObject: profile))
+            profileBytes: signedReleaseEntryProfileBytes(
+                fixture: fixture,
+                host: "purchase.sdk-fixtures.nuxie.test"
+            ))
     }
 
     #if canImport(UIKit)
@@ -3392,80 +3375,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await authenticatedFixtureArtifact(at: fixture, profileBytes: suppliedProfileBytes).1.payload
     }
 
-    private func authenticatedFixtureArtifact(
-        at fixture: URL,
-        profileBytes suppliedProfileBytes: Data? = nil
-    ) async throws -> (Experience, LoadedExperienceArtifact) {
-        StubURLProtocol.reset()
-        let profileBytes = try suppliedProfileBytes ?? Data(
-            contentsOf: fixture.appendingPathComponent("profile.json")
-        )
-        let profile = try JourneyPlaneProfile.decode(profileBytes)
-        let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
-        StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
-            let file = fixture.appendingPathComponent(String(request.url!.path.dropFirst()))
-            let bytes = try Data(contentsOf: file)
-            let contentType: String
-            switch file.pathExtension {
-            case "nux": contentType = "application/vnd.nuxie.scene"
-            case "png": contentType = "image/png"
-            case "ttf": contentType = "font/ttf"
-            default: contentType = "application/octet-stream"
-            }
-            return (
-                HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 200,
-                    httpVersion: "HTTP/1.1",
-                    headerFields: [
-                        "Content-Type": contentType,
-                        "Content-Length": String(bytes.count),
-                    ]
-                )!,
-                bytes
-            )
-        }
-        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "authenticated-fixture-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: cache,
-            withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: cache) }
-        let store = JourneyReleaseAcquisitionStore(
-            cacheDirectory: cache,
-            urlSession: TestURLSessionProvider.createTestSession()
-        )
-        let catalog = JourneyProfileCatalog(
-            authorizationKeys: try JourneyTrustRoots.keys(for: .development),
-            supportedRuntime: JourneyReleaseRuntime.current,
-            highWaterStore: InMemoryJourneyReleaseHighWaterStore()
-        )
-        let firstEntry = try XCTUnwrap(profile.releases.first)
-        let authenticated = try await catalog.prepare(
-            profile,
-            authority: ProfileDeliveryAuthority(
-                appId: firstEntry.locator.appId,
-                environment: firstEntry.locator.environment
-            )
-        ).snapshot
-        let release = try XCTUnwrap(authenticated.releasesByDigest.values.first)
-        let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
-        let presentation = try await store.preparePresentation(
-            release: release,
-            delivery: profile.delivery,
-            pinnedArtifacts: nil,
-            productResolver: { _ in [] }
-        )
-        return (presentation.experience, LoadedExperienceArtifact(acquired: try await presentation.artifactLoader(
-            presentation.experience,
-            nil,
-            screenID
-        )))
-    }
-
     private func exerciseExternalAssetFixture(named name: String) async throws {
         let payload = try await authenticatedFixturePayload(named: name)
         XCTAssertTrue(payload.assets.contains { asset in
@@ -3482,185 +3391,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
         _ = try await renderAndWait(screen)
         try await screen.close()
-    }
-
-    private func twoScreenStatePayload() async throws -> (
-        payload: AuthenticatedRuntimePayload,
-        firstScreenID: String,
-        secondScreenID: String
-    ) {
-        let base = try await statePayload(defaultViewModelName: "Test")
-        let authoredScreen = try XCTUnwrap(base.renderPlan.screens.first)
-        let secondScreen = NativeExperienceScreen(
-            screenId: "state-screen-2",
-            artboardId: authoredScreen.artboardId,
-            artboardName: authoredScreen.artboardName,
-            width: authoredScreen.width,
-            height: authoredScreen.height,
-            exit: authoredScreen.exit
-        )
-        return (
-            AuthenticatedRuntimePayload(
-                authenticatedKeyID: base.authenticatedKeyID,
-                renderPlan: NativeExperienceRenderPlan(
-                    identity: base.renderPlan.identity,
-                    scene: base.renderPlan.scene,
-                    entry: base.renderPlan.entry,
-                    screens: base.renderPlan.screens + [secondScreen],
-                    transitions: base.renderPlan.transitions,
-                    textInputs: base.renderPlan.textInputs,
-                    images: base.renderPlan.images,
-                    fonts: base.renderPlan.fonts
-                ),
-                journey: JourneyDocument(
-                    screens: base.journey.screens + [JourneyScreen(
-                        id: secondScreen.screenId,
-                        defaultViewModelName: "Test",
-                        defaultInstanceId: "root-sdk-id"
-                    )],
-                    viewModelValues: base.journey.viewModelValues
-                ),
-                sceneBytes: base.sceneBytes,
-                assets: base.assets
-            ),
-            authoredScreen.screenId,
-            secondScreen.screenId
-        )
-    }
-
-    private func statePayload(
-        defaultViewModelName: String?,
-        values: [JourneyViewModelValue]? = nil,
-        scene suppliedScene: Data? = nil,
-        artboardName: String = "Artboard"
-    ) async throws -> AuthenticatedRuntimePayload {
-        let scene = try suppliedScene ?? fixture(named: "data_binding_test", extension: "riv")
-        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
-        var images: [NativeExperienceImageAsset] = []
-        var fonts: [NativeExperienceFontAsset] = []
-        var assetMembers: [(String, Data)] = []
-        for descriptor in catalog where descriptor.kind == .image || descriptor.kind == .font {
-            guard descriptor.isEmbedded, let authoredID = descriptor.authoredID else {
-                throw XCTSkip("State fixture requires only embedded identified assets")
-            }
-            let uniqueName = "\(descriptor.name)-\(authoredID)"
-            let assetBytes = Data("asset-\(descriptor.ordinal)".utf8)
-            let assetHash = SHA256Provider.hexDigest(assetBytes)
-            let fileExtension = descriptor.kind == .image ? "png" : "ttf"
-            let member = "assets/sha256/\(assetHash).\(fileExtension)"
-            assetMembers.append((member, assetBytes))
-            if descriptor.kind == .image {
-                images.append(NativeExperienceImageAsset(
-                    location: .embedded(member: member),
-                    authoredAssetId: UInt64(authoredID),
-                    assetUniqueName: uniqueName,
-                    sha256: assetHash,
-                    sizeBytes: assetBytes.count,
-                    contentType: "image/png",
-                    required: true
-                ))
-            } else {
-                fonts.append(NativeExperienceFontAsset(
-                    location: .embedded(member: member),
-                    authoredAssetId: UInt64(authoredID),
-                    assetUniqueName: uniqueName,
-                    family: "Inter",
-                    weight: "400",
-                    style: "normal",
-                    sha256: assetHash,
-                    sizeBytes: assetBytes.count,
-                    contentType: "font/ttf",
-                    format: "ttf",
-                    required: true
-                ))
-            }
-        }
-        let defaultValues: [JourneyViewModelValue]
-        if let defaultViewModelName {
-            defaultValues = [
-                JourneyViewModelValue(
-                    viewModelName: defaultViewModelName,
-                    instanceId: "root-sdk-id",
-                    path: "Number",
-                    value: AnyCodable(23)
-                ),
-                JourneyViewModelValue(
-                    viewModelName: defaultViewModelName,
-                    instanceId: "root-sdk-id",
-                    path: "Boolean",
-                    value: AnyCodable(true)
-                ),
-                JourneyViewModelValue(
-                    viewModelName: defaultViewModelName,
-                    instanceId: "root-sdk-id",
-                    path: "String",
-                    value: AnyCodable("signed-state")
-                ),
-            ]
-        } else {
-            defaultValues = []
-        }
-        let journey = JourneyDocument(
-            screens: [JourneyScreen(
-                id: "state-screen",
-                defaultViewModelName: defaultViewModelName,
-                defaultInstanceId: defaultViewModelName == nil ? nil : "root-sdk-id"
-            )],
-            viewModelValues: values ?? defaultValues
-        )
-        let sceneHash = SHA256Provider.hexDigest(scene)
-        let bytesByPath = Dictionary(uniqueKeysWithValues: assetMembers)
-        let runtimeAssets = try images.map { image in
-            AuthenticatedRuntimeAsset(
-                kind: .image,
-                authoredAssetID: try XCTUnwrap(UInt32(exactly: image.authoredAssetId)),
-                assetUniqueName: image.assetUniqueName,
-                sourceKey: image.location.contentAddressedPath,
-                contentType: image.contentType,
-                sha256: image.sha256,
-                required: image.required,
-                bytes: bytesByPath[image.location.contentAddressedPath]
-            )
-        } + fonts.map { font in
-            AuthenticatedRuntimeAsset(
-                kind: .font,
-                authoredAssetID: try XCTUnwrap(UInt32(exactly: font.authoredAssetId)),
-                assetUniqueName: font.assetUniqueName,
-                sourceKey: font.location.contentAddressedPath,
-                contentType: font.contentType,
-                sha256: font.sha256,
-                required: font.required,
-                bytes: bytesByPath[font.location.contentAddressedPath]
-            )
-        }
-        return AuthenticatedRuntimePayload(
-            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
-            renderPlan: NativeExperienceRenderPlan(
-                identity: .init(
-                    experienceId: "state-experience",
-                    buildId: "state-build",
-                    appId: "test-app",
-                    environment: "test"
-                ),
-                scene: .init(key: "scene.riv", sha256: sceneHash, sizeBytes: scene.count),
-                entry: .init(screenId: "state-screen"),
-                screens: [NativeExperienceScreen(
-                    screenId: "state-screen",
-                    artboardId: artboardName,
-                    artboardName: artboardName,
-                    width: 100,
-                    height: 100,
-                    exit: nil
-                )],
-                transitions: [],
-                textInputs: [],
-                images: images,
-                fonts: fonts
-            ),
-            journey: journey,
-            sceneBytes: scene,
-            assets: runtimeAssets
-        )
     }
 
     private func componentListStatePayload(
