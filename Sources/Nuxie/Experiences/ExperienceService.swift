@@ -318,6 +318,11 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         )
         controller.colorSchemeMode = colorSchemeMode
         controller.runtimeDelegate = runtimeDelegate
+        // The show's trace context carries artifact acquisition and runtime
+        // preparation spans, including readiness and prepared_release.
+        controller.presentationTraceContext = (
+            runtimeDelegate as? any ExperiencePresentationTraceContextProviding
+        )?.presentationTraceContext
         controller.notificationPermissionEventReceiver =
             runtimeDelegate as? NotificationPermissionEventReceiver
         controller.requestPermissionEventReceiver =
