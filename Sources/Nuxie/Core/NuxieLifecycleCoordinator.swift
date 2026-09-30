@@ -116,8 +116,8 @@ final class NuxieLifecycleCoordinator: @unchecked Sendable {
 
     case .didBecomeActive:
       await eventLog.onAppBecameActive()
-      // Expire or refresh resident profile authority before speculative
-      // Experience preparation is allowed to resume from that authority.
+      // Expire or refresh resident profile authority before background
+      // Experience preparation resumes from that authority.
       await profileService.onAppBecameActive()
       // Sync FeatureInfo after profile refresh (for SwiftUI reactivity)
       await featureService.syncFeatureInfo()

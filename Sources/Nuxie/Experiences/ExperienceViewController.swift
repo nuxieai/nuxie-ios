@@ -532,9 +532,10 @@ class ExperienceViewController: NuxiePlatformViewController {
     #if canImport(UIKit)
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        // View controllers are cached and re-presented (ExperienceViewControllerCache);
-        // without this reset a re-presented experience would never fire onClose again,
-        // leaking the presentation window and dropping dismissal analytics.
+        // Every show builds a new controller, so this is the first appearance.
+        // Resetting the close latch keeps an appearance after an in-place
+        // dismissal able to fire onClose, which releases the window and
+        // records dismissal analytics.
         didInvokeClose = false
     }
 
@@ -590,14 +591,6 @@ class ExperienceViewController: NuxiePlatformViewController {
         ))
     }
 
-    func updateExperienceIfNeeded(_ newExperience: Experience) {
-        viewModel.updateExperienceIfNeeded(newExperience)
-    }
-
-    func updateArtifactTelemetryContext(_ context: ExperienceArtifactTelemetryContext) {
-        viewModel.updateArtifactTelemetryContext(context)
-    }
-
     func configurePresentationShell(
         _ contract: ExperienceShellContract?,
         suppressLoadingTreatment: Bool = false,
@@ -611,10 +604,10 @@ class ExperienceViewController: NuxiePlatformViewController {
         platformApplyPresentationShell(contract)
     }
 
-    /// Resets presentation-scoped state and starts fresh interactive screens for
-    /// cached controllers. A newly created controller begins artifact loading
-    /// when its view is first loaded; a reused controller reacquires its
-    /// artifact and never shares the previous presentation's runtime state.
+    /// Resets presentation-scoped state and starts fresh interactive screens.
+    /// Every show builds a new controller, which begins artifact loading when
+    /// its view is first loaded; a controller whose view is already loaded
+    /// reacquires its artifact and never shares earlier runtime state.
     func prepareForPresentation(
         traceToken: ExperiencePresentationTraceToken?,
         initialScreenID: String? = nil
@@ -735,8 +728,8 @@ class ExperienceViewController: NuxiePlatformViewController {
     }
 
     /// Deterministically releases every presentation-owned interactive screen.
-    /// A later presentation reloads the cached artifact through ExperienceViewModel
-    /// and opens an entirely new native ownership graph.
+    /// Every show builds a new controller, so a later show opens an entirely
+    /// new native ownership graph.
     func shutdownRuntime() async {
         dismissalTask?.cancel()
         dismissalTask = nil
