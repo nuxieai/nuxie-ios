@@ -268,6 +268,14 @@ private actor ForegroundPresentationAdmissionProbe {
 
 extension ForegroundPresentationAdmissionProbe: JourneyServiceProtocol {}
 
+private final class LifecycleOrderLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    func append(_ entry: String) { lock.withLock { recorded.append(entry) } }
+    var entries: [String] { lock.withLock { recorded } }
+}
+
 final class NuxieConfigurationLifecycleTests: XCTestCase {
     func testForegroundPresentationAuthorityOpensBeforeRuntimesResume() async {
         await NuxieSDK.shared.shutdown()
@@ -329,6 +337,108 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             observedOpenAdmission,
             "foreground runtime resume must not wait on its own lifecycle worker"
         )
+    }
+
+    /// Backgrounding and memory warnings reach background preparation
+    /// synchronously, outside the FIFO worker; becoming active resumes it
+    /// only after profile authority is current.
+    func testLifecycleFansOutPreparationPauseResumeAndMemoryWarning() async {
+        await NuxieSDK.shared.shutdown()
+
+        let log = LifecycleOrderLog()
+        let identity = MockIdentityService()
+        identity.setDistinctId("lifecycle-customer")
+        let profile = MockProfileService()
+        profile.setOnAppBecameActive { log.append("profile.onAppBecameActive") }
+        let experiences = MockExperienceService()
+        experiences.preparationCallObserver = { call in
+            switch call {
+            case .enterBackground: log.append("experiences.onAppDidEnterBackground")
+            case .memoryWarning: log.append("experiences.didReceiveMemoryWarning")
+            case .becameActive: log.append("experiences.onAppBecameActive")
+            default: break
+            }
+        }
+        let eventLog = MockEventLog()
+        eventLog.identity = identity
+        let presenter = await MainActor.run {
+            ExperiencePresentationService(
+                windowProvider: MockWindowProvider(),
+                experiences: experiences,
+                eventLog: eventLog
+            )
+        }
+        let features = FeatureService(
+            api: MockNuxieApi(),
+            identity: identity,
+            profile: profile,
+            dateProvider: MockDateProvider(),
+            featureInfo: FeatureInfo(),
+            cacheTTL: 60
+        )
+        let suiteName = "com.nuxie.test.lifecycle-preparation.\(UUID().uuidString)"
+        let userDefaults = UserDefaults(suiteName: suiteName)!
+        let lifecycle = NuxieLifecycleCoordinator(
+            lifecycleTracker: AppLifecycleTracker(
+                userDefaults: userDefaults,
+                eventSink: DiscardingSystemEventSink()
+            ),
+            journeys: ForegroundPresentationAdmissionProbe(presenter: presenter),
+            eventLog: eventLog,
+            profile: profile,
+            experiences: experiences,
+            experiencePresentation: presenter,
+            journeyPresentation: presenter,
+            features: features
+        )
+        lifecycle.start()
+        // Let start()'s initial-state check on the main queue settle.
+        await MainActor.run {}
+
+        let pausedSynchronously = await MainActor.run { () -> Bool in
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidEnterBackground,
+                object: nil
+            )
+            return log.entries.contains("experiences.onAppDidEnterBackground")
+        }
+        XCTAssertTrue(pausedSynchronously, "the pause must not wait for the lifecycle worker")
+
+        #if canImport(UIKit)
+        let memoryWarning = NuxieSystemNotifications.appDidReceiveMemoryWarning
+        XCTAssertNotNil(memoryWarning)
+        if let memoryWarning {
+            let notedSynchronously = await MainActor.run { () -> Bool in
+                NotificationCenter.default.post(name: memoryWarning, object: nil)
+                return log.entries.contains("experiences.didReceiveMemoryWarning")
+            }
+            XCTAssertTrue(notedSynchronously)
+        }
+        #else
+        XCTAssertNil(NuxieSystemNotifications.appDidReceiveMemoryWarning)
+        #endif
+
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: NuxieSystemNotifications.appDidBecomeActive,
+                object: nil
+            )
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while !log.entries.contains("experiences.onAppBecameActive"), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        await lifecycle.stop()
+        userDefaults.removePersistentDomain(forName: suiteName)
+        let entries = log.entries
+        let profileIndex = entries.firstIndex(of: "profile.onAppBecameActive")
+        let resumeIndex = entries.firstIndex(of: "experiences.onAppBecameActive")
+        XCTAssertNotNil(profileIndex)
+        XCTAssertNotNil(resumeIndex)
+        if let profileIndex, let resumeIndex {
+            XCTAssertLessThan(profileIndex, resumeIndex, "\(entries)")
+        }
     }
 
     func testSetupRejectsInvalidDeliveryCounts() async {
