@@ -133,6 +133,131 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         XCTAssertEqual(starts, 1)
     }
 
+    /// A trigger takes waiting releases out of the queue. B's show ends
+    /// before it mounts, so it never asks for the preparation; C's show
+    /// fails before it could start it. B is prepared anyway, and C goes back
+    /// to the lane, so neither is left cold.
+    func testJumpedReleaseIsPreparedEvenWhenItsShowNeverMounts() async throws {
+        let gate = ConcurrencyProbeGate(holding: .keys(["A"]))
+        let store = makeStore(gate)
+        await store.replaceProfile(
+            prepared(["A", "B", "C"]),
+            owner: PreparedReleaseOwner(distinctId: "u1"),
+            generation: 1,
+            admission: nil
+        )
+        await gate.waitForStarts(1)
+
+        let abandoned = try await presentationArtifact("B", from: store)
+        XCTAssertEqual(abandoned.preparedReleaseOutcome, .jumped)
+        do {
+            _ = try await store.presentationArtifact(
+                release: release("C"),
+                delivery: base.profile.delivery,
+                pinnedArtifacts: nil,
+                screenID: "undeclared-screen",
+                identity: .init(experienceId: "C", buildId: "build"),
+                productResolver: { _ in [] }
+            )
+            XCTFail("an undeclared screen must fail the show")
+        } catch {
+            XCTAssertEqual(
+                error as? JourneyReleaseAcquisitionError,
+                .selectedScreenNotDeclared("undeclared-screen")
+            )
+        }
+        let afterFailure = await store.inspection()
+        XCTAssertEqual(afterFailure.pending, [sha("C")], "the failed show returns C to the lane")
+
+        await gate.release("A")
+        await store.waitForIdle()
+
+        for key in ["A", "B", "C"] {
+            let status = await store.cache.status(for: sha(key))
+            XCTAssertEqual(status, .prepared, key)
+            let starts = await gate.startCount(of: key)
+            XCTAssertEqual(starts, 1, key)
+        }
+    }
+
+    /// Admission could not read one of A's optional objects. That partial
+    /// release is not kept: the lane reads A again, and later shows get the
+    /// complete read.
+    func testPartialSeedIsNotKeptAndTheLaneReadsTheReleaseAgain() async throws {
+        let partialSceneURL = sceneURL.appendingPathExtension("partial")
+        let completeSceneURL = sceneURL.appendingPathExtension("complete")
+        let acquirer = makeAcquirer(runtimes: [
+            sha("A"): runtime("A", sceneURL: completeSceneURL),
+        ])
+        let store = makeStore(ConcurrencyProbeGate(), acquirer: acquirer)
+        await store.replaceProfile(
+            PreparedJourneyProfileArtifacts(
+                snapshot: snapshot(["A"]),
+                runtimeReleasesByDescriptorSHA256: [sha("A"): runtime(
+                    "A",
+                    sceneURL: partialSceneURL,
+                    missingOptionalObjectKeys: ["assets/sha256/optional.png"]
+                )]
+            ),
+            owner: PreparedReleaseOwner(distinctId: "u1"),
+            generation: 1,
+            admission: nil
+        )
+        await store.waitForIdle()
+
+        let intents = await acquirer.intents
+        XCTAssertEqual(intents, [.preload], "the lane must read the partial release again")
+        let status = await store.cache.status(for: sha("A"))
+        XCTAssertEqual(status, .prepared)
+        let shown = try await presentationArtifact("A", from: store)
+        XCTAssertEqual(shown.preparedReleaseOutcome, .hit)
+        XCTAssertEqual(shown.sceneURL, completeSceneURL)
+    }
+
+    /// A show's read could not fetch an optional object. The show renders
+    /// what it has from a private native preparation, and nothing is kept,
+    /// so the next show reads again; that complete read is kept.
+    func testPartialShowReadIsNotKeptAndTheNextShowReadsAgain() async throws {
+        let partialSceneURL = sceneURL.appendingPathExtension("partial")
+        let completeSceneURL = sceneURL.appendingPathExtension("complete")
+        let acquirer = makeAcquirer(runtimesByStart: [sha("D"): [
+            runtime(
+                "D",
+                sceneURL: partialSceneURL,
+                missingOptionalObjectKeys: ["assets/sha256/optional.png"]
+            ),
+            runtime("D", sceneURL: completeSceneURL),
+        ]])
+        let store = makeStore(
+            ConcurrencyProbeGate(),
+            acquirer: acquirer,
+            automaticPreparation: false
+        )
+        let (reservation, _) = await store.reserve(descriptorSHA256: sha("D"))
+
+        let partial = try await presentationArtifact("D", from: store)
+        XCTAssertEqual(partial.preparedReleaseOutcome, .cold)
+        XCTAssertEqual(partial.sceneURL, partialSceneURL)
+        XCTAssertFalse(
+            partial.interactivePreparation.cache === store.cache,
+            "a partial release must not prepare in the shared cache"
+        )
+        let afterPartial = await store.inspection()
+        XCTAssertEqual(afterPartial.entries, [])
+
+        let retried = try await presentationArtifact("D", from: store)
+        XCTAssertEqual(retried.preparedReleaseOutcome, .cold)
+        XCTAssertEqual(retried.sceneURL, completeSceneURL)
+        XCTAssertTrue(retried.interactivePreparation.cache === store.cache)
+
+        let kept = try await presentationArtifact("D", from: store)
+        XCTAssertEqual(kept.preparedReleaseOutcome, .hit)
+        XCTAssertEqual(kept.sceneURL, completeSceneURL)
+        let reads = await acquirer.startCount(of: sha("D"))
+        XCTAssertEqual(reads, 2)
+        reservation.release()
+    }
+
     /// A profile change drops B while the lane is still preparing it. The
     /// finished preparation owns a pinned native thread that its deinit
     /// joins, so its last reference must drop on the disposal queue, never
@@ -197,6 +322,57 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         NativePreparationDisposer.queue.sync {}
         let released = await eventually { dropped.preparation == nil }
         XCTAssertTrue(released, "the disposal queue must release the evicted preparation")
+    }
+
+    /// Native preparation cannot be interrupted. A profile drops A while the
+    /// lane is preparing it, and the next one arms A again before that work
+    /// returns. The install skipped A because it was running, and the
+    /// dropped work is thrown away, so the lane must queue A again itself
+    /// instead of leaving an armed release cold.
+    func testLaneQueuesItsItemAgainWhenDroppedAndArmedAgainMidPreparation() async throws {
+        let gate = ConcurrencyProbeGate(holding: .keys(["A"]))
+        let cache = ExperienceInteractivePreparationCache(preparePayload: { payload, catalog in
+            let key = payload.renderPlan.identity.experienceId
+            // The hold outlives the eviction's cancellation, like a native job.
+            try await Task { try await gate.enter(key) }.value
+            await gate.exit(key)
+            return try await ExperienceInteractivePreparation.prepare(
+                payload: payload,
+                inspectedCatalog: catalog
+            )
+        })
+        let store = JourneyPreparedReleaseStore(
+            acquirer: makeAcquirer(),
+            cache: cache,
+            gate: ExperiencePreparationGate(),
+            automaticPreparation: true
+        )
+        stores.append(store)
+        await store.replaceProfile(
+            prepared(["A"]),
+            owner: PreparedReleaseOwner(distinctId: "u1"),
+            generation: 1,
+            admission: nil
+        )
+        await gate.waitForStarts(1)
+
+        await store.withdrawProfile(ownerDistinctId: "u1", generation: 2)
+        await store.replaceProfile(
+            prepared(["A"]),
+            owner: PreparedReleaseOwner(distinctId: "u1"),
+            generation: 3,
+            admission: nil
+        )
+        let whileRunning = await store.inspection()
+        XCTAssertEqual(whileRunning.armed, [sha("A")])
+        XCTAssertEqual(whileRunning.pending, [], "the install skips the running item")
+        await gate.release("A")
+        await store.waitForIdle()
+
+        let status = await store.cache.status(for: sha("A"))
+        XCTAssertEqual(status, .prepared, "an armed release must not be left cold")
+        let starts = await gate.startCount(of: "A")
+        XCTAssertEqual(starts, 2, "the dropped preparation is thrown away and redone once")
     }
 
     // MARK: - Profiles
@@ -825,7 +1001,8 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
         _ key: String,
         sceneURL: URL? = nil,
         source: ExperienceArtifactSource = .cache,
-        resourceMetrics: JourneyReleaseResourceMetrics = .zero
+        resourceMetrics: JourneyReleaseResourceMetrics = .zero,
+        missingOptionalObjectKeys: Set<String> = []
     ) -> PreparedRuntimeRelease {
         let plan = basePayload.renderPlan
         let payload = AuthenticatedRuntimePayload(
@@ -853,7 +1030,8 @@ final class JourneyPreparedReleaseStoreTests: JourneyTestCase {
             payloadsByScreenID: [plan.entry.screenId: payload],
             objectURLsByKey: [plan.scene.key: sceneURL ?? self.sceneURL],
             source: source,
-            resourceMetrics: resourceMetrics
+            resourceMetrics: resourceMetrics,
+            missingOptionalObjectKeys: missingOptionalObjectKeys
         )
     }
 

@@ -40,18 +40,28 @@ struct PreparedRuntimeRelease: Sendable {
     let objectURLsByKey: [String: URL]
     let source: ExperienceArtifactSource
     let resourceMetrics: JourneyReleaseResourceMetrics
+    /// Keys of optional objects the acquisition could not read. Their assets
+    /// render without bytes.
+    let missingOptionalObjectKeys: Set<String>
 
     init(
         payloadsByScreenID: [String: AuthenticatedRuntimePayload],
         objectURLsByKey: [String: URL],
         source: ExperienceArtifactSource,
-        resourceMetrics: JourneyReleaseResourceMetrics
+        resourceMetrics: JourneyReleaseResourceMetrics,
+        missingOptionalObjectKeys: Set<String> = []
     ) {
         self.payloadsByScreenID = payloadsByScreenID
         self.objectURLsByKey = objectURLsByKey
         self.source = source
         self.resourceMetrics = resourceMetrics
+        self.missingOptionalObjectKeys = missingOptionalObjectKeys
     }
+
+    /// Whether every object the release declares was read. Only a complete
+    /// release is kept for later shows; a partial one is read again by the
+    /// next show, which retries the missing objects.
+    var isComplete: Bool { missingOptionalObjectKeys.isEmpty }
 
     /// The payload used to prepare the release natively. Native preparation
     /// is per release, not per screen, and every mount opens an explicit
@@ -1100,7 +1110,10 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             source: downloadedAny ? .download : .cache,
             resourceMetrics: objectsByDigest.values.reduce(failedObjectMetrics) {
                 $0.adding($1.resourceMetrics)
-            }
+            },
+            missingOptionalObjectKeys: Set(uniqueRequirements.compactMap {
+                objectsByDigest[$0.artifact.sha256] == nil ? $0.artifact.key : nil
+            })
         )
     }
 

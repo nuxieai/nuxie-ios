@@ -14,6 +14,10 @@ import Foundation
 /// rest, and queues anything new. Resetting or switching between identified
 /// users drops everything, including queued and in-flight work; a first
 /// sign-in keeps it (`PreparedReleaseUserSwitchPolicy`).
+///
+/// Only a complete release is kept. One whose acquisition could not read an
+/// optional object is never stored or prepared in the shared cache, so the
+/// next show reads it again and retries the missing objects.
 actor JourneyPreparedReleaseStore {
     struct Entry: Sendable {
         let release: AuthenticatedJourneyRelease
@@ -48,6 +52,13 @@ actor JourneyPreparedReleaseStore {
     /// it finishes its current item.
     private var runningLanes = 0
     private var laneItem: String?
+    /// Set when the release the lane is working on stops being armed or
+    /// reserved, which cancels or throws away that work. Installs skip the
+    /// running item, so if it is armed again by the time the work ends, the
+    /// lane queues it again itself.
+    private var laneItemDropped = false
+    /// Native preparations a trigger started for a waiting release.
+    private var jumpedPreparations = 0
     private var acquisitions: [String: Acquisition] = [:]
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var isShutDown = false
@@ -156,13 +167,18 @@ actor JourneyPreparedReleaseStore {
                     release: release,
                     delivery: snapshot.profile.delivery,
                     runtime: entries[descriptorSHA256]?.runtime
-                        ?? runtimeSeeds[descriptorSHA256],
+                        ?? runtimeSeeds[descriptorSHA256].flatMap {
+                            $0.isComplete ? $0 : nil
+                        },
                     isEnrollment: enrollment.contains(descriptorSHA256)
                 )
             }
         }
         armed = nextArmed
         let retained = retainedDescriptors
+        if let laneItem, !retained.contains(laneItem) {
+            laneItemDropped = true
+        }
         for descriptorSHA256 in Array(entries.keys)
         where !retained.contains(descriptorSHA256) {
             entries[descriptorSHA256] = nil
@@ -269,6 +285,7 @@ actor JourneyPreparedReleaseStore {
               reservations[descriptorSHA256] == nil else {
             return
         }
+        if laneItem == descriptorSHA256 { laneItemDropped = true }
         entries[descriptorSHA256] = nil
         acquisitions.removeValue(forKey: descriptorSHA256)?.task.cancel()
         await cache.retainPreparations(for: retainedDescriptors)
@@ -279,6 +296,11 @@ actor JourneyPreparedReleaseStore {
     /// the lane skips it; an in-flight preparation is joined, never started
     /// twice; anything else takes the cold path, and its work fills the
     /// store for later shows.
+    ///
+    /// A waiting release's native preparation starts here, not at mount, so
+    /// a show that ends before it mounts still leaves the release prepared.
+    /// If the show cannot start it (the read fails, the screen is not
+    /// declared, or the read is partial), the release goes back to the lane.
     func presentationArtifact(
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,
@@ -290,7 +312,43 @@ actor JourneyPreparedReleaseStore {
         let descriptorSHA256 = release.descriptorSHA256
         let wasWaiting = pending.contains(descriptorSHA256)
         pending.removeAll { $0 == descriptorSHA256 }
+        do {
+            let (artifact, sharedPreparation) = try await resolvePresentationArtifact(
+                release: release,
+                delivery: delivery,
+                pinnedArtifacts: pinnedArtifacts,
+                screenID: screenID,
+                identity: identity,
+                wasWaiting: wasWaiting,
+                productResolver: productResolver
+            )
+            if wasWaiting {
+                if let sharedPreparation {
+                    startJumpedPreparation(sharedPreparation)
+                } else {
+                    returnToLane(descriptorSHA256)
+                }
+            }
+            return artifact
+        } catch {
+            if wasWaiting { returnToLane(descriptorSHA256) }
+            throw error
+        }
+    }
 
+    /// The show's artifact, and the shared-cache preparation handle it
+    /// carries. A partial release gets a private cache instead (nil here),
+    /// so its native preparation never stands in for the complete release.
+    private func resolvePresentationArtifact(
+        release: AuthenticatedJourneyRelease,
+        delivery: JourneyReleaseDelivery,
+        pinnedArtifacts: JourneyPinnedReleaseArtifacts?,
+        screenID: String,
+        identity: AcquiredExperienceArtifact.Identity,
+        wasWaiting: Bool,
+        productResolver: @escaping @Sendable (String) async throws -> [StoreProduct]
+    ) async throws -> (AcquiredExperienceArtifact, ExperienceInteractivePreparationHandle?) {
+        let descriptorSHA256 = release.descriptorSHA256
         var outcome: JourneyPreparedReleaseOutcome
         let resolved: PreparedRuntimeRelease?
         // Only a show that starts the read reports what the read cost and
@@ -325,20 +383,56 @@ actor JourneyPreparedReleaseStore {
                 screenID
             )
         }
-        return try runtime.presentationArtifact(
-            identity: identity,
-            provenance: descriptorSHA256,
-            initialScreenID: screenID,
-            interactivePreparation: ExperienceInteractivePreparationHandle(
+        let sharedPreparation = runtime.isComplete
+            ? ExperienceInteractivePreparationHandle(
                 cache: cache,
                 provenance: descriptorSHA256,
                 payload: payload
-            ),
+            )
+            : nil
+        let artifact = try runtime.presentationArtifact(
+            identity: identity,
+            provenance: descriptorSHA256,
+            initialScreenID: screenID,
+            interactivePreparation: sharedPreparation,
             source: startedAcquisition ? runtime.source : .cache,
             resourceMetrics: startedAcquisition ? runtime.resourceMetrics : .zero,
             preparedReleaseOutcome: outcome,
             productResolver: productResolver
         )
+        return (artifact, sharedPreparation)
+    }
+
+    /// Starts the native preparation of a release a trigger took out of the
+    /// queue, at the trigger's priority. The show's mount joins it through
+    /// the cache.
+    private func startJumpedPreparation(
+        _ preparation: ExperienceInteractivePreparationHandle
+    ) {
+        jumpedPreparations += 1
+        Task {
+            // A failure is the show's to report: its mount joins this work,
+            // or starts a fresh attempt once the failed entry is gone.
+            _ = try? await preparation.preparation()
+            self.finishJumpedPreparation()
+        }
+    }
+
+    private func finishJumpedPreparation() {
+        jumpedPreparations -= 1
+        resumeIdleWaitersIfIdle()
+    }
+
+    /// Gives a waiting release that a show took out of the queue, but did
+    /// not start preparing, back to the lane.
+    private func returnToLane(_ descriptorSHA256: String) {
+        guard armed.contains(descriptorSHA256),
+              laneItem != descriptorSHA256,
+              !pending.contains(descriptorSHA256) else {
+            return
+        }
+        pending.insert(descriptorSHA256, at: 0)
+        kickLane()
     }
 
     // MARK: - Lifecycle
@@ -359,12 +453,13 @@ actor JourneyPreparedReleaseStore {
         await discard(departingDistinctId: nil)
     }
 
-    /// Returns once no lane is running: every queued release is prepared, or
-    /// the lane is paused in the background or disabled. A lane that a
-    /// discard cancelled counts until it finishes its current item.
+    /// Returns once no lane is running and no preparation a trigger started
+    /// for a waiting release is still running: every queued release is
+    /// prepared, or the lane is paused in the background or disabled. A lane
+    /// that a discard cancelled counts until it finishes its current item.
     /// For tests and the parent qualification host.
     func waitForIdle() async {
-        while laneTask != nil || runningLanes > 0 {
+        while !isIdle {
             await withCheckedContinuation { idleWaiters.append($0) }
         }
     }
@@ -394,12 +489,17 @@ actor JourneyPreparedReleaseStore {
         armed.union(reservations.keys)
     }
 
+    private var isIdle: Bool {
+        laneTask == nil && runningLanes == 0 && jumpedPreparations == 0
+    }
+
     private func resetState() {
         epoch &+= 1
         unconfirmedSignInFrom = nil
         laneTask?.cancel()
         laneTask = nil
         laneItem = nil
+        laneItemDropped = false
         for acquisition in acquisitions.values { acquisition.task.cancel() }
         acquisitions.removeAll()
         pending.removeAll()
@@ -446,11 +546,42 @@ actor JourneyPreparedReleaseStore {
                 continue
             }
             laneItem = descriptorSHA256
+            laneItemDropped = false
             await prepare(entry, descriptorSHA256: descriptorSHA256)
-            if laneID == id { laneItem = nil }
+            if laneID == id, laneItemDropped, !Task.isCancelled {
+                await requeueDroppedLaneItem(descriptorSHA256, laneID: id)
+            }
+            if laneID == id {
+                laneItem = nil
+                laneItemDropped = false
+            }
         }
         guard laneID == id else { return }
         laneTask = nil
+    }
+
+    /// The lane's item was dropped while it ran, so its work was cancelled
+    /// or thrown away, and a profile that armed it again in the meantime
+    /// skipped it because it was running. Queue it again, first, when it is
+    /// armed and still unprepared. Only a dropped item comes back here, so a
+    /// release that keeps failing is never retried in a loop.
+    private func requeueDroppedLaneItem(
+        _ descriptorSHA256: String,
+        laneID id: UInt64
+    ) async {
+        guard armed.contains(descriptorSHA256),
+              !pending.contains(descriptorSHA256) else {
+            return
+        }
+        let status = await cache.status(for: descriptorSHA256)
+        guard status == .miss,
+              laneID == id,
+              !Task.isCancelled,
+              armed.contains(descriptorSHA256),
+              !pending.contains(descriptorSHA256) else {
+            return
+        }
+        pending.insert(descriptorSHA256, at: 0)
     }
 
     private func prepare(_ entry: Entry, descriptorSHA256: String) async {
@@ -474,6 +605,12 @@ actor JourneyPreparedReleaseStore {
                   let payload = runtime.preparationPayload else {
                 return
             }
+            guard runtime.isComplete else {
+                LogWarning(
+                    "Experience release preparation could not read every object; the release stays cold"
+                )
+                return
+            }
             if entries[descriptorSHA256]?.runtime == nil {
                 entries[descriptorSHA256]?.runtime = runtime
             }
@@ -492,6 +629,8 @@ actor JourneyPreparedReleaseStore {
         } catch is CancellationError {
             return
         } catch {
+            // Work cut short because the release was dropped did not fail.
+            guard !laneItemDropped else { return }
             LogWarning(
                 "Experience release preparation failed; the release stays cold: \(error)"
             )
@@ -554,6 +693,7 @@ actor JourneyPreparedReleaseStore {
             acquisitions[descriptorSHA256] = nil
         }
         guard let runtime,
+              runtime.isComplete,
               epoch == startEpoch,
               retainedDescriptors.contains(descriptorSHA256) else {
             return
@@ -571,7 +711,7 @@ actor JourneyPreparedReleaseStore {
     }
 
     private func resumeIdleWaitersIfIdle() {
-        guard laneTask == nil, runningLanes == 0 else { return }
+        guard isIdle else { return }
         let waiters = idleWaiters
         idleWaiters.removeAll()
         waiters.forEach { $0.resume() }

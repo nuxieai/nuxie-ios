@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @_spi(Testing) @testable import Nuxie
@@ -95,6 +96,143 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
             metricsBefore.configuredPreparationCount
         )
         await experiences.shutdownPreparation()
+    }
+
+    /// Admission could not download a release's optional image. That partial
+    /// read is not kept, so the next show reads the release again and fetches
+    /// the image, and the show after it gets the complete release.
+    func testPartlyAcquiredReleaseIsReadAgainByTheNextShow() async throws {
+        let directory = temporaryDirectory()
+        defer {
+            StubURLProtocol.reset()
+            removeTemporaryDirectoryIfPresent(directory)
+        }
+        let fixture = experiencePreparationRepositoryRoot()
+            .appendingPathComponent("Tests/ExperienceRuntimeHostApp/Fixtures/external-image")
+        let (profileBytes, imageKey) = try optionalImageProfileBytes(fixture: fixture)
+        let snapshot = try await authenticatedFixtureSnapshot(
+            at: fixture,
+            profileBytes: profileBytes
+        )
+        let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
+        let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
+        let host = try XCTUnwrap(URL(string: snapshot.profile.delivery.assetBaseUrl)?.host)
+        let imageRestored = JourneyCompletionFlag()
+        let requests = JourneyArtifactRequestCounter()
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: {
+            $0.url?.host == host && $0.url?.pathExtension == "png" && !imageRestored.isCompleted
+        }) { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        serveSignedFixtureObjects(at: fixture, host: host, onRequest: { requests.increment() })
+        let acquisition = JourneyReleaseAcquisitionStore(
+            cacheDirectory: directory,
+            urlSession: TestURLSessionProvider.createTestSession()
+        )
+        let experiences = ExperienceService(
+            productService: ProductService(),
+            eventLog: MockEventLog(),
+            transactionServiceProvider: {
+                fatalError("preparation needs no transaction service")
+            },
+            systemEventSink: DiscardingSystemEventSink(),
+            releaseStore: acquisition,
+            automaticPreparation: false
+        )
+
+        let preparedProfile = try await experiences.prepareJourneyProfile(snapshot)
+        let seed = try XCTUnwrap(
+            preparedProfile.runtimeReleasesByDescriptorSHA256[release.descriptorSHA256]
+        )
+        XCTAssertEqual(seed.missingOptionalObjectKeys, [imageKey])
+        let committed = await experiences.commitJourneyProfile(
+            preparedProfile,
+            owner: PreparedReleaseOwner(distinctId: "customer"),
+            generation: 1,
+            admission: nil
+        )
+        XCTAssertTrue(committed)
+
+        imageRestored.finish()
+        let presentation = try await acquisition.preparePresentation(
+            release: release,
+            delivery: snapshot.profile.delivery,
+            pinnedArtifacts: nil,
+            preparedReleases: experiences.preparedReleaseStore,
+            productResolver: { _ in [] }
+        )
+        let retried = try await presentation.artifactLoader(
+            presentation.experience,
+            nil,
+            screenID
+        )
+        let image = try XCTUnwrap(retried.payload.assets.first { $0.kind == .image })
+        let imageBytes = try XCTUnwrap(image.bytes, "the next show must fetch the optional image")
+        XCTAssertEqual(SHA256Provider.hexDigest(imageBytes), image.sha256)
+        await experiences.waitForPreparationIdle()
+
+        let requestsBefore = requests.value
+        let later = try await presentation.artifactLoader(
+            presentation.experience,
+            nil,
+            screenID
+        )
+        XCTAssertEqual(later.preparedReleaseOutcome, .hit)
+        XCTAssertNotNil(later.payload.assets.first { $0.kind == .image }?.bytes)
+        XCTAssertEqual(requests.value, requestsBefore)
+        await experiences.shutdownPreparation()
+    }
+
+    /// The signed fixture profile with its image made optional, re-signed
+    /// with the development key, and the image's object key.
+    private func optionalImageProfileBytes(
+        fixture: URL
+    ) throws -> (profile: Data, imageKey: String) {
+        var profile = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: fixture.appendingPathComponent("profile.json"))) as? [String: Any])
+        var releases = try XCTUnwrap(profile["releases"] as? [[String: Any]])
+        var entry = try XCTUnwrap(releases.first)
+        var envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
+        let original = try XCTUnwrap(Data(
+            base64Encoded: try XCTUnwrap(envelope["descriptorBytesBase64"] as? String)
+        ))
+        var descriptor = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: original) as? [String: Any]
+        )
+        var render = try XCTUnwrap(descriptor["render"] as? [String: Any])
+        var assets = try XCTUnwrap(render["assets"] as? [[String: Any]])
+        let index = try XCTUnwrap(assets.firstIndex { $0["kind"] as? String == "image" })
+        assets[index]["required"] = false
+        let imageKey = try XCTUnwrap(assets[index]["key"] as? String)
+        render["assets"] = assets
+        descriptor["render"] = render
+        let bytes = try ExactJSONCodec.canonicalize(
+            JSONSerialization.data(withJSONObject: descriptor)
+        )
+        let digest = SHA256Provider.hexDigest(bytes)
+        let key = try Curve25519.Signing.PrivateKey(
+            rawRepresentation: Data(repeating: 0x42, count: 32)
+        )
+        var signature = try XCTUnwrap(envelope["signature"] as? [String: Any])
+        signature["signatureBase64"] = try key.signature(
+            for: Data(JourneyReleaseDescriptor.signatureDomain.utf8) + bytes
+        ).base64EncodedString()
+        envelope["signature"] = signature
+        envelope["descriptorSha256"] = digest
+        envelope["descriptorSizeBytes"] = bytes.count
+        envelope["descriptorBytesBase64"] = bytes.base64EncodedString()
+        entry["envelope"] = envelope
+        releases[0] = entry
+        profile["releases"] = releases
+        var arms = try XCTUnwrap(profile["armedLegs"] as? [[String: Any]])
+        for armIndex in arms.indices {
+            var reference = try XCTUnwrap(arms[armIndex]["reference"] as? [String: Any])
+            reference["descriptorSha256"] = digest
+            arms[armIndex]["reference"] = reference
+        }
+        profile["armedLegs"] = arms
+        return (try JSONSerialization.data(withJSONObject: profile), imageKey)
     }
     #endif
 

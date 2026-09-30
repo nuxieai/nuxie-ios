@@ -991,7 +991,7 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
             controller.configurePresentationShell(Self.shell(), readiness: readiness)
             _ = controller.view
 
-            XCTAssertEqual(try Self.presentationState(of: controller), .loading, vectorCase.name)
+            XCTAssertEqual(controller.viewModel.currentState, .loading, vectorCase.name)
             XCTAssertEqual(controller.presentationReadiness, readiness, vectorCase.name)
             XCTAssertEqual(
                 controller.suppressesLoadingTreatmentForPresentation,
@@ -1021,20 +1021,20 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         XCTAssertTrue(controller.loadingView.isHidden)
 
         let deadline = Date().addingTimeInterval(2)
-        while try Self.presentationState(of: controller) != .timedOut, Date() < deadline {
+        while controller.viewModel.currentState != .timedOut, Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        XCTAssertEqual(try Self.presentationState(of: controller), .timedOut)
+        XCTAssertEqual(controller.viewModel.currentState, .timedOut)
         XCTAssertFalse(released.value, "a timeout must not release the show's reservation")
 
-        try Self.viewModel(of: controller).handleLoadingFailed(
+        controller.viewModel.handleLoadingFailed(
             URLError(.networkConnectionLost)
         )
-        XCTAssertEqual(try Self.presentationState(of: controller), .error)
+        XCTAssertEqual(controller.viewModel.currentState, .error)
         XCTAssertFalse(released.value, "an error must not release the show's reservation")
 
-        try Self.viewModel(of: controller).handleLoadingFinished()
-        XCTAssertEqual(try Self.presentationState(of: controller), .loaded)
+        controller.viewModel.handleLoadingFinished()
+        XCTAssertEqual(controller.viewModel.currentState, .loaded)
         XCTAssertFalse(released.value, "reveal must not release the show's reservation")
 
         await controller.shutdownRuntime()
@@ -1090,30 +1090,6 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
             productService: products,
             systemEventSink: sink
         )
-    }
-
-    /// The controller's private view model, reached through reflection so
-    /// the presentation states can be driven without a native mount.
-    @MainActor
-    private static func viewModel(
-        of controller: ExperienceViewController
-    ) throws -> ExperienceViewModel {
-        var mirror: Mirror? = Mirror(reflecting: controller)
-        while let current = mirror {
-            if let viewModel = current.children.first(where: { $0.label == "viewModel" })?
-                .value as? ExperienceViewModel {
-                return viewModel
-            }
-            mirror = current.superclassMirror
-        }
-        throw XCTSkip("ExperienceViewController no longer stores its view model")
-    }
-
-    @MainActor
-    private static func presentationState(
-        of controller: ExperienceViewController
-    ) throws -> ExperienceViewModel.State {
-        try viewModel(of: controller).currentState
     }
 
     private static func shell(
