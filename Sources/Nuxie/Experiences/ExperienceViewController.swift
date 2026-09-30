@@ -291,7 +291,9 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     // MARK: - Properties
 
-    private let viewModel: ExperienceViewModel
+    /// The show's loading state machine. Internal, not private, so tests can
+    /// read and drive the presentation states without a native mount.
+    let viewModel: ExperienceViewModel
     /// System-permission resolution (status checks, usage-description
     /// gating, authorization requests). The VC keeps orchestration and event
     /// dispatch; the coordinator owns everything that talks to the system.
