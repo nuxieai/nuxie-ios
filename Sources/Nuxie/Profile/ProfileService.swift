@@ -464,7 +464,7 @@ internal actor ProfileService: ProfileServiceProtocol {
 
         guard await experiences.commitJourneyProfile(
             preparedArtifacts,
-            ownerDistinctId: item.distinctId,
+            owner: preparedReleaseOwner(distinctId: item.distinctId),
             generation: admission.generation,
             admission: sideEffectAdmission(for: admission)
         ), isCurrent(admission) else { return false }
@@ -509,7 +509,7 @@ internal actor ProfileService: ProfileServiceProtocol {
               isCurrent(admission) else { return }
         _ = await experiences.commitJourneyProfile(
             prepared,
-            ownerDistinctId: admission.distinctId,
+            owner: preparedReleaseOwner(distinctId: admission.distinctId),
             generation: admission.generation,
             admission: sideEffectAdmission(for: admission)
         )
@@ -645,6 +645,18 @@ internal actor ProfileService: ProfileServiceProtocol {
     private func cancelAdmissionPreparation() {
         admissionPreparation?.task.cancel()
         admissionPreparation = nil
+    }
+
+    /// Who an admitted profile's prepared releases belong to, read together
+    /// with the current identity so a first sign-in is recognized even when
+    /// its profile commits before the queued user transition runs. The
+    /// commit re-checks admission, so a read after the identity moved on
+    /// changes nothing.
+    private func preparedReleaseOwner(distinctId: String) -> PreparedReleaseOwner {
+        identity.performIfCurrentDistinctIdMatches(
+            distinctId,
+            PreparedReleaseOwner.init(identity:)
+        ) ?? PreparedReleaseOwner(distinctId: distinctId)
     }
 
     private func isCurrent(_ admission: Admission) -> Bool {

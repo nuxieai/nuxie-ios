@@ -82,7 +82,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
     @discardableResult
     func commitJourneyProfile(
         _ prepared: PreparedJourneyProfileArtifacts,
-        ownerDistinctId: String?,
+        owner: PreparedReleaseOwner?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async -> Bool {
@@ -96,7 +96,7 @@ final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendabl
             return true
         }
         if committed {
-            record(.commit(ownerDistinctId: ownerDistinctId, generation: generation))
+            record(.commit(ownerDistinctId: owner?.distinctId, generation: generation))
         }
         return committed
     }

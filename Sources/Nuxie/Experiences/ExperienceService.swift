@@ -16,11 +16,12 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     /// Commits a prepared profile. When the catalog accepts it, the armed
     /// releases are handed to the prepared-release store, which prepares
     /// them in the background. The hand-off is bookkeeping only and never
-    /// waits for preparation.
+    /// waits for preparation. A different `owner` drops what was prepared
+    /// for the previous one, unless it is that owner's first sign-in.
     @discardableResult
     func commitJourneyProfile(
         _ prepared: PreparedJourneyProfileArtifacts,
-        ownerDistinctId: String?,
+        owner: PreparedReleaseOwner?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async -> Bool
@@ -50,8 +51,8 @@ protocol ExperienceServiceProtocol: AnyObject, Sendable {
     /// user. A nil id drops unconditionally.
     func discardPreparedReleases(departingDistinctId: String?) async
 
-    /// Keeps prepared releases across a user transition by re-tagging their
-    /// owner. See `PreparedReleaseUserSwitchPolicy`.
+    /// Keeps prepared releases across a first sign-in by handing them to the
+    /// arriving user. See `PreparedReleaseUserSwitchPolicy`.
     func transferPreparedReleases(from departingDistinctId: String, to arrivingDistinctId: String) async
 
     /// Stops background preparation and drops everything prepared.
@@ -97,7 +98,7 @@ extension ExperienceServiceProtocol {
     ) async -> Bool {
         await commitJourneyProfile(
             prepared,
-            ownerDistinctId: nil,
+            owner: nil,
             generation: generation,
             admission: admission
         )
@@ -173,7 +174,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     @discardableResult
     func commitJourneyProfile(
         _ prepared: PreparedJourneyProfileArtifacts,
-        ownerDistinctId: String?,
+        owner: PreparedReleaseOwner?,
         generation: UInt64,
         admission: ProfileSideEffectAdmission?
     ) async -> Bool {
@@ -184,7 +185,7 @@ final class ExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
         ) else { return false }
         await preparedReleases.replaceProfile(
             prepared,
-            ownerDistinctId: ownerDistinctId,
+            owner: owner,
             generation: generation,
             admission: admission
         )
