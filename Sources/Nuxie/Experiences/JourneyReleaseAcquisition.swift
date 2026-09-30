@@ -68,6 +68,7 @@ struct PreparedRuntimeRelease: Sendable {
         interactivePreparation suppliedPreparation: ExperienceInteractivePreparationHandle? = nil,
         products: [StoreProduct] = [],
         productsResolvedForScreenID: String? = nil,
+        source suppliedSource: ExperienceArtifactSource? = nil,
         resourceMetrics suppliedResourceMetrics: JourneyReleaseResourceMetrics? = nil,
         preparedReleaseOutcome: JourneyPreparedReleaseOutcome? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil
@@ -98,7 +99,7 @@ struct PreparedRuntimeRelease: Sendable {
             sceneURL: sceneURL,
             sceneBytes: payload.sceneBytes,
             assetURLsByUniqueName: assetURLs,
-            source: source,
+            source: suppliedSource ?? source,
             payload: payload,
             interactivePreparation: interactivePreparation,
             products: products,

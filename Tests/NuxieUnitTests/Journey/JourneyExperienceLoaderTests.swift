@@ -87,6 +87,8 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         XCTAssertEqual(requests.value, requestsBefore)
         XCTAssertEqual(artifact.resourceMetrics, .zero)
         XCTAssertEqual(artifact.preparedReleaseOutcome, .hit)
+        // Admission downloaded these objects; the show itself read nothing.
+        XCTAssertEqual(artifact.source, .cache)
         let metricsAfter = await store.cache.metrics()
         XCTAssertEqual(
             metricsAfter.configuredPreparationCount,

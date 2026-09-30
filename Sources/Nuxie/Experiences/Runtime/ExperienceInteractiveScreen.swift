@@ -1155,7 +1155,8 @@ final class ExperiencePresentationWarmReservation: @unchecked Sendable {
 /// thread or on the main thread, so evicted entries are handed here and
 /// released on a serial utility queue.
 enum NativePreparationDisposer {
-    private static let queue = DispatchQueue(
+    /// Internal so a test can hold it to observe where the last release lands.
+    static let queue = DispatchQueue(
         label: "com.nuxie.preparation.disposal",
         qos: .utility
     )
@@ -1268,6 +1269,10 @@ actor ExperienceInteractivePreparationCache {
         do {
             let value = try await entry.task.value
             guard preparationsByProvenance[provenance]?.id == entry.id else {
+                // Evicted while it was still preparing. The eviction handed
+                // its task to the disposer at once, so the task and this
+                // value are now the last references; hand them over too.
+                NativePreparationDisposer.dispose([value, entry.task])
                 throw CancellationError()
             }
             preparedProvenances.insert(provenance)
