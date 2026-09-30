@@ -1,5 +1,4 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
-import Accelerate
 import AVFoundation
 import CoreVideo
 import Foundation
@@ -37,8 +36,12 @@ final class ExperienceVideoPlayback {
             self.audioPolicy = audioPolicy
             self.generation = generation
             self.duration = duration
+            // IOSurface-backed BGRA buffers let the renderer sample each
+            // frame in place, with the colors the byte path produced.
             output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+                kCVPixelBufferMetalCompatibilityKey as String: true,
             ])
             let item = AVPlayerItem(asset: asset)
             item.add(output)
@@ -130,7 +133,6 @@ final class ExperienceVideoPlayback {
     private var presentationAdmitted = false
     private var closed = false
     private(set) var deliveredFrames: UInt64 = 0
-    private(set) var deliveredRGBABytes: UInt64 = 0
     var activeDecoderCount: Int { decoders.filter { !$0.disposed }.count }
 
     private init(runtime: NuxieNativeRuntime, artboardBounds: CGRect, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement],
@@ -576,23 +578,6 @@ final class ExperienceVideoPlayback {
                         guard width > 0, height > 0, width <= 8192, height <= 8192, width * height <= 16_777_216 else {
                             throw ExperienceInteractiveScreenError.assetContract("decoded video frame exceeds limits")
                         }
-                        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-                        let rgba: Data
-                        do {
-                            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-                            guard let base = CVPixelBufferGetBaseAddress(buffer) else { continue }
-                            let stride = CVPixelBufferGetBytesPerRow(buffer)
-                            var source = vImage_Buffer(data: base, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: stride)
-                            var pixels = Data(count: width * height * 4)
-                            let status = pixels.withUnsafeMutableBytes { raw -> vImage_Error in
-                                var target = vImage_Buffer(data: raw.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * 4)
-                                return vImagePermuteChannels_ARGB8888(&source, &target, [2, 1, 0, 3], vImage_Flags(kvImageNoFlags))
-                            }
-                            guard status == kvImageNoError else {
-                                throw ExperienceInteractiveScreenError.assetContract("video pixel conversion failed")
-                            }
-                            rgba = pixels
-                        }
                         let presentationSeconds = displayTime.seconds.isFinite ? displayTime.seconds : clock
                         if selectedBySeek && displayTime.seconds.isFinite {
                             // Only a successfully completed seek can identify
@@ -614,10 +599,8 @@ final class ExperienceVideoPlayback {
                             guard !decoder.disposed, !decoder.seeking, decoder.generation == generation else { continue }
                         }
                         try await runtime.videoPresent(componentID: decoder.componentID, generation: generation,
-                            seconds: presentationSeconds,
-                            width: UInt32(width), height: UInt32(height), rgba: rgba)
+                            seconds: presentationSeconds, pixelBuffer: NuxieNativeVideoPixelBuffer(buffer))
                         deliveredFrames += 1
-                        deliveredRGBABytes += UInt64(rgba.count)
                     }
                 }
             }

@@ -1,6 +1,7 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
 import CoreGraphics
+import CoreVideo
 import ImageIO
 import Metal
 import QuartzCore
@@ -448,6 +449,17 @@ package struct NuxieNativeTextRunMutation: Equatable, Sendable {
 
 package struct NuxieNativeMetalDevice: @unchecked Sendable {
     package let value: any MTLDevice
+}
+
+/// A decoded video frame in an IOSurface-backed 32BGRA pixel buffer. The
+/// renderer samples it in place and keeps its own reference while the frame
+/// is shown, so the decoder's pool reuses the buffer only after that.
+package struct NuxieNativeVideoPixelBuffer: @unchecked Sendable {
+    fileprivate let value: CVPixelBuffer
+
+    package init(_ value: CVPixelBuffer) {
+        self.value = value
+    }
 }
 
 package struct NuxieNativeDrawable: @unchecked Sendable {
@@ -3416,23 +3428,16 @@ extension NuxieNativeRuntime {
         }
     }
 
-    package func videoPresent(componentID: Int, generation: UInt64, seconds: Double, width: UInt32, height: UInt32, rgba: Data) async throws {
-        guard width > 0, height > 0, width <= 8192, height <= 8192,
-              rgba.count == Int(width) * Int(height) * 4 else {
-            throw NuxieNativeRuntimeError.invalidNativeValue("invalid video frame dimensions")
-        }
+    package func videoPresent(componentID: Int, generation: UInt64, seconds: Double, pixelBuffer: NuxieNativeVideoPixelBuffer) async throws {
         let state = try requireState()
         try await executor.call {
-            try rgba.withUnsafeBytes { storage in
-                var frame = NuxVideoFrame()
-                frame.struct_size = UInt32(MemoryLayout<NuxVideoFrame>.size)
+            try withExtendedLifetime(pixelBuffer.value) {
+                var frame = NuxVideoPixelBufferFrame()
+                frame.struct_size = UInt32(MemoryLayout<NuxVideoPixelBufferFrame>.size)
                 frame.generation = generation
                 frame.presentation_seconds = seconds
-                frame.width = width
-                frame.height = height
-                frame.row_bytes = width * 4
-                frame.pixels = NuxByteView(data: storage.bindMemory(to: UInt8.self).baseAddress, len: storage.count)
-                try requireOK(nux_player_video_present_metal(try state.renderer.require(), try state.player.require(), componentID, &frame), operation: "present video frame")
+                frame.pixel_buffer = Unmanaged.passUnretained(pixelBuffer.value).toOpaque()
+                try requireOK(nux_player_video_present_metal_pixel_buffer(try state.renderer.require(), try state.player.require(), componentID, &frame), operation: "present video frame")
             }
         }
     }
