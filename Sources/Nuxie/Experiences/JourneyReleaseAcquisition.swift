@@ -250,7 +250,7 @@ struct JourneyReleaseRuntime {
         )
     }
 
-    /// Derived from the runtime module's authoritative build metadata.
+    /// Runtime capabilities come from the binary; SDK-owned projections are additive.
     static let current = JourneyReleaseSupportedRuntime(
         currentSdkVersion: SDKVersion.current,
         supportedRuntimeRevisions: [NuxieEmbeddedRuntimeCompatibility.sourceRevision],
@@ -264,7 +264,7 @@ struct JourneyReleaseRuntime {
         ),
         timezoneDataRevision: "2026c",
         timezoneDataSHA256: SignedTimezoneBundle.sha256,
-        supportedCapabilities: NuxieEmbeddedRuntimeCompatibility.capabilities.union(["system-fonts"])
+        supportedCapabilities: NuxieEmbeddedRuntimeCompatibility.capabilities.union(["system-fonts", "paywall.selection.v1"])
     )
 }
 

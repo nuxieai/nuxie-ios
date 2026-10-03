@@ -285,6 +285,56 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
+    func testPaywallSelectionCallbackChangesTheJourneyPurchaseTarget() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        func value(_ model: String, _ instance: String, _ path: String,
+                   _ raw: JourneyReleaseJSONValue) -> [String: JourneyReleaseJSONValue] {
+            ["viewModelName": .string(model), "instanceId": .string(instance),
+             "path": .string(path), "value": raw]
+        }
+        let snapshot = replacing(try await authenticatedRenderedSnapshot(fixture),
+            screens: [.init(id: "screen_welcome", defaultViewModelName: "Runtime",
+                            defaultInstanceId: "root", responseCaptures: [])],
+            viewModelValues: [
+                value("Runtime", "root", "paywall/products", .array([
+                    .object(["vmInstanceId": .string("monthly")]),
+                    .object(["vmInstanceId": .string("annual")]),
+                ])),
+                value("Runtime", "root", "paywall/selectedProduct", .object(["vmInstanceId": .string("monthly")])),
+                value("Runtime", "root", "paywall/selectedProductId", .string("product-monthly")),
+                value("PaywallProduct", "monthly", "productId", .string("product-monthly")),
+                value("PaywallProduct", "monthly", "placementId", .string("placement-monthly")),
+                value("PaywallProduct", "annual", "productId", .string("product-annual")),
+                value("PaywallProduct", "annual", "placementId", .string("placement-annual")),
+            ])
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
+            reservation: nil, onEmissionBatch: { _ in true }, onOutcome: { _, _ in true })
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+        let reference = JourneyReleaseJSONValue.object(["ref": .object([
+            "kind": .string("path"), "viewModelName": .string("Runtime"),
+            "path": .string("paywall.selectedProduct.placementId"), "isRelative": .bool(false),
+        ])])
+        await delegate.experienceViewController(controller, didChangeScreen: "screen_welcome")
+        let initial = await delegate.resolvePresentationString(reference)
+        XCTAssertEqual(initial, "placement-monthly")
+        for (screen, id, expected) in [
+            ("stale-screen", "product-annual", "placement-monthly" as String?),
+            ("screen_welcome", "product-annual", "placement-annual"),
+            ("screen_welcome", "undeclared", nil),
+            ("screen_welcome", "product-monthly", "placement-monthly"),
+        ] {
+            await delegate.experienceViewController(controller, didEmitViewModelChange:
+                .init(path: .init(viewModelName: "Runtime", path: "paywall/selectedProductId"),
+                    value: id, source: "runtime", screenId: screen, instanceId: "root", isTrigger: false))
+            let selected = await delegate.resolvePresentationString(reference)
+            XCTAssertEqual(selected, expected)
+        }
+    }
+
     func testPathReferenceRoundTripPreservesExplicitScope() throws {
         for relative: Bool? in [nil, false, true] {
             let reference = VmPathRef(path: "product.placementId", isRelative: relative)

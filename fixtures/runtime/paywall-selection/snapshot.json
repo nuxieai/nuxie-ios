@@ -1,0 +1,503 @@
+{
+  "version": 1,
+  "project": {
+    "id": "purchase",
+    "data": {}
+  },
+  "document": {
+    "rootId": "root",
+    "nodes": [
+      {
+        "id": "root",
+        "projectId": "purchase",
+        "parentId": null,
+        "kind": "root",
+        "type": "root",
+        "orderKey": "000",
+        "data": {
+          "kind": "root"
+        }
+      },
+      {
+        "id": "purchase::artboard_tree",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "artboard_tree",
+        "type": "artboard_tree",
+        "orderKey": "001",
+        "data": {
+          "kind": "artboard_tree",
+          "version": 1
+        }
+      },
+      {
+        "id": "purchase::journey_root",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "journey_root",
+        "type": "journey_root",
+        "orderKey": "002",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        }
+      },
+      {
+        "id": "screen",
+        "projectId": "purchase",
+        "parentId": "purchase::artboard_tree",
+        "kind": "artboard",
+        "type": "artboard",
+        "orderKey": "008",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 320,
+              "height": 150
+            }
+          },
+          "viewModelDefaults": {
+            "viewModelId": "Runtime",
+            "instanceId": "root-sdk-id"
+          }
+        },
+        "name": "Paywall"
+      },
+      {
+        "id": "screen.tree",
+        "projectId": "purchase",
+        "parentId": "screen",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "orderKey": "009",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "plan",
+        "projectId": "purchase",
+        "parentId": "purchase::artboard_tree",
+        "kind": "artboard",
+        "type": "artboard",
+        "orderKey": "010",
+        "data": {
+          "kind": "artboard",
+          "isComponent": true,
+          "canvas": {
+            "dimensions": {
+              "width": 140,
+              "height": 100
+            }
+          },
+          "viewModelDefaults": {
+            "viewModelId": "PaywallProduct",
+            "instanceId": "monthly"
+          }
+        },
+        "name": "Plan card"
+      },
+      {
+        "id": "plan.tree",
+        "projectId": "purchase",
+        "parentId": "plan",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "orderKey": "011",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "buy",
+        "projectId": "purchase",
+        "parentId": "screen.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "014",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "buy",
+            "type": "View",
+            "systemId": "Pressable",
+            "props": {
+              "style": {
+                "x": 10,
+                "y": 100,
+                "width": 300,
+                "height": 40,
+                "backgroundColor": "#2457d6"
+              },
+              "pressedStyle": {
+                "backgroundColor": "#163783"
+              },
+              "accessibilityRole": "button",
+              "accessibilityLabel": "Choose plan"
+            }
+          },
+          "controlAction": {
+            "actionId": "buy",
+            "behavior": {
+              "kind": "declarative",
+              "program": [
+                {
+                  "type": "emit",
+                  "eventName": "purchase_requested"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "buy.interactions",
+        "projectId": "purchase",
+        "parentId": "buy",
+        "kind": "interaction_tree",
+        "type": "interaction_tree",
+        "orderKey": "015",
+        "data": {
+          "kind": "interaction_tree"
+        }
+      },
+      {
+        "id": "buy.press",
+        "projectId": "purchase",
+        "parentId": "buy.interactions",
+        "kind": "interaction",
+        "type": "interaction",
+        "orderKey": "016",
+        "data": {
+          "kind": "interaction",
+          "enabled": true,
+          "trigger": {
+            "type": "press"
+          }
+        }
+      },
+      {
+        "id": "buy.purchase",
+        "projectId": "purchase",
+        "parentId": "buy.press",
+        "kind": "interaction_action",
+        "type": "interaction_action",
+        "orderKey": "017",
+        "data": {
+          "kind": "interaction_action",
+          "action": {
+            "type": "purchase",
+            "placementId": {
+              "ref": {
+                "kind": "path",
+                "viewModelName": "Runtime",
+                "path": "paywall.selectedProduct.placementId",
+                "isRelative": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "select",
+        "projectId": "purchase",
+        "parentId": "screen.tree",
+        "kind": "view",
+        "type": "view",
+        "orderKey": "018",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "select",
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "x": 10,
+                "y": 10,
+                "width": 300,
+                "height": 80,
+                "backgroundColor": "#14806b"
+              },
+              "accessibilityRole": "button",
+              "accessibilityLabel": "Select lifetime plan"
+            }
+          }
+        },
+        "screenId": "screen"
+      },
+      {
+        "id": "plan.animations",
+        "projectId": "purchase",
+        "parentId": "screen",
+        "kind": "animation_tree",
+        "type": "animation_tree",
+        "orderKey": "019",
+        "data": {
+          "kind": "animation_tree"
+        }
+      },
+      {
+        "id": "plan.selection",
+        "projectId": "purchase",
+        "parentId": "plan.animations",
+        "kind": "state_machine",
+        "type": "state_machine",
+        "orderKey": "020",
+        "data": {
+          "kind": "state_machine",
+          "name": "Plan selection",
+          "instantiateOnNestedOccurrence": false,
+          "listeners": [
+            {
+              "id": "select.listener",
+              "targetObjectKey": "select",
+              "listenerType": "click",
+              "actions": [
+                {
+                  "id": "select.product",
+                  "type": "viewModelChange",
+                  "ref": {
+                    "viewModelPathIds": [
+                      100,
+                      1
+                    ],
+                    "propertyId": 3
+                  },
+                  "value": "product-annual"
+                }
+              ]
+            }
+          ]
+        },
+        "screenId": "screen"
+      },
+      {
+        "id": "plan.selection.layer",
+        "projectId": "purchase",
+        "parentId": "plan.selection",
+        "kind": "state_machine_layer",
+        "type": "state_machine_layer",
+        "orderKey": "021",
+        "data": {
+          "kind": "state_machine_layer"
+        }
+      },
+      {
+        "id": "plan.selection.entry",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "022",
+        "data": {
+          "kind": "layer_state",
+          "type": "entry"
+        }
+      },
+      {
+        "id": "plan.selection.any",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "023",
+        "data": {
+          "kind": "layer_state",
+          "type": "any"
+        }
+      },
+      {
+        "id": "plan.selection.exit",
+        "projectId": "purchase",
+        "parentId": "plan.selection.layer",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "orderKey": "024",
+        "data": {
+          "kind": "layer_state",
+          "type": "exit"
+        }
+      },
+      {
+        "id": "Runtime",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "view_model",
+        "type": "view_model",
+        "name": "Runtime",
+        "orderKey": "018",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 100,
+          "properties": {
+            "paywall": {
+              "type": "viewModel",
+              "propertyId": 1,
+              "viewModelId": "Paywall"
+            }
+          }
+        }
+      },
+      {
+        "id": "Paywall",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "view_model",
+        "type": "view_model",
+        "name": "Paywall",
+        "orderKey": "019",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 102,
+          "properties": {
+            "products": {
+              "type": "list",
+              "propertyId": 1,
+              "itemType": {
+                "type": "viewModel",
+                "viewModelId": "PaywallProduct"
+              }
+            },
+            "selectedProduct": {
+              "type": "viewModel",
+              "propertyId": 2,
+              "viewModelId": "PaywallProduct"
+            },
+            "selectedProductId": {
+              "type": "string",
+              "propertyId": 3,
+              "defaultValue": "product-monthly"
+            },
+            "selectedIndex": {
+              "type": "number",
+              "propertyId": 4,
+              "defaultValue": 0
+            },
+            "marker": {
+              "type": "string",
+              "propertyId": 5,
+              "defaultValue": "authored parent"
+            }
+          }
+        }
+      },
+      {
+        "id": "PaywallProduct",
+        "projectId": "purchase",
+        "parentId": "root",
+        "kind": "view_model",
+        "type": "view_model",
+        "name": "PaywallProduct",
+        "orderKey": "020",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 101,
+          "properties": {
+            "productId": {
+              "type": "string",
+              "propertyId": 1,
+              "defaultValue": ""
+            },
+            "placementId": {
+              "type": "string",
+              "propertyId": 2,
+              "defaultValue": ""
+            },
+            "isSelected": {
+              "type": "boolean",
+              "propertyId": 3,
+              "defaultValue": false
+            }
+          }
+        }
+      },
+      {
+        "id": "monthly",
+        "projectId": "purchase",
+        "parentId": "PaywallProduct",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "name": "Monthly",
+        "orderKey": "021",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "productId": "product-monthly",
+            "placementId": "authored-monthly",
+            "isSelected": true
+          }
+        }
+      },
+      {
+        "id": "annual",
+        "projectId": "purchase",
+        "parentId": "PaywallProduct",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "name": "Annual",
+        "orderKey": "022",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "productId": "product-annual",
+            "placementId": "authored-annual",
+            "isSelected": false
+          }
+        }
+      },
+      {
+        "id": "paywall",
+        "projectId": "purchase",
+        "parentId": "Paywall",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "name": "paywall",
+        "orderKey": "023",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "products": [
+              {
+                "vmInstanceId": "monthly"
+              },
+              {
+                "vmInstanceId": "annual"
+              }
+            ],
+            "selectedProduct": {
+              "vmInstanceId": "monthly"
+            },
+            "selectedProductId": "product-monthly",
+            "selectedIndex": 0,
+            "marker": "authored parent"
+          }
+        }
+      },
+      {
+        "id": "root-sdk-id",
+        "projectId": "purchase",
+        "parentId": "Runtime",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "name": "root-sdk-id",
+        "orderKey": "024",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "paywall": {
+              "vmInstanceId": "paywall"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "designSystem": {
+    "screenDesignSystems": []
+  }
+}

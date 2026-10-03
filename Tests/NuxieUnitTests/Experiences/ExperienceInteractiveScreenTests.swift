@@ -2765,6 +2765,142 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
     }
 
+    func testNativePaywallTapUpdatesTheHydratedProductReference() async throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/paywall-selection/screen.riv")
+        var values: [JourneyViewModelValue] = [
+            .init(viewModelName: "Runtime", instanceId: "root-sdk-id", path: "paywall/products",
+                value: AnyCodable([["vmInstanceId": "monthly"], ["vmInstanceId": "annual"]])),
+            .init(viewModelName: "Runtime", instanceId: "root-sdk-id", path: "paywall/selectedProduct",
+                value: AnyCodable(["vmInstanceId": "monthly"])),
+            .init(viewModelName: "Runtime", instanceId: "root-sdk-id", path: "paywall/selectedProductId",
+                value: AnyCodable("product-monthly")),
+        ]
+        for plan in ["monthly", "annual"] {
+            for (path, value) in [("productId", "product-\(plan)"), ("placementId", "signed-\(plan)")] {
+                values.append(.init(viewModelName: "PaywallProduct", instanceId: plan,
+                    instanceName: plan == "monthly" ? "Monthly" : "Annual", path: path, value: AnyCodable(value)))
+            }
+        }
+        let payload = try await statePayload(defaultViewModelName: "Runtime", values: values,
+            scene: Data(contentsOf: fixture), artboardName: "Paywall")
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        let state = ExperienceViewModelStateCoordinator(screens: payload.journey)
+        let target = VmPathRef(viewModelName: "Runtime", path: "paywall.selectedProduct.placementId", isRelative: false)
+        XCTAssertEqual(state.getPurchaseValue(path: target, screenId: "state-screen", instanceId: nil) as? String, "signed-monthly")
+        let initial = try await screen.snapshot()
+        guard case .referencedInstance(let parent) = initial.values.first(where: {
+            $0.ownerInstanceID == initial.rootInstanceID && $0.name == "paywall"
+        })?.value else { return XCTFail("Expected the authored paywall parent") }
+        XCTAssertEqual(initial.values.first { $0.ownerInstanceID == parent && $0.name == "marker" }?.value,
+            .bytes(Data("authored parent".utf8)))
+        let monthly = try await screen.viewModel(named: "PaywallProduct", instanceID: "monthly")
+        let annual = try await screen.viewModel(named: "PaywallProduct", instanceID: "annual")
+        XCTAssertEqual(initial.values.first { $0.ownerInstanceID == parent && $0.name == "products" }?.value,
+            .list([monthly.rawValue, annual.rawValue]))
+        XCTAssertEqual(initial.values.first { $0.ownerInstanceID == parent && $0.name == "selectedProduct" }?.value,
+            .referencedInstance(monthly.rawValue))
+
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        let down = try await screen.step(pointers: [.init(kind: .down, x: 80, y: 40)], elapsedSeconds: 0)
+        let up = try await screen.step(pointers: [.init(kind: .up, x: 80, y: 40, timestamp: 0.1)], elapsedSeconds: 0)
+        let settled = try await screen.step(elapsedSeconds: 0.016)
+        var selections = 0
+        for effect in down.effects + up.effects + settled.effects {
+            guard case .viewModelChange(let change) = effect.kind, change.origin == .runtime else { continue }
+            let resolved = try await screen.resolveViewModelChange(change)
+            guard resolved.path == "paywall/selectedProductId", case .string(let id) = resolved.value else { continue }
+            selections += 1
+            XCTAssertEqual(id, "product-annual")
+            let updates = state.applyRendererValue(path: .init(viewModelName: resolved.viewModelName, path: resolved.path),
+                value: id, screenId: "state-screen", instanceId: resolved.instanceID)
+            for update in try ExperienceInteractiveStateCompiler.signedValues(updates) {
+                _ = try await screen.applyStateCommand(.value(update))
+            }
+        }
+        XCTAssertGreaterThan(selections, 0, "The real pointer must produce the selection write")
+        XCTAssertEqual(state.getPurchaseValue(path: target, screenId: "state-screen", instanceId: nil) as? String, "signed-annual")
+        let selected = try await screen.snapshot()
+        XCTAssertEqual(selected.values.first { $0.ownerInstanceID == parent && $0.name == "selectedProduct" }?.value,
+            .referencedInstance(annual.rawValue))
+        XCTAssertEqual(selected.values.first { $0.ownerInstanceID == parent && $0.name == "selectedIndex" }?.value, .number(1))
+    }
+
+    func testNormallyPublishedPaywallPreservesDynamicPurchaseAfterNativeSelection() async throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/rendered-paywall-selection")
+        let payload = try await authenticatedFixturePayload(at: fixture)
+        let screenID = try XCTUnwrap(payload.journey.screens.first?.id)
+        let state = ExperienceViewModelStateCoordinator(screens: payload.journey)
+        let target = VmPathRef(viewModelName: "Runtime", path: "paywall.selectedProduct.placementId", isRelative: false)
+        XCTAssertEqual(state.getPurchaseValue(path: target, screenId: screenID, instanceId: nil) as? String, "paywall-capability:0")
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 320, pixelHeight: 150)
+        defer { Task { try? await screen.close() } }
+        let initial = try await screen.snapshot()
+        guard case .referencedInstance(let parent) = initial.values.first(where: {
+            $0.ownerInstanceID == initial.rootInstanceID && $0.name == "paywall"
+        })?.value else { return XCTFail("Normal publication must preserve the authored paywall object") }
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        let down = try await screen.step(pointers: [.init(kind: .down, x: 80, y: 40)], elapsedSeconds: 0)
+        let up = try await screen.step(pointers: [.init(kind: .up, x: 80, y: 40, timestamp: 0.1)], elapsedSeconds: 0)
+        let settled = try await screen.step(elapsedSeconds: 0.016)
+        var writes = 0
+        for effect in down.effects + up.effects + settled.effects {
+            guard case .viewModelChange(let change) = effect.kind, change.origin == .runtime else { continue }
+            let resolved = try await screen.resolveViewModelChange(change)
+            guard resolved.path == "paywall/selectedProductId", case .string(let id) = resolved.value else { continue }
+            XCTAssertEqual(id, "product-annual")
+            writes += 1
+            for update in try ExperienceInteractiveStateCompiler.signedValues(state.applyRendererValue(
+                path: .init(viewModelName: resolved.viewModelName, path: resolved.path), value: id,
+                screenId: screenID, instanceId: resolved.instanceID)) {
+                _ = try await screen.applyStateCommand(.value(update))
+            }
+        }
+        XCTAssertGreaterThan(writes, 0)
+        XCTAssertEqual(state.getPurchaseValue(path: target, screenId: screenID, instanceId: nil) as? String, "paywall-capability:1")
+        let selected = try await screen.snapshot()
+        XCTAssertEqual(selected.values.first { $0.ownerInstanceID == parent && $0.name == "selectedIndex" }?.value, .number(1))
+        let buyDown = try await screen.step(pointers: [.init(kind: .down, x: 80, y: 120)], elapsedSeconds: 0)
+        let buyUp = try await screen.step(pointers: [.init(kind: .up, x: 80, y: 120, timestamp: 0.2)], elapsedSeconds: 0)
+        XCTAssertEqual((buyDown.effects + buyUp.effects).filter {
+            if case .controlAction(let id, _) = $0.kind { return id == "buy" }; return false
+        }.count, 1)
+        try await screen.close()
+    }
+
+    func testSignedNestedReferencePreservesItsAuthoredParent() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test", values: [
+            .init(viewModelName: "Test", instanceId: "root-sdk-id",
+                path: "Nested/String", value: AnyCodable("parent retained")),
+            .init(viewModelName: "Test", instanceId: "root-sdk-id",
+                path: "Nested/DeeperNested", value: AnyCodable([
+                    "vmInstanceId": "signed-child",
+                    "values": ["String": "signed child"],
+                ] as [String: Any])),
+        ])
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload,
+            player: .stateMachine("State Machine 1"), pixelWidth: 16, pixelHeight: 16)
+        defer { Task { try? await screen.close() } }
+        let snapshot = try await screen.snapshot()
+        guard case .referencedInstance(let parent) = snapshot.values.first(where: {
+            $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "Nested"
+        })?.value,
+        case .referencedInstance(let child) = snapshot.values.first(where: {
+            $0.ownerInstanceID == parent && $0.name == "DeeperNested"
+        })?.value else { return XCTFail("Expected the signed nested reference") }
+        XCTAssertEqual(snapshot.values.first {
+            $0.ownerInstanceID == parent && $0.name == "String"
+        }?.value, .bytes(Data("parent retained".utf8)))
+        XCTAssertEqual(snapshot.values.first {
+            $0.ownerInstanceID == child && $0.name == "String"
+        }?.value, .bytes(Data("signed child".utf8)))
+    }
+
     func testNestedRuntimeChangeResolvesToAuthenticatedRootPath() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         let screen = try await ExperienceInteractiveScreen.open(

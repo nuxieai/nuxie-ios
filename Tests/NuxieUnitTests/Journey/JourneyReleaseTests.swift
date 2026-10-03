@@ -655,6 +655,50 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateRenderRequirements(root))
     }
 
+    func testSignedPaywallSelectionRequiresTheSDKProjectionCapability() throws {
+        let fixture = try golden(entryKey: "renderedEntry")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let current = JourneyReleaseRuntime.current
+        let luau = try XCTUnwrap(current.supportedLuauRevisions.first)
+        root["requirements"] = [
+            "minimumSdkVersion": current.currentSdkVersion,
+            "runtimeRevision": try XCTUnwrap(current.supportedRuntimeRevisions.first),
+            "luau": ["revision": luau.key, "bytecodeVersions": luau.value.sorted()],
+            "sceneFormat": ["major": current.sceneFormat.major, "minor": current.sceneFormat.minor],
+            "timezoneData": ["format": "iana-tzdb", "revision": current.timezoneDataRevision,
+                             "sha256": current.timezoneDataSHA256],
+            "requiredCapabilities": ["paywall.selection.v1"],
+        ]
+        let envelope = try sign(JSONSerialization.data(withJSONObject: root))
+        let leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        let unsupported = JourneyReleaseSupportedRuntime(
+            currentSdkVersion: current.currentSdkVersion,
+            supportedRuntimeRevisions: current.supportedRuntimeRevisions,
+            supportedLuauRevisions: current.supportedLuauRevisions,
+            sceneFormat: current.sceneFormat,
+            timezoneDataRevision: current.timezoneDataRevision,
+            timezoneDataSHA256: current.timezoneDataSHA256,
+            supportedCapabilities: current.supportedCapabilities.subtracting(["paywall.selection.v1"]))
+        for (runtime, accepted) in [(current, true), (unsupported, false)] {
+            let authenticate = {
+                try JourneyReleaseVerifier().authenticateJourney(
+                    envelopeBytes: JSONEncoder().encode(envelope),
+                    authorizationKeys: [self.key(self.signingKey.publicKey.rawRepresentation)],
+                    expectedIdentity: fixture.identity, expectedLegId: try XCTUnwrap(leg["id"] as? String),
+                    supportedRuntime: runtime, replayPolicy: .active(minimumPublishedAtSeq: 0))
+            }
+            if accepted {
+                XCTAssertNoThrow(try authenticate())
+            } else {
+                XCTAssertThrowsError(try authenticate()) { error in
+                    XCTAssertEqual(error as? JourneyReleaseAuthenticationError,
+                                   .unsupportedCapabilities(["paywall.selection.v1"]))
+                }
+            }
+        }
+    }
+
     func testSignedSystemFontRequiresConsumerCapability() throws {
         let root = try systemFontRoot()
         let envelope = try sign(JSONSerialization.data(withJSONObject: root))

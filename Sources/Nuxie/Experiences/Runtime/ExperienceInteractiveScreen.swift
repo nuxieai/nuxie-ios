@@ -4221,7 +4221,7 @@ private enum ExperienceInteractiveInitialState {
                 order: &requestOrder
             )
             let property = try compiler.property(at: value.path, startingWith: schema.index)
-            if property.kind == .viewModel, !value.path.contains("/") {
+            if property.kind == .viewModel {
                 let referenced = try referencedInstance(
                     value.value,
                     expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4238,7 +4238,7 @@ private enum ExperienceInteractiveInitialState {
                     requests: &requests,
                     order: &requestOrder
                 )
-            } else if property.kind == .list, !value.path.contains("/") {
+            } else if property.kind == .list {
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }
@@ -4324,7 +4324,7 @@ private enum ExperienceInteractiveInitialState {
             }
             let property = try compiler.property(at: value.path, startingWith: schema.index)
             switch property.kind {
-            case .viewModel where !value.path.contains("/"):
+            case .viewModel:
                 let referenced = try referencedInstance(
                     value.value,
                     expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4357,7 +4357,7 @@ private enum ExperienceInteractiveInitialState {
                     schema: referenced.schema,
                     compiler: compiler
                 )
-            case .list where !value.path.contains("/"):
+            case .list:
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }

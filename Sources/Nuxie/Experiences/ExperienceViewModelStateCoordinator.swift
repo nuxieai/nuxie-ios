@@ -81,8 +81,10 @@ final class ExperienceViewModelStateCoordinator {
     private var instanceViewModelNames: [String: String] = [:]
     private var defaultInstanceByViewModelName: [String: String] = [:]
     private var firstViewModelName: String?
+    private let declaredValues: [JourneyViewModelValue]
 
     init(screens: JourneyDocument) {
+        self.declaredValues = screens.viewModelValues ?? []
         self.screenDefaults = Dictionary(
             uniqueKeysWithValues: screens.screens.map {
                 (
@@ -170,6 +172,67 @@ final class ExperienceViewModelStateCoordinator {
             firstViewModelName = resolved.viewModelName
         }
         return true
+    }
+
+    /// Selection is a file-authored data write. Only products in this screen's
+    /// signed list may become the purchase target; renderer writes cannot expand it.
+    func applyRendererValue(
+        path: VmPathRef,
+        value: Any,
+        screenId: String?,
+        instanceId: String?
+    ) -> [JourneyViewModelValue] {
+        guard let resolved = resolve(path, screenId: screenId, instanceId: instanceId) else { return [] }
+        let isSelection = path.path == "paywall/selectedProductId"
+        if isSelection {
+            guard let defaults = screenId.flatMap({ screenDefaults[$0] }),
+                  defaults.viewModelName == resolved.viewModelName,
+                  defaults.instanceId == resolved.instanceId else { return [] }
+        }
+        guard setValue(path: path, value: value, screenId: screenId, instanceId: instanceId),
+              isSelection else { return [] }
+
+        let declarations = declaredValues.filter {
+            $0.viewModelName == resolved.viewModelName && $0.instanceId == resolved.instanceId
+                && $0.path == "paywall/products"
+        }
+        let declaredRows = declarations.count == 1 ? arrayValue(declarations[0].value.value) : []
+        let declaredInstances = declaredRows.compactMap { linkedInstanceId(from: $0) }
+        let rows = arrayValue(storedValue(viewModelName: resolved.viewModelName,
+            instanceId: resolved.instanceId, path: "paywall/products"))
+        let productInstances = rows.compactMap { linkedInstanceId(from: $0) }
+        let selectedID = resolveLiteralValue(value) as? String
+        let matches = productInstances.enumerated().filter { _, productInstance in
+            let ids = declaredValues.filter {
+                $0.viewModelName == "PaywallProduct" && $0.instanceId == productInstance
+                    && $0.path == "productId"
+            }
+            return selectedID != nil && ids.count == 1 && ids[0].value.value as? String == selectedID
+        }
+        let validList = declaredInstances.count == declaredRows.count
+            && productInstances.count == rows.count
+            && Set(productInstances).count == productInstances.count
+            && productInstances.allSatisfy { declaredInstances.contains($0) }
+        let selected = validList && matches.count == 1 ? matches.first : nil
+        let selectedLink: Any = selected.map { ["vmInstanceId": $0.element] as Any } ?? NSNull()
+        var changes = [
+            JourneyViewModelValue(viewModelName: resolved.viewModelName,
+                instanceId: resolved.instanceId, path: "paywall/selectedIndex",
+                value: AnyCodable(selected?.offset ?? -1)),
+            JourneyViewModelValue(viewModelName: resolved.viewModelName,
+                instanceId: resolved.instanceId, path: "paywall/selectedProduct",
+                value: AnyCodable(selectedLink)),
+        ]
+        for productInstance in Set(declaredInstances).sorted() {
+            changes.append(JourneyViewModelValue(viewModelName: "PaywallProduct",
+                instanceId: productInstance, path: "isSelected",
+                value: AnyCodable(productInstance == selected?.element)))
+        }
+        for change in changes {
+            _ = setValue(path: VmPathRef(viewModelName: change.viewModelName, path: change.path),
+                value: change.value.value, screenId: screenId, instanceId: change.instanceId)
+        }
+        return changes
     }
 
     /// Explicit purchase scopes never substitute a different occurrence or an arbitrary model default.
@@ -312,7 +375,12 @@ final class ExperienceViewModelStateCoordinator {
         var viewModelName = resolved.viewModelName
         var instanceId = resolved.instanceId
         var index = 0
-        if let namedInstanceId = resolveInstanceId(named: segments[0]),
+        let rootInstance = instanceId ?? defaultInstanceByViewModelName[viewModelName]
+        let hasRootPrefix = values.keys.contains { key in
+            key.viewModelName == viewModelName && (key.instanceId == rootInstance || key.instanceId == nil)
+                && (key.path == segments[0] || key.path.hasPrefix("\(segments[0])/"))
+        }
+        if !hasRootPrefix, let namedInstanceId = resolveInstanceId(named: segments[0]),
            let namedViewModel = instanceViewModelNames[namedInstanceId] {
             viewModelName = namedViewModel
             instanceId = namedInstanceId
@@ -321,13 +389,20 @@ final class ExperienceViewModelStateCoordinator {
 
         var current: Any?
         while index < segments.count {
-            current = storedValue(
-                viewModelName: viewModelName,
-                instanceId: instanceId,
-                path: segments[index]
-            )
+            // Published values flatten nested properties with slash-separated paths.
+            // Resolve the longest stored prefix before following its instance link.
+            var consumed = 0
+            for end in stride(from: segments.count, through: index + 1, by: -1) {
+                if let value = storedValue(viewModelName: viewModelName, instanceId: instanceId,
+                    path: segments[index..<end].joined(separator: "/")) {
+                    current = value
+                    consumed = end - index
+                    break
+                }
+            }
+            guard consumed > 0 else { return nil }
             guard let current else { return nil }
-            index += 1
+            index += consumed
             if index == segments.count {
                 return unwrap(current)
             }

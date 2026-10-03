@@ -9,6 +9,28 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    func testNestedPaywallProductListAcceptsSignedProductInstances() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/paywall-selection")
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")),
+            artboardName: "Paywall", player: .staticArtboard, pixelWidth: 320, pixelHeight: 100,
+            bindDefaultViewModel: true)
+        defer { Task { try? await runtime.close() } }
+        let catalog = try await runtime.viewModelCatalog()
+        let product = try XCTUnwrap(catalog.schemas.first { $0.name == "PaywallProduct" })
+        let root = try await runtime.rootViewModelReference()
+        let child = try await runtime.makeViewModel(schemaIndex: product.index)
+        _ = try await runtime.mutateViewModel([.listClear(instance: root, path: "paywall/products")], correlationID: 1)
+        _ = try await runtime.mutateViewModel([
+            .listInsert(instance: root, path: "paywall/products", index: 0, value: child),
+        ], correlationID: 2)
+        let snapshot = try await runtime.snapshot()
+        XCTAssertTrue(snapshot.values.contains { $0.name == "products" && $0.value == .list([child.rawValue]) })
+        try await runtime.close()
+    }
+
     #if os(iOS)
     func testMixedSystemAndCDNFontsRenderBothTextRows() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

@@ -21,6 +21,22 @@ These JSON vectors define the contracts shared by SDK implementations.
 
 The signed release fixture is the only release wire shape. Tests consume it directly and never rebuild a retired runtime model.
 
+- `journeys/rendered-paywall-selection/`: a normal publisher-generated signed
+  release and content-addressed `.nux` render with two local StoreKitTest products.
+  Authored selection writes a catalog product ID; the signed purchase action keeps
+  its dynamic `paywall.selectedProduct.placementId` reference. The native unit
+  suite qualifies admission, hydration and pointer selection, and
+  `PublishedPaywallSelectionStoreKitTests` buys the default product and then the
+  selected second product through hosted UIKit and the native commerce handler.
+  This is presentation-boundary qualification; it does not cover the durable
+  Journey executor, a physical-device App Store sandbox, or provider equivalence.
+  Regenerate from the parent monorepo with
+  `bun tools/sdk-fixtures/generate-paywall-selection-fixture.mjs`.
+- `runtime/paywall-selection/`: small raw authored-runtime fixture for nested
+  product-list/reference hydration and native pointer callback regressions.
+  `snapshot.json`, `report.json` and provenance accompany the generated scene;
+  the signed-publication fixture above supplies the broader purchase proof.
+
 - `journeys/planes/text-input-typography.json`: native multiline font size and baseline intervals, natural line-height sentinel, contain/geometry scaling, and restyling invariants. Consumers compare actual native layout with independently configured platform controls.
 - `journeys/planes/text-input-response-capture.json`: accepted raw text versus evaluated binding-source capture, scalar types, missing-source rejection, and secure-entry boundaries.
 

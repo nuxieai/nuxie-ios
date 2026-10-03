@@ -449,13 +449,22 @@ final class JourneyRuntimeDelegate {
         _ controller: ExperienceViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {
-        _ = controller
-        _ = viewModelState?.setValue(
+        guard !resolved, let activeScreenId,
+              change.screenId == activeScreenId else { return }
+        let projected = viewModelState?.applyRendererValue(
             path: change.path,
             value: change.value,
             screenId: change.screenId,
             instanceId: change.instanceId
-        )
+        ) ?? []
+        for value in projected {
+            // Native view-model references are non-nullable. An invalid selection
+            // clears the Journey target above and deselects every product below.
+            if value.value.value is NSNull { continue }
+            controller.applyViewModelValue(
+                path: VmPathRef(viewModelName: value.viewModelName, path: value.path),
+                value: value.value.value, screenId: activeScreenId, instanceId: value.instanceId)
+        }
     }
 
     func experienceViewController(
