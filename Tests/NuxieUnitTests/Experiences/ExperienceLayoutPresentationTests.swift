@@ -67,6 +67,57 @@ final class ExperienceLayoutPresentationTests: XCTestCase {
         await loop.shutdown()
         window.isHidden = true
     }
+    @MainActor
+    func testScaleChangeWithIdenticalPixelsStillSettlesPointSize() async throws {
+        guard #available(iOS 17, *) else { throw XCTSkip("Display-scale overrides require iOS 17") }
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = LayoutSessionRecorder(device: device)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.traitOverrides.displayScale = 3
+        let view = ExperienceRuntimeSurfaceView(frame: window.bounds)
+        window.addSubview(view)
+        window.isHidden = false
+        let loop = ExperienceRuntimePresentationLoop(
+            session: .init(perform: { try await recorder.perform($0) }),
+            surfaceView: view, usesSystemDisplayLink: false,
+            acquireDrawable: { _ in nil }, onError: { XCTFail("\($0)") })
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let first = await recorder.waitForRenders(1)
+        XCTAssertTrue(first)
+        window.traitOverrides.displayScale = 2
+        view.frame.size = CGSize(width: 589.5, height: 1278)
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        loop.displayLinkDidFire(at: 2)
+        let second = await recorder.waitForRenders(2)
+        XCTAssertTrue(second)
+        let events = await recorder.recordedEvents()
+        XCTAssertEqual(Array(events.suffix(3)), ["size:589.5,1278.0", "step:0.0", "render:2.0"])
+        await loop.shutdown()
+        window.isHidden = true
+    }
+
+    @MainActor
+    func testUnattachedViewDoesNotDrawAndZeroScaleHasNoPixelExtent() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = LayoutSessionRecorder(device: device)
+        let view = ExperienceRuntimeSurfaceView(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        XCTAssertNil(view.window)
+        XCTAssertEqual(ExperienceRuntimeSurfaceSizing.pixels(width: 393, height: 852, scale: 0),
+            ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0, layoutScaleFactor: 0))
+        let loop = ExperienceRuntimePresentationLoop(
+            session: .init(perform: { try await recorder.perform($0) }),
+            surfaceView: view, usesSystemDisplayLink: false,
+            acquireDrawable: { _ in XCTFail("Unattached views must not acquire a drawable"); return nil },
+            onError: { XCTFail("\($0)") })
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        await loop.shutdown()
+        let events = await recorder.recordedEvents()
+        XCTAssertFalse(events.contains { $0.hasPrefix("render:") || $0.hasPrefix("step:") })
+    }
+
 }
 
 private actor LayoutSessionRecorder {
