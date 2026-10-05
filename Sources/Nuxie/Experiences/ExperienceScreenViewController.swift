@@ -82,6 +82,8 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     )
 
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)?
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
@@ -97,6 +99,12 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         _ controller: ExperienceScreenViewController,
         didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput
     )
+}
+
+extension ExperienceScreenViewControllerDelegate {
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)? {
+        { [self, controller] request in await experienceScreenViewController(controller, didRequestOpenLink: request) }
+    }
 }
 
 private enum ExperienceInteractiveScreenControllerError: LocalizedError {
@@ -976,6 +984,7 @@ final class ExperienceScreenViewController: UIViewController {
     func deliverStep(effects: [ExperienceInteractiveEffect]) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
+        let openLink = delegate?.captureLinkHandler(for: self)
         var assembler = ExperienceRuntimeScreenEmissionAssembler()
         var frameSources = ExperienceEmissionSources()
         var links: [ExperienceRendererOpenLinkRequest] = []
@@ -1018,10 +1027,7 @@ final class ExperienceScreenViewController: UIViewController {
             )
         }
         for link in links {
-            Task { @MainActor [weak self] in
-                guard let self, !self.isShuttingDown else { return }
-                await self.delegate?.experienceScreenViewController(self, didRequestOpenLink: link)
-            }
+            Task { @MainActor in await openLink?(link) }
         }
     }
 
@@ -1069,7 +1075,7 @@ final class ExperienceScreenViewController: UIViewController {
             if !event.url.isEmpty {
                 return .link(ExperienceRendererOpenLinkRequest(
                     urlString: event.url,
-                    target: event.target.isEmpty ? nil : event.target,
+                    target: event.target,
                     screenId: screenId,
                     instanceId: instanceID
                 ))

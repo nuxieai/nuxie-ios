@@ -432,3 +432,13 @@ subscription state, quotas, and credits.
 ## License
 
 Licensed under the terms in `LICENSE`.
+
+Links use the same state table for runtime hrefs and Journey steps. A settled, owned
+Experience opens web links in-app from its topmost controller for an omitted target,
+`_self`, `_parent`, `_top`, or `in_app`. `_blank` and `external` use the browser.
+Closing, closed, and screenless Experiences use the browser or system for every link.
+Background apps open and record nothing. Non-web schemes go to the system only when
+available. Broken Journey link steps advance without opening, recording, or dismissing.
+`$link_opened` and the public `linkOpened` activity include the actual `destination`
+(`in_app` or `external`) and the original optional `target`. Successful Journey links
+record under the step identity before `$journey_leg_completed`.

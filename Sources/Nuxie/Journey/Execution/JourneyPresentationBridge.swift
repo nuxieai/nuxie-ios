@@ -171,6 +171,9 @@ enum JourneyPresentationActionResult: Equatable, Sendable {
 }
 
 protocol JourneyPresenting: AnyObject, Sendable {
+    @MainActor
+    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?
+
     /// Re-opens presentation admission after foreground profile authority and
     /// its dependent projections are current.
     @MainActor
@@ -230,6 +233,11 @@ protocol JourneyPresenting: AnyObject, Sendable {
     func shutdownJourneyPresentation(ownerDistinctId: String) async
 }
 
+extension JourneyPresenting {
+    @MainActor
+    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest? { nil }
+}
+
 @MainActor
 final class JourneyRuntimeDelegate {
     nonisolated let introEligibilityAuthorizationContext:
@@ -238,6 +246,7 @@ final class JourneyRuntimeDelegate {
     private(set) var presentationTraceContext:
         ExperiencePresentationTraceContext?
     private let presentationTraceToken: ExperiencePresentationTraceToken?
+    private let openLinkHandler: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)?
     private let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) async -> Void
     private let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
@@ -262,7 +271,7 @@ final class JourneyRuntimeDelegate {
     private let viewModelState: ExperienceViewModelStateCoordinator?
     private var responseProjection: JourneyResponseViewModelProjection
     private let initialScreenId: String
-    private var activeScreenId: String?
+    private(set) var activeScreenId: String?
     private var navigationHistory: [String] = []
     private var pendingBackNavigation: (target: String, history: [String])?
     private var dismissedSurfaceScreenId: String?
@@ -274,7 +283,9 @@ final class JourneyRuntimeDelegate {
     private var resolved = false
     private var resolutionWaiters: [CheckedContinuation<Bool, Never>]?
 
-    init(request: JourneyPresentationRequest) {
+    init(request: JourneyPresentationRequest,
+         openLink: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)? = nil) {
+        openLinkHandler = openLink
         introEligibilityAuthorizationContext = .init(
             distinctId: request.owner.distinctId,
             journeyId: request.owner.journeyId,
@@ -474,12 +485,8 @@ final class JourneyRuntimeDelegate {
 
     @discardableResult
     func openLink(_ controller: ExperienceViewController, request: ExperienceRendererOpenLinkRequest) async -> Bool {
-        guard !resolved, request.screenId == nil || request.screenId == activeScreenId,
-              await controller.performOpenLink(urlString: request.urlString, target: request.target) else { return false }
-        await onLinkOpened(.init(urlString: request.urlString,
-            target: request.target,
-            screenId: request.screenId ?? activeScreenId, instanceId: request.instanceId, effectId: request.effectId,
-            destination: ExperienceLinkRouting.destination(urlString: request.urlString, target: request.target)?.inApp == true ? "in_app" : "external"))
+        guard let opened = await openLinkHandler?(controller, request) else { return false }
+        await onLinkOpened(opened)
         return true
     }
 

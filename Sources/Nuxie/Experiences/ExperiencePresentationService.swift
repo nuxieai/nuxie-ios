@@ -1,4 +1,8 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+import SafariServices
+#endif
 
 /// Host control for the single Journey-owned presentation surface.
 protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
@@ -100,6 +104,17 @@ final class ExperiencePresentationService {
     private let eventLog: EventCapturing
     private let windowProvider: WindowProviderProtocol
     
+    #if canImport(UIKit)
+    typealias LinkHandoff = @MainActor @Sendable (URL, UIViewController?) async -> Bool
+    var linkHandoff: LinkHandoff = { url, controller in
+        if let controller {
+            controller.present(SFSafariViewController(url: url), animated: true)
+            return true
+        }
+        return await UIApplication.shared.open(url, options: [:])
+    }
+    #endif
+
     // MARK: - State
     
     internal var currentWindow: PresentationWindowProtocol?
@@ -151,6 +166,43 @@ final class ExperiencePresentationService {
         self.eventLog = eventLog
     }
     
+    /// Derive lifecycle state at handoff, including retirement during batch admission.
+    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest? {
+        await openJourneyLink(owner: owner, request: request, originatingController: nil)
+    }
+
+    private func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest,
+                                 originatingController: ExperienceViewController?) async -> ExperienceRendererOpenLinkRequest? {
+        let screenId = request.screenId ?? (ownsJourneyPresentation(owner: owner)
+            ? (currentRuntimeDelegate as? JourneyRuntimeDelegate)?.activeScreenId : nil)
+        var state = ExperienceLinkRouting.State.closed
+        #if canImport(UIKit)
+        var host: UIViewController?
+        if appIsForeground && UIApplication.shared.activeWindowScene != nil {
+            if ownsJourneyPresentation(owner: owner), let controller = currentExperienceViewController,
+               originatingController == nil || originatingController === controller,
+               let id = currentPresentationID, !presentationTeardownIDs.contains(id),
+               !controller.linkPresentationIsClosing, controller.viewIfLoaded?.window != nil,
+               !controller.isBeingPresented, !controller.isBeingDismissed {
+                var top: UIViewController = controller
+                while let presented = top.presentedViewController { top = presented }
+                if !top.isBeingPresented && !top.isBeingDismissed, top.viewIfLoaded?.window != nil {
+                    state = .settled
+                    host = top
+                }
+            }
+        } else { state = .background }
+        guard let route = ExperienceLinkRouting.route(urlString: request.urlString, target: request.target, state: state),
+              await linkHandoff(route.url, route.destination == "in_app" ? host : nil) else { return nil }
+        #else
+        state = appIsForeground ? .closed : .background
+        guard let route = ExperienceLinkRouting.route(urlString: request.urlString, target: request.target, state: state),
+              await ExperienceLinkRouting.openExternal(request.urlString) else { return nil }
+        #endif
+        return .init(urlString: request.urlString, target: request.target, screenId: screenId,
+                     instanceId: request.instanceId, effectId: request.effectId, destination: route.destination)
+    }
+
     // MARK: - Public API
     
     var isExperiencePresented: Bool {
@@ -411,7 +463,9 @@ final class ExperiencePresentationService {
             return .declined
         }
         defer { reservation?.release() }
-        let runtimeDelegate = JourneyRuntimeDelegate(request: request)
+        let runtimeDelegate = JourneyRuntimeDelegate(request: request, openLink: { [weak self] controller, link in
+            await self?.openJourneyLink(owner: request.owner, request: link, originatingController: controller)
+        })
         do {
             _ = try await presentJourneyExperience(
                 request.release.descriptor.identity.experienceVersionId,

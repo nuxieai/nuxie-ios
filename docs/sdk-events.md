@@ -36,6 +36,16 @@ A live run pins its authenticated release and journal. Offline execution can con
 
 See [`fixtures/`](../fixtures/README.md) for portable Journey, event, feature, and purchase vectors.
 
-Runtime links and Journey open-link steps emit `$link_opened` after the URL is handed to the browser or system. Web targets `_self`, `_parent`, `_top`, and an omitted target stay in-app; `_blank` opens externally. Non-web schemes go to the system. Journey `in_app` and `external` targets use the same routing path.
+Runtime links and Journey open-link steps emit `$link_opened` after the URL is handed to the browser or system. With a settled owned screen, web targets `_self`, `_parent`, `_top`, and an omitted target stay in-app; `_blank` opens externally. Non-web schemes go to the system. Journey `in_app` and `external` targets use the same routing path.
 
 The link record includes `destination` (`in_app` or `external`) and retains the authored `target` separately. A Journey link with no owned Experience opens externally. Invalid step inputs and unavailable handlers advance `next` without opening or recording.
+
+Links use the same state table for runtime hrefs and Journey steps. A settled, owned
+Experience opens web links in-app from its topmost controller for an omitted target,
+`_self`, `_parent`, `_top`, or `in_app`. `_blank` and `external` use the browser.
+Closing, closed, and screenless Experiences use the browser or system for every link.
+Background apps open and record nothing. Non-web schemes go to the system only when
+available. Broken Journey link steps advance without opening, recording, or dismissing.
+`$link_opened` and the public `linkOpened` activity include the actual `destination`
+(`in_app` or `external`) and the original optional `target`. Successful Journey links
+record under the step identity before `$journey_leg_completed`.

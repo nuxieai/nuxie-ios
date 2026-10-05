@@ -1939,25 +1939,23 @@ actor ExperienceInteractiveScreen {
                 let videoActive = try await videoPlayback.tick()
                 result.keepGoing = result.keepGoing || videoActive
             }
-            await captureTextFrame(result, requested: capturesTextLayout)
             // Discover generated state on newly materialized components
             // before projecting this frame's changes. Native effects have
             // committed: a recoverable topology failure must not discard them.
-            try? await refreshTrackedTopology()
-            let eventSnapshot = !result.events.isEmpty
-                ? try? await runtime.snapshot() : nil
+            let eventSnapshot = try? await runtime.snapshot()
+            if let eventSnapshot { try? await refreshTrackedTopology(snapshot: eventSnapshot) }
+            await captureTextFrame(result, requested: capturesTextLayout, snapshot: eventSnapshot)
             return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
         }
     }
 
-    private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool) async {
+    private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool, snapshot: NuxieNativeViewModelSnapshot?) {
         guard requested else {
             pendingTextFrame = nil
             return
         }
         // Copy failure cannot discard committed step effects. A missing snapshot
         // travels with this frame so the consumer can withdraw stale editors.
-        let snapshot = try? await runtime.snapshot()
         pendingTextFrame = ExperienceInteractiveTextFrame(
             snapshot: snapshot.map(Self.projectSnapshot), geometry: result.textGeometry)
     }
@@ -2570,6 +2568,7 @@ actor ExperienceInteractiveScreen {
     }
 
     private func refreshTrackedTopology(
+        snapshot suppliedSnapshot: NuxieNativeViewModelSnapshot? = nil,
         preferredLists:
             [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:],
         preferredViewModels:
@@ -2577,7 +2576,9 @@ actor ExperienceInteractiveScreen {
                 ExperienceInteractiveViewModelReference] = [:]
     ) async throws {
         guard let rootViewModelReference else { return }
-        let snapshot = try await runtime.snapshot()
+        let snapshot: NuxieNativeViewModelSnapshot
+        if let suppliedSnapshot { snapshot = suppliedSnapshot }
+        else { snapshot = try await runtime.snapshot() }
         trackedLists = try snapshotTopology.reconcile(
             snapshot: snapshot,
             rootReference: rootViewModelReference,
