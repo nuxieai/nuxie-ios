@@ -210,7 +210,8 @@ protocol JourneyPresenting: AnyObject, Sendable {
     func resolveJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        source: ScreenEmissionSource?
+        source: ScreenEmissionSource?,
+        eventSource: ExperienceResolvedEventSource?
     ) -> [String: JourneyReleaseJSONValue]?
 
     @MainActor
@@ -650,7 +651,8 @@ final class JourneyRuntimeDelegate {
 
     func resolvePresentationString(
         _ value: JourneyReleaseJSONValue,
-        source: ScreenEmissionSource? = nil
+        source: ScreenEmissionSource? = nil,
+        eventSource: ExperienceResolvedEventSource? = nil
     ) -> String? {
         let screenId = source?.screenId ?? activeScreenId
         let instanceId = source?.instanceId
@@ -658,7 +660,10 @@ final class JourneyRuntimeDelegate {
             payload: nil,
             context: nil,
             lookup: { [viewModelState] path in
-                viewModelState?.getPurchaseValue(
+                if path.isRelative == true {
+                    return eventSource?.string(path: path)
+                }
+                return viewModelState?.getPurchaseValue(
                     path: path,
                     screenId: screenId,
                     instanceId: instanceId

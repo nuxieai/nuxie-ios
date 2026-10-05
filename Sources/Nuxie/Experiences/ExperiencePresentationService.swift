@@ -514,7 +514,8 @@ final class ExperiencePresentationService {
     func resolveJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        source: ScreenEmissionSource?
+        source: ScreenEmissionSource?,
+        eventSource: ExperienceResolvedEventSource?
     ) -> [String: JourneyReleaseJSONValue]? {
         guard ownsCurrentJourneyPresentation(owner),
               let type = JourneyActionType(action: action) else {
@@ -525,7 +526,8 @@ final class ExperiencePresentationService {
               let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
               let placementId = delegate.resolvePresentationString(
                 placementValue,
-                source: source
+                source: source,
+                eventSource: eventSource
               ), !placementId.isEmpty else {
             return nil
         }

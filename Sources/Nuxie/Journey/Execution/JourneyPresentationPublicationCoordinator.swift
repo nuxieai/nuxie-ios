@@ -14,6 +14,7 @@ actor JourneyPresentationPublicationCoordinator {
         let run: JourneyRun
         let signal: JourneyControlExecutor.Signal
         let checkpoint: JourneyControlExecutor.Checkpoint?
+        var eventID: String? = nil
     }
 
     struct BatchFailure: Sendable {
@@ -322,7 +323,8 @@ actor JourneyPresentationPublicationCoordinator {
                     event: controlEvent,
                     responsesChanged: publication.responsesChanged
                 ),
-                checkpoint: nil
+                checkpoint: nil,
+                eventID: routedEvent.id
             ))
         }
 
