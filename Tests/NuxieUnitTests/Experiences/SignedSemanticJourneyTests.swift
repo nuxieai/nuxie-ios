@@ -378,8 +378,8 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
         return await base.navigateJourneyPresentation(owner: owner, screenId: screenId, transition: transition)
     }
     func cancelJourneyBackNavigation(owner: JourneyPresentationOwner) { base.cancelJourneyBackNavigation(owner: owner) }
-    func resolveJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], source: ScreenEmissionSource?) -> [String: JourneyReleaseJSONValue]? {
-        base.resolveJourneyPresentationAction(owner: owner, action: action, source: source)
+    func resolveJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], source: ScreenEmissionSource?, eventSource: ExperienceResolvedEventSource?) -> [String: JourneyReleaseJSONValue]? {
+        base.resolveJourneyPresentationAction(owner: owner, action: action, source: source, eventSource: eventSource)
     }
     func dispatchJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], effectId: String) async -> JourneyPresentationActionResult {
         await base.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: effectId)

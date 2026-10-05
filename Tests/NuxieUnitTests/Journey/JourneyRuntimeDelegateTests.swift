@@ -255,6 +255,16 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertTrue(completion.isCompleted)
     }
 
+    private func frameSource(model: String, value: String, nested: Bool) -> ExperienceResolvedEventSource {
+        let values: [ExperienceInteractiveViewModelSnapshot.Value] = nested
+            ? [.init(ownerInstanceID: 2, propertyIndex: 0, name: "product", value: .referencedInstance(3)),
+               .init(ownerInstanceID: 3, propertyIndex: 0, name: "placementId", value: .bytes(Data(value.utf8)))]
+            : [.init(ownerInstanceID: 2, propertyIndex: 0, name: "placementId", value: .bytes(Data(value.utf8)))]
+        return ExperienceResolvedEventSource(nativeID: 2, snapshot: .init(rootInstanceID: 1,
+            instances: [1, 2, 3].map { .init(id: $0, schemaIndex: 0, valueRange: 0..<0) },
+            values: values), schemaNames: [0: model])
+    }
+
     func testSignedPurchaseScopeChoosesTheDeclaredInstance() async throws {
         for (directory, expected) in [("rendered-purchase-scopes", "plan:lifetime"),
                                       ("rendered-purchase-absolute", "plan:monthly")] {
@@ -274,7 +284,8 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                     value: "plan:lifetime", source: "runtime", screenId: "screen",
                     instanceId: "plan.second", isTrigger: false))
             let selected = await delegate.resolvePresentationString(reference, source:
-                ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"))
+                ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"),
+                eventSource: frameSource(model: "Plan", value: "plan:lifetime", nested: false))
             XCTAssertEqual(selected, expected, directory)
             let ambiguous = JourneyReleaseJSONValue.object(["ref": .object([
                 "kind": .string("path"), "path": .string("placementId"),
@@ -373,7 +384,8 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 ScreenEmissionSource(screenId: "screen_welcome", actionId: "purchase",
                     componentId: "buy", instanceId: $0)
             }
-            let resolved = await delegate.resolvePresentationString(vector.reference, source: source)
+            let resolved = await delegate.resolvePresentationString(vector.reference, source: source,
+                eventSource: vector.instanceId == "secondary" ? frameSource(model: "WelcomeModel", value: "golden:secondary", nested: true) : nil)
             XCTAssertEqual(resolved, vector.expected, vector.name)
         }
     }
