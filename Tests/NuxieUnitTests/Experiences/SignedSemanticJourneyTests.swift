@@ -242,6 +242,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             controller.view.window != nil && !controller.isBeingPresented
         }
         var top: UIViewController = controller
+        let probe = LinkHandoffProbe()
         switch state {
         case "sheet_active":
             let sheet = UIViewController()
@@ -250,14 +251,13 @@ final class SignedSemanticJourneyTests: XCTestCase {
             top = sheet
         case "button_dismissing": controller.performDismiss()
         case "swipe_dismissing":
-            controller.dismiss(animated: true)
+            controller.dismiss(animated: true) { probe.dismissalCompleted = true }
             XCTAssertTrue(controller.isBeingDismissed, "Link must be attempted during UIKit dismissal")
         case "host_dismissed": await presentations.dismissCurrentExperienceFromHost()
         case "owner_retired", "presentation_finished", "screenless": await presentations.finishJourneyPresentation(owner: request.owner)
         case "background": presentations.onAppDidEnterBackground()
         default: break
         }
-        let probe = LinkHandoffProbe()
         presentations.linkHandoff = { _, host in
             probe.destinations.append(host == nil ? "external" : "in_app")
             if let host { XCTAssertTrue(host === top, "Sheet links must use the topmost controller") }
@@ -274,10 +274,16 @@ final class SignedSemanticJourneyTests: XCTestCase {
         XCTAssertEqual(probe.destinations.count, (expected["opened"] as? Bool == true || link["canOpen"] as? Bool == false) ? 1 : 0)
         let records = await events.countEvents(name: JourneyEvents.linkOpened, distinctId: request.owner.distinctId)
         XCTAssertEqual(records, expected["recorded"] as? Bool == true ? 1 : 0, "\(vector["name"]!)")
+        if state == "swipe_dismissing" {
+            try await waitUntil("UIKit dismissal must finish before fixture teardown") { probe.dismissalCompleted }
+        }
         presentations.onAppBecameActive()
     }
 
-    @MainActor private final class LinkHandoffProbe { var destinations: [String] = [] }
+    @MainActor private final class LinkHandoffProbe {
+        var destinations: [String] = []
+        var dismissalCompleted = false
+    }
 
     private func assertAuthoredRoles(in view: UIView?, observer: SemanticJourneyPresenter,
                                      journal: JourneyRunJournal) async throws {
