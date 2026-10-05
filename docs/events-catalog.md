@@ -57,3 +57,7 @@ import failures retain their existing diagnostics rather than being attributed t
 | Identity | `$identify` | ordinary and hidden from public activity |
 
 The exact property schema, emitter files, delivery flags, and forwarding decision for each event live in the JSON catalog. `scripts/check-event-catalog.sh` checks that every catalog constant exists, every declared reserved event has one row, emitter files exist, semantic arrays align, and retired Journey protocol names do not return.
+
+## Opened links
+
+`$link_opened` uses stable system capture after a runtime link or a Journey open-link step is handed to the browser or system. It carries `url`, `target`, `screen_id` when presented, optional `instance_id`, and the run's `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. Malformed and unopenable URLs do not emit it. Its public activity is `linkOpened`, with the forwarding name `link_opened`.
