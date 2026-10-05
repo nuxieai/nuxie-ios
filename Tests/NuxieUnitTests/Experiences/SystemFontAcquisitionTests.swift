@@ -264,7 +264,7 @@ final class SystemFontAcquisitionTests: XCTestCase {
         let experiences = MockExperienceService()
         experiences.defaultMockViewController = experienceController
         let windows = MockWindowProvider()
-        let service = ExperiencePresentationService(windowProvider: windows, experiences: experiences, eventLog: eventLog)
+        let service = ExperiencePresentationService(windowProvider: windows, experiences: experiences, eventLog: eventLog, identity: MockIdentityService())
         let recorder = FontFailurePresentationRecorder()
         let reservation = try XCTUnwrap(service.reserveJourneyPresentation(ownerDistinctId: "font-failure-owner"))
         let result = await service.presentJourney(JourneyPresentationRequest(
