@@ -589,6 +589,24 @@
         "opened": false,
         "recorded": false
       }
+    },
+    {
+      "name": "paused-experience-before-host-resume",
+      "state": "paused_foreground",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
     }
   ]
 }

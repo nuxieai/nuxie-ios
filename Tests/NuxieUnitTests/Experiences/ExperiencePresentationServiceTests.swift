@@ -369,7 +369,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             }
 
             context("when window scene is available") {
-                it("advances an unopenable journey link without recording or dismissing") { @MainActor in
+                it("returns no handoff for an unopenable link without dismissing") { @MainActor in
                     let versionID = "unopenable-link"
                     let screenID = "screen-selected"
                     let controller = MockExperienceViewController(mockExperienceVersionId: versionID, mockScreenId: screenID)
@@ -383,10 +383,13 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in XCTFail("Link must not finish the run"); return false })
                     let shown = await service.presentJourney(request)
                     expect(shown).to(equal(.shown))
-                    let result = await service.dispatchJourneyPresentationAction(owner: owner,
-                        action: ["type": .string("open_link"), "url": .string("missing-app://item"), "target": .string("external")],
-                        effectId: "unopenable-effect")
-                    expect(result).to(equal(.advanced(outlet: "next")))
+                    #if canImport(UIKit)
+                    service.linkHandoff = { _, _ in false }
+                    #endif
+                    let result = await service.openJourneyLink(owner: owner,
+                        request: .init(urlString: "missing-app://item", target: "external", screenId: screenID,
+                            instanceId: nil, effectId: "unopenable-effect"))
+                    expect(result).to(beNil())
                     expect(controller.performedOpenLinks).to(beEmpty())
                     expect(controller.performDismissReasons).to(beEmpty())
                 }

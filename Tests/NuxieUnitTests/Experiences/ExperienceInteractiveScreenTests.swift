@@ -59,6 +59,33 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     @MainActor
+    func testLaterFramesDoNotWaitForPendingExternalConfirmation() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        let gate = ExperienceInteractiveOperationGate()
+        recorder.onBatchAsync = { sources in await gate.withLock { await sources?.frameLinks?.perform() } }
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        var release: CheckedContinuation<Void, Never>?
+        recorder.linkGate = { await withCheckedContinuation { release = $0 } }
+        let ordinary = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "emit", url: "", target: "", delay: 0, properties: [])
+        let href = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 131, name: "", url: "tel:123", target: "_blank", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 1, kind: .reportedEvent(ordinary)),
+            .init(sequence: 1, correlationID: 1, kind: .reportedEvent(href))])
+        for _ in 0..<100 where release == nil { await Task.yield() }
+        XCTAssertNotNil(release)
+        let returned = expectation(description: "Next frame returns while browser confirmation holds publication")
+        Task { @MainActor in
+            await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 2, kind: .reportedEvent(ordinary))])
+            returned.fulfill()
+        }
+        await fulfillment(of: [returned], timeout: 1)
+        release?.resume()
+        for _ in 0..<100 where recorder.order.filter({ $0 == "batch" }).count != 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order.filter { $0 == "link" }.count, 1)
+    }
+
+    @MainActor
     func testSharedSourcesPublishOnlyLiveEventsWithContiguousSequences() async throws {
         struct Fixture: Decodable {
             struct Case: Decodable {
@@ -3833,9 +3860,10 @@ private final class LinkFrameRecorder: ExperienceScreenViewControllerDelegate {
     var order: [String] = []
     var linkGate: (() async -> Void)?
     var onBatch: (() -> Void)?
+    var onBatchAsync: ((ExperienceEmissionSources?) async -> Void)?
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
     func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
-    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch"); onBatch?() }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch"); onBatch?(); await onBatchAsync?(frameSources) }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async { order.append("link"); await linkGate?() }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}

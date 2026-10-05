@@ -981,6 +981,8 @@ final class ExperienceScreenViewController: UIViewController {
         })
     }
 
+    private var pendingFramePublications = 0
+
     func deliverStep(effects: [ExperienceInteractiveEffect]) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
@@ -1018,16 +1020,31 @@ final class ExperienceScreenViewController: UIViewController {
         case .success(let assembled):
             emission = assembled
         }
-        if let emission {
-            await delegate?.experienceScreenViewController(
-                self,
-                didEmitScreenEmission: emission,
-                originatingRun: originatingRun,
-                frameSources: frameSources
-            )
+        let frameLinks = ExperienceFrameLinks {
+            for link in links { await openLink?(link) }
         }
-        for link in links {
-            Task { @MainActor in await openLink?(link) }
+        frameSources.frameLinks = frameLinks
+        let publish = { @MainActor [self, delegate, frameSources] in
+            if let emission {
+                await delegate?.experienceScreenViewController(
+                    self,
+                    didEmitScreenEmission: emission,
+                    originatingRun: originatingRun,
+                    frameSources: frameSources
+                )
+            }
+            // JourneyService consumes these before continuing an accepted batch.
+            // Rejected and link-only frames still own their independent links.
+            await frameLinks.perform()
+        }
+        if links.isEmpty && pendingFramePublications == 0 {
+            await publish()
+        } else {
+            pendingFramePublications += 1
+            Task { @MainActor in
+                defer { pendingFramePublications -= 1 }
+                await publish()
+            }
         }
     }
 

@@ -708,18 +708,6 @@ final class ExperiencePresentationService {
                 )
             )
 
-        case .openLink:
-            guard case .string(let url)? = action["url"],
-                  !url.isEmpty,
-                  case .string(let target)? = action["target"] else {
-                return .advanced(outlet: "next")
-            }
-            if let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate {
-                _ = await delegate.openLink(controller, request: .init(urlString: url, target: target,
-                    screenId: nil, instanceId: nil, effectId: effectId))
-            }
-            result = .advanced(outlet: "next")
-
         case .dismiss:
             controller.performDismiss(reason: .userDismissed)
             result = .handled

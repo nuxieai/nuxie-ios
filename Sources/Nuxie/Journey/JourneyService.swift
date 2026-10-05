@@ -1632,6 +1632,7 @@ private extension JourneyService {
             in: journal,
             executionFenceToken: executionFenceToken
         )
+        await eventSource?.frameLinks?.perform()
         switch disposition {
         case .rejected:
             return false

@@ -32,6 +32,7 @@ struct ExperienceResolvedEventSource: Equatable, Sendable {
 
 /// Aligns ordinary drafts and control output with their own frame sources.
 struct ExperienceEmissionSources: Sendable {
+    var frameLinks: ExperienceFrameLinks?
     var control: ExperienceResolvedEventSource?
     var drafts: [ExperienceResolvedEventSource?] = []
     var byEmissionID: [String: ExperienceResolvedEventSource] = [:]
@@ -49,6 +50,18 @@ struct ExperienceEmissionSources: Sendable {
     func source(eventID: String?) -> ExperienceResolvedEventSource? {
         guard let eventID else { return control }
         return byEmissionID[eventID]
+    }
+}
+
+/// One frame owns one handoff, including rejected publication and link-only frames.
+@MainActor
+final class ExperienceFrameLinks {
+    private var operation: (@MainActor () async -> Void)?
+    init(_ operation: @escaping @MainActor () async -> Void) { self.operation = operation }
+    func perform() async {
+        let operation = self.operation
+        self.operation = nil
+        await operation?()
     }
 }
 

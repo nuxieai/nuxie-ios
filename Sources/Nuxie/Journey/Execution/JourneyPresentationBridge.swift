@@ -233,11 +233,6 @@ protocol JourneyPresenting: AnyObject, Sendable {
     func shutdownJourneyPresentation(ownerDistinctId: String) async
 }
 
-extension JourneyPresenting {
-    @MainActor
-    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest? { nil }
-}
-
 @MainActor
 final class JourneyRuntimeDelegate {
     nonisolated let introEligibilityAuthorizationContext:
