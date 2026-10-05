@@ -1,0 +1,101 @@
+{
+  "contract": "View coordinates are pixels divided by scale. Artboard coordinates are points offset by the artboard origin. Rectangles are x,y,width,height.",
+  "cases": [
+    {
+      "name": "phone",
+      "view": [
+        393,
+        852
+      ],
+      "scale": 3,
+      "origin": [
+        0,
+        0
+      ],
+      "pixelPoint": [
+        360,
+        900
+      ],
+      "runtimePoint": [
+        120,
+        300
+      ],
+      "semanticRect": [
+        16,
+        59,
+        361,
+        44
+      ],
+      "viewRect": [
+        16,
+        59,
+        361,
+        44
+      ]
+    },
+    {
+      "name": "offset-origin",
+      "view": [
+        393,
+        852
+      ],
+      "scale": 3,
+      "origin": [
+        10,
+        20
+      ],
+      "pixelPoint": [
+        360,
+        900
+      ],
+      "runtimePoint": [
+        130,
+        320
+      ],
+      "semanticRect": [
+        26,
+        79,
+        361,
+        44
+      ],
+      "viewRect": [
+        16,
+        59,
+        361,
+        44
+      ]
+    },
+    {
+      "name": "fractional-density",
+      "view": [
+        400,
+        800
+      ],
+      "scale": 2.625,
+      "origin": [
+        10,
+        20
+      ],
+      "pixelPoint": [
+        315,
+        787.5
+      ],
+      "runtimePoint": [
+        130,
+        320
+      ],
+      "semanticRect": [
+        26,
+        79,
+        361,
+        44
+      ],
+      "viewRect": [
+        16,
+        59,
+        361,
+        44
+      ]
+    }
+  ]
+}
