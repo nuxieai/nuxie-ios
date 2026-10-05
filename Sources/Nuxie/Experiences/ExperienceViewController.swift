@@ -51,6 +51,7 @@ struct ExperienceRendererOpenLinkRequest: Equatable, Sendable {
     let screenId: String?
     let instanceId: String?
     var effectId: String? = nil
+    var destination: String = "external"
 }
 
 /// Invoked by the MainActor-isolated ExperienceViewController.

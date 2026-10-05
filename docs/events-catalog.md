@@ -61,3 +61,5 @@ The exact property schema, emitter files, delivery flags, and forwarding decisio
 ## Opened links
 
 `$link_opened` uses stable system capture after a runtime link or a Journey open-link step is handed to the browser or system. It carries `url`, `target`, `screen_id` when presented, optional `instance_id`, and the run's `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. Malformed and unopenable URLs do not emit it. Its public activity is `linkOpened`, with the forwarding name `link_opened`.
+
+The link record includes `destination` (`in_app` or `external`) and retains the authored `target` separately. A Journey link with no owned Experience opens externally. Invalid step inputs and unavailable handlers advance `next` without opening or recording.

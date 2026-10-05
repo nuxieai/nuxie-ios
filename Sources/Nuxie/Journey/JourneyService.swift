@@ -132,6 +132,7 @@ actor JourneyService {
     private let storeEntitlements: StoreEntitlementLookup
     private let dispatcher: any JourneyDispatching
     private let presenter: (any JourneyPresenting)?
+    private let openExternalLink: @MainActor @Sendable (String) async -> Bool
     private let presentationTrace: JourneyPresentationTraceCoordinator
     private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
     private let timezones: SignedTimezoneBundle
@@ -202,6 +203,7 @@ actor JourneyService {
         storeEntitlements: @escaping StoreEntitlementLookup = { [] },
         dispatcher: any JourneyDispatching,
         presenter: (any JourneyPresenting)? = nil,
+        openExternalLink: @escaping @MainActor @Sendable (String) async -> Bool = { await ExperienceLinkRouting.openExternal($0) },
         presentationTrace: JourneyPresentationTraceCoordinator = .init(
             recorder: DisabledExperiencePresentationTrace()
         ),
@@ -234,6 +236,7 @@ actor JourneyService {
         self.storeEntitlements = storeEntitlements
         self.dispatcher = dispatcher
         self.presenter = presenter
+        self.openExternalLink = openExternalLink
         self.presentationTrace = presentationTrace
         self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
         self.timezones = timezones
@@ -2492,11 +2495,9 @@ private extension JourneyService {
                             )
                         },
                         onLinkOpened: { [weak self] link in
-                            Task {
-                                await self?.handlePresentationLinkOpened(link, run: presentedRun,
-                                    release: release, identityFenceToken: presentationIdentityFenceToken,
-                                    executionFenceToken: executionFenceToken)
-                            }
+                            await self?.handlePresentationLinkOpened(link, run: presentedRun,
+                                release: release, identityFenceToken: presentationIdentityFenceToken,
+                                executionFenceToken: executionFenceToken)
                         },
                         onEmissionBatch: { [weak self] batch, frameSources in
                             guard let self else { return false }
@@ -2575,7 +2576,22 @@ private extension JourneyService {
                 }
                 let result: JourneyDispatchResult
                 var presentationSignal: JourneyControlExecutor.Signal?
-                if let presenter,
+                if JourneyActionType(action: action) == .openLink {
+                    let owner = JourneyPresentationOwner(journeyId: run.journeyId, distinctId: journal.distinctId)
+                    if let resolved = resolvedPresentationAction(action, context: run.context),
+                       case .string(let url)? = resolved["url"], !url.isEmpty,
+                       case .string(let target)? = resolved["target"] {
+                        if let presenter, await presenter.ownsJourneyPresentation(owner: owner) {
+                            _ = await presenter.dispatchJourneyPresentationAction(owner: owner, action: resolved, effectId: effectId)
+                        } else if await openExternalLink(url) {
+                            await handlePresentationLinkOpened(.init(urlString: url,
+                                target: target, screenId: nil, instanceId: nil,
+                                effectId: effectId, destination: "external"), run: run, release: release,
+                                identityFenceToken: identityFence.token, executionFenceToken: executionFenceToken)
+                        }
+                    }
+                    result = .outlet("next")
+                } else if let presenter,
                    let actionType = JourneyActionType(action: action),
                    actionType.isPresentationOwned,
                    await presenter.ownsJourneyPresentation(
@@ -3188,6 +3204,7 @@ private extension JourneyService {
     ) -> [String: JourneyReleaseJSONValue]? {
         guard let type = JourneyActionType(action: action) else { return nil }
         guard type == .openLink else { return action }
+        if case .string? = action["url"] { return action }
         guard let encoded = action["url"].flatMap({
             try? ExactJSONCodec.encode($0)
         }), let value = try? ExactJSONCodec.decode(

@@ -96,3 +96,5 @@ stable completion report and are omitted from the flat activity view.
 Pending wire delivery may retry after restart, but retries do not replay `nuxieDidEmit`. A process exit between durable capture and callback can lose the callback, which is why the contract is at most once rather than guaranteed delivery.
 
 `$link_opened` forwards as `linkOpened` (`link_opened`), with URL, target, optional screen/source alias, and the same Journey leg attribution as the lifecycle activities.
+
+The link record includes `destination` (`in_app` or `external`) and retains the authored `target` separately. A Journey link with no owned Experience opens externally. Invalid step inputs and unavailable handlers advance `next` without opening or recording.

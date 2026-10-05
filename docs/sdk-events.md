@@ -37,3 +37,5 @@ A live run pins its authenticated release and journal. Offline execution can con
 See [`fixtures/`](../fixtures/README.md) for portable Journey, event, feature, and purchase vectors.
 
 Runtime links and Journey open-link steps emit `$link_opened` after the URL is handed to the browser or system. Web targets `_self`, `_parent`, `_top`, and an omitted target stay in-app; `_blank` opens externally. Non-web schemes go to the system. Journey `in_app` and `external` targets use the same routing path.
+
+The link record includes `destination` (`in_app` or `external`) and retains the authored `target` separately. A Journey link with no owned Experience opens externally. Invalid step inputs and unavailable handlers advance `next` without opening or recording.

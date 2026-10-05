@@ -65,7 +65,7 @@ struct JourneyPresentationRequest: Sendable {
             -> JourneyScreenDismissalResult
     let onProductsUnavailable:
         @MainActor @Sendable (String) async -> JourneyProductFailureResult
-    let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) -> Void
+    let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) async -> Void
     let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
     let onPermissionEvent:
@@ -100,7 +100,7 @@ struct JourneyPresentationRequest: Sendable {
             @escaping @MainActor @Sendable (String) async -> JourneyProductFailureResult = {
                 _ in .rejected
             },
-        onLinkOpened: @escaping @Sendable (ExperienceRendererOpenLinkRequest) -> Void = { _ in },
+        onLinkOpened: @escaping @Sendable (ExperienceRendererOpenLinkRequest) async -> Void = { _ in },
         onEmissionBatch:
             @escaping @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool,
         onPermissionEvent:
@@ -238,7 +238,7 @@ final class JourneyRuntimeDelegate {
     private(set) var presentationTraceContext:
         ExperiencePresentationTraceContext?
     private let presentationTraceToken: ExperiencePresentationTraceToken?
-    private let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) -> Void
+    private let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) async -> Void
     private let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
     nonisolated private let onPermissionEvent:
@@ -476,9 +476,10 @@ final class JourneyRuntimeDelegate {
     func openLink(_ controller: ExperienceViewController, request: ExperienceRendererOpenLinkRequest) async -> Bool {
         guard !resolved, request.screenId == nil || request.screenId == activeScreenId,
               await controller.performOpenLink(urlString: request.urlString, target: request.target) else { return false }
-        onLinkOpened(.init(urlString: request.urlString,
-            target: request.target?.isEmpty == false ? request.target : "_self",
-            screenId: request.screenId ?? activeScreenId, instanceId: request.instanceId, effectId: request.effectId))
+        await onLinkOpened(.init(urlString: request.urlString,
+            target: request.target,
+            screenId: request.screenId ?? activeScreenId, instanceId: request.instanceId, effectId: request.effectId,
+            destination: ExperienceLinkRouting.destination(urlString: request.urlString, target: request.target)?.inApp == true ? "in_app" : "external"))
         return true
     }
 

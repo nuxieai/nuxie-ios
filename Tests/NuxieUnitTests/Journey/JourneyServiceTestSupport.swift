@@ -864,6 +864,7 @@ extension JourneyTestCase {
         storeEntitlements: @escaping JourneyService.StoreEntitlementLookup = { [] },
         dispatcher: (any JourneyDispatching)? = nil,
         presenter: (any JourneyPresenting)? = nil,
+        openExternalLink: @escaping @MainActor @Sendable (String) async -> Bool = { _ in false },
         pinnedReleaseAuthenticator: @escaping JourneyService.PinnedReleaseAuthenticator = {
             _, _ in throw JourneyJournalError.invalidState
         },
@@ -883,6 +884,7 @@ extension JourneyTestCase {
                 events: events
             ),
             presenter: presenter,
+            openExternalLink: openExternalLink,
             pinnedReleaseAuthenticator: pinnedReleaseAuthenticator,
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!,
@@ -1494,6 +1496,7 @@ final class RecordingJourneyPresenter {
     private(set) var cancelledBackNavigations = 0
     var actionResult = JourneyPresentationActionResult.handled
     var resolvesFrameValues = false
+    var recordsOpenedLinks = false
     var resolvedPurchasePlacementId: String?
     var presentHandler:
         ((JourneyPresentationRequest) async -> JourneyPresentationResult)?
@@ -1626,6 +1629,12 @@ final class RecordingJourneyPresenter {
         }
         guard activeOwner == owner else {
             return .declined
+        }
+        if recordsOpenedLinks, case .string("open_link")? = action["type"],
+           case .string(let url)? = action["url"], case .string(let target)? = action["target"] {
+            await request?.onLinkOpened(.init(urlString: url, target: target, screenId: request?.screenId,
+                instanceId: nil, effectId: effectId, destination: "in_app"))
+            return .advanced(outlet: "next")
         }
         return actionResult
     }

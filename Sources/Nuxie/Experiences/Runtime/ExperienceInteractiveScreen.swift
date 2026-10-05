@@ -1926,14 +1926,14 @@ actor ExperienceInteractiveScreen {
             snapshot: snapshot.map(Self.projectSnapshot), geometry: result.textGeometry)
     }
 
-    private func projectStep(
+    func projectStep(
         _ result: NuxieNativePlayerStepResult,
         eventSnapshot: NuxieNativeViewModelSnapshot?,
         correlationID: UInt64
     ) -> ExperienceInteractiveStepResult {
         let frameSnapshot = eventSnapshot.map(Self.projectSnapshot)
-        let schemaNames = Dictionary(uniqueKeysWithValues: viewModelCatalog.schemas.map { ($0.index, $0.name) })
-        let liveIDs = Set(eventSnapshot?.instances.map(\.id) ?? [])
+        let schemaNames = result.events.isEmpty ? [:] : Dictionary(uniqueKeysWithValues: viewModelCatalog.schemas.map { ($0.index, $0.name) })
+        let liveIDs = result.events.isEmpty ? [] : Set(eventSnapshot?.instances.map(\.id) ?? [])
         let effects = router.project(
             reportedEvents: result.events.map { event in
                 var projected = ExperienceInteractiveEventSource.project(

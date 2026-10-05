@@ -17,17 +17,20 @@
     {
       "name": "second row",
       "source": 3,
-      "expected": "second-placement"
+      "expected": "second-placement",
+      "viewModelName": "Row"
     },
     {
       "name": "root-only frame",
       "source": 1,
-      "expected": "root-placement"
+      "expected": "root-placement",
+      "viewModelName": "Root"
     },
     {
       "name": "absent native source",
       "source": 99,
-      "expected": null
+      "expected": null,
+      "viewModelName": "Row"
     },
     {
       "name": "conflicting model",
@@ -35,5 +38,7 @@
       "viewModelName": "OtherModel",
       "expected": null
     }
-  ]
+  ],
+  "rootModelName": "Root",
+  "rowModelName": "Row"
 }

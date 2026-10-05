@@ -785,8 +785,8 @@
         "type": "String"
       },
       "target": {
-        "required": true,
-        "source": "opened link and source screen",
+        "required": false,
+        "source": "Authored target, when supplied",
         "type": "String"
       },
       "screen_id": {
@@ -797,6 +797,11 @@
       "instance_id": {
         "required": false,
         "source": "opened link and source screen",
+        "type": "String"
+      },
+      "destination": {
+        "required": true,
+        "source": "Actual opener: in_app or external",
         "type": "String"
       }
     },

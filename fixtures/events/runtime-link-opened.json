@@ -12,7 +12,8 @@
       "experience_id": "experience",
       "experience_version_id": "version",
       "leg_id": "leg",
-      "leg_generation": 2
+      "leg_generation": 2,
+      "destination": "in_app"
     }
   }
 }
