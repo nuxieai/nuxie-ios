@@ -165,6 +165,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let storageScope = JourneyStorageScope(authority: authority)
         let journal = try JourneyRunJournal(directory: directory, distinctId: owner, storageScope: storageScope)
         let observer = SemanticJourneyPresenter(base: presentations, journal: journal)
+        let continuationFinished = XCTestExpectation(description: "Routed link execution finished")
         let journeys = JourneyService(identity: identity, events: events, dateProvider: SystemDateProvider(),
             sleepProvider: SystemSleepProvider(), journalDirectory: directory, storageScope: storageScope,
             featureAccess: { _ in nil }, dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
@@ -173,7 +174,8 @@ final class SignedSemanticJourneyTests: XCTestCase {
                     authorizationKeys: keys, expectedIdentity: entry.locator.identity, expectedLegId: reference.legId,
                     supportedRuntime: candidate, replayPolicy: .pinned(experienceVersionId: reference.versionId,
                         buildId: entry.locator.buildId, descriptorSHA256: reference.descriptorSha256))
-            }, timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
+            }, timezones: try XCTUnwrap(SignedTimezoneBundle.installed),
+            onPresentationContinuationFinished: { continuationFinished.fulfill() })
         let linkProbe = LinkHandoffProbe()
         if let linkVector {
             let link = try XCTUnwrap(linkVector["link"] as? [String: Any])
@@ -199,7 +201,14 @@ final class SignedSemanticJourneyTests: XCTestCase {
             }
             }
             if let linkVector {
-                try await assertLinkState(linkVector, presentations: presentations, observer: observer, events: events, probe: linkProbe)
+                try await assertLinkState(linkVector, presentations: presentations, observer: observer, events: events, probe: linkProbe, continuationFinished: continuationFinished, retire: { reason in
+                    if reason == "identity_change" {
+                        identity.setDistinctId("replacement-owner")
+                        await journeys.handleUserChange(from: owner, to: "replacement-owner")
+                    } else {
+                        await journeys.profileDidClear(distinctId: owner)
+                    }
+                })
             } else if scenario == .roles {
                 try await assertAuthoredRoles(in: presentations.currentExperienceViewController?.view,
                     observer: observer, journal: journal)
@@ -289,8 +298,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
     }
 
     private func assertLinkState(_ vector: [String: Any], presentations: ExperiencePresentationService,
-                                 observer: SemanticJourneyPresenter, events: EventLog, probe: LinkHandoffProbe) async throws {
+                                 observer: SemanticJourneyPresenter, events: EventLog, probe: LinkHandoffProbe,
+                                 continuationFinished: XCTestExpectation, retire: @escaping (String) async -> Void) async throws {
         let state = try XCTUnwrap(vector["state"] as? String)
+        let retirement = state == "owner_retired" ? try XCTUnwrap(vector["retirement"] as? String) : ""
         let link = try XCTUnwrap(vector["link"] as? [String: Any])
         let expected = try XCTUnwrap(vector["expected"] as? [String: Any])
         if state != "screenless" {
@@ -311,11 +322,12 @@ final class SignedSemanticJourneyTests: XCTestCase {
                     await withCheckedContinuation { continuation in controller.present(sheet, animated: false) { continuation.resume() } }
                     top = sheet
                 case "button_dismissing": controller.performDismiss()
+                // iOS has no separate paused_foreground state; reuse swipe dismissal.
                 case "swipe_dismissing", "paused_foreground":
                     controller.dismiss(animated: true) { probe.dismissalCompleted = true }
                     XCTAssertTrue(controller.isBeingDismissed)
                 case "host_dismissed": await presentations.dismissCurrentExperienceFromHost()
-                case "owner_retired": await presentations.shutdownJourneyPresentation(ownerDistinctId: request.owner.distinctId)
+                case "owner_retired": await retire(retirement)
                 case "presentation_finished": await presentations.finishJourneyPresentation(owner: request.owner)
                 case "background": presentations.onAppDidEnterBackground()
                 default: break
@@ -336,7 +348,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
             if !journey { effects.append(.init(sequence: 1, correlationID: 991,
                 kind: .reportedEvent(.init(localIndex: 1, coreType: 131, name: "", url: url, target: link["target"] as? String ?? "", delay: 0, properties: [])))) }
             await source.deliverStep(effects: effects)
-            try await waitUntil("Runtime frame must settle") { observer.accepted.count == 1 || probe.destinations.count == 1 }
+            try await waitUntil("Runtime frame must settle") { observer.finishedBatch }
+        }
+        if state == "owner_retired" {
+            await fulfillment(of: [continuationFinished], timeout: 5)
         }
         for _ in 0..<100 {
             if await events.getRecentEvents().filter { $0.name == JourneyEvents.linkOpened }.count == (expected["recorded"] as? Bool == true ? 1 : 0) { break }
@@ -344,7 +359,13 @@ final class SignedSemanticJourneyTests: XCTestCase {
         }
         let records = await events.getRecentEvents().filter { $0.name == JourneyEvents.linkOpened }
         XCTAssertEqual(records.count, expected["recorded"] as? Bool == true ? 1 : 0, "\(vector["name"]!)")
-        XCTAssertEqual((try records.first.flatMap { try JSONSerialization.jsonObject(with: $0.properties) as? [String: Any] })?["destination"] as? String, expected["destination"] as? String)
+        if let record = records.first {
+            let properties = try XCTUnwrap(try JSONSerialization.jsonObject(with: record.properties) as? [String: Any])
+            XCTAssertEqual(properties["destination"] as? String, expected["destination"] as? String)
+        }
+        if expected["opened"] as? Bool == true {
+            XCTAssertEqual(probe.destinations, [try XCTUnwrap(expected["destination"] as? String)])
+        }
         XCTAssertEqual(probe.destinations.count, (expected["opened"] as? Bool == true || link["canOpen"] as? Bool == false) ? 1 : 0)
         if vector["complete"] as? Bool == true {
             for _ in 0..<100 where await events.getRecentEvents().filter { $0.name == JourneyEvents.journeyCompleted }.count == 0 { try await Task.sleep(nanoseconds: 20_000_000) }
@@ -493,6 +514,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
     var lastRequest: JourneyPresentationRequest?
     var beforeLink: (() async -> Void)?
     var beforeBatch: (() async -> Void)?
+    var finishedBatch = false
     var revealed = false
     var accepted: [ScreenEmissionBatch] = []
     var navigationResponses: ExactJSONObject<JourneyReleaseJSONValue>?
@@ -522,6 +544,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
                 let change = self.beforeBatch; self.beforeBatch = nil
                 await change?()
                 let committed = await request.onEmissionBatch(batch, frameSources)
+                self.finishedBatch = true
                 if committed { self.accepted.append(batch) }
                 return committed
             }, onPermissionEvent: request.onPermissionEvent, onPresentationRevealed: { screen in
