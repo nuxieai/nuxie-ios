@@ -1037,6 +1037,8 @@ final class ExperienceScreenViewController: UIViewController {
             // Rejected and link-only frames still own their independent links.
             await frameLinks.perform()
         }
+        // A link-bearing frame returns before its emission publishes.
+        // The publication gate preserves emission order across frames.
         if links.isEmpty && pendingFramePublications == 0 {
             await publish()
         } else {
