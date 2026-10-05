@@ -287,8 +287,9 @@
       "expected": {
         "destination": "external",
         "opened": true,
-        "recorded": true
-      }
+        "recorded": false
+      },
+      "retirement": "identity_change"
     },
     {
       "name": "owner_retired-16",
@@ -305,8 +306,9 @@
       "expected": {
         "destination": "external",
         "opened": true,
-        "recorded": true
-      }
+        "recorded": false
+      },
+      "retirement": "profile_clear"
     },
     {
       "name": "presentation_finished-17",

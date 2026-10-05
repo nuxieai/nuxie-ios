@@ -187,6 +187,7 @@ actor JourneyService {
     /// instance before starting commerce. Keep that exact value with the
     /// claimed run so only its matching SDK outcome can advance the cursor.
     private var pendingPresentationPurchasePlacements: [String: String] = [:]
+    private let onPresentationContinuationFinished: (@Sendable () -> Void)?
     private var wakeTask: Task<Void, Never>?
     private var wakeGeneration: UInt64 = 0
 
@@ -208,8 +209,10 @@ actor JourneyService {
         pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone = .current,
-        journalBeforePersist: (@Sendable () throws -> Void)? = nil
+        journalBeforePersist: (@Sendable () throws -> Void)? = nil,
+        onPresentationContinuationFinished: (@Sendable () -> Void)? = nil
     ) {
+        self.onPresentationContinuationFinished = onPresentationContinuationFinished
         self.identity = identity
         self.events = events
         let executionFence = JourneyProfileFence()
@@ -1640,7 +1643,9 @@ private extension JourneyService {
             return true
         case .continueExecution(let continuation):
             Task { [weak self] in
-                await self?.continuePresentedRun(
+                guard let self else { return }
+                defer { self.onPresentationContinuationFinished?() }
+                await self.continuePresentedRun(
                     continuation.run,
                     release: release,
                     executionFenceToken: executionFenceToken,
