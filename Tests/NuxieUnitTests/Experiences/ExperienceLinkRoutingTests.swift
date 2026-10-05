@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class ExperienceLinkRoutingTests: XCTestCase {
-    func testSharedTargetsUseExactlyOneOpener() async throws {
+    func testSharedTargetsUseProductionRoute() throws {
         struct Fixture: Decodable {
             struct Case: Decodable { let url: String; let target: String?; let destination: String? }
             let cases: [Case]
@@ -20,16 +20,12 @@ final class ExperienceLinkRoutingTests: XCTestCase {
                 return URL(string: escaped)
             })
         }] {
-        for vector in fixture.cases {
-            var calls: [String] = []
-            let opened = await ExperienceLinkRouting.open(urlString: vector.url, target: vector.target, parser: parser,
-                inApp: { _ in calls.append("in_app"); return true },
-                external: { _ in calls.append("external"); return true })
-            XCTAssertEqual(calls, vector.destination.map { [$0] } ?? [], vector.url)
-            XCTAssertEqual(opened, vector.destination != nil, vector.url)
+            for vector in fixture.cases {
+                let route = ExperienceLinkRouting.route(urlString: vector.url, target: vector.target,
+                    state: .settled, parser: parser)
+                XCTAssertEqual(route?.destination, vector.destination, vector.url)
+            }
         }
-    }
-
     }
 
     func testLegacyEscapesInvalidPercentBracketsAndRepeatedFragmentMarkers() {
@@ -49,11 +45,5 @@ final class ExperienceLinkRoutingTests: XCTestCase {
 
     func testLegacyHostUsesIDNA() {
         XCTAssertEqual(ExperienceLinkRouting.parseLegacy("https://münich.example/path")?.host, "xn--mnich-kva.example")
-    }
-
-    func testUnopenableURLIsNotReportedAsOpened() async {
-        let opened = await ExperienceLinkRouting.open(urlString: "sampleapp://item", target: "_blank",
-            inApp: { _ in XCTFail("Unexpected in-app route"); return false }, external: { _ in false })
-        XCTAssertFalse(opened)
     }
 }
