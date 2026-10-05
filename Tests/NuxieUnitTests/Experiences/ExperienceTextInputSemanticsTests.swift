@@ -912,7 +912,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         layer.pixelFormat = .bgra8Unorm
         layer.drawableSize = CGSize(width: 64, height: 64)
         let drawable = try XCTUnwrap(layer.nextDrawable())
-        let outcome = try await runtime.render(drawable: .available(NuxieNativeDrawable(drawable)))
+        let outcome = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(drawable)))
         XCTAssertEqual(outcome.disposition, .presented)
         let capture = try await runtime.captureSemantics(nativeInputs: ["editable"])
         let node = try XCTUnwrap(capture.nativeInputs["editable"]?.first)
@@ -960,7 +960,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         await fulfillment(of: [committed], timeout: 5)
         _ = try await runtime.step(elapsedSeconds: 0)
         let next = try XCTUnwrap(layer.nextDrawable())
-        _ = try await runtime.render(drawable: .available(NuxieNativeDrawable(next)))
+        _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(next)))
         let refreshed = try await runtime.captureSemantics(nativeInputs: ["editable"])
         let value = try await runtime.readFieldString(captureID: refreshed.id, nodeID: node.nodeID, name: "editable")
         XCTAssertEqual(value, Data("native edit".utf8))
@@ -1015,7 +1015,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         layer.pixelFormat = .bgra8Unorm
         layer.drawableSize = CGSize(width: 64, height: 64)
         let drawable = try XCTUnwrap(layer.nextDrawable(), "Hosted native qualification requires a drawable")
-        let outcome = try await runtime.render(drawable: .available(NuxieNativeDrawable(drawable)))
+        let outcome = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(drawable)))
         XCTAssertEqual(outcome.disposition, .presented)
         let capture = try await runtime.captureSemantics(textRuns: ["field/名前"])
         let bridge = ExperienceTextInputOverlayBridge()
@@ -1046,7 +1046,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                         do {
                             _ = try await runtime.step(elapsedSeconds: 0)
                             let nextDrawable = try XCTUnwrap(layer.nextDrawable())
-                            let next = try await runtime.render(drawable: .available(NuxieNativeDrawable(nextDrawable)))
+                            let next = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(nextDrawable)))
                             XCTAssertEqual(next.disposition, .presented)
                             let replacement = try await runtime.captureSemantics(textRuns: ["field/名前"])
                             _ = bridge.applySemantics(replacement)

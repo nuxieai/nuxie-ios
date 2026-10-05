@@ -282,6 +282,7 @@ enum ExperienceRuntimePresentationSessionOperation: @unchecked Sendable {
     /// render reached native code and therefore never synthesizes completion.
     case render(
         ExperienceRuntimePresentationDrawableState,
+        layoutScaleFactor: Float,
         completion: ExperienceRuntimePresentationFrameCompletion
     )
     case queued(ExperienceRuntimePresentationQueuedWork)
@@ -404,7 +405,7 @@ extension ExperienceInteractiveScreen {
                     pixelWidth: size.pixelWidth,
                     pixelHeight: size.pixelHeight
                 )))
-            case .render(let drawableState, let completion):
+            case .render(let drawableState, let layoutScaleFactor, let completion):
                 let drawable: ExperienceInteractiveDrawable?
                 let isOccluded: Bool
                 switch drawableState {
@@ -419,6 +420,7 @@ extension ExperienceInteractiveScreen {
                     isOccluded = true
                 }
                 let frame = try await screen.renderFrame(
+                    layoutScaleFactor: layoutScaleFactor,
                     drawable: drawable,
                     isOccluded: isOccluded,
                     capturesSemantics: onSemantics != nil,
@@ -1001,7 +1003,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     )
                 }
             }
-        case (.render(_, let completion), .renderer(let outcome)):
+        case (.render(_, _, let completion), .renderer(let outcome)):
             if result.hasDelivery {
                 completion.recordPresentedWork { [weak self] in
                     Task { @MainActor [weak self] in
@@ -1053,6 +1055,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private func makeRenderOperation(
         for surfaceView: ExperienceRuntimeSurfaceView
     ) -> ExperienceRuntimePresentationSessionOperation {
+        let scale = Float(surfaceView.window?.traitCollection.displayScale ?? surfaceView.traitCollection.displayScale)
         frameSequence &+= 1
         let frameID = frameSequence
         if let generation = zeroDeltaRenderGeneration {
@@ -1067,17 +1070,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             }
         }
         guard shouldPresent else {
-            return .render(.occluded, completion: completion)
+            return .render(.occluded, layoutScaleFactor: scale, completion: completion)
         }
         guard let size = lastAppliedSize,
               size.pixelWidth > 0,
               size.pixelHeight > 0,
               let permit = drawableGate.tryAcquire() else {
-            return .render(.timeout, completion: completion)
+            return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
         guard let drawable = acquireDrawable(surfaceView.metalLayer) else {
             permit.release()
-            return .render(.timeout, completion: completion)
+            return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
         let firstPresentedDrawableGate = firstPresentedDrawableGate
         let shouldObservePresentation = session.observesEveryPresentation || !firstPresentedDrawableGate.isClaimed
@@ -1113,6 +1116,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
         return .render(
             .available(ExperienceRuntimePresentationDrawable(value: drawable)),
+            layoutScaleFactor: scale,
             completion: wrappedCompletion
         )
     }

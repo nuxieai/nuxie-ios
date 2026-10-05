@@ -1155,7 +1155,7 @@ private actor PresentationSessionRecorder {
                 await withCheckedContinuation { stepContinuation = $0 }
             }
             return .session { await self.waitForDeliveryIfNeeded() }
-        case .render(let state, let completion):
+        case .render(let state, _, let completion):
             names.append("render")
             let disposition: ExperienceRuntimePresentationRenderOutcome.Disposition
             switch state {

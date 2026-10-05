@@ -90,7 +90,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
                 _ = try await hosts[index].tick()
                 let drawable = try XCTUnwrap(layers[index].nextDrawable())
                 let completed = expectation(description: "Composed frame \(index)")
-                _ = try await runtimes[index].render(drawable: .available(.init(drawable)),
+                _ = try await runtimes[index].render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffers[index], bytesPerRow: 320 * 4), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let pixel = buffers[index].contents().assumingMemoryBound(to: UInt8.self) + (80 * 320 + 100) * 4
@@ -212,7 +212,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
                 _ = try await host.tick()
                 let drawable = try XCTUnwrap(layer.nextDrawable())
                 let completed = expectation(description: "Lifecycle composed frame")
-                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: 320 * 4), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let pixel = buffer.contents().assumingMemoryBound(to: UInt8.self) + (80 * 320 + 100) * 4
