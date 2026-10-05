@@ -1031,28 +1031,29 @@ class ExperienceViewController: NuxiePlatformViewController {
         return false
     }
 
-    func performOpenLink(urlString: String, target: String? = nil) {
-        guard let url = URL(string: urlString) else { return }
-        let normalizedTarget = target?.lowercased()
-
-        if normalizedTarget == "in_app" {
-            let scheme = url.scheme?.lowercased()
-            guard scheme == "http" || scheme == "https" else { return }
-            #if canImport(UIKit)
-            let safariViewController = SFSafariViewController(url: url)
-            present(safariViewController, animated: true)
-            #elseif canImport(AppKit)
-            NSWorkspace.shared.open(url)
-            #endif
-            return
-        }
-
-        #if canImport(UIKit)
-        guard UIApplication.shared.canOpenURL(url) else { return }
-        UIApplication.shared.open(url)
-        #elseif canImport(AppKit)
-        NSWorkspace.shared.open(url)
-        #endif
+    @discardableResult
+    func performOpenLink(urlString: String, target: String? = nil) -> Bool {
+        ExperienceLinkRouting.open(urlString: urlString, target: target,
+            inApp: { url in
+                #if canImport(UIKit)
+                present(SFSafariViewController(url: url), animated: true)
+                return true
+                #elseif canImport(AppKit)
+                return NSWorkspace.shared.open(url)
+                #else
+                return false
+                #endif
+            }, external: { url in
+                #if canImport(UIKit)
+                guard UIApplication.shared.canOpenURL(url) else { return false }
+                UIApplication.shared.open(url)
+                return true
+                #elseif canImport(AppKit)
+                return NSWorkspace.shared.open(url)
+                #else
+                return false
+                #endif
+            })
     }
 
     func applyViewModelSnapshot(_ snapshot: ExperienceViewModelSnapshot, screenId: String? = nil) {

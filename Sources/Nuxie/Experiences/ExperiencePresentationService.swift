@@ -660,7 +660,7 @@ final class ExperiencePresentationService {
                   case .string(let target)? = action["target"] else {
                 return .failed
             }
-            controller.performOpenLink(urlString: url, target: target)
+            guard controller.performOpenLink(urlString: url, target: target) else { return .failed }
             result = .advanced(outlet: "next")
 
         case .dismiss:
