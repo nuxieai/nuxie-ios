@@ -300,7 +300,7 @@
           "type": "String",
           "value": "https://example.test/path"
         },
-        "target": "external",
+        "target": "in_app",
         "canOpen": true
       },
       "expected": {
@@ -609,6 +609,25 @@
         "opened": true,
         "recorded": true
       }
+    },
+    {
+      "name": "owner-retired-runtime-before-shutdown",
+      "state": "owner_retired",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": false
+      },
+      "retirement": "identity_change"
     }
   ]
 }

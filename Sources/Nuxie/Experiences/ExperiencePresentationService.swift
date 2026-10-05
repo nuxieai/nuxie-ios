@@ -102,6 +102,7 @@ final class ExperiencePresentationService {
     
     private let experienceService: ExperienceServiceProtocol
     private let eventLog: EventCapturing
+    private let identity: IdentityServiceProtocol
     private let windowProvider: WindowProviderProtocol
     
     #if canImport(UIKit)
@@ -159,11 +160,13 @@ final class ExperiencePresentationService {
     nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
         experiences: ExperienceServiceProtocol,
-        eventLog: EventCapturing
+        eventLog: EventCapturing,
+        identity: IdentityServiceProtocol
     ) {
         self.windowProvider = windowProvider ?? DefaultWindowProvider()
         self.experienceService = experiences
         self.eventLog = eventLog
+        self.identity = identity
     }
     
     /// Derive lifecycle state at handoff, including retirement during batch admission.
@@ -179,7 +182,8 @@ final class ExperiencePresentationService {
         #if canImport(UIKit)
         var host: UIViewController?
         if appIsForeground && UIApplication.shared.activeWindowScene != nil {
-            if ownsJourneyPresentation(owner: owner), let controller = currentExperienceViewController,
+            if identity.getDistinctId() == owner.distinctId,
+               ownsJourneyPresentation(owner: owner), let controller = currentExperienceViewController,
                originatingController == nil || originatingController === controller,
                let id = currentPresentationID, !presentationTeardownIDs.contains(id),
                !controller.linkPresentationIsClosing, controller.viewIfLoaded?.window != nil,

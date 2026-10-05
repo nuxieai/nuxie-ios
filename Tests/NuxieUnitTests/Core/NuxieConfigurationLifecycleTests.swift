@@ -322,7 +322,8 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             ExperiencePresentationService(
                 windowProvider: windowProvider,
                 experiences: experiences,
-                eventLog: eventLog
+                eventLog: eventLog,
+                identity: identity
             )
         }
         let journeys = ForegroundPresentationAdmissionProbe(
