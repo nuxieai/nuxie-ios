@@ -53,7 +53,13 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/events/link-open-states.json")
         let vectors = try XCTUnwrap(try object(at: path)["cases"] as? [[String: Any]])
-        for vector in vectors { try await exercise(.success, linkVector: vector) }
+        for vector in vectors {
+            let link = try XCTUnwrap(vector["link"] as? [String: Any])
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any])
+            // Broken Journey expressions run through JourneyService in JourneyPresentationLifecycleTests.
+            if link["kind"] as? String == "journey", expected["opened"] as? Bool == false { continue }
+            try await exercise(.success, linkVector: vector)
+        }
     }
 
     private func exercise(_ scenario: Scenario, linkVector: [String: Any]? = nil) async throws {
@@ -243,7 +249,9 @@ final class SignedSemanticJourneyTests: XCTestCase {
             await withCheckedContinuation { continuation in controller.present(sheet, animated: false) { continuation.resume() } }
             top = sheet
         case "button_dismissing": controller.performDismiss()
-        case "swipe_dismissing": controller.performInteractiveDismissal()
+        case "swipe_dismissing":
+            controller.dismiss(animated: true)
+            XCTAssertTrue(controller.isBeingDismissed, "Link must be attempted during UIKit dismissal")
         case "host_dismissed": await presentations.dismissCurrentExperienceFromHost()
         case "owner_retired", "presentation_finished", "screenless": await presentations.finishJourneyPresentation(owner: request.owner)
         case "background": presentations.onAppDidEnterBackground()
@@ -255,13 +263,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
             if let host { XCTAssertTrue(host === top, "Sheet links must use the topmost controller") }
             return link["canOpen"] as? Bool ?? true
         }
-        let expression = link["url"] as? [String: Any]
-        let url = expression?["type"] as? String == "String" ? expression?["value"] as? String : nil
-        var opened: ExperienceRendererOpenLinkRequest?
-        if let url, !url.isEmpty, link["kind"] as? String != "journey" || link["target"] is String {
-            opened = await presentations.openJourneyLink(owner: request.owner,
-                request: .init(urlString: url, target: link["target"] as? String, screenId: request.screenId, instanceId: nil))
-        }
+        let expression = try XCTUnwrap(link["url"] as? [String: Any])
+        let url = try XCTUnwrap(expression["value"] as? String)
+        let opened = await presentations.openJourneyLink(owner: request.owner,
+            request: .init(urlString: url, target: link["target"] as? String, screenId: request.screenId, instanceId: nil))
         // The production callback only records returned successful handoffs.
         if let opened { await request.onLinkOpened(opened) }
         XCTAssertEqual(opened != nil, expected["opened"] as? Bool, "\(vector["name"]!)")
