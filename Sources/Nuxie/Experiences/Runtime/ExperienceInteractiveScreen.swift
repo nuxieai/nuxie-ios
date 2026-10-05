@@ -1676,7 +1676,9 @@ actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
     private let videoPlayback: ExperienceVideoPlayback?
     private let fontScope: ExperienceRuntimeFontScope
-    nonisolated let artboardBounds: CGRect
+    private nonisolated let layoutBounds: ExperienceLayoutBounds
+    nonisolated var artboardBounds: CGRect { layoutBounds.read() }
+    private var needsLayoutReadback = false
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
     private let controlActionIds: Set<String>
@@ -1728,7 +1730,7 @@ actor ExperienceInteractiveScreen {
         self.runtime = runtime
         self.videoPlayback = videoPlayback
         self.fontScope = fontScope
-        self.artboardBounds = artboardBounds
+        self.layoutBounds = ExperienceLayoutBounds(artboardBounds)
         self.controlActionIds = controlActionIds
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
@@ -1930,6 +1932,7 @@ actor ExperienceInteractiveScreen {
                 textRunNames: capturesTextLayout
                     ? textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted() : []
             )
+            try await refreshLayoutBounds()
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
                 result.keepGoing = result.keepGoing || videoActive
@@ -3587,16 +3590,33 @@ actor ExperienceInteractiveScreen {
         ExperienceInteractiveMetalDevice(value: try await runtime.metalDevice().value)
     }
 
-    func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32, layoutScaleFactor: Float) async throws
         -> ExperienceInteractiveRenderOutcome
     {
         let runtime = runtime
         return try await operationGate.withLock { [self] in
             await discardTextFrame()
+            if pixelWidth > 0, pixelHeight > 0 {
+                try await runtime.setLayoutSize(width: Float(pixelWidth) / layoutScaleFactor,
+                    height: Float(pixelHeight) / layoutScaleFactor)
+                await markLayoutReadbackPending(true)
+            } else {
+                await markLayoutReadbackPending(false)
+                try await videoPlayback?.resizeViewport(bounds: .zero)
+            }
             let outcome = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
-            try await videoPlayback?.resizeViewport(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
             return Self.renderOutcome(outcome)
         }
+    }
+
+    private func markLayoutReadbackPending(_ pending: Bool) { needsLayoutReadback = pending }
+
+    private func refreshLayoutBounds() async throws {
+        guard needsLayoutReadback else { return }
+        let size = try await runtime.layoutSize()
+        layoutBounds.update(size: size)
+        try await videoPlayback?.resizeViewport(bounds: artboardBounds)
+        needsLayoutReadback = false
     }
 
     func enableSemantics() async throws {

@@ -113,7 +113,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }?.value as? ExperienceInteractiveScreen)
         }
         let initial = try interactiveScreen()
-        try await initial.resize(pixelWidth: 320, pixelHeight: 150)
+        try await initial.resize(pixelWidth: 320, pixelHeight: 150, layoutScaleFactor: 1)
         for _ in 0..<20 { _ = try await initial.step(elapsedSeconds: 0.016) }
         _ = try await initial.step(pointers: [.init(kind: .down, x: 240, y: 65)], elapsedSeconds: 0)
         _ = try await initial.step(pointers: [.init(kind: .up, x: 240, y: 65, timestamp: 0.1)], elapsedSeconds: 0)
@@ -765,7 +765,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(current.values.first { $0.name == "Number" }?.value, .number(91))
         XCTAssertEqual(deliveredSteps, 1)
 
-        _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80)
+        _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80, layoutScaleFactor: 1)
         layer.drawableSize = CGSize(width: 80, height: 80)
         guard let nextDrawable = layer.nextDrawable() else { throw XCTSkip("No second drawable") }
         let afterResize = try await screen.renderFrame(layoutScaleFactor: 1, drawable: .init(nextDrawable), capturesSemantics: false)

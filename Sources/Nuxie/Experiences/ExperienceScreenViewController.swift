@@ -356,6 +356,9 @@ final class ExperienceScreenViewController: UIViewController {
             surfaceView: surfaceView,
             onSessionResult: { [weak self] in
                 guard let self else { return }
+                if let bounds = self.interactiveScreen?.artboardBounds {
+                    self.textInputOverlayBridge.updateArtboardBounds(bounds)
+                }
                 self.delegate?.experienceScreenViewControllerDidAdvance(self)
             },
             onPresentedDrawable: { [weak self] drawable in
@@ -764,7 +767,7 @@ final class ExperienceScreenViewController: UIViewController {
     private func applySemantics(_ capture: NuxieNativeSemanticCapture) {
         guard !isShuttingDown, !contentHidden, controllerIsVisible,
               let interactiveScreen, let presentationLoop,
-              let transform = ExperienceContainCenterTransform(
+              let transform = ExperienceLayoutTransform(
                 artboardBounds: interactiveScreen.artboardBounds,
                 viewportBounds: surfaceView.bounds) else { return }
         let nativeControls = textInputOverlayBridge.applySemantics(capture)
@@ -909,12 +912,7 @@ final class ExperienceScreenViewController: UIViewController {
             screenID: screenId,
             renderPlan: artifact.renderPlan,
             surfaceView: surfaceView,
-            artboardBounds: CGRect(
-                x: 0,
-                y: 0,
-                width: screen.width,
-                height: screen.height
-            ),
+            artboardBounds: interactiveScreen.artboardBounds,
             semanticTextWriter: semanticWriter,
             semanticContentOffsetWriter: { [weak self] captureID, target, offset, completion in
                 loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
