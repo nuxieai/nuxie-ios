@@ -1044,24 +1044,24 @@ final class ExperienceScreenViewController: UIViewController {
             )
         case .reportedEvent(let event):
             resolveExitWaiters(eventName: event.name)
-            let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
+            let properties = Dictionary(event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
-            })
+            }, uniquingKeysWith: { first, _ in first })
             let eventScreenID = Self.stringProperty(
                 ["screenId", "screen_id"],
                 in: properties
             ) ?? screenId
-            let instanceID = Self.stringProperty(
+            let instanceID = event.sourceRejection == nil ? Self.stringProperty(
                 ["instanceId", "instance_id"],
                 in: properties
-            )
+            ) : nil
             if !event.url.isEmpty {
                 delegate?.experienceScreenViewController(
                     self,
                     didRequestOpenLink: ExperienceRendererOpenLinkRequest(
                         urlString: event.url,
                         target: event.target.isEmpty ? nil : event.target,
-                        screenId: eventScreenID,
+                        screenId: screenId,
                         instanceId: instanceID
                     )
                 )
