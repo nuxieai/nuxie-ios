@@ -5,9 +5,7 @@ import Foundation
 import UIKit
 #endif
 
-/// Safe-area insets for a rectangular surface, expressed in that surface's
-/// own coordinate space (points for a UIKit view or artboard units for a
-/// runtime surface).
+/// The screen view's safe-area insets in points, published as they are.
 struct ExperienceSafeAreaInsets: Equatable {
     var top: Double
     var bottom: Double
