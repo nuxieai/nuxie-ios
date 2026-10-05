@@ -29,7 +29,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             executionFenceToken: fence.token())
         let link = ExperienceRendererOpenLinkRequest(urlString: try XCTUnwrap(properties["url"] as? String),
             target: properties["target"] as? String, screenId: properties["screen_id"] as? String,
-            instanceId: properties["instance_id"] as? String)
+            instanceId: properties["instance_id"] as? String, destination: try XCTUnwrap(properties["destination"] as? String))
         let captured = await dispatcher.captureLinkOpened(link, request: request)
         XCTAssertTrue(captured)
         XCTAssertEqual(events.routedEvents.count, 1)

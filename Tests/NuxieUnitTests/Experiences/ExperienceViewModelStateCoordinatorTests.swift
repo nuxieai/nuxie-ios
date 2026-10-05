@@ -55,6 +55,10 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
         }
 
         describe("ExperienceViewModelStateCoordinator") {
+            it("refuses relative purchase paths in the alias store") {
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: [value(path: "placementId", "wrong")]))
+                expect(coordinator.getPurchaseValue(path: path("placementId", isRelative: true), screenId: "screen-1", instanceId: "runtime-instance")).to(beNil())
+            }
             it("hydrates and reads path/value entries without a schema bucket") {
                 let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: [
                     value(path: "title", "Welcome"),
