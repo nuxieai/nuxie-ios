@@ -25,8 +25,14 @@
       "expected": "root-placement"
     },
     {
-      "name": "no retained source",
-      "source": null,
+      "name": "absent native source",
+      "source": 99,
+      "expected": null
+    },
+    {
+      "name": "conflicting model",
+      "source": 3,
+      "viewModelName": "OtherModel",
       "expected": null
     }
   ]

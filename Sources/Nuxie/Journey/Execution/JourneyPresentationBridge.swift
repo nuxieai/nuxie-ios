@@ -66,9 +66,8 @@ struct JourneyPresentationRequest: Sendable {
     let onProductsUnavailable:
         @MainActor @Sendable (String) async -> JourneyProductFailureResult
     let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) -> Void
-    let eventSources: ExperienceEventSources
     let onEmissionBatch:
-        @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
+        @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
     let onPermissionEvent:
         @Sendable (
             String,
@@ -102,9 +101,8 @@ struct JourneyPresentationRequest: Sendable {
                 _ in .rejected
             },
         onLinkOpened: @escaping @Sendable (ExperienceRendererOpenLinkRequest) -> Void = { _ in },
-        eventSources: ExperienceEventSources = ExperienceEventSources(),
         onEmissionBatch:
-            @escaping @MainActor @Sendable (ScreenEmissionBatch) async -> Bool,
+            @escaping @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool,
         onPermissionEvent:
             @escaping @Sendable (
                 String,
@@ -129,7 +127,6 @@ struct JourneyPresentationRequest: Sendable {
         self.onScreenDismissed = onScreenDismissed
         self.onProductsUnavailable = onProductsUnavailable
         self.onLinkOpened = onLinkOpened
-        self.eventSources = eventSources
         self.onEmissionBatch = onEmissionBatch
         self.onPermissionEvent = onPermissionEvent
         self.onPresentationRevealed = onPresentationRevealed
@@ -242,9 +239,8 @@ final class JourneyRuntimeDelegate {
         ExperiencePresentationTraceContext?
     private let presentationTraceToken: ExperiencePresentationTraceToken?
     private let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) -> Void
-    private let eventSources: ExperienceEventSources
     private let onEmissionBatch:
-        @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
+        @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
     nonisolated private let onPermissionEvent:
         @Sendable (
             String,
@@ -301,7 +297,6 @@ final class JourneyRuntimeDelegate {
         onProductsUnavailable = request.onProductsUnavailable
         onPresentationRevealed = request.onPresentationRevealed
         onLinkOpened = request.onLinkOpened
-        eventSources = request.eventSources
         onEmissionBatch = request.onEmissionBatch
         onPermissionEvent = request.onPermissionEvent
         onOutcome = request.onOutcome
@@ -429,7 +424,8 @@ final class JourneyRuntimeDelegate {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch,
+        frameSources: ExperienceEmissionSources? = nil
     ) async -> Bool {
         guard !resolved,
               batch.journeyId == journeyId,
@@ -437,10 +433,7 @@ final class JourneyRuntimeDelegate {
               batch.presentationEpoch == presentationEpoch else {
             return false
         }
-        eventSources.put(controller.eventSources.take(invocationID: batch.invocationId),
-            invocationID: batch.invocationId)
-        defer { _ = eventSources.take(invocationID: batch.invocationId) }
-        guard await onEmissionBatch(batch) else { return false }
+        guard await onEmissionBatch(batch, frameSources) else { return false }
         let changed = responseProjection.accept(batch.emissions)
         if !resolved, let activeScreenId {
             projectResponses(into: controller, screenID: activeScreenId, fields: changed)
@@ -485,7 +478,7 @@ final class JourneyRuntimeDelegate {
               await controller.performOpenLink(urlString: request.urlString, target: request.target) else { return false }
         onLinkOpened(.init(urlString: request.urlString,
             target: request.target?.isEmpty == false ? request.target : "_self",
-            screenId: request.screenId ?? activeScreenId, instanceId: request.instanceId))
+            screenId: request.screenId ?? activeScreenId, instanceId: request.instanceId, effectId: request.effectId))
         return true
     }
 

@@ -50,6 +50,7 @@ struct ExperienceRendererOpenLinkRequest: Equatable, Sendable {
     let target: String?
     let screenId: String?
     let instanceId: String?
+    var effectId: String? = nil
 }
 
 /// Invoked by the MainActor-isolated ExperienceViewController.
@@ -97,7 +98,8 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch,
+        frameSources: ExperienceEmissionSources?
     ) async -> Bool
 
     func experienceViewController(
@@ -211,7 +213,8 @@ extension ExperienceRuntimeDelegate {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch,
+        frameSources: ExperienceEmissionSources?
     ) async -> Bool { false }
 
     func experienceViewController(
@@ -458,7 +461,6 @@ class ExperienceViewController: NuxiePlatformViewController {
     private var hostDismissalRequested = false
     private let screenEmissionDispatcher: ScreenEmissionDispatcher
     private let screenEmissionPublicationGate = ExperienceInteractiveOperationGate()
-    let eventSources = ExperienceEventSources()
     private var screenEmissionRun: ScreenEmissionRun?
     private var pendingScreenEmissionRunScope: ScreenControlRunScope??
 
@@ -1033,18 +1035,27 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     @discardableResult
     func performOpenLink(urlString: String, target: String? = nil) async -> Bool {
-        guard let route = ExperienceLinkRouting.destination(urlString: urlString, target: target) else { return false }
-        #if canImport(UIKit)
-        if route.inApp {
-            present(SFSafariViewController(url: route.url), animated: true)
-            return true
-        }
-        return await UIApplication.shared.open(route.url, options: [:])
-        #elseif canImport(AppKit)
-        return NSWorkspace.shared.open(route.url)
-        #else
-        return false
-        #endif
+        await ExperienceLinkRouting.open(urlString: urlString, target: target,
+            inApp: { [self] url in
+                #if canImport(UIKit)
+                guard viewIfLoaded?.window != nil, presentedViewController == nil,
+                      !isBeingDismissed, !isBeingPresented else { return false }
+                present(SFSafariViewController(url: url), animated: true)
+                return true
+                #elseif canImport(AppKit)
+                return NSWorkspace.shared.open(url)
+                #else
+                return false
+                #endif
+            }, external: { url in
+                #if canImport(UIKit)
+                return await UIApplication.shared.open(url, options: [:])
+                #elseif canImport(AppKit)
+                return NSWorkspace.shared.open(url)
+                #else
+                return false
+                #endif
+            })
     }
 
     func applyViewModelSnapshot(_ snapshot: ExperienceViewModelSnapshot, screenId: String? = nil) {
@@ -2179,12 +2190,11 @@ extension ExperienceViewController {
             LogWarning("ExperienceViewController: screen emission dispatch failed: \(error)")
             disposition = .rejected
         case .success(let batch):
-            eventSources.put(eventSource?.bound(to: batch), invocationID: batch.invocationId)
-            defer { _ = eventSources.take(invocationID: batch.invocationId) }
             await joinPresentationRevealNotification()
             let published = await runtimeDelegate?.experienceViewController(
                 self,
-                didEmitScreenEmissionBatch: batch
+                didEmitScreenEmissionBatch: batch,
+                frameSources: eventSource?.bound(to: batch)
             ) ?? false
             if !published {
                 _ = await screenEmissionDispatcher.rollbackUnpublishedBatch(batch)
@@ -2212,11 +2222,12 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        frameSources: ExperienceEmissionSources?
     ) async {
         guard acceptsRuntimeCallback(from: controller) else { return }
         await publishScreenInput(input, originatingRun: originatingRun,
-            eventSource: controller.emissionEventSource)
+            eventSource: frameSources)
     }
 
     func experienceScreenViewController(

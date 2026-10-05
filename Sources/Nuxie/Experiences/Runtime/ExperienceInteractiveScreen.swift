@@ -1931,21 +1931,22 @@ actor ExperienceInteractiveScreen {
         eventSnapshot: NuxieNativeViewModelSnapshot?,
         correlationID: UInt64
     ) -> ExperienceInteractiveStepResult {
+        let frameSnapshot = eventSnapshot.map(Self.projectSnapshot)
+        let schemaNames = Dictionary(uniqueKeysWithValues: viewModelCatalog.schemas.map { ($0.index, $0.name) })
+        let liveIDs = Set(eventSnapshot?.instances.map(\.id) ?? [])
         let effects = router.project(
             reportedEvents: result.events.map { event in
                 var projected = ExperienceInteractiveEventSource.project(
                     Self.reportedEvent(event), nativeID: event.sourceViewModelInstanceID,
                     rootID: eventSnapshot?.rootInstanceID,
-                    liveIDs: Set(eventSnapshot?.instances.map(\.id) ?? []),
+                    liveIDs: liveIDs,
                     identities: viewModelsByIdentity
                 )
-                projected.resolvedSource = eventSnapshot.map {
+                projected.resolvedSource = frameSnapshot.map {
                     ExperienceResolvedEventSource(
                         nativeID: event.sourceViewModelInstanceID ?? $0.rootInstanceID,
-                        snapshot: Self.projectSnapshot($0),
-                        schemaNames: Dictionary(uniqueKeysWithValues: viewModelCatalog.schemas.map {
-                            ($0.index, $0.name)
-                        })
+                        snapshot: $0,
+                        schemaNames: schemaNames
                     )
                 }
                 return projected

@@ -55,6 +55,7 @@ These fields do not change the flat activity name or properties.
 | Internal source | Public activity |
 | --- | --- |
 | `$experience_shown` | `experienceShown` |
+| `$link_opened` | `linkOpened` |
 | `$experience_dismissed` | `experienceDismissed` |
 | `$experience_errored` | `experienceErrored` |
 | `$journey_leg_started` | `journeyStarted` |

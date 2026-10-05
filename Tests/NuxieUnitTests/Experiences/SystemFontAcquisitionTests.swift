@@ -270,7 +270,7 @@ final class SystemFontAcquisitionTests: XCTestCase {
         let result = await service.presentJourney(JourneyPresentationRequest(
             release: release, delivery: delivery, screenId: screen.screenId,
             owner: .init(journeyId: "font-failure-journey", distinctId: "font-failure-owner"),
-            reservation: reservation, onEmissionBatch: { _ in true },
+            reservation: reservation, onEmissionBatch: { _, _ in true },
             onPresentationRevealed: { _ in recorder.revealCount += 1 },
             onOutcome: { outcome, _ in recorder.outcomes.append(outcome); return true }
         ))

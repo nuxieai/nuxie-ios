@@ -12,10 +12,11 @@ enum ExperienceLinkRouting {
         return (url, web && ["", "_self", "_parent", "_top", "in_app"].contains(target))
     }
 
+    @MainActor
     @discardableResult
     static func open(urlString: String, target: String?,
-                     inApp: (URL) -> Bool, external: (URL) -> Bool) -> Bool {
+                     inApp: @MainActor (URL) async -> Bool, external: @MainActor (URL) async -> Bool) async -> Bool {
         guard let route = destination(urlString: urlString, target: target) else { return false }
-        return route.inApp ? inApp(route.url) : external(route.url)
+        return await (route.inApp ? inApp(route.url) : external(route.url))
     }
 }
