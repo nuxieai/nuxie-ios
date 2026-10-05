@@ -83,7 +83,7 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    )
+    ) async
 
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
@@ -1056,7 +1056,7 @@ final class ExperienceScreenViewController: UIViewController {
                 in: properties
             ) : nil
             if !event.url.isEmpty {
-                delegate?.experienceScreenViewController(
+                await delegate?.experienceScreenViewController(
                     self,
                     didRequestOpenLink: ExperienceRendererOpenLinkRequest(
                         urlString: event.url,

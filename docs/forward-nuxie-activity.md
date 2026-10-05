@@ -93,3 +93,5 @@ stable completion report and are omitted from the flat activity view.
 `beforeSend` governs every event path, including stable Journey reports. Returning `nil` suppresses the wire event, history row, and activity callback together. Renaming an event does not change its typed public activity case.
 
 Pending wire delivery may retry after restart, but retries do not replay `nuxieDidEmit`. A process exit between durable capture and callback can lose the callback, which is why the contract is at most once rather than guaranteed delivery.
+
+`$link_opened` forwards as `linkOpened` (`link_opened`), with URL, target, optional screen/source alias, and the same Journey leg attribution as the lifecycle activities.

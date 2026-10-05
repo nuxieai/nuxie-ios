@@ -45,7 +45,7 @@ struct ExperienceRendererViewModelChange: @unchecked Sendable {
     let isTrigger: Bool
 }
 
-struct ExperienceRendererOpenLinkRequest {
+struct ExperienceRendererOpenLinkRequest: Equatable, Sendable {
     let urlString: String
     let target: String?
     let screenId: String?
@@ -108,7 +108,7 @@ protocol ExperienceRuntimeDelegate: AnyObject {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    )
+    ) async
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -222,7 +222,7 @@ extension ExperienceRuntimeDelegate {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    ) {}
+    ) async {}
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -1032,28 +1032,19 @@ class ExperienceViewController: NuxiePlatformViewController {
     }
 
     @discardableResult
-    func performOpenLink(urlString: String, target: String? = nil) -> Bool {
-        ExperienceLinkRouting.open(urlString: urlString, target: target,
-            inApp: { url in
-                #if canImport(UIKit)
-                present(SFSafariViewController(url: url), animated: true)
-                return true
-                #elseif canImport(AppKit)
-                return NSWorkspace.shared.open(url)
-                #else
-                return false
-                #endif
-            }, external: { url in
-                #if canImport(UIKit)
-                guard UIApplication.shared.canOpenURL(url) else { return false }
-                UIApplication.shared.open(url)
-                return true
-                #elseif canImport(AppKit)
-                return NSWorkspace.shared.open(url)
-                #else
-                return false
-                #endif
-            })
+    func performOpenLink(urlString: String, target: String? = nil) async -> Bool {
+        guard let route = ExperienceLinkRouting.destination(urlString: urlString, target: target) else { return false }
+        #if canImport(UIKit)
+        if route.inApp {
+            present(SFSafariViewController(url: route.url), animated: true)
+            return true
+        }
+        return await UIApplication.shared.open(route.url, options: [:])
+        #elseif canImport(AppKit)
+        return NSWorkspace.shared.open(route.url)
+        #else
+        return false
+        #endif
     }
 
     func applyViewModelSnapshot(_ snapshot: ExperienceViewModelSnapshot, screenId: String? = nil) {
@@ -2239,9 +2230,9 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    ) {
+    ) async {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        runtimeDelegate?.experienceViewController(self, didRequestOpenLink: request)
+        await runtimeDelegate?.experienceViewController(self, didRequestOpenLink: request)
     }
 
     func experienceScreenViewController(

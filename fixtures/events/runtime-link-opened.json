@@ -1,0 +1,18 @@
+{
+  "suite": "events/runtime-link-opened",
+  "version": 1,
+  "record": {
+    "name": "$link_opened",
+    "properties": {
+      "url": "https://example.test/account",
+      "target": "_self",
+      "screen_id": "screen",
+      "instance_id": "second",
+      "journey_id": "journey",
+      "experience_id": "experience",
+      "experience_version_id": "version",
+      "leg_id": "leg",
+      "leg_generation": 2
+    }
+  }
+}

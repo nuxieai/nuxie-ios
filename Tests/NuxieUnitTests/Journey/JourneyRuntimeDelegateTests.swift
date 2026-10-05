@@ -390,6 +390,26 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
+    func testOnlySuccessfulOpensReachTheRunRecorder() async throws {
+        let snapshot = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let recorded = OpenedLinkRecorder()
+        let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
+            reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _ in true },
+            onOutcome: { _, _ in true })
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+        await delegate.experienceViewController(controller, didChangeScreen: "screen_welcome")
+        for url in ["https://example.test/account", "not a url"] {
+            await delegate.experienceViewController(controller, didRequestOpenLink: .init(urlString: url,
+                target: "_self", screenId: "screen_welcome", instanceId: nil))
+        }
+        XCTAssertEqual(recorded.values().map(\.urlString), ["https://example.test/account"])
+        XCTAssertEqual(recorded.values().first?.screenId, "screen_welcome")
+    }
+
     func testRuntimeDelegateForwardsRendererOpenLinksFromTheActiveScreen() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)
@@ -1064,4 +1084,11 @@ private struct PurchaseReferenceScopes: Decodable {
         let instanceId: String?
         let expected: String?
     }
+}
+
+private final class OpenedLinkRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var links: [ExperienceRendererOpenLinkRequest] = []
+    func append(_ link: ExperienceRendererOpenLinkRequest) { lock.withLock { links.append(link) } }
+    func values() -> [ExperienceRendererOpenLinkRequest] { lock.withLock { links } }
 }

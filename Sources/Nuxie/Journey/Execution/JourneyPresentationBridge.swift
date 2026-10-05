@@ -65,6 +65,7 @@ struct JourneyPresentationRequest: Sendable {
             -> JourneyScreenDismissalResult
     let onProductsUnavailable:
         @MainActor @Sendable (String) async -> JourneyProductFailureResult
+    let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) -> Void
     let eventSources: ExperienceEventSources
     let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
@@ -100,6 +101,7 @@ struct JourneyPresentationRequest: Sendable {
             @escaping @MainActor @Sendable (String) async -> JourneyProductFailureResult = {
                 _ in .rejected
             },
+        onLinkOpened: @escaping @Sendable (ExperienceRendererOpenLinkRequest) -> Void = { _ in },
         eventSources: ExperienceEventSources = ExperienceEventSources(),
         onEmissionBatch:
             @escaping @MainActor @Sendable (ScreenEmissionBatch) async -> Bool,
@@ -126,6 +128,7 @@ struct JourneyPresentationRequest: Sendable {
         self.onScreenChanged = onScreenChanged
         self.onScreenDismissed = onScreenDismissed
         self.onProductsUnavailable = onProductsUnavailable
+        self.onLinkOpened = onLinkOpened
         self.eventSources = eventSources
         self.onEmissionBatch = onEmissionBatch
         self.onPermissionEvent = onPermissionEvent
@@ -238,6 +241,7 @@ final class JourneyRuntimeDelegate {
     private(set) var presentationTraceContext:
         ExperiencePresentationTraceContext?
     private let presentationTraceToken: ExperiencePresentationTraceToken?
+    private let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) -> Void
     private let eventSources: ExperienceEventSources
     private let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
@@ -296,6 +300,7 @@ final class JourneyRuntimeDelegate {
         onScreenDismissed = request.onScreenDismissed
         onProductsUnavailable = request.onProductsUnavailable
         onPresentationRevealed = request.onPresentationRevealed
+        onLinkOpened = request.onLinkOpened
         eventSources = request.eventSources
         onEmissionBatch = request.onEmissionBatch
         onPermissionEvent = request.onPermissionEvent
@@ -470,15 +475,18 @@ final class JourneyRuntimeDelegate {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    ) {
-        guard !resolved,
-              request.screenId == nil || request.screenId == activeScreenId else {
-            return
-        }
-        controller.performOpenLink(
-            urlString: request.urlString,
-            target: request.target
-        )
+    ) async {
+        _ = await openLink(controller, request: request)
+    }
+
+    @discardableResult
+    func openLink(_ controller: ExperienceViewController, request: ExperienceRendererOpenLinkRequest) async -> Bool {
+        guard !resolved, request.screenId == nil || request.screenId == activeScreenId,
+              await controller.performOpenLink(urlString: request.urlString, target: request.target) else { return false }
+        onLinkOpened(.init(urlString: request.urlString,
+            target: request.target?.isEmpty == false ? request.target : "_self",
+            screenId: request.screenId ?? activeScreenId, instanceId: request.instanceId))
+        return true
     }
 
     nonisolated func experienceViewController(

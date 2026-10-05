@@ -1663,6 +1663,19 @@ private extension JourneyService {
         }
     }
 
+    private func handlePresentationLinkOpened(_ link: ExperienceRendererOpenLinkRequest,
+        run: JourneyRun, release: AuthenticatedJourneyRelease,
+        identityFenceToken: IdentityFenceToken, executionFenceToken: JourneyProfileFenceToken) async {
+        guard let journal, executionFence.isCurrent(executionFenceToken),
+              await isCurrentIdentity(identityFenceToken, journal: journal) else { return }
+        _ = await JourneyEffectDispatcher(identity: identity, events: events).captureLinkOpened(link,
+            request: .init(runId: run.id, journeyId: run.journeyId, generation: run.generation,
+                reference: run.reference, release: release, stepId: run.stepId, action: [:],
+                context: run.context, effectId: UUID.v7().uuidString, distinctId: journal.distinctId,
+                identityFence: identityFenceToken, executionFence: executionFence,
+                executionFenceToken: executionFenceToken))
+    }
+
     private func handlePresentationPermissionEvent(
         _ eventName: String,
         properties: UncheckedSendable<[String: Any]>,
@@ -2478,6 +2491,13 @@ private extension JourneyService {
                                 release: release,
                                 executionFenceToken: executionFenceToken
                             )
+                        },
+                        onLinkOpened: { [weak self] link in
+                            Task {
+                                await self?.handlePresentationLinkOpened(link, run: presentedRun,
+                                    release: release, identityFenceToken: presentationIdentityFenceToken,
+                                    executionFenceToken: executionFenceToken)
+                            }
                         },
                         eventSources: eventSources,
                         onEmissionBatch: { [weak self] batch in

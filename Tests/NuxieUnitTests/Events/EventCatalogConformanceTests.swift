@@ -72,6 +72,7 @@ $experience_shown	processCapture	governed	batch	true	true
 $experiment_exposure	captureStableSystemEvent	governed	batch	true	true
 $feature_used	featureCommand|storePreparedEventInHistory	governed|governed	/event|none	true|true	true|false
 $identify	processCapture	governed	batch	true	true
+$link_opened	captureStableSystemEvent	governed	batch	true	true
 $journey_leg_started	captureStableSystemEvent	governed	batch	true	true
 $journey_leg_completed	captureStableSystemEvent	governed	batch	true	true
 $notifications_denied	processCapture|captureStableSystemEvent	governed|governed	batch|batch	true|true	true|true
@@ -104,6 +105,7 @@ $tracking_denied	processCapture|captureStableSystemEvent	governed|governed	batch
         ("JourneyEvents.experimentExposure", JourneyEvents.experimentExposure),
         ("JourneyEvents.journeyStarted", JourneyEvents.journeyStarted),
         ("JourneyEvents.journeyCompleted", JourneyEvents.journeyCompleted),
+        ("JourneyEvents.linkOpened", JourneyEvents.linkOpened),
         ("SystemEventNames.appBackgrounded", SystemEventNames.appBackgrounded),
         ("SystemEventNames.appInstalled", SystemEventNames.appInstalled),
         ("SystemEventNames.appOpened", SystemEventNames.appOpened),
@@ -148,6 +150,7 @@ $tracking_denied	processCapture|captureStableSystemEvent	governed|governed	batch
         "$identify": "hidden: identity and PII event",
         "$journey_leg_started": "journeyStarted",
         "$journey_leg_completed": "journeyCompleted",
+        "$link_opened": "linkOpened",
         "$notifications_denied": "permissionResolved",
         "$notifications_enabled": "permissionResolved",
         "$permission_denied": "permissionResolved",

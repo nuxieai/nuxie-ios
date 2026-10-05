@@ -192,7 +192,7 @@ class MockExperienceViewController: ExperienceViewController {
         super.performDismiss(reason: reason)
     }
 
-    override func performOpenLink(urlString: String, target: String? = nil) -> Bool {
+    override func performOpenLink(urlString: String, target: String? = nil) async -> Bool {
         guard ExperienceLinkRouting.destination(urlString: urlString, target: target) != nil else { return false }
         performedOpenLinks.append((urlString, target))
         return true
