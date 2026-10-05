@@ -635,18 +635,7 @@ final class ExperienceScreenViewController: UIViewController {
               let defaultViewModelName = journeyScreen?.defaultViewModelName else {
             return
         }
-        let viewSize = view.bounds.size
-        let artboardSize = CGSize(width: screen.width, height: screen.height)
-        guard viewSize.width > 0,
-              viewSize.height > 0,
-              artboardSize.width > 0,
-              artboardSize.height > 0 else { return }
-
-        let insets = ExperienceSafeAreaInsetMapper.artboardInsets(
-            deviceInsets: ExperienceSafeAreaInsets(view.safeAreaInsets),
-            viewSize: viewSize,
-            artboardSize: artboardSize
-        )
+        let insets = experienceSafeAreaInsets(for: view)
         guard insets != lastPushedSafeAreaInsets else { return }
         let identity = journeyScreen?.defaultInstanceId
         let values: [(String, Double)] = [
