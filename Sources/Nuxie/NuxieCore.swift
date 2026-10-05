@@ -189,7 +189,8 @@ final class NuxieCore: @unchecked Sendable {
     let defaultExperiencePresentation = ExperiencePresentationService(
       windowProvider: nil,
       experiences: experiences,
-      eventLog: eventLog
+      eventLog: eventLog,
+      identity: identity
     )
     let experiencePresentation = overrides.experiencePresentation
       ?? defaultExperiencePresentation

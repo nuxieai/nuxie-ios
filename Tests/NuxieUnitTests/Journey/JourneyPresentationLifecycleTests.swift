@@ -74,7 +74,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         let recorder = LinkStepProbe()
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
         let actualPresenter = await MainActor.run {
-            ExperiencePresentationService(experiences: MockExperienceService(), eventLog: events)
+            ExperiencePresentationService(experiences: MockExperienceService(), eventLog: events, identity: identity)
         }
         let observedPresenter = await MainActor.run { ObservedLinkPresenter(base: actualPresenter) }
         let service = makeService(identity: identity, events: events, directory: directory,

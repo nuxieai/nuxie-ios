@@ -160,7 +160,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             settings: NuxieRuntimeSettings(configuration: configuration), eventSink: DiscardingSystemEventSink())
         let experiences = ExperienceService(productService: products, eventLog: events,
             transactionServiceProvider: { transactions }, systemEventSink: DiscardingSystemEventSink(), releaseStore: acquisition)
-        let presentations = ExperiencePresentationService(experiences: experiences, eventLog: events)
+        let presentations = ExperiencePresentationService(experiences: experiences, eventLog: events, identity: identity)
         let storageScope = JourneyStorageScope(authority: authority)
         let journal = try JourneyRunJournal(directory: directory, distinctId: owner, storageScope: storageScope)
         let observer = SemanticJourneyPresenter(base: presentations, journal: journal)
@@ -200,12 +200,17 @@ final class SignedSemanticJourneyTests: XCTestCase {
             }
             }
             if let linkVector {
-                try await assertLinkState(linkVector, presentations: presentations, observer: observer, events: events, probe: linkProbe, continuationFinished: continuationFinished, retire: { reason in
-                    if reason == "identity_change" {
-                        identity.setDistinctId("replacement-owner")
-                        await journeys.handleUserChange(from: owner, to: "replacement-owner")
-                    } else {
-                        await journeys.profileDidClear(distinctId: owner)
+                try await assertLinkState(linkVector, presentations: presentations, observer: observer, events: events, probe: linkProbe, continuationFinished: continuationFinished, retire: { reason, afterHandoff in
+                    switch reason {
+                    case "identity_change":
+                        if afterHandoff {
+                            await journeys.handleUserChange(from: owner, to: "replacement-owner")
+                        } else {
+                            identity.setDistinctId("replacement-owner")
+                        }
+                    case "profile_clear":
+                        if !afterHandoff { await journeys.profileDidClear(distinctId: owner) }
+                    default: XCTFail("Unknown retirement \(reason)")
                     }
                 })
             } else if scenario == .roles {
@@ -298,7 +303,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
 
     private func assertLinkState(_ vector: [String: Any], presentations: ExperiencePresentationService,
                                  observer: SemanticJourneyPresenter, events: EventLog, probe: LinkHandoffProbe,
-                                 continuationFinished: XCTestExpectation, retire: @escaping (String) async -> Void) async throws {
+                                 continuationFinished: XCTestExpectation, retire: @escaping (String, Bool) async -> Void) async throws {
         let state = try XCTUnwrap(vector["state"] as? String)
         let retirement = state == "owner_retired" ? try XCTUnwrap(vector["retirement"] as? String) : ""
         let link = try XCTUnwrap(vector["link"] as? [String: Any])
@@ -326,7 +331,13 @@ final class SignedSemanticJourneyTests: XCTestCase {
                     controller.dismiss(animated: true) { probe.dismissalCompleted = true }
                     XCTAssertTrue(controller.isBeingDismissed)
                 case "host_dismissed": await presentations.dismissCurrentExperienceFromHost()
-                case "owner_retired": await retire(retirement)
+                case "owner_retired":
+                    await retire(retirement, false)
+                    if retirement == "identity_change" {
+                        XCTAssertTrue(presentations.ownsJourneyPresentation(owner: request.owner))
+                        XCTAssertTrue(controller.view.window != nil)
+                        XCTAssertFalse(controller.linkPresentationIsClosing)
+                    }
                 case "presentation_finished": await presentations.finishJourneyPresentation(owner: request.owner)
                 case "background": presentations.onAppDidEnterBackground()
                 default: break
@@ -335,6 +346,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             presentations.linkHandoff = { _, host in
                 probe.destinations.append(host == nil ? "external" : "in_app")
                 if let host { XCTAssertTrue(host === top) }
+                if state == "owner_retired" { await retire(retirement, true) }
                 return link["canOpen"] as? Bool ?? true
             }
             let journey = link["kind"] as? String == "journey"
@@ -350,7 +362,11 @@ final class SignedSemanticJourneyTests: XCTestCase {
             try await waitUntil("Runtime frame must settle") { observer.finishedBatch }
         }
         if state == "owner_retired" {
-            await fulfillment(of: [continuationFinished], timeout: 5)
+            if link["kind"] as? String == "journey" {
+                await fulfillment(of: [continuationFinished], timeout: 5)
+            } else {
+                try await waitUntil("Runtime link recording must finish before the negative assertion") { observer.finishedLinkRecording }
+            }
         }
         for _ in 0..<100 {
             if await events.getRecentEvents().filter { $0.name == JourneyEvents.linkOpened }.count == (expected["recorded"] as? Bool == true ? 1 : 0) { break }
@@ -514,6 +530,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
     var beforeLink: (() async -> Void)?
     var beforeBatch: (() async -> Void)?
     var finishedBatch = false
+    var finishedLinkRecording = false
     var revealed = false
     var accepted: [ScreenEmissionBatch] = []
     var navigationResponses: ExactJSONObject<JourneyReleaseJSONValue>?
@@ -539,7 +556,10 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
                     self.failureResponses = try? await self.journal.runs().first?.context.responses
                 }
                 return await request.onScreenDismissed(screen, next, method)
-            }, onProductsUnavailable: request.onProductsUnavailable, onLinkOpened: request.onLinkOpened, onEmissionBatch: { batch, frameSources in
+            }, onProductsUnavailable: request.onProductsUnavailable, onLinkOpened: { link in
+                await request.onLinkOpened(link)
+                await MainActor.run { self.finishedLinkRecording = true }
+            }, onEmissionBatch: { batch, frameSources in
                 let change = self.beforeBatch; self.beforeBatch = nil
                 await change?()
                 let committed = await request.onEmissionBatch(batch, frameSources)

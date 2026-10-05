@@ -237,7 +237,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             service = ExperiencePresentationService(
                 windowProvider: mockWindowProvider,
                 experiences: mockExperienceService,
-                eventLog: mockEventLog
+                eventLog: mockEventLog,
+                identity: MockIdentityService()
             )
         }
 
