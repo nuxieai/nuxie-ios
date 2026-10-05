@@ -7,6 +7,27 @@ struct ExperienceResolvedEventSource: Equatable, Sendable {
     let nativeID: UInt64
     let snapshot: ExperienceInteractiveViewModelSnapshot
     let schemaNames: [Int: String]
+
+    func string(path: VmPathRef) -> String? {
+        guard let instance = snapshot.instances.first(where: { $0.id == nativeID }),
+              path.viewModelName == nil || path.viewModelName == schemaNames[instance.schemaIndex] else {
+            return nil
+        }
+        let segments = path.path.split(whereSeparator: { $0 == "/" || $0 == "." }).map(String.init)
+        guard let last = segments.last else { return nil }
+        var ownerID = nativeID
+        for segment in segments.dropLast() {
+            guard let field = snapshot.values.first(where: {
+                $0.ownerInstanceID == ownerID && $0.name == segment
+            }), case .referencedInstance(let nextID) = field.value,
+            snapshot.instances.contains(where: { $0.id == nextID }) else { return nil }
+            ownerID = nextID
+        }
+        guard let field = snapshot.values.first(where: {
+            $0.ownerInstanceID == ownerID && $0.name == last
+        }), case .bytes(let bytes) = field.value else { return nil }
+        return String(data: bytes, encoding: .utf8)
+    }
 }
 
 /// Aligns ordinary drafts and control output with their own frame sources.

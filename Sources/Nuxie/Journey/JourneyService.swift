@@ -1646,6 +1646,7 @@ private extension JourneyService {
                     signal: continuation.signal,
                     checkpoint: continuation.checkpoint,
                     presentationSource: batch.source,
+                    eventSource: eventSource?.source(eventID: continuation.eventID),
                     journal: journal
                 )
             }
@@ -2144,6 +2145,7 @@ private extension JourneyService {
         signal: JourneyControlExecutor.Signal,
         checkpoint: JourneyControlExecutor.Checkpoint? = nil,
         presentationSource: ScreenEmissionSource? = nil,
+        eventSource: ExperienceResolvedEventSource? = nil,
         dismissPresentationOnCompletion: Bool = true,
         journal: JourneyRunJournal
     ) async {
@@ -2165,6 +2167,7 @@ private extension JourneyService {
             checkpoint: checkpoint,
             journal: journal,
             presentationSource: presentationSource,
+            eventSource: eventSource,
             dismissPresentationOnCompletion: dismissPresentationOnCompletion
         )
     }
@@ -2198,6 +2201,7 @@ private extension JourneyService {
         checkpoint initialCheckpoint: JourneyControlExecutor.Checkpoint?,
         journal: JourneyRunJournal,
         presentationSource: ScreenEmissionSource? = nil,
+        eventSource: ExperienceResolvedEventSource? = nil,
         dismissPresentationOnCompletion: Bool = true,
         presentationReservation initialPresentationReservation:
             (any JourneyPresentationReservation)? = nil
@@ -2572,7 +2576,8 @@ private extension JourneyService {
                                 distinctId: journal.distinctId
                             ),
                             action: contextResolvedAction,
-                            source: presentationSource
+                            source: presentationSource,
+                            eventSource: eventSource
                         )
                     else {
                         await finish(

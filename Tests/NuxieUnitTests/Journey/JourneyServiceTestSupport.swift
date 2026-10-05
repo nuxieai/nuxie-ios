@@ -1584,7 +1584,8 @@ final class RecordingJourneyPresenter {
     func resolveJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        source: ScreenEmissionSource?
+        source: ScreenEmissionSource?,
+        eventSource: ExperienceResolvedEventSource?
     ) -> [String: JourneyReleaseJSONValue]? {
         resolvedActionSources.append(source)
         guard activeOwner == owner else {

@@ -139,6 +139,53 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
         XCTAssertNil(sources.take(invocationID: "first"))
     }
 
+    func testSharedRelativeValuesReadTheEventFrame() throws {
+        struct Fixture: Decodable {
+            struct Case: Decodable { let name: String; let source: UInt64?; let expected: String? }
+            let root: UInt64
+            let rows: [UInt64]
+            let values: [String: String]
+            let cases: [Case]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/events/runtime-relative-values.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        let instances = ([fixture.root] + fixture.rows).map {
+            ExperienceInteractiveViewModelSnapshot.Instance(id: $0, schemaIndex: $0 == fixture.root ? 0 : 1, valueRange: 0..<0)
+        }
+        let values = fixture.values.map {
+            ExperienceInteractiveViewModelSnapshot.Value(ownerInstanceID: UInt64($0.key)!,
+                propertyIndex: 0, name: "placementId", value: .bytes(Data($0.value.utf8)))
+        } + [.init(ownerInstanceID: fixture.root, propertyIndex: 1, name: "rows", value: .list(fixture.rows))]
+        let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: fixture.root, instances: instances, values: values)
+        let path = VmPathRef(path: "placementId", isRelative: true)
+        for vector in fixture.cases {
+            let source = vector.source.map { ExperienceResolvedEventSource(nativeID: $0,
+                snapshot: snapshot, schemaNames: [0: "Root", 1: "Row"]) }
+            XCTAssertEqual(source?.string(path: path), vector.expected, vector.name)
+        }
+    }
+
+    func testLaterRoutedEmissionRetainsItsOwnFrameSource() async throws {
+        let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [], values: [])
+        let first = ExperienceResolvedEventSource(nativeID: 2, snapshot: snapshot, schemaNames: [:])
+        let second = ExperienceResolvedEventSource(nativeID: 3, snapshot: snapshot, schemaNames: [:])
+        let dispatcher = ScreenEmissionDispatcher(createId: { UUID().uuidString },
+            now: { "2026-10-04T12:00:00.000Z" }, executeScriptAction: { _ in [] })
+        let result = await dispatcher.dispatch(
+            run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
+                lifecycleGeneration: 0, presentationEpoch: 0),
+            source: ScreenEmissionSource(screenId: "screen", actionId: "frame", componentId: nil, instanceId: nil),
+            drafts: [.event(name: "unrouted", payload: [:]), .event(name: "selected", payload: [:])])
+        guard case .success(let batch) = result else { return XCTFail("Expected batch") }
+        let sources = ExperienceEmissionSources(drafts: [first, second]).bound(to: batch)
+        XCTAssertEqual(sources.source(eventID: batch.emissions[1].id)?.nativeID, 3)
+        XCTAssertEqual(sources.source(eventID: batch.emissions[0].id)?.nativeID, 2)
+        XCTAssertNil(sources.source(eventID: "missing"))
+    }
+
     private func bindings() -> [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference] {
         [.init(viewModelName: "Plan", instanceID: "plan.first"): first,
          .init(viewModelName: "Plan", instanceID: "plan.second"): second]
