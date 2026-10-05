@@ -768,12 +768,14 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
 
     @MainActor
     func testCoalescesResizeAndRunsQueuedProductWorkFIFO() async throws {
+        guard #available(iOS 17, *) else { throw XCTSkip("Display-scale overrides require iOS 17") }
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
         let recorder = PresentationSessionRecorder(device: device)
         await recorder.holdNextStep()
         let (window, view) = makePresentationSurface()
+        window.traitOverrides.displayScale = 3
         let loop = makeLoop(recorder: recorder, view: view)
         try await loop.start()
         loop.displayLinkDidFire(at: 1)
@@ -788,11 +790,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let resized = await recorder.waitForResizeCount(2)
         XCTAssertTrue(resized)
         let sizes = await recorder.resizeSizes()
-        let expectedSize = ExperienceRuntimeSurfaceSizing.pixels(
-            width: 300,
-            height: 150,
-            scale: window.screen.scale
-        )
+        let expectedSize = ExperienceRuntimeSurfaceSize(pixelWidth: 900, pixelHeight: 450, layoutScaleFactor: 3)
         XCTAssertEqual(sizes.count, 2)
         XCTAssertEqual(sizes.last, expectedSize)
 
@@ -985,14 +983,14 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
-    func testPointerProjectionUsesTheSwiftOwnedContainTransform() async throws {
+    func testPointerProjectionUsesTheSwiftOwnedLayoutTransform() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
         let recorder = PresentationSessionRecorder(device: device)
         let (window, view) = makePresentationSurface(size: CGSize(width: 200, height: 100))
         let session = ExperienceRuntimePresentationSession(
-            artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
+            artboardBounds: { CGRect(x: 0, y: 0, width: 100, height: 100) },
             perform: { try await recorder.perform($0) }
         )
         var acceptedInputs: [ExperienceRuntimeAcceptedPointerInput] = []
@@ -1021,7 +1019,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         let pointer = await recorder.steps().last?.pointers.first
-        XCTAssertEqual(pointer?.x, 0)
+        XCTAssertEqual(pointer?.x, 50)
         XCTAssertEqual(pointer?.y, 0)
         XCTAssertEqual(pointer?.pointerID, 1)
         XCTAssertEqual(pointer?.timestamp, 7)
@@ -1123,7 +1121,7 @@ private actor PresentationSessionRecorder {
     private var queuedWorkContinuation: CheckedContinuation<Void, Never>?
     private var renderHealth: [ExperienceRuntimePresentationRenderOutcome.Health] = []
     private var presentedDrawCalls: [UInt64] = []
-    private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0)
+    private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0, layoutScaleFactor: 0)
 
     init(device: any MTLDevice, onRenderDelivery: (@MainActor @Sendable () async -> Void)? = nil) {
         self.device = device
@@ -1324,7 +1322,7 @@ private func makeLoop(
 ) -> ExperienceRuntimePresentationLoop {
     ExperienceRuntimePresentationLoop(
         session: ExperienceRuntimePresentationSession(
-            artboardBounds: CGRect(x: 0, y: 0, width: 128, height: 64),
+            artboardBounds: { CGRect(x: 0, y: 0, width: 128, height: 64) },
             observesEveryPresentation: observesEveryPresentation,
             perform: { try await recorder.perform($0) }
         ),

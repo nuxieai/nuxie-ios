@@ -38,7 +38,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
 
             it("preserves event timestamps and rejects values outside the f32 ABI") {
                 var router = ExperienceRuntimePointerInputRouter()
-                let transform = ExperienceContainCenterTransform(
+                let transform = ExperienceLayoutTransform(
                     artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
                     viewportBounds: CGRect(x: 0, y: 0, width: 100, height: 100)
                 )!
@@ -77,7 +77,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
 
             it("shares a bounded set of stable positive IDs across touch and hover sources") {
                 var router = ExperienceRuntimePointerInputRouter()
-                let transform = ExperienceContainCenterTransform(
+                let transform = ExperienceLayoutTransform(
                     artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
                     viewportBounds: CGRect(x: 0, y: 0, width: 100, height: 100)
                 )!
@@ -143,7 +143,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
 
             it("releases on up and supports a standalone hover exit") {
                 var router = ExperienceRuntimePointerInputRouter()
-                let transform = ExperienceContainCenterTransform(
+                let transform = ExperienceLayoutTransform(
                     artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
                     viewportBounds: CGRect(x: 0, y: 0, width: 100, height: 100)
                 )!
