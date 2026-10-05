@@ -431,6 +431,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         _ event: ExperienceInteractiveReportedEvent,
         controlActionIds: Set<String>
     ) -> ExperienceInteractiveEffectKind {
+        if !event.url.isEmpty { return .reportedEvent(event) }
         if let reason = event.sourceRejection {
             return .rejectedHostCommand(name: event.name, reason: reason)
         }
