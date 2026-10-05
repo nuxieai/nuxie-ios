@@ -1018,7 +1018,10 @@ final class ExperienceScreenViewController: UIViewController {
             )
         }
         for link in links {
-            await delegate?.experienceScreenViewController(self, didRequestOpenLink: link)
+            Task { @MainActor [weak self] in
+                guard let self, !self.isShuttingDown else { return }
+                await self.delegate?.experienceScreenViewController(self, didRequestOpenLink: link)
+            }
         }
     }
 

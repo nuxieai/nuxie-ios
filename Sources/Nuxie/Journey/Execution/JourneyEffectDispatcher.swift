@@ -335,7 +335,8 @@ struct JourneyEffectDispatcher {
         guard await requestIsCurrent(request) else { return false }
         var properties = legAttribution(request)
         properties["url"] = link.urlString
-        properties["target"] = link.target?.isEmpty == false ? link.target : "_self"
+        properties["target"] = link.target
+        properties["destination"] = link.destination
         if let screenId = link.screenId { properties["screen_id"] = screenId }
         if let instanceId = link.instanceId { properties["instance_id"] = instanceId }
         return await captureRider(JourneyEvents.linkOpened, properties: properties, request: request)

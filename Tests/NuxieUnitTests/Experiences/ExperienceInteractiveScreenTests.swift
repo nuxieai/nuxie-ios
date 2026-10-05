@@ -29,7 +29,27 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let ordinary = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128, name: "sibling", url: "", target: "", delay: 0, properties: [])
         await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 1, kind: .reportedEvent(badSourceLink)),
             .init(sequence: 1, correlationID: 1, kind: .reportedEvent(ordinary))])
+        for _ in 0..<100 where recorder.order.count < 2 { await Task.yield() }
         XCTAssertEqual(recorder.order, ["batch", "link"])
+        recorder.order = []
+        let control = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "buy", url: "", target: "", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 2, kind: .controlAction(actionId: "buy", event: control)),
+            .init(sequence: 1, correlationID: 2, kind: .controlAction(actionId: "buy", event: control)),
+            .init(sequence: 2, correlationID: 2, kind: .reportedEvent(link))])
+        for _ in 0..<100 where recorder.order.isEmpty { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["link"])
+        var resume: CheckedContinuation<Void, Never>?
+        recorder.linkGate = { await withCheckedContinuation { resume = $0 } }
+        let delivered = expectation(description: "Frame returned while external confirmation is pending")
+        Task { @MainActor in
+            await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 3, kind: .reportedEvent(link))])
+            delivered.fulfill()
+        }
+        await fulfillment(of: [delivered], timeout: 1)
+        for _ in 0..<100 where resume == nil { await Task.yield() }
+        XCTAssertNotNil(resume)
+        resume?.resume()
+
     }
 
     @MainActor
@@ -99,6 +119,18 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     #endif
+
+    func testRootEventUsesSnapshotRootIdentity() async throws {
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload, pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: 71, instances: [.init(id: 71, schemaIndex: 0, valueRange: 0..<0)], values: [])
+        let event = NuxieNativeEvent(localIndex: 0, coreType: 131, name: "", url: "https://example.test", target: "_self", delay: 0, properties: [], sourceViewModelInstanceID: nil)
+        let step = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [], stateChanges: [], events: [event], hostCommands: [], viewModelChanges: [])
+        let projected = await screen.projectStep(step, eventSnapshot: snapshot, correlationID: 1)
+        guard case .reportedEvent(let reported) = try XCTUnwrap(projected.effects.first).kind else { return XCTFail("Missing root event") }
+        XCTAssertEqual(reported.resolvedSource?.nativeID, snapshot.rootInstanceID)
+    }
 
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
         let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
@@ -3793,10 +3825,11 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
 @MainActor
 private final class LinkFrameRecorder: ExperienceScreenViewControllerDelegate {
     var order: [String] = []
+    var linkGate: (() async -> Void)?
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
     func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch") }
-    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async { order.append("link") }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async { order.append("link"); await linkGate?() }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}

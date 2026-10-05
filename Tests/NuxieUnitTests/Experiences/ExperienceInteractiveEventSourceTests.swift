@@ -68,6 +68,8 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
     func testSharedRelativeValuesReadTheEventFrame() throws {
         struct Fixture: Decodable {
             struct Case: Decodable { let name: String; let source: UInt64?; let expected: String?; let viewModelName: String? }
+            let rootModelName: String
+            let rowModelName: String
             let root: UInt64
             let rows: [UInt64]
             let values: [String: String]
@@ -89,7 +91,7 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
         let path = VmPathRef(path: "placementId", isRelative: true)
         for vector in fixture.cases {
             let source = vector.source.map { ExperienceResolvedEventSource(nativeID: $0,
-                snapshot: snapshot, schemaNames: [0: "Root", 1: "Row"]) }
+                snapshot: snapshot, schemaNames: [0: fixture.rootModelName, 1: fixture.rowModelName]) }
             XCTAssertEqual(source?.string(path: VmPathRef(viewModelName: vector.viewModelName, path: path.path, isRelative: true)), vector.expected, vector.name)
         }
     }
