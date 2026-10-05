@@ -7,6 +7,13 @@ import AppKit
 
 /// Shared destination policy for native links and journey open-link steps.
 enum ExperienceLinkRouting {
+    enum State { case settled, closed, background }
+
+    static func route(urlString: String, target: String?, state: State) -> (url: URL, destination: String)? {
+        guard state != .background, let link = destination(urlString: urlString, target: target) else { return nil }
+        return (link.url, state == .settled && link.inApp ? "in_app" : "external")
+    }
+
     static func destination(urlString: String, target: String?, parser: (String) -> URL? = parse) -> (url: URL, inApp: Bool)? {
         guard urlString.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
               let url = parser(urlString), let scheme = url.scheme?.lowercased(),
@@ -32,9 +39,10 @@ enum ExperienceLinkRouting {
     }
 
     /// RFC 3986 escaping and IDNA host conversion for Foundation before iOS 17.
-    static func parseLegacy(_ value: String) -> URL? {
+    static func parseLegacy(_ value: String, parser: (String) -> URL? = { URL(string: $0) }) -> URL? {
         var value = value
-        if let authority = value.range(of: "://") {
+        if let colon = value.firstIndex(of: ":"),
+           let authority = value.range(of: "://"), authority.lowerBound == colon {
             let end = value[authority.upperBound...].firstIndex(where: { "/?#".contains($0) }) ?? value.endIndex
             let raw = String(value[authority.upperBound..<end])
             let userEnd = raw.lastIndex(of: "@").map { raw.index(after: $0) } ?? raw.startIndex
@@ -49,9 +57,32 @@ enum ExperienceLinkRouting {
                     with: String(raw[..<userEnd]) + encoded + String(raw[hostEnd...]))
             }
         }
+        let scalars = Array(value.unicodeScalars)
+        let authority = value.range(of: "://").flatMap { range -> Range<String.Index>? in
+            guard value.firstIndex(of: ":") == range.lowerBound else { return nil }
+            let end = value[range.upperBound...].firstIndex(where: { "/?#".contains($0) }) ?? value.endIndex
+            let start = value[range.upperBound..<end].lastIndex(of: "@").map { value.index(after: $0) } ?? range.upperBound
+            let hostEnd: String.Index
+            if value[start..<end].first == "[", let bracket = value[start..<end].firstIndex(of: "]") { hostEnd = value.index(after: bracket) }
+            else { hostEnd = value[start..<end].firstIndex(of: ":") ?? end }
+            return start..<hostEnd
+        }
+        let hostOffsets = authority.map { value.unicodeScalars.distance(from: value.startIndex, to: $0.lowerBound)..<value.unicodeScalars.distance(from: value.startIndex, to: $0.upperBound) }
+        var normalized = "", fragmentSeen = false
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        for (index, scalar) in scalars.enumerated() {
+            if scalar == "%", !(index + 2 < scalars.count && hex.contains(scalars[index + 1]) && hex.contains(scalars[index + 2])) {
+                normalized += "%25"
+            } else if (scalar == "[" || scalar == "]") && !(hostOffsets?.contains(index) ?? false) {
+                normalized += scalar == "[" ? "%5B" : "%5D"
+            } else if scalar == "#" {
+                normalized += fragmentSeen ? "%23" : "#"
+                fragmentSeen = true
+            } else { normalized.unicodeScalars.append(scalar) }
+        }
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%")
-        guard let escaped = value.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
-        return URL(string: escaped)
+        guard let escaped = normalized.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return parser(escaped)
     }
 
     private static func punycode(_ label: String) -> String {

@@ -8,7 +8,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         try await assertLinkStep(url: .object(["type": .string("Event.Field"), "key": .string("absent")]), target: "external", opens: false)
     }
     func testEmptyLinkAdvancesWithoutDismissal() async throws {
-        try await assertLinkStep(url: .string(""), target: "external", opens: false)
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("")]), target: "external", opens: false)
     }
     func testMissingLinkAdvancesWithoutDismissal() async throws {
         try await assertLinkStep(url: nil, target: "external", opens: false)
@@ -17,20 +17,20 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         try await assertLinkStep(url: .bool(true), target: "external", opens: false)
     }
     func testMissingTargetAdvancesWithoutDismissal() async throws {
-        try await assertLinkStep(url: .string("https://example.test"), target: nil, opens: false)
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: nil, opens: false)
     }
     func testExternalLinkWithoutPresentationOpensAndAdvances() async throws {
-        try await assertLinkStep(url: .string("https://example.test"), target: "external", opens: true)
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "external", opens: true)
     }
     func testInAppLinkWithoutPresentationUsesExternalDestination() async throws {
-        try await assertLinkStep(url: .string("https://example.test"), target: "in_app", opens: true)
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "in_app", opens: true)
     }
     func testLinkRecordPrecedesCompletionAndUsesStepEffectID() async throws {
-        try await assertLinkStep(url: .string("https://example.test"), target: "external", opens: true, complete: true)
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "external", opens: true, complete: true)
     }
 
     func testPresentedLinkRecordPrecedesCompletionAndUsesStepEffectID() async throws {
-        try await assertLinkStep(url: .string("https://example.test"), target: "in_app", opens: true, complete: true, owned: true)
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "in_app", opens: true, complete: true, owned: true)
     }
 
     private func assertLinkStep(url: JourneyReleaseJSONValue?, target: String?, opens: Bool, complete: Bool = false, owned: Bool = false) async throws {
@@ -52,12 +52,18 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         let presenter = await MainActor.run { RecordingJourneyPresenter() }
         let recorder = LinkStepProbe()
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let service = makeService(identity: identity, events: events, directory: directory, presenter: presenter,
-            openExternalLink: { url in
-                let runs = try? await journal.runs()
-                await recorder.open(url, effectID: runs?.first?.effectReceipts["link"])
-                return true
-            })
+        let service = makeService(identity: identity, events: events, directory: directory, presenter: presenter)
+        if !owned {
+            await MainActor.run {
+                presenter.linkHandler = { _, link in
+                    let runs = try? await journal.runs()
+                    await recorder.open(link.urlString, effectID: runs?.first?.effectReceipts["link"])
+                    var opened = link
+                    opened.destination = "external"
+                    return opened
+                }
+            }
+        }
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
         if owned {

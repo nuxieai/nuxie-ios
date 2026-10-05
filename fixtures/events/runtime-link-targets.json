@@ -111,6 +111,26 @@
       "url": "HTTPS://example.test/path",
       "target": "_self",
       "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/bad%escape",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/a%",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/a[b]?x=[v]",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/#first#second",
+      "target": "_self",
+      "destination": "in_app"
     }
   ]
 }

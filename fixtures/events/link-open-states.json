@@ -1,0 +1,594 @@
+{
+  "suite": "events/link-open-states",
+  "version": 1,
+  "cases": [
+    {
+      "name": "settled-0",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": null,
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "in_app",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-1",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "in_app",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-2",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "in_app",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-3",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "_parent",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "in_app",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-4",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "_top",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "in_app",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-5",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "_blank",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-6",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "in_app",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-7",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "external",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "sheet_active-8",
+      "state": "sheet_active",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "in_app",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "button_dismissing-9",
+      "state": "button_dismissing",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "button_dismissing-10",
+      "state": "button_dismissing",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "external",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "swipe_dismissing-11",
+      "state": "swipe_dismissing",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "swipe_dismissing-12",
+      "state": "swipe_dismissing",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "external",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "host_dismissed-13",
+      "state": "host_dismissed",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "host_dismissed-14",
+      "state": "host_dismissed",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "external",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "owner_retired-15",
+      "state": "owner_retired",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "owner_retired-16",
+      "state": "owner_retired",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "external",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "presentation_finished-17",
+      "state": "presentation_finished",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "presentation_finished-18",
+      "state": "presentation_finished",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "external",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "screenless-19",
+      "state": "screenless",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "in_app",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "screenless-20",
+      "state": "screenless",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "external",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "background-21",
+      "state": "background",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-22",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "mailto:hello@example.test"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-23",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "mailto:hello@example.test"
+        },
+        "target": "_self",
+        "canOpen": false
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-24",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "tel:+15555550100"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-25",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "tel:+15555550100"
+        },
+        "target": "_self",
+        "canOpen": false
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-26",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "sampleapp://item/42"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": "external",
+        "opened": true,
+        "recorded": true
+      }
+    },
+    {
+      "name": "settled-27",
+      "state": "settled",
+      "link": {
+        "kind": "runtime",
+        "url": {
+          "type": "String",
+          "value": "sampleapp://item/42"
+        },
+        "target": "_self",
+        "canOpen": false
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-28",
+      "state": "settled",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": ""
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-29",
+      "state": "settled",
+      "link": {
+        "kind": "journey",
+        "url": null,
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-30",
+      "state": "settled",
+      "link": {
+        "kind": "journey",
+        "url": true,
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-31",
+      "state": "settled",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "Event.Field",
+          "key": "absent"
+        },
+        "target": "_self",
+        "canOpen": true
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    },
+    {
+      "name": "settled-32",
+      "state": "settled",
+      "link": {
+        "kind": "journey",
+        "url": {
+          "type": "String",
+          "value": "https://example.test/path"
+        },
+        "target": null,
+        "canOpen": true
+      },
+      "expected": {
+        "destination": null,
+        "opened": false,
+        "recorded": false
+      }
+    }
+  ]
+}

@@ -38,6 +38,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         XCTAssertEqual(NSDictionary(dictionary: event.properties), NSDictionary(dictionary: properties))
         let activity = try XCTUnwrap(ActivityCuration.activity(internalName: event.name, properties: event.properties))
         XCTAssertEqual(activity.wireName, "link_opened")
+        XCTAssertEqual(activity.wireProperties["destination"], .string("in_app"))
         XCTAssertEqual(activity.wireProperties["url"], .string(link.urlString))
     }
 

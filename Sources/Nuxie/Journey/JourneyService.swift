@@ -132,7 +132,6 @@ actor JourneyService {
     private let storeEntitlements: StoreEntitlementLookup
     private let dispatcher: any JourneyDispatching
     private let presenter: (any JourneyPresenting)?
-    private let openExternalLink: @MainActor @Sendable (String) async -> Bool
     private let presentationTrace: JourneyPresentationTraceCoordinator
     private let pinnedReleaseAuthenticator: PinnedReleaseAuthenticator
     private let timezones: SignedTimezoneBundle
@@ -203,7 +202,6 @@ actor JourneyService {
         storeEntitlements: @escaping StoreEntitlementLookup = { [] },
         dispatcher: any JourneyDispatching,
         presenter: (any JourneyPresenting)? = nil,
-        openExternalLink: @escaping @MainActor @Sendable (String) async -> Bool = { await ExperienceLinkRouting.openExternal($0) },
         presentationTrace: JourneyPresentationTraceCoordinator = .init(
             recorder: DisabledExperiencePresentationTrace()
         ),
@@ -236,7 +234,6 @@ actor JourneyService {
         self.storeEntitlements = storeEntitlements
         self.dispatcher = dispatcher
         self.presenter = presenter
-        self.openExternalLink = openExternalLink
         self.presentationTrace = presentationTrace
         self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
         self.timezones = timezones
@@ -2581,12 +2578,9 @@ private extension JourneyService {
                     if let resolved = resolvedPresentationAction(action, context: run.context),
                        case .string(let url)? = resolved["url"], !url.isEmpty,
                        case .string(let target)? = resolved["target"] {
-                        if let presenter, await presenter.ownsJourneyPresentation(owner: owner) {
-                            _ = await presenter.dispatchJourneyPresentationAction(owner: owner, action: resolved, effectId: effectId)
-                        } else if await openExternalLink(url) {
-                            await handlePresentationLinkOpened(.init(urlString: url,
-                                target: target, screenId: nil, instanceId: nil,
-                                effectId: effectId, destination: "external"), run: run, release: release,
+                        if let presenter, let opened = await presenter.openJourneyLink(owner: owner,
+                            request: .init(urlString: url, target: target, screenId: nil, instanceId: nil, effectId: effectId)) {
+                            await handlePresentationLinkOpened(opened, run: run, release: release,
                                 identityFenceToken: identityFence.token, executionFenceToken: executionFenceToken)
                         }
                     }
@@ -3204,7 +3198,6 @@ private extension JourneyService {
     ) -> [String: JourneyReleaseJSONValue]? {
         guard let type = JourneyActionType(action: action) else { return nil }
         guard type == .openLink else { return action }
-        if case .string? = action["url"] { return action }
         guard let encoded = action["url"].flatMap({
             try? ExactJSONCodec.encode($0)
         }), let value = try? ExactJSONCodec.decode(

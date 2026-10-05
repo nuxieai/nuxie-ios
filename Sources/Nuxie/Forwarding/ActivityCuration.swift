@@ -83,8 +83,9 @@ enum ActivityCuration {
             number.doubleValue >= 0, number.doubleValue <= 9_007_199_254_740_991,
             number.doubleValue.rounded() == number.doubleValue,
             let url = nonemptyString(properties, "url"),
-            let target = nonemptyString(properties, "target") else { return missing(internalName) }
-      return .linkOpened(ref, legId: legId, generation: number.intValue, url: url, target: target,
+            let destination = string(properties, "destination"),
+            ["in_app", "external"].contains(destination) else { return missing(internalName) }
+      return .linkOpened(ref, legId: legId, generation: number.intValue, url: url, target: string(properties, "target"), destination: destination,
           screenId: nonemptyString(properties, "screen_id"), instanceId: nonemptyString(properties, "instance_id"))
     case JourneyEvents.journeyStarted, JourneyEvents.journeyCompleted:
       guard let ref = experienceRef(properties, requireVersion: true), ref.journeyId != nil,

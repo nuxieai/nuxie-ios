@@ -397,30 +397,6 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
-    #if canImport(UIKit)
-    @MainActor
-    func testAlreadyPresentingControllerRecordsNothing() async throws {
-        let snapshot = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
-        let recorded = OpenedLinkRecorder()
-        let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
-            screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
-            reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
-        let delegate = JourneyRuntimeDelegate(request: request)
-        let controller = OccupiedLinkController(mockExperienceVersionId: "version")
-        controller.usesSystemLinkOpening = true
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
-        window.addSubview(controller.view)
-        XCTAssertNotNil(controller.view.window)
-        XCTAssertNotNil(controller.presentedViewController)
-        await delegate.experienceViewController(controller, didChangeScreen: "screen_welcome")
-        let opened = await delegate.openLink(controller, request: .init(urlString: "https://example.test", target: "_self", screenId: "screen_welcome", instanceId: nil))
-        XCTAssertFalse(opened)
-        XCTAssertTrue(recorded.values().isEmpty)
-    }
-    #endif
-
     func testOnlySuccessfulOpensReachTheRunRecorder() async throws {
         let snapshot = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
@@ -430,7 +406,10 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
             reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true })
-        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request, openLink: { _, link in
+                guard ExperienceLinkRouting.destination(urlString: link.urlString, target: link.target) != nil else { return nil }
+                return link
+            }) }
         let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
         await delegate.experienceViewController(controller, didChangeScreen: "screen_welcome")
         for url in ["https://example.test/account", "not a url"] {
@@ -441,13 +420,14 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertEqual(recorded.values().first?.screenId, "screen_welcome")
     }
 
-    func testRuntimeDelegateForwardsRendererOpenLinksFromTheActiveScreen() async throws {
+    func testRuntimeDelegateForwardsRendererOpenLinksToTheStateRouter() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
+        let recorded = OpenedLinkRecorder()
         let request = JourneyPresentationRequest(
             release: release,
             delivery: snapshot.profile.delivery,
@@ -457,11 +437,15 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
+            onLinkOpened: { recorded.append($0) },
             onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
-            JourneyRuntimeDelegate(request: request)
+            JourneyRuntimeDelegate(request: request, openLink: { _, link in
+                guard ExperienceLinkRouting.destination(urlString: link.urlString, target: link.target) != nil else { return nil }
+                return link
+            })
         }
         let controller = await MainActor.run {
             MockExperienceViewController(mockExperienceVersionId: "version_golden")
@@ -490,8 +474,8 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             )
         )
 
-        let links = await MainActor.run { controller.performedOpenLinks }
-        XCTAssertEqual(links.count, 1)
+        let links = recorded.values()
+        XCTAssertEqual(links.count, 2)
         XCTAssertEqual(links.first?.urlString, "https://example.com/account")
         XCTAssertEqual(links.first?.target, "in_app")
     }

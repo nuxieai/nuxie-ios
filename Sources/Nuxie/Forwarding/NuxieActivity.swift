@@ -68,7 +68,7 @@ public enum NuxieActivity: Sendable {
   /// A pinned Journey completed its local program.
   case journeyCompleted(ExperienceRef, legId: String, generation: Int, outcome: String)
   /// A runtime link or Journey open-link step was handed to a browser or the system.
-  case linkOpened(ExperienceRef, legId: String, generation: Int, url: String, target: String, screenId: String?, instanceId: String?)
+  case linkOpened(ExperienceRef, legId: String, generation: Int, url: String, target: String?, destination: String, screenId: String?, instanceId: String?)
   /// A presentation-scoped purchase completed.
   case purchaseCompleted(PurchaseInfo)
   /// A presentation-scoped purchase failed.
@@ -238,12 +238,13 @@ extension NuxieActivity {
       properties.add(ref)
       properties["leg_id"] = .string(legId)
       properties["leg_generation"] = .int(generation)
-    case .linkOpened(let ref, let legId, let generation, let url, let target, let screenId, let instanceId):
+    case .linkOpened(let ref, let legId, let generation, let url, let target, let destination, let screenId, let instanceId):
       properties.add(ref)
       properties["leg_id"] = .string(legId)
       properties["leg_generation"] = .int(generation)
       properties["url"] = .string(url)
-      properties["target"] = .string(target)
+      if let target { properties["target"] = .string(target) }
+      properties["destination"] = .string(destination)
       if let screenId { properties["screen_id"] = .string(screenId) }
       if let instanceId { properties["instance_id"] = .string(instanceId) }
     case .journeyCompleted(let ref, let legId, let generation, let outcome):

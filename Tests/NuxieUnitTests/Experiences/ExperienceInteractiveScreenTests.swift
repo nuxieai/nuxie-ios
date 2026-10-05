@@ -49,7 +49,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         for _ in 0..<100 where resume == nil { await Task.yield() }
         XCTAssertNotNil(resume)
         resume?.resume()
-
+        recorder.linkGate = nil
+        recorder.order = []
+        recorder.onBatch = { controller.delegate = nil }
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 4, kind: .reportedEvent(ordinary)),
+            .init(sequence: 1, correlationID: 4, kind: .reportedEvent(link))])
+        for _ in 0..<100 where recorder.order.count < 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["batch", "link"])
     }
 
     @MainActor
@@ -3826,9 +3832,10 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
 private final class LinkFrameRecorder: ExperienceScreenViewControllerDelegate {
     var order: [String] = []
     var linkGate: (() async -> Void)?
+    var onBatch: (() -> Void)?
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
     func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
-    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch") }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch"); onBatch?() }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async { order.append("link"); await linkGate?() }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}

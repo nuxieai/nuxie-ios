@@ -50,6 +50,8 @@ enum JourneyActionType: String, Codable, Sendable {
         }
     }
 
+    var requiresPresentation: Bool { isPresentationOwned && self != .openLink }
+
     var isCommerce: Bool {
         self == .purchase || self == .restore
     }
