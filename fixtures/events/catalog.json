@@ -756,27 +756,27 @@
     "properties": {
       "experience_id": {
         "required": true,
-        "source": "JourneyEvents.appActionRequestedProperties journey snapshot",
+        "source": "Journey run leg attribution",
         "type": "String"
       },
       "journey_id": {
         "required": true,
-        "source": "JourneyEvents.appActionRequestedProperties journey snapshot",
+        "source": "Journey run leg attribution",
         "type": "String"
       },
       "experience_version_id": {
         "required": true,
-        "source": "authenticated Journey run",
+        "source": "Journey run leg attribution",
         "type": "String"
       },
       "leg_generation": {
         "required": true,
-        "source": "authenticated Journey run",
+        "source": "Journey run leg attribution",
         "type": "Int"
       },
       "leg_id": {
         "required": true,
-        "source": "authenticated Journey run",
+        "source": "Journey run leg attribution",
         "type": "String"
       },
       "url": {
@@ -791,7 +791,7 @@
       },
       "screen_id": {
         "required": false,
-        "source": "opened link and source screen",
+        "source": "Active presentation screen, when available",
         "type": "String"
       },
       "instance_id": {

@@ -4,6 +4,43 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyPresentationLifecycleTests: JourneyTestCase {
+    func testSecondRowFrameReachesRelativePurchaseThroughBatchAdmission() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let base = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
+        let snapshot = try addingPurchaseOffer(replacing(base, entryStepId: "present", steps: [
+            .init(kind: .action, id: "present", action: ["type": .string("navigate"), "screenId": .string("screen_welcome")], outlets: [:], outcome: nil),
+            .init(kind: .action, id: "purchase", action: ["type": .string("purchase"), "placementId": .object(["ref": .object(["kind": .string("path"), "path": .string("placementId"), "isRelative": .bool(true)])])], outlets: ["completed": "done"], outcome: nil),
+            .init(kind: .complete, id: "done", action: nil, outlets: nil, outcome: "purchased")
+        ], routes: [.init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "buy", entryStepId: "purchase")],
+        screens: [.init(id: "screen_welcome", defaultViewModelName: "WelcomeModel", defaultInstanceId: "welcome", responseCaptures: [])]))
+        let identity = MockIdentityService(); identity.setDistinctId("customer")
+        let events = MockEventLog(); events.identity = identity
+        let presenter = await MainActor.run {
+            let presenter = RecordingJourneyPresenter()
+            presenter.resolvesFrameValues = true
+            presenter.actionResult = .awaitingOutcome
+            return presenter
+        }
+        let service = makeService(identity: identity, events: events, directory: directory, featureAccess: { _ in .notFound }, presenter: presenter)
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presented = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presented)
+        let frame = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1,
+            instances: (1...4).map { .init(id: UInt64($0), schemaIndex: 0, valueRange: 0..<0) },
+            values: [.init(ownerInstanceID: 1, propertyIndex: 0, name: "rows", value: .list([2, 3, 4]))] +
+                [(2, "first"), (3, "golden:monthly"), (4, "third")].map { .init(ownerInstanceID: UInt64($0.0), propertyIndex: 0, name: "placementId", value: .bytes(Data($0.1.utf8))) })
+        let source = ExperienceResolvedEventSource(nativeID: 3, snapshot: frame, schemaNames: [0: "Row"])
+        let batch = presentationBatch(request: request, invocationId: "row-purchase", emissions: [.init(id: "00000000-0000-7000-8000-000000000911", sequence: 0,
+            occurredAt: "2026-08-29T12:00:00Z", name: "buy", payload: [:])])
+        let accepted = await request.onEmissionBatch(batch, ExperienceEmissionSources(drafts: [source]).bound(to: batch))
+        XCTAssertTrue(accepted)
+        await waitForPresentationActions(1, presenter: presenter)
+        let placement = await MainActor.run { presenter.presentationActions.first?.action["placementId"] }
+        XCTAssertEqual(placement, .string("golden:monthly"))
+    }
+
     func testHostDismissalAcknowledgesAnAlreadyRetiredJourney() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
@@ -462,7 +499,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [navigated], timeout: 2)
@@ -566,7 +603,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [completed], timeout: 2)
@@ -630,7 +667,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         for _ in 0..<100 {
@@ -778,7 +815,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     name: "continue",
                     payload: [:]
                 )]
-            ))
+            ), nil)
 
             XCTAssertTrue(accepted, actionFixture.type)
             await waitForPresentationActions(1, presenter: presenter)
@@ -981,7 +1018,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await waitForPresentationActions(1, presenter: presenter)
@@ -1200,7 +1237,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     name: "continue",
                     payload: [:]
                 )]
-            ))
+            ), nil)
             XCTAssertTrue(batchAccepted)
             await waitForPresentationActions(1, presenter: presenter)
             let resolvedSource = await MainActor.run {
@@ -1248,7 +1285,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                         payload: [:]
                     )]
                 )
-            )
+            , nil)
             XCTAssertFalse(repeatedInputAccepted)
             let actionsAfterRepeatedInput = await MainActor.run {
                 presenter.presentationActions
@@ -1338,7 +1375,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                             payload: ["placement_id": .string("golden:monthly")]
                         )]
                     )
-                )
+                , nil)
                 XCTAssertFalse(failedBatchAccepted)
                 events.stableCaptureBatchFailureIndex = nil
 
@@ -1413,7 +1450,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 invocationId: "back-offer-\(decision)",
                 emissions: [.init(id: "00000000-0000-7000-8000-000000000901", sequence: 0,
                     occurredAt: "2026-08-29T12:00:00Z", name: "go_back", payload: [:])]
-            ))
+            ), nil)
             XCTAssertTrue(accepted)
             for _ in 0..<200 {
                 let settled = await MainActor.run {

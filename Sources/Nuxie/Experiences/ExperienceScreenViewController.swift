@@ -13,7 +13,8 @@ enum ExperienceRuntimeScreenEmission: Equatable, Sendable {
     case effects(source: ScreenEmissionSource, drafts: [ScreenEmissionDraft])
 }
 
-private enum ExperienceRuntimeProjectedEmission {
+enum ExperienceRuntimeProjectedEmission {
+    case link(ExperienceRendererOpenLinkRequest)
     case control(screenId: String, invocation: ScreenActionInvocation)
     case draft(ScreenEmissionDraft, source: ScreenEmissionSource)
 }
@@ -72,7 +73,8 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        frameSources: ExperienceEmissionSources?
     ) async
 
     func experienceScreenViewController(
@@ -826,7 +828,8 @@ final class ExperienceScreenViewController: UIViewController {
                             ),
                             drafts: [draft]
                         ),
-                        originatingRun: originatingRun
+                        originatingRun: originatingRun,
+                        frameSources: nil
                     )
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
@@ -860,7 +863,8 @@ final class ExperienceScreenViewController: UIViewController {
                                 invocation: invocation,
                                 additionalDrafts: []
                             ),
-                            originatingRun: originatingRun
+                            originatingRun: originatingRun,
+                            frameSources: nil
                         )
                     }
                 }
@@ -969,17 +973,18 @@ final class ExperienceScreenViewController: UIViewController {
         })
     }
 
-    private(set) var emissionEventSource: ExperienceEmissionSources?
-
-    private func deliverStep(effects: [ExperienceInteractiveEffect]) async {
+    func deliverStep(effects: [ExperienceInteractiveEffect]) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
         var assembler = ExperienceRuntimeScreenEmissionAssembler()
         var frameSources = ExperienceEmissionSources()
+        var links: [ExperienceRendererOpenLinkRequest] = []
         for effect in effects {
             guard !isShuttingDown, runtimeFailure == nil else { return }
             guard let projected = await route(effect) else { continue }
             switch projected {
+            case .link(let request):
+                links.append(request)
             case .control(let screenId, let invocation):
                 if case .controlAction(_, let event) = effect.kind {
                     frameSources.control = event.resolvedSource
@@ -1000,26 +1005,29 @@ final class ExperienceScreenViewController: UIViewController {
             LogWarning(
                 "ExperienceScreenViewController: rejected native transaction with multiple controls"
             )
-            return
+            emission = nil
         case .success(let assembled):
             emission = assembled
         }
         if let emission {
-            emissionEventSource = frameSources
-            defer { emissionEventSource = nil }
             await delegate?.experienceScreenViewController(
                 self,
                 didEmitScreenEmission: emission,
-                originatingRun: originatingRun
+                originatingRun: originatingRun,
+                frameSources: frameSources
             )
+        }
+        for link in links {
+            await delegate?.experienceScreenViewController(self, didRequestOpenLink: link)
         }
     }
 
-    private func route(
+    func route(
         _ effect: ExperienceInteractiveEffect
     ) async -> ExperienceRuntimeProjectedEmission? {
         switch effect.kind {
         case .controlAction(let actionId, let event):
+            guard Set(event.properties.map(\.key)).count == event.properties.count else { return nil }
             let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
             })
@@ -1056,15 +1064,12 @@ final class ExperienceScreenViewController: UIViewController {
                 in: properties
             ) : nil
             if !event.url.isEmpty {
-                await delegate?.experienceScreenViewController(
-                    self,
-                    didRequestOpenLink: ExperienceRendererOpenLinkRequest(
-                        urlString: event.url,
-                        target: event.target.isEmpty ? nil : event.target,
-                        screenId: screenId,
-                        instanceId: instanceID
-                    )
-                )
+                return .link(ExperienceRendererOpenLinkRequest(
+                    urlString: event.url,
+                    target: event.target.isEmpty ? nil : event.target,
+                    screenId: screenId,
+                    instanceId: instanceID
+                ))
             } else if !event.name.isEmpty {
                 return .draft(
                     .event(name: event.name, payload: properties.mapValues(

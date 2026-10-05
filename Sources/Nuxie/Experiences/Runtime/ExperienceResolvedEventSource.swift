@@ -52,17 +52,4 @@ struct ExperienceEmissionSources: Sendable {
     }
 }
 
-/// Retains frame values beside a batch until its invocation is admitted.
-final class ExperienceEventSources: @unchecked Sendable {
-    private let lock = NSLock()
-    private var sources: [String: ExperienceEmissionSources] = [:]
-
-    func put(_ source: ExperienceEmissionSources?, invocationID: String) {
-        lock.withLock { sources[invocationID] = source }
-    }
-
-    func take(invocationID: String) -> ExperienceEmissionSources? {
-        lock.withLock { sources.removeValue(forKey: invocationID) }
-    }
-}
 #endif

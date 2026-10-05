@@ -272,7 +272,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [exposureCaptured], timeout: 2)
@@ -346,7 +346,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         for _ in 0..<100 {

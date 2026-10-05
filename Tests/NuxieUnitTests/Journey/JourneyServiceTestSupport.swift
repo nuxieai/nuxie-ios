@@ -1493,6 +1493,7 @@ final class RecordingJourneyPresenter {
     var navigationResult = JourneyPresentationNavigationResult.navigated
     private(set) var cancelledBackNavigations = 0
     var actionResult = JourneyPresentationActionResult.handled
+    var resolvesFrameValues = false
     var resolvedPurchasePlacementId: String?
     var presentHandler:
         ((JourneyPresentationRequest) async -> JourneyPresentationResult)?
@@ -1593,6 +1594,13 @@ final class RecordingJourneyPresenter {
         }
         guard case .string("purchase")? = action["type"] else {
             return action
+        }
+        if resolvesFrameValues, let request, let value = action["placementId"] {
+            var resolved = action
+            guard let placement = JourneyRuntimeDelegate(request: request).resolvePresentationString(
+                value, source: source, eventSource: eventSource) else { return nil }
+            resolved["placementId"] = .string(placement)
+            return resolved
         }
         guard let placementId = resolvedPurchasePlacementId
                 ?? journeyPresentationLiteralString(action["placementId"])

@@ -56,7 +56,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                     payload: [:]
                 ),
             ]
-        ))
+        ), nil)
         XCTAssertTrue(accepted)
         await fulfillment(of: [completionCommitted], timeout: 2)
         XCTAssertEqual(
@@ -193,7 +193,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(waitAccepted)
         let journal = try JourneyRunJournal(
             directory: directory,
@@ -226,7 +226,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "finish",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(routeAccepted)
         await fulfillment(of: [completionCommitted], timeout: 2)
 
@@ -275,7 +275,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(routeAccepted)
         let journal = try JourneyRunJournal(
             directory: directory,
@@ -303,7 +303,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                     "value": .bool(false),
                 ]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(falseResponseAccepted)
         for _ in 0..<100 {
             let run = try await journal.runs().first
@@ -339,7 +339,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                     "value": .bool(true),
                 ]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(trueResponseAccepted)
         await fulfillment(of: [completionCommitted], timeout: 2)
         XCTAssertEqual(
@@ -446,7 +446,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(accepted)
         let journal = try JourneyRunJournal(
             directory: directory,
@@ -591,7 +591,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(enteredWait)
         let journal = try JourneyRunJournal(
             directory: directory,

@@ -160,6 +160,22 @@
       "declared": "made-up",
       "accepted": false,
       "alias": null
+    },
+    {
+      "name": "duplicate literal property keeps first",
+      "source": 3,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [],
+      "declared": null,
+      "accepted": true,
+      "alias": null,
+      "duplicateValue": "later"
     }
-  ]
+  ],
+  "duplicatePropertyPolicy": "first"
 }

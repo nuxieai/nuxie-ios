@@ -2,6 +2,19 @@ import XCTest
 @testable import Nuxie
 
 final class JourneyScreenEmissionDispatcherTests: XCTestCase {
+    func testUnaliasedControlDropsOnlyItsOwnDrafts() async throws {
+        let dispatcher = ScreenEmissionDispatcher(createId: incrementingID(), now: { "2026-08-17T22:00:00.000Z" }, executeScriptAction: { _ in [] })
+        let result = await dispatcher.dispatch(run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0, lifecycleGeneration: 0, presentationEpoch: 0),
+            screenId: "screen", definition: ScreenControlActionDefinition(actionId: "control", binding: .declarative([
+                .emit(eventName: "before_missing", payload: [:]),
+                .emit(eventName: "requires_alias", payload: ["instance": .instanceId])
+            ])), invocation: ScreenActionInvocation(actionId: "control", value: nil, componentId: nil, instanceId: nil),
+            additionalDrafts: [.event(name: "sibling", payload: [:])])
+        let batch = try XCTUnwrap(result.success)
+        XCTAssertEqual(batch.emissions.map(\.name), ["sibling"])
+        XCTAssertEqual(batch.emissions.map(\.sequence), [0])
+    }
+
     func testTypedRuntimeEffectsProduceOneAtomicBatch() async throws {
         let dispatcher = ScreenEmissionDispatcher(
             createId: incrementingID(),

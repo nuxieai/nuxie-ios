@@ -65,83 +65,9 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
             rootID: nil, liveIDs: [], identities: [:]), event)
     }
 
-    func testSharedSourcesPublishOnlyLiveEventsWithContiguousSequences() async throws {
-        struct Fixture: Decodable {
-            struct Case: Decodable {
-                struct Alias: Decodable { let model: String; let name: String; let native: UInt64 }
-                let name: String
-                let source: UInt64?
-                let live: [UInt64]
-                let aliases: [Alias]
-                let declared: String?
-                let accepted: Bool
-                let alias: String?
-            }
-            let cases: [Case]
-        }
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("fixtures/events/runtime-event-sources.json")
-        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL))
-        for vector in fixture.cases {
-            var properties = [ExperienceInteractiveField(key: "value", value: .string("literal"))]
-            if let declared = vector.declared {
-                properties.append(.init(key: "instanceId", value: .string(declared)))
-            }
-            let reported = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128,
-                name: "selected", url: "", target: "", delay: 0, properties: properties)
-            let identities = Dictionary(uniqueKeysWithValues: vector.aliases.map {
-                (ExperienceInteractiveViewModelIdentity(viewModelName: $0.model, instanceID: $0.name),
-                 ExperienceInteractiveViewModelReference(rawValue: $0.native)!)
-            })
-            let projected = ExperienceInteractiveEventSource.project(reported, nativeID: vector.source,
-                rootID: 1, liveIDs: Set(vector.live), identities: identities)
-            var router = ExperienceInteractiveEffectRouter()
-            let sibling = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128,
-                name: "sibling", url: "", target: "", delay: 0, properties: [])
-            let effects = router.project(reportedEvents: [projected, sibling], viewModelChanges: [],
-                hostCommands: [], declaredEventNames: [], correlationID: 1)
-            let drafts: [ScreenEmissionDraft] = effects.compactMap {
-                guard case .reportedEvent(let value) = $0.kind else { return nil }
-                let payload = Dictionary(uniqueKeysWithValues: value.properties.compactMap { field -> (String, ScreenEmissionValue)? in
-                    guard case .string(let text) = field.value else { return nil }
-                    return (field.key, .string(text))
-                })
-                return .event(name: value.name, payload: payload)
-            }
-            let dispatcher = ScreenEmissionDispatcher(createId: { UUID().uuidString },
-                now: { "2026-10-04T12:00:00.000Z" }, executeScriptAction: { _ in [] })
-            let result = await dispatcher.dispatch(
-                run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
-                    lifecycleGeneration: 0, presentationEpoch: 0),
-                source: ScreenEmissionSource(screenId: "screen", actionId: "runtime:1",
-                    componentId: nil, instanceId: vector.alias), drafts: drafts)
-            guard case .success(let batch) = result else {
-                XCTFail("Publication failed: \(vector.name)"); continue
-            }
-            XCTAssertEqual(batch.emissions.map(\.name), vector.accepted ? ["selected", "sibling"] : ["sibling"], vector.name)
-            XCTAssertEqual(batch.emissions.map(\.sequence), vector.accepted ? [0, 1] : [0], vector.name)
-            if vector.accepted {
-                XCTAssertEqual(batch.emissions[0].payload["value"], .string("literal"), vector.name)
-                XCTAssertEqual(batch.emissions[0].payload["instanceId"], vector.alias.map(ScreenEmissionValue.string), vector.name)
-            }
-        }
-    }
-
-    func testFrameSourcesAreHeldOnlyForTheirInvocation() {
-        let source = ExperienceResolvedEventSource(nativeID: 3,
-            snapshot: .init(rootInstanceID: 1, instances: [], values: []), schemaNames: [:])
-        let sources = ExperienceEventSources()
-        sources.put(ExperienceEmissionSources(control: source), invocationID: "first")
-        XCTAssertNil(sources.take(invocationID: "second"))
-        XCTAssertEqual(sources.take(invocationID: "first")?.control, source)
-        XCTAssertNil(sources.take(invocationID: "first"))
-    }
-
     func testSharedRelativeValuesReadTheEventFrame() throws {
         struct Fixture: Decodable {
-            struct Case: Decodable { let name: String; let source: UInt64?; let expected: String? }
+            struct Case: Decodable { let name: String; let source: UInt64?; let expected: String?; let viewModelName: String? }
             let root: UInt64
             let rows: [UInt64]
             let values: [String: String]
@@ -164,7 +90,7 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
         for vector in fixture.cases {
             let source = vector.source.map { ExperienceResolvedEventSource(nativeID: $0,
                 snapshot: snapshot, schemaNames: [0: "Root", 1: "Row"]) }
-            XCTAssertEqual(source?.string(path: path), vector.expected, vector.name)
+            XCTAssertEqual(source?.string(path: VmPathRef(viewModelName: vector.viewModelName, path: path.path, isRelative: true)), vector.expected, vector.name)
         }
     }
 

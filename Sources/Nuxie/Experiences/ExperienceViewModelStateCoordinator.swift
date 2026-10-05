@@ -174,7 +174,6 @@ final class ExperienceViewModelStateCoordinator {
 
     /// Explicit purchase scopes never substitute a different occurrence or an arbitrary model default.
     func getPurchaseValue(path: VmPathRef, screenId: String?, instanceId: String?) -> Any? {
-        if path.isRelative == true { return nil }
         if path.isRelative == false {
             let defaults = screenId.flatMap { screenDefaults[$0] }
             let rootModel = defaults?.instanceId.flatMap { instanceViewModelNames[$0] }
