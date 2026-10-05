@@ -34,6 +34,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 return event
             }
             XCTAssertEqual(controls.count, 1, "Expected exactly one purchase control: \(effects)")
+            let source = try XCTUnwrap(controls.first?.resolvedSource)
+            XCTAssertTrue(source.snapshot.instances.contains { $0.id == source.nativeID })
             XCTAssertEqual(controls.first?.properties.first { $0.key == "instanceId" }?.value,
                 .string(expected))
         }

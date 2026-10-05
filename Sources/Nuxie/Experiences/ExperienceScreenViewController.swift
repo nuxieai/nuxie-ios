@@ -969,17 +969,28 @@ final class ExperienceScreenViewController: UIViewController {
         })
     }
 
+    private(set) var emissionEventSource: ExperienceEmissionSources?
+
     private func deliverStep(effects: [ExperienceInteractiveEffect]) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
         var assembler = ExperienceRuntimeScreenEmissionAssembler()
+        var frameSources = ExperienceEmissionSources()
         for effect in effects {
             guard !isShuttingDown, runtimeFailure == nil else { return }
             guard let projected = await route(effect) else { continue }
             switch projected {
             case .control(let screenId, let invocation):
+                if case .controlAction(_, let event) = effect.kind {
+                    frameSources.control = event.resolvedSource
+                }
                 assembler.appendControl(screenId: screenId, invocation: invocation)
             case .draft(let draft, let draftSource):
+                if case .reportedEvent(let event) = effect.kind {
+                    frameSources.drafts.append(event.resolvedSource)
+                } else {
+                    frameSources.drafts.append(nil)
+                }
                 assembler.appendDraft(draft, source: draftSource)
             }
         }
@@ -994,6 +1005,8 @@ final class ExperienceScreenViewController: UIViewController {
             emission = assembled
         }
         if let emission {
+            emissionEventSource = frameSources
+            defer { emissionEventSource = nil }
             await delegate?.experienceScreenViewController(
                 self,
                 didEmitScreenEmission: emission,
