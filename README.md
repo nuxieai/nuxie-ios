@@ -58,6 +58,7 @@ available. Broken Journey link steps advance without opening, recording, or dism
 `$link_opened` and the public `linkOpened` activity include the actual `destination`
 (`in_app` or `external`) and the original optional `target`. Successful Journey links
 record under the step identity before `$journey_leg_completed`.
+A link already in flight still opens externally after identity change or current-customer profile clear, but its revoked run records no event.
 
 ## Requirements
 
