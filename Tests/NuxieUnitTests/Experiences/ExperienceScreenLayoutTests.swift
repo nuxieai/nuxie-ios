@@ -12,7 +12,7 @@ final class ExperienceScreenLayoutTests: XCTestCase {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/multi-screen")
-        let artifact = try await authenticatedFixtureArtifact(at: fixture)
+        let (_, artifact) = try await authenticatedFixtureArtifact(at: fixture)
         let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
             pixelWidth: 1179, pixelHeight: 2556)
         do {
@@ -33,9 +33,56 @@ final class ExperienceScreenLayoutTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testControllerPublishesSafeAreaToRuntimeAtPhoneTabletAndEmptyViewSizes() async throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/rendered-text-input")
+        let (experience, artifact) = try await authenticatedFixtureArtifact(at: fixture)
+        let manifest = try XCTUnwrap(artifact.payload.renderPlan.screens.first)
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: manifest, reduceMotion: false, delegate: nil)
+        let view = LayoutPublicationInsetsView()
+        controller.view = view
+        try await controller.mountInteractiveScreen()
+        do {
+            let mirror = Mirror(reflecting: controller)
+            let screen = try XCTUnwrap(mirror.children.first { $0.label == "interactiveScreen" }?.value as? ExperienceInteractiveScreen)
+            let loop = try XCTUnwrap(mirror.children.first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+            func assertSafeArea(top: Float, bottom: Float, size: CGSize) async throws {
+                let snapshot = try await screen.snapshot()
+                let safeArea = try XCTUnwrap(snapshot.values.first {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "safeArea"
+                })
+                guard case .referencedInstance(let owner) = safeArea.value else {
+                    return XCTFail("safeArea must be an authored view model")
+                }
+                for (side, expected) in [("top", top), ("bottom", bottom), ("left", 0), ("right", 0)] {
+                    XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == owner && $0.name == side }?.value,
+                        .number(expected), "\(size) safeArea/\(side)")
+                }
+            }
+            view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            controller.syncSafeAreaInsets(force: true)
+            try await loop.advanceZeroDelta()
+            try await assertSafeArea(top: 0, bottom: 0, size: view.bounds.size)
+            view.testInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+            for size in [CGSize.zero, CGSize(width: 393, height: 852), CGSize(width: 820, height: 1180)] {
+                view.frame = CGRect(origin: .zero, size: size)
+                controller.syncSafeAreaInsets(force: true)
+                try await loop.advanceZeroDelta()
+                try await assertSafeArea(top: 59, bottom: 34, size: size)
+            }
+            await controller.shutdownInteractiveScreen()
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+    }
+
     private func authenticatedFixtureArtifact(
         at fixture: URL
-    ) async throws -> LoadedExperienceArtifact {
+    ) async throws -> (Experience, LoadedExperienceArtifact) {
         StubURLProtocol.reset()
         let profileBytes = try Data(
             contentsOf: fixture.appendingPathComponent("profile.json")
@@ -99,12 +146,17 @@ final class ExperienceScreenLayoutTests: XCTestCase {
             pinnedArtifacts: nil,
             productResolver: { _ in [] }
         )
-        return LoadedExperienceArtifact(acquired: try await presentation.artifactLoader(
+        return (presentation.experience, LoadedExperienceArtifact(acquired: try await presentation.artifactLoader(
             presentation.experience,
             nil,
             screenID
-        ))
+        )))
     }
 
+}
+@MainActor
+private final class LayoutPublicationInsetsView: UIView {
+    var testInsets: UIEdgeInsets = .zero
+    override var safeAreaInsets: UIEdgeInsets { testInsets }
 }
 #endif
