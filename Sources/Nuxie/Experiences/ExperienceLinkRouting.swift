@@ -9,8 +9,8 @@ import AppKit
 enum ExperienceLinkRouting {
     enum State { case settled, closed, background }
 
-    static func route(urlString: String, target: String?, state: State) -> (url: URL, destination: String)? {
-        guard state != .background, let link = destination(urlString: urlString, target: target) else { return nil }
+    static func route(urlString: String, target: String?, state: State, parser: (String) -> URL? = parse) -> (url: URL, destination: String)? {
+        guard state != .background, let link = destination(urlString: urlString, target: target, parser: parser) else { return nil }
         return (link.url, state == .settled && link.inApp ? "in_app" : "external")
     }
 
@@ -24,13 +24,6 @@ enum ExperienceLinkRouting {
         return (url, web && ["", "_self", "_parent", "_top", "in_app"].contains(target))
     }
 
-    @MainActor
-    @discardableResult
-    static func open(urlString: String, target: String?, parser: (String) -> URL? = parse,
-                     inApp: @MainActor (URL) async -> Bool, external: @MainActor (URL) async -> Bool) async -> Bool {
-        guard let route = destination(urlString: urlString, target: target, parser: parser) else { return false }
-        return await (route.inApp ? inApp(route.url) : external(route.url))
-    }
     static func parse(_ value: String) -> URL? {
         if #available(iOS 17, macOS 14, *) {
             return URL(string: value, encodingInvalidCharacters: true)
