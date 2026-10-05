@@ -3327,7 +3327,7 @@ private final class NuxieVideoActionCollector {
 
 extension NuxieNativeRuntime {
     /// Query all requested occurrences on the runtime lane after scene advance.
-    /// The viewport is in root-artboard coordinates, including any letterboxing.
+    /// The viewport is the visible view bounds in root-artboard points.
     package func visibleVideoIDs(_ componentIDs: [Int], viewport: CGRect) async throws -> Set<Int> {
         let state = try requireState()
         return try await executor.call {

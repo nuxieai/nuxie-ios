@@ -8,6 +8,7 @@ struct ExperienceRuntimeFrameTime: Equatable, Sendable {
 struct ExperienceRuntimeSurfaceSize: Equatable, Sendable {
     let pixelWidth: UInt32
     let pixelHeight: UInt32
+    let layoutScaleFactor: Float
 }
 
 /// Converts display timestamps into bounded runtime deltas.
@@ -63,7 +64,8 @@ enum ExperienceRuntimeSurfaceSizing {
     ) -> ExperienceRuntimeSurfaceSize {
         ExperienceRuntimeSurfaceSize(
             pixelWidth: pixels(points: width, scale: scale),
-            pixelHeight: pixels(points: height, scale: scale)
+            pixelHeight: pixels(points: height, scale: scale),
+            layoutScaleFactor: Float(scale).isFinite && scale > 0 ? Float(scale) : 0
         )
     }
 

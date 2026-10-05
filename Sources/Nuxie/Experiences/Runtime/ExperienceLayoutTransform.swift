@@ -1,11 +1,11 @@
 import CoreGraphics
 
-/// The one geometry transform shared by runtime rendering, pointer input, and
-/// native overlays: centered `.contain` with the artboard's authored origin.
+/// The point-space transform shared by pointer input and native overlays.
+/// View points differ from artboard points only by their origins.
 ///
 /// Points outside `contentBounds` intentionally remain outside the artboard.
 /// Callers must not clamp them before delivering pointer input to the runtime.
-struct ExperienceContainCenterTransform: Equatable, Sendable {
+struct ExperienceLayoutTransform: Equatable, Sendable {
     let artboardBounds: CGRect
     let viewportBounds: CGRect
     let contentBounds: CGRect
@@ -21,21 +21,8 @@ struct ExperienceContainCenterTransform: Equatable, Sendable {
             return nil
         }
 
-        let scale = min(
-            viewportBounds.width / artboardBounds.width,
-            viewportBounds.height / artboardBounds.height
-        )
-        guard scale.isFinite, scale > 0 else { return nil }
-
-        let width = artboardBounds.width * scale
-        let height = artboardBounds.height * scale
-        let contentBounds = CGRect(
-            x: viewportBounds.minX + (viewportBounds.width - width) / 2,
-            y: viewportBounds.minY + (viewportBounds.height - height) / 2,
-            width: width,
-            height: height
-        )
-        guard Self.isFinite(contentBounds) else { return nil }
+        let scale: CGFloat = 1
+        let contentBounds = viewportBounds
 
         self.artboardBounds = artboardBounds
         self.viewportBounds = viewportBounds

@@ -450,11 +450,11 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTAssertFalse(initiallyReady, "Opening a decoder is not a decoded first frame")
         }
         if forceFirstFrameTimeout {
-            try await host.resizeViewport(pixelWidth: 0, pixelHeight: 0)
+            try await host.resizeViewport(bounds: .zero)
             let hiddenReady = try await host.isReadyForPresentation()
             XCTAssertTrue(hiddenReady, "An offscreen video must not block presentation")
             try await Task.sleep(nanoseconds: 2_100_000_000)
-            try await host.resizeViewport(pixelWidth: UInt32(width), pixelHeight: UInt32(height))
+            try await host.resizeViewport(bounds: CGRect(x: 0, y: 0, width: width, height: height))
             let restoredReady = try await host.isReadyForPresentation()
             XCTAssertTrue(restoredReady, "A presented screen stays admitted while the restored video waits")
             // Do not tick the decoder: admission must not accept an opened

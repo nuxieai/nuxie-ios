@@ -112,7 +112,6 @@ final class ExperienceVideoPlayback {
     private var requestedRates: [Int: Double] = [:]
     private var reconciling = false
     private let runtime: NuxieNativeRuntime
-    private let artboardBounds: CGRect
     private var viewport: CGRect
     private var visibleOccurrences: Set<Int> = []
     private let lease: JourneyReleaseVideoFileLease?
@@ -140,7 +139,6 @@ final class ExperienceVideoPlayback {
         self.decoderPool = decoderPool
         self.decoderBudget = decoderBudget
         self.runtime = runtime
-        self.artboardBounds = artboardBounds
         self.viewport = artboardBounds
         self.lease = lease
         self.targets = targets
@@ -516,18 +514,10 @@ final class ExperienceVideoPlayback {
         return try await runtime.videos()
     }
 
-    /// Invert the renderer's centered contain fit, including the letterboxed area.
-    func resizeViewport(pixelWidth: UInt32, pixelHeight: UInt32) async throws {
+    /// The visible viewport is the laid-out view in artboard points.
+    func resizeViewport(bounds: CGRect) async throws {
         advanceAdmissionClock()
-        if pixelWidth > 0, pixelHeight > 0, artboardBounds.width > 0, artboardBounds.height > 0 {
-            let scale = min(CGFloat(pixelWidth) / artboardBounds.width, CGFloat(pixelHeight) / artboardBounds.height)
-            let width = CGFloat(pixelWidth) / scale
-            let height = CGFloat(pixelHeight) / scale
-            viewport = CGRect(x: artboardBounds.midX - width / 2, y: artboardBounds.midY - height / 2,
-                width: width, height: height)
-        } else {
-            viewport = .zero
-        }
+        viewport = bounds
         let current = try await runtime.videos()
         visibleOccurrences = try await runtime.visibleVideoIDs(current.map(\.componentID), viewport: viewport)
     }

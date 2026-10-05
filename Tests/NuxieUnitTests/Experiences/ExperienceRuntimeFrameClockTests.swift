@@ -86,7 +86,7 @@ final class ExperienceRuntimeFrameClockTests: QuickSpec {
                         scale: 2
                     )
                 ).to(
-                    equal(ExperienceRuntimeSurfaceSize(pixelWidth: 201, pixelHeight: 101))
+                    equal(ExperienceRuntimeSurfaceSize(pixelWidth: 201, pixelHeight: 101, layoutScaleFactor: 2))
                 )
             }
 
@@ -94,12 +94,12 @@ final class ExperienceRuntimeFrameClockTests: QuickSpec {
                 expect(
                     ExperienceRuntimeSurfaceSizing.pixels(width: -1, height: 20, scale: 3)
                 ).to(
-                    equal(ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 60))
+                    equal(ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 60, layoutScaleFactor: 3))
                 )
                 expect(
                     ExperienceRuntimeSurfaceSizing.pixels(width: 10, height: 10, scale: 0)
                 ).to(
-                    equal(ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0))
+                    equal(ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0, layoutScaleFactor: 0))
                 )
             }
         }

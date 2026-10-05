@@ -8,7 +8,7 @@ import XCTest
 final class ExperienceTextInputGeometryTests: XCTestCase {
     @MainActor
     func testNativeInputPlacementPreservesOccurrenceLayoutAndHitTesting() throws {
-        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+        let viewport = try XCTUnwrap(ExperienceLayoutTransform(
             artboardBounds: CGRect(x: 0, y: 0, width: 500, height: 500),
             viewportBounds: CGRect(x: 20, y: 30, width: 1000, height: 1000)))
         // A nested occurrence rotates and scales a 100 x 40 field. The text
@@ -31,19 +31,19 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
             parent.addSubview(field)
             placement.apply(to: field)
             let origin = field.convert(CGPoint.zero, to: parent)
-            XCTAssertEqual(origin.x, 444, accuracy: 0.001)
-            XCTAssertEqual(origin.y, 354, accuracy: 0.001)
+            XCTAssertEqual(origin.x, 232, accuracy: 0.001)
+            XCTAssertEqual(origin.y, 192, accuracy: 0.001)
             let opposite = field.convert(CGPoint(x: 100, y: 40), to: parent)
-            XCTAssertEqual(opposite.x, 324, accuracy: 0.001)
-            XCTAssertEqual(opposite.y, 554, accuracy: 0.001)
-            let hit = try XCTUnwrap(parent.hitTest(CGPoint(x: 384, y: 454), with: nil))
+            XCTAssertEqual(opposite.x, 172, accuracy: 0.001)
+            XCTAssertEqual(opposite.y, 292, accuracy: 0.001)
+            let hit = try XCTUnwrap(parent.hitTest(CGPoint(x: 202, y: 242), with: nil))
             XCTAssertTrue(hit === field || hit.isDescendant(of: field))
             field.removeFromSuperview()
         }
     }
 
     func testNativeInputPlacementRejectsUnpresentedOrInvalidLayout() throws {
-        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+        let viewport = try XCTUnwrap(ExperienceLayoutTransform(
             artboardBounds: CGRect(x: 0, y: 0, width: 100, height: 100),
             viewportBounds: CGRect(x: 0, y: 0, width: 100, height: 100)))
         let valid = NuxieNativeTextLayout(transform: .identity,
@@ -74,7 +74,7 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
         XCTAssertEqual(cases.count, 8)
         let parent = UIView(frame: CGRect(x: 0, y: 0, width: 600, height: 600))
-        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+        let viewport = try XCTUnwrap(ExperienceLayoutTransform(
             artboardBounds: CGRect(x: 0, y: 0, width: 400, height: 400),
             viewportBounds: CGRect(x: 100, y: 100, width: 400, height: 400)))
         for item in cases {
@@ -108,8 +108,8 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
         }
     }
 
-    func testAffinePlacementIncludesLayoutOriginAndContainOffset() throws {
-        let viewport = try XCTUnwrap(ExperienceContainCenterTransform(
+    func testAffinePlacementIncludesLayoutAndArtboardOrigins() throws {
+        let viewport = try XCTUnwrap(ExperienceLayoutTransform(
             artboardBounds: CGRect(x: 10, y: 20, width: 100, height: 100),
             viewportBounds: CGRect(x: 0, y: 0, width: 400, height: 200)))
         let matrix = CGAffineTransform(a: 2, b: 0, c: 0.5, d: 3, tx: 24, ty: 32)
@@ -118,8 +118,8 @@ final class ExperienceTextInputGeometryTests: XCTestCase {
             layout: .init(transform: matrix, bounds: CGRect(x: 5, y: 7, width: 10, height: 20)),
             firstBaseline: 15), viewport: viewport))
         let origin = CGPoint.zero.applying(placement.transform)
-        XCTAssertEqual(origin.x, 155, accuracy: 0.001)
-        XCTAssertEqual(origin.y, 66, accuracy: 0.001)
+        XCTAssertEqual(origin.x, 27.5, accuracy: 0.001)
+        XCTAssertEqual(origin.y, 33, accuracy: 0.001)
         XCTAssertEqual(placement.textOrigin.x, -5, accuracy: 0.001)
         XCTAssertEqual(placement.textOrigin.y, -7, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(placement.firstBaseline).y, 8, accuracy: 0.001)

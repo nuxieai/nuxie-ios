@@ -48,6 +48,10 @@ final class ExperienceRuntimeSurfaceView: UIView {
         }
     }
 
+    var runtimeDisplayScale: CGFloat {
+        window?.traitCollection.displayScale ?? traitCollection.displayScale
+    }
+
     var metalLayer: CAMetalLayer {
         layer as! CAMetalLayer
     }
@@ -68,9 +72,11 @@ final class ExperienceRuntimeSurfaceView: UIView {
     }
 
     private func updateGeometry() {
-        let scale = window?.screen.scale ?? contentScaleFactor
-        contentScaleFactor = scale
-        metalLayer.contentsScale = scale
+        let scale = runtimeDisplayScale
+        if scale.isFinite, scale > 0 {
+            contentScaleFactor = scale
+            metalLayer.contentsScale = scale
+        }
         // UIKit relayouts this host when an embedded editor changes its text.
         // That is not a coordinate change and must not cancel queued edits.
         // Three points retain translation, rotation and scale in window space.

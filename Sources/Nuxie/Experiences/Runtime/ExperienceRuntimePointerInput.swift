@@ -39,7 +39,7 @@ struct ExperienceRuntimePointerInputRouter {
 
     mutating func runtimeEvents(
         for samples: [ExperienceRuntimeViewPointerEvent],
-        transform: ExperienceContainCenterTransform
+        transform: ExperienceLayoutTransform
     ) -> [ExperienceInteractivePointerEvent] {
         var events: [ExperienceInteractivePointerEvent] = []
         events.reserveCapacity(min(samples.count, Self.maximumActivePointers))
