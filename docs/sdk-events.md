@@ -35,3 +35,5 @@ Entry conditions read only the authenticated profile fact table plus covered loc
 A live run pins its authenticated release and journal. Offline execution can continue through local controls and effects. Only an explicit park point resumes after process death; an active unparked run is abandoned and reports its buffered outputs. No claim, mailbox, ownership-transfer, checkpoint-event, or response-session protocol exists in the SDK.
 
 See [`fixtures/`](../fixtures/README.md) for portable Journey, event, feature, and purchase vectors.
+
+Runtime links and Journey open-link steps emit `$link_opened` after the URL is handed to the browser or system. Web targets `_self`, `_parent`, `_top`, and an omitted target stay in-app; `_blank` opens externally. Non-web schemes go to the system. Journey `in_app` and `external` targets use the same routing path.

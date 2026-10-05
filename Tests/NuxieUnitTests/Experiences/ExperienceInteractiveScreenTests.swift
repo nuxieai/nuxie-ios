@@ -56,6 +56,34 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
+    func testNativeNestedEventCanResolveWithoutHostAliases() async throws {
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
+            pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        let down = try await screen.step(pointers: [.init(kind: .down, x: 240, y: 30)], elapsedSeconds: 0)
+        let up = try await screen.step(pointers: [.init(kind: .up, x: 240, y: 30, timestamp: 0.1)], elapsedSeconds: 0)
+        let settled = try await screen.step(elapsedSeconds: 0.016)
+        let reported = (down.effects + up.effects + settled.effects).compactMap { effect -> ExperienceInteractiveReportedEvent? in
+            guard case .controlAction(_, let event) = effect.kind else { return nil }
+            return event
+        }
+        XCTAssertEqual(reported.count, 1)
+        let event = try XCTUnwrap(reported.first)
+        let source = try XCTUnwrap(event.resolvedSource)
+        XCTAssertNotEqual(source.nativeID, source.snapshot.rootInstanceID)
+        let nativeEvent = ExperienceInteractiveReportedEvent(localIndex: event.localIndex,
+            coreType: event.coreType, name: event.name, url: event.url, target: event.target,
+            delay: event.delay, properties: event.properties.filter { $0.key != "instanceId" })
+        let unaliased = ExperienceInteractiveEventSource.project(nativeEvent, nativeID: source.nativeID,
+            rootID: source.snapshot.rootInstanceID, liveIDs: Set(source.snapshot.instances.map(\.id)), identities: [:])
+        XCTAssertNil(unaliased.sourceRejection)
+        XCTAssertFalse(unaliased.properties.contains { $0.key == "instanceId" })
+        XCTAssertEqual(source.string(path: VmPathRef(path: "placementId", isRelative: true)), "plan:annual")
+        try await screen.close()
+    }
+
     private func purchaseFixtureArtifact(navigation: Bool) async throws -> (Experience, LoadedExperienceArtifact) {
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

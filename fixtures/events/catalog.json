@@ -738,6 +738,71 @@
     "status": "active",
     "wire": true
   },
+  "$link_opened": {
+    "authoredBy": "platform",
+    "beforeSend": "governed",
+    "constant": "JourneyEvents.linkOpened",
+    "docs": true,
+    "emitters": [
+      "Sources/Nuxie/Journey/Execution/JourneyEffectDispatcher.swift"
+    ],
+    "endpoint": "batch",
+    "fixtures": [
+      "events/runtime-link-opened.json"
+    ],
+    "forwarding": "linkOpened",
+    "lane": "captureStableSystemEvent",
+    "persists": true,
+    "properties": {
+      "experience_id": {
+        "required": true,
+        "source": "JourneyEvents.appActionRequestedProperties journey snapshot",
+        "type": "String"
+      },
+      "journey_id": {
+        "required": true,
+        "source": "JourneyEvents.appActionRequestedProperties journey snapshot",
+        "type": "String"
+      },
+      "experience_version_id": {
+        "required": true,
+        "source": "authenticated Journey run",
+        "type": "String"
+      },
+      "leg_generation": {
+        "required": true,
+        "source": "authenticated Journey run",
+        "type": "Int"
+      },
+      "leg_id": {
+        "required": true,
+        "source": "authenticated Journey run",
+        "type": "String"
+      },
+      "url": {
+        "required": true,
+        "source": "opened link and source screen",
+        "type": "String"
+      },
+      "target": {
+        "required": true,
+        "source": "opened link and source screen",
+        "type": "String"
+      },
+      "screen_id": {
+        "required": false,
+        "source": "opened link and source screen",
+        "type": "String"
+      },
+      "instance_id": {
+        "required": false,
+        "source": "opened link and source screen",
+        "type": "String"
+      }
+    },
+    "status": "active",
+    "wire": true
+  },
   "$notifications_denied": {
     "authoredBy": "platform",
     "beforeSend": [
