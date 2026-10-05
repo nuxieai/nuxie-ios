@@ -76,6 +76,36 @@
       "url": "",
       "target": "_self",
       "destination": null
+    },
+    {
+      "url": "https://example.test/?q=a|b",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/?q={value}",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/a^b",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://münich.example/path",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://under_score.example/path",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "mailto:",
+      "target": "_self",
+      "destination": "external"
     }
   ]
 }

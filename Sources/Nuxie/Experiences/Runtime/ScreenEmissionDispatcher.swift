@@ -310,7 +310,11 @@ private actor ScreenEmissionDispatcherState {
             let actionDrafts: [ScreenEmissionDraft]
             switch definition.binding {
             case .declarative(let actions):
-                actionDrafts = try executeDeclarative(actions, invocation: invocation)
+                do {
+                    actionDrafts = try executeDeclarative(actions, invocation: invocation)
+                } catch ScreenEmissionDispatchError.declarativeSourceMissing(let source) where source == "instance_id" {
+                    actionDrafts = []
+                }
             case .script:
                 actionDrafts = try await executeScriptAction(ScreenScriptActionInput(
                     screenId: screenId,

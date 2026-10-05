@@ -90,7 +90,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 name: "continue",
                 payload: ["source": .string("button")]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(
@@ -207,7 +207,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         )
 
         events.stableCaptureBatchFailureIndex = 1
-        let firstAccepted = await request.onEmissionBatch(batch)
+        let firstAccepted = await request.onEmissionBatch(batch, nil)
         XCTAssertFalse(firstAccepted)
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyStarted,
@@ -230,7 +230,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         events.addEventHandler(pattern: JourneyEvents.journeyCompleted) { _ in
             completionCommitted.fulfill()
         }
-        let retryAccepted = await request.onEmissionBatch(batch)
+        let retryAccepted = await request.onEmissionBatch(batch, nil)
         XCTAssertTrue(retryAccepted)
         await fulfillment(of: [completionCommitted], timeout: 2)
         XCTAssertEqual(events.routedEvents.map(\.name), [
@@ -313,7 +313,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                         payload: [:]
                     ),
                 ]
-            ))
+            ), nil)
 
             XCTAssertFalse(accepted)
             let journal = try JourneyRunJournal(
@@ -416,7 +416,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(routedToWait)
         let journal = try JourneyRunJournal(
             directory: directory,
@@ -452,7 +452,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                     "value": .bool(true),
                 ]
             )]
-        ))
+        ), nil)
         XCTAssertFalse(responseAccepted)
         let stagedRuns = try await journal.runs()
         let staged = try XCTUnwrap(stagedRuns.first)
@@ -567,7 +567,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 ),
             ]
         )
-        let accepted = await request.onEmissionBatch(batch)
+        let accepted = await request.onEmissionBatch(batch, nil)
 
         XCTAssertFalse(accepted)
         let persistedRuns = try await journal.runs()
@@ -580,7 +580,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         let finishedOwners = await MainActor.run { presenter.finishedOwners }
         XCTAssertTrue(finishedOwners.isEmpty)
 
-        let retryAccepted = await request.onEmissionBatch(batch)
+        let retryAccepted = await request.onEmissionBatch(batch, nil)
         XCTAssertTrue(retryAccepted)
         XCTAssertEqual(
             beforeSendCalls.callCount,
@@ -615,7 +615,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         XCTAssertFalse(harness.events.routedEvents.contains {
@@ -656,7 +656,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         XCTAssertTrue(harness.events.routedEvents.contains {
@@ -698,7 +698,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 name: "primary_tapped",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [completed], timeout: 2)
@@ -760,7 +760,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 name: "continue",
                 payload: ["allow": .bool(false)]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [completed], timeout: 2)
@@ -929,7 +929,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                     payload: [:]
                 ),
             ]
-        ))
+        ), nil)
         events.prepareEventPropertiesHandler = nil
 
         XCTAssertTrue(accepted)

@@ -1671,7 +1671,7 @@ private extension JourneyService {
         _ = await JourneyEffectDispatcher(identity: identity, events: events).captureLinkOpened(link,
             request: .init(runId: run.id, journeyId: run.journeyId, generation: run.generation,
                 reference: run.reference, release: release, stepId: run.stepId, action: [:],
-                context: run.context, effectId: UUID.v7().uuidString, distinctId: journal.distinctId,
+                context: run.context, effectId: link.effectId ?? UUID.v7().uuidString, distinctId: journal.distinctId,
                 identityFence: identityFenceToken, executionFence: executionFence,
                 executionFenceToken: executionFenceToken))
     }
@@ -2440,7 +2440,6 @@ private extension JourneyService {
                         return
                     }
                     let presentedRun = run
-                    let eventSources = ExperienceEventSources()
                     let presentationIdentityFenceToken = identityFence.token
                     let presentationTraceContext = presentationTrace
                         .beginPresentation(
@@ -2499,12 +2498,11 @@ private extension JourneyService {
                                     executionFenceToken: executionFenceToken)
                             }
                         },
-                        eventSources: eventSources,
-                        onEmissionBatch: { [weak self] batch in
+                        onEmissionBatch: { [weak self] batch, frameSources in
                             guard let self else { return false }
                             return await self.handlePresentationBatch(
                                 batch,
-                                eventSource: eventSources.take(invocationID: batch.invocationId),
+                                eventSource: frameSources,
                                 runId: presentedRun.id,
                                 release: release,
                                 executionFenceToken: executionFenceToken

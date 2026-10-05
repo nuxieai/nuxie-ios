@@ -12,6 +12,94 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    #if canImport(UIKit)
+    @MainActor
+    func testFrameHandsOffBatchBeforeOpeningLinksAndRejectsDuplicateControlKeys() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        let duplicate = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "control", url: "", target: "", delay: 0,
+            properties: [.init(key: "value", value: .string("first")), .init(key: "value", value: .string("last"))])
+        let rejected = await controller.route(.init(sequence: 0, correlationID: 1, kind: .controlAction(actionId: "control", event: duplicate)))
+        XCTAssertNil(rejected)
+        let link = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 131, name: "", url: "https://example.test", target: "_self", delay: 0, properties: [])
+        var badSourceLink = link
+        badSourceLink.sourceRejection = "source absent"
+        let ordinary = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128, name: "sibling", url: "", target: "", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 1, kind: .reportedEvent(badSourceLink)),
+            .init(sequence: 1, correlationID: 1, kind: .reportedEvent(ordinary))])
+        XCTAssertEqual(recorder.order, ["batch", "link"])
+    }
+
+    @MainActor
+    func testSharedSourcesPublishOnlyLiveEventsWithContiguousSequences() async throws {
+        struct Fixture: Decodable {
+            struct Case: Decodable {
+                struct Alias: Decodable { let model: String; let name: String; let native: UInt64 }
+                let name: String
+                let source: UInt64?
+                let live: [UInt64]
+                let aliases: [Alias]
+                let declared: String?
+                let accepted: Bool
+                let alias: String?
+                let duplicateValue: String?
+            }
+            let cases: [Case]
+        }
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/events/runtime-event-sources.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL))
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: nil)
+        for vector in fixture.cases {
+            var properties = [ExperienceInteractiveField(key: "value", value: .string("literal"))]
+            if let duplicate = vector.duplicateValue { properties.append(.init(key: "value", value: .string(duplicate))) }
+            if let declared = vector.declared {
+                properties.append(.init(key: "instanceId", value: .string(declared)))
+            }
+            let reported = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128,
+                name: "selected", url: "", target: "", delay: 0, properties: properties)
+            let identities = Dictionary(uniqueKeysWithValues: vector.aliases.map {
+                (ExperienceInteractiveViewModelIdentity(viewModelName: $0.model, instanceID: $0.name),
+                 ExperienceInteractiveViewModelReference(rawValue: $0.native)!)
+            })
+            let projected = ExperienceInteractiveEventSource.project(reported, nativeID: vector.source,
+                rootID: 1, liveIDs: Set(vector.live), identities: identities)
+            var router = ExperienceInteractiveEffectRouter()
+            let sibling = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128,
+                name: "sibling", url: "", target: "", delay: 0, properties: [])
+            let effects = router.project(reportedEvents: [projected, sibling], viewModelChanges: [],
+                hostCommands: [], declaredEventNames: [], correlationID: 1)
+            var drafts: [ScreenEmissionDraft] = []
+            for effect in effects {
+                if case .draft(let draft, _) = await controller.route(effect) { drafts.append(draft) }
+            }
+            let dispatcher = ScreenEmissionDispatcher(createId: { UUID().uuidString },
+                now: { "2026-10-04T12:00:00.000Z" }, executeScriptAction: { _ in [] })
+            let result = await dispatcher.dispatch(
+                run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
+                    lifecycleGeneration: 0, presentationEpoch: 0),
+                source: ScreenEmissionSource(screenId: "screen", actionId: "runtime:1",
+                    componentId: nil, instanceId: vector.alias), drafts: drafts)
+            guard case .success(let batch) = result else {
+                XCTFail("Publication failed: \(vector.name)"); continue
+            }
+            XCTAssertEqual(batch.emissions.map(\.name), vector.accepted ? ["selected", "sibling"] : ["sibling"], vector.name)
+            XCTAssertEqual(batch.emissions.map(\.sequence), vector.accepted ? [0, 1] : [0], vector.name)
+            if vector.accepted {
+                XCTAssertEqual(batch.emissions[0].payload["value"], .string("literal"), vector.name)
+                XCTAssertEqual(batch.emissions[0].payload["instanceId"], vector.alias.map(ScreenEmissionValue.string), vector.name)
+            }
+        }
+    }
+
+    #endif
+
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
         let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
         let payload = artifact.payload
@@ -4127,7 +4215,7 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
     func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
-        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?) async {}
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
@@ -4138,4 +4226,18 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
         didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
 }
 #endif
+#endif
+
+#if canImport(UIKit)
+@MainActor
+private final class LinkFrameRecorder: ExperienceScreenViewControllerDelegate {
+    var order: [String] = []
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
+    func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch") }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async { order.append("link") }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
+}
 #endif

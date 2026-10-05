@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
@@ -31,7 +34,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 attempt: attempt,
                 recorder: recorder
             ),
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -121,7 +124,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer-authority"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -158,7 +161,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onScreenChanged: { _ in true },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onPresentationRevealed: { _ in
                 await reveals.record()
             },
@@ -229,7 +232,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer-reveal-join"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onPresentationRevealed: { _ in
                 await gate.suspend()
             },
@@ -275,7 +278,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             let reference = try XCTUnwrap(release.descriptor.leg.steps.first { $0.id == "purchase" }?.action?["placementId"])
             let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
                 screenId: "screen", owner: .init(journeyId: "journey", distinctId: "customer"),
-                reservation: nil, onEmissionBatch: { _ in true }, onOutcome: { _, _ in true })
+                reservation: nil, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
             let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
             let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
             await delegate.experienceViewController(controller, didChangeScreen: "screen")
@@ -287,6 +290,11 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"),
                 eventSource: frameSource(model: "Plan", value: "plan:lifetime", nested: false))
             XCTAssertEqual(selected, expected, directory)
+            if directory == "rendered-purchase-scopes" {
+                let withoutFrame = await delegate.resolvePresentationString(reference,
+                    source: ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"))
+                XCTAssertNil(withoutFrame)
+            }
             let ambiguous = JourneyReleaseJSONValue.object(["ref": .object([
                 "kind": .string("path"), "path": .string("placementId"),
                 "viewModelName": .string("Plan"), "isRelative": .bool(false),
@@ -329,7 +337,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -384,11 +392,34 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 ScreenEmissionSource(screenId: "screen_welcome", actionId: "purchase",
                     componentId: "buy", instanceId: $0)
             }
-            let resolved = await delegate.resolvePresentationString(vector.reference, source: source,
-                eventSource: vector.instanceId == "secondary" ? frameSource(model: "WelcomeModel", value: "golden:secondary", nested: true) : nil)
+            let resolved = await delegate.resolvePresentationString(vector.reference, source: source)
             XCTAssertEqual(resolved, vector.expected, vector.name)
         }
     }
+
+    #if canImport(UIKit)
+    @MainActor
+    func testAlreadyPresentingControllerRecordsNothing() async throws {
+        let snapshot = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let recorded = OpenedLinkRecorder()
+        let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
+            reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+        let delegate = JourneyRuntimeDelegate(request: request)
+        let controller = OccupiedLinkController(mockExperienceVersionId: "version")
+        controller.usesSystemLinkOpening = true
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+        window.addSubview(controller.view)
+        XCTAssertNotNil(controller.view.window)
+        XCTAssertNotNil(controller.presentedViewController)
+        await delegate.experienceViewController(controller, didChangeScreen: "screen_welcome")
+        let opened = await delegate.openLink(controller, request: .init(urlString: "https://example.test", target: "_self", screenId: "screen_welcome", instanceId: nil))
+        XCTAssertFalse(opened)
+        XCTAssertTrue(recorded.values().isEmpty)
+    }
+    #endif
 
     func testOnlySuccessfulOpensReachTheRunRecorder() async throws {
         let snapshot = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
@@ -397,7 +428,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let recorded = OpenedLinkRecorder()
         let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
             screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
-            reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _ in true },
+            reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true })
         let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
         let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
@@ -426,7 +457,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -592,7 +623,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -648,7 +679,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 )
                 return .completed
             },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, screenId in
                 await outcomes.record(outcome: outcome, screenId: screenId)
                 return true
@@ -701,7 +732,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, screenId in
                 await calls.record(outcome: outcome, screenId: screenId)
                 await gate.suspend()
@@ -763,7 +794,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 )
                 return .handled
             },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, screenId in
                 await outcomes.record(outcome: outcome, screenId: screenId)
                 return true
@@ -819,7 +850,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 await gate.suspend()
                 return true
             },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -869,7 +900,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onScreenChanged: { _ in true },
-            onEmissionBatch: { batch in
+            onEmissionBatch: { batch, _ in
                 await recorder.accept(batch)
             },
             onOutcome: { _, _ in true }
@@ -937,7 +968,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onScreenChanged: { _ in false },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, _ in outcome == .abandoned }
         )
         let delegate = await MainActor.run {
@@ -976,7 +1007,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onProductsUnavailable: { _ in .rejected },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, _ in outcome == .abandoned }
         )
         let delegate = await MainActor.run {
@@ -1092,3 +1123,11 @@ private final class OpenedLinkRecorder: @unchecked Sendable {
     func append(_ link: ExperienceRendererOpenLinkRequest) { lock.withLock { links.append(link) } }
     func values() -> [ExperienceRendererOpenLinkRequest] { lock.withLock { links } }
 }
+
+#if canImport(UIKit)
+@MainActor
+private final class OccupiedLinkController: MockExperienceViewController {
+    private let occupied = UIViewController()
+    override var presentedViewController: UIViewController? { occupied }
+}
+#endif
