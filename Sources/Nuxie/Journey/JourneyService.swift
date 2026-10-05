@@ -1590,6 +1590,7 @@ private extension JourneyService {
 private extension JourneyService {
     private func handlePresentationBatch(
         _ batch: ScreenEmissionBatch,
+        eventSource: ExperienceEmissionSources? = nil,
         runId: String,
         release: AuthenticatedJourneyRelease,
         executionFenceToken: JourneyProfileFenceToken
@@ -2422,6 +2423,7 @@ private extension JourneyService {
                         return
                     }
                     let presentedRun = run
+                    let eventSources = ExperienceEventSources()
                     let presentationIdentityFenceToken = identityFence.token
                     let presentationTraceContext = presentationTrace
                         .beginPresentation(
@@ -2473,10 +2475,12 @@ private extension JourneyService {
                                 executionFenceToken: executionFenceToken
                             )
                         },
+                        eventSources: eventSources,
                         onEmissionBatch: { [weak self] batch in
                             guard let self else { return false }
                             return await self.handlePresentationBatch(
                                 batch,
+                                eventSource: eventSources.take(invocationID: batch.invocationId),
                                 runId: presentedRun.id,
                                 release: release,
                                 executionFenceToken: executionFenceToken

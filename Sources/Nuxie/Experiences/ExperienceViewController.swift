@@ -458,6 +458,7 @@ class ExperienceViewController: NuxiePlatformViewController {
     private var hostDismissalRequested = false
     private let screenEmissionDispatcher: ScreenEmissionDispatcher
     private let screenEmissionPublicationGate = ExperienceInteractiveOperationGate()
+    let eventSources = ExperienceEventSources()
     private var screenEmissionRun: ScreenEmissionRun?
     private var pendingScreenEmissionRunScope: ScreenControlRunScope??
 
@@ -2125,20 +2126,23 @@ extension ExperienceViewController {
     @discardableResult
     func publishScreenInput(
         _ input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        eventSource: ExperienceEmissionSources? = nil
     ) async -> ScreenEmissionPublicationDisposition {
         return await screenEmissionPublicationGate.withLock { [weak self] in
             guard let self else { return .rejected }
             return await self.publishScreenInputSerially(
                 input,
-                originatingRun: originatingRun
+                originatingRun: originatingRun,
+                eventSource: eventSource
             )
         }
     }
 
     private func publishScreenInputSerially(
         _ input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        eventSource: ExperienceEmissionSources? = nil
     ) async -> ScreenEmissionPublicationDisposition {
         await applyPendingScreenEmissionRunScope()
         guard let run = screenEmissionRun,
@@ -2183,6 +2187,8 @@ extension ExperienceViewController {
             LogWarning("ExperienceViewController: screen emission dispatch failed: \(error)")
             disposition = .rejected
         case .success(let batch):
+            eventSources.put(eventSource?.bound(to: batch), invocationID: batch.invocationId)
+            defer { _ = eventSources.take(invocationID: batch.invocationId) }
             await joinPresentationRevealNotification()
             let published = await runtimeDelegate?.experienceViewController(
                 self,
@@ -2217,7 +2223,8 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
         originatingRun: ScreenEmissionRun?
     ) async {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        await publishScreenInput(input, originatingRun: originatingRun)
+        await publishScreenInput(input, originatingRun: originatingRun,
+            eventSource: controller.emissionEventSource)
     }
 
     func experienceScreenViewController(

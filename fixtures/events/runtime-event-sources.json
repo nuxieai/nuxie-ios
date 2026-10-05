@@ -1,0 +1,165 @@
+{
+  "suite": "events/runtime-event-sources",
+  "version": 1,
+  "cases": [
+    {
+      "name": "unaliased component",
+      "source": 2,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [],
+      "declared": null,
+      "accepted": true,
+      "alias": null
+    },
+    {
+      "name": "unaliased second row",
+      "source": 3,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [],
+      "declared": null,
+      "accepted": true,
+      "alias": null
+    },
+    {
+      "name": "one alias",
+      "source": 3,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [
+        {
+          "model": "Row",
+          "name": "second",
+          "native": 3
+        }
+      ],
+      "declared": null,
+      "accepted": true,
+      "alias": "second"
+    },
+    {
+      "name": "root without defaultInstanceId",
+      "source": null,
+      "live": [
+        1
+      ],
+      "aliases": [],
+      "declared": null,
+      "accepted": true,
+      "alias": null
+    },
+    {
+      "name": "absent source",
+      "source": 2,
+      "live": [
+        1,
+        4
+      ],
+      "aliases": [],
+      "declared": null,
+      "accepted": false,
+      "alias": null
+    },
+    {
+      "name": "missing snapshot",
+      "source": 2,
+      "live": [],
+      "aliases": [],
+      "declared": null,
+      "accepted": false,
+      "alias": null
+    },
+    {
+      "name": "ambiguous alias",
+      "source": 2,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [
+        {
+          "model": "Row",
+          "name": "first",
+          "native": 2
+        },
+        {
+          "model": "Row",
+          "name": "other",
+          "native": 2
+        }
+      ],
+      "declared": null,
+      "accepted": false,
+      "alias": null
+    },
+    {
+      "name": "rebound alias",
+      "source": 2,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [
+        {
+          "model": "Row",
+          "name": "first",
+          "native": 3
+        }
+      ],
+      "declared": "first",
+      "accepted": false,
+      "alias": null
+    },
+    {
+      "name": "conflicting declaration",
+      "source": 2,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [
+        {
+          "model": "Row",
+          "name": "first",
+          "native": 2
+        }
+      ],
+      "declared": "second",
+      "accepted": false,
+      "alias": null
+    },
+    {
+      "name": "unaliased declaration",
+      "source": 2,
+      "live": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "aliases": [],
+      "declared": "made-up",
+      "accepted": false,
+      "alias": null
+    }
+  ]
+}

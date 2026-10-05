@@ -23,8 +23,8 @@ enum ExperienceInteractiveEventSource {
         let aliases = Set(identities.compactMap { identity, reference in
             reference.rawValue == nativeID ? identity.instanceID : nil
         })
-        guard aliases.count <= 1, aliases.count == 1 || nativeID == rootID else {
-            return reject("event source has no unique authenticated instance identity")
+        guard aliases.count <= 1 else {
+            return reject("event source has ambiguous authenticated instance identities")
         }
         let alias = aliases.first
         if let alias, identities.contains(where: {
