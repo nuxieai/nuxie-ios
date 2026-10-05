@@ -512,7 +512,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 _ = try await host.tick()
                 guard let drawable = layer.nextDrawable() else { return XCTFail("Metal drawable unavailable") }
                 let completed = expectation(description: "endpoint scrub pixels")
-                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
@@ -556,7 +556,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 XCTAssertGreaterThan(host.deliveredFrames, before, "Paused seek to \(seconds) must present decoded pixels")
                 guard let drawable = layer.nextDrawable() else { return XCTFail("Metal drawable unavailable") }
                 let completed = expectation(description: "paused seek pixels")
-                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
@@ -642,7 +642,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             guard let drawable = layer.nextDrawable() else { XCTFail("Metal drawable unavailable"); break }
             let clockBefore = clockQualification ? try mediaClock() : 0
             let completed = expectation(description: "video frame presented")
-            _ = try await runtime.render(drawable: .available(.init(drawable)),
+            _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                 readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             let clockAfter = clockQualification ? try mediaClock() : 0
@@ -684,7 +684,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 let before = try mediaClock()
                 let drawable = try XCTUnwrap(layer.nextDrawable())
                 let completed = expectation(description: "Seek/resume composed timing sample")
-                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let after = try mediaClock()
@@ -879,7 +879,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             _ = try await screen.step(elapsedSeconds: 0.03)
             let drawable = try XCTUnwrap(layer.nextDrawable())
             let completed = expectation(description: "prepared video presented")
-            let result = try await screen.renderFrame(drawable: .init(drawable), capturesSemantics: false,
+            let result = try await screen.renderFrame(layoutScaleFactor: 1, drawable: .init(drawable), capturesSemantics: false,
                 capturesCaptions: true, completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             XCTAssertEqual(result.outcome.disposition, .presented)

@@ -426,7 +426,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             lastSnapshot = snapshot
             guard let drawable = layer.nextDrawable() else { throw XCTSkip("No Metal drawable") }
             let completed = expectation(description: "published frame completed")
-            let outcome = try await runtime.render(drawable: .available(.init(drawable)), completion: { completed.fulfill() })
+            let outcome = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)), completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             XCTAssertEqual(outcome.disposition, .presented)
             bridge.update(frame: .init(snapshot: snapshot, geometry: step.textGeometry))
@@ -555,7 +555,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         XCTAssertTrue(blankGeometry.values.allSatisfy { $0.firstBaseline == nil })
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("No blank drawable") }
         let blankCompleted = expectation(description: "blank frame completed")
-        _ = try await runtime.render(drawable: .available(.init(drawable)), completion: { blankCompleted.fulfill() })
+        _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)), completion: { blankCompleted.fulfill() })
         await fulfillment(of: [blankCompleted], timeout: 2)
         bridge.update(frame: .init(snapshot: try XCTUnwrap(lastSnapshot), geometry: blank.textGeometry))
         if let editor {
