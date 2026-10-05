@@ -342,6 +342,23 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
     }
 
+    func testAcceptsOpenLinkAfterHostDismissalAndWithoutScreens() throws {
+        for entry in ["entry", "renderedEntry"] {
+            let fixture = try golden(entryKey: entry)
+            let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+            var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+            leg["entryStepId"] = "link"
+            leg["steps"] = [
+                ["kind": "action", "id": "link", "action": ["type": "open_link", "url": ["type": "String", "value": "https://example.test"], "target": "in_app"], "outlets": ["next": "done"]],
+                ["kind": "complete", "id": "done", "outcome": "continue"]
+            ]
+            leg["routes"] = [["host": ["kind": "journey"], "eventName": "host_dismissed", "entryStepId": "link"]]
+            root["leg"] = leg
+            XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        }
+    }
+
     func testRejectsPresentationActionInScreenlessLeg() throws {
         let fixture = try golden()
         let bytes = try XCTUnwrap(

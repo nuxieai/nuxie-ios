@@ -1034,29 +1034,8 @@ class ExperienceViewController: NuxiePlatformViewController {
         return false
     }
 
-    @discardableResult
-    func performOpenLink(urlString: String, target: String? = nil) async -> Bool {
-        await ExperienceLinkRouting.open(urlString: urlString, target: target,
-            inApp: { [self] url in
-                #if canImport(UIKit)
-                guard viewIfLoaded?.window != nil, presentedViewController == nil,
-                      !isBeingDismissed, !isBeingPresented else { return false }
-                present(SFSafariViewController(url: url), animated: true)
-                return true
-                #elseif canImport(AppKit)
-                return NSWorkspace.shared.open(url)
-                #else
-                return false
-                #endif
-            }, external: { url in
-                #if canImport(UIKit)
-                return await UIApplication.shared.open(url, options: [:])
-                #elseif canImport(AppKit)
-                return NSWorkspace.shared.open(url)
-                #else
-                return false
-                #endif
-            })
+    var linkPresentationIsClosing: Bool {
+        hostDismissalRequested || dismissalTask != nil || didInvokeClose
     }
 
     func applyViewModelSnapshot(_ snapshot: ExperienceViewModelSnapshot, screenId: String? = nil) {
@@ -2239,12 +2218,19 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
         runtimeDelegate?.experienceViewController(self, didEmitViewModelChange: change)
     }
 
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)? {
+        guard acceptsRuntimeCallback(from: controller), let runtimeDelegate else { return nil }
+        // Keep the accepted frame's owner alive across batch-triggered dismissal.
+        return { [self, runtimeDelegate] request in
+            await runtimeDelegate.experienceViewController(self, didRequestOpenLink: request)
+        }
+    }
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
     ) async {
-        guard acceptsRuntimeCallback(from: controller) else { return }
-        await runtimeDelegate?.experienceViewController(self, didRequestOpenLink: request)
+        await captureLinkHandler(for: controller)?(request)
     }
 
     func experienceScreenViewController(

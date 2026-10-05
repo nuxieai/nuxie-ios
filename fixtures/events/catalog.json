@@ -748,7 +748,8 @@
     ],
     "endpoint": "batch",
     "fixtures": [
-      "events/runtime-link-opened.json"
+      "events/runtime-link-opened.json",
+      "events/link-open-states.json"
     ],
     "forwarding": "linkOpened",
     "lane": "captureStableSystemEvent",
@@ -801,7 +802,7 @@
       },
       "destination": {
         "required": true,
-        "source": "Actual opener: in_app or external",
+        "source": "Actual handoff destination from foreground and presentation lifecycle state: in_app or external",
         "type": "String"
       }
     },

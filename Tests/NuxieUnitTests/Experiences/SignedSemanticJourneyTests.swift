@@ -49,7 +49,14 @@ final class SignedSemanticJourneyTests: XCTestCase {
         case scriptFailure = "rendered-semantic-screen-control-error"
     }
 
-    private func exercise(_ scenario: Scenario) async throws {
+    func testSharedLinkOpenStatesThroughWindowedPresentation() async throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/events/link-open-states.json")
+        let vectors = try XCTUnwrap(try object(at: path)["cases"] as? [[String: Any]])
+        for vector in vectors { try await exercise(.success, linkVector: vector) }
+    }
+
+    private func exercise(_ scenario: Scenario, linkVector: [String: Any]? = nil) async throws {
         let root = try XCTUnwrap(Bundle(for: Self.self).resourceURL)
             .appendingPathComponent(scenario.rawValue)
         let entry = try object(at: root.appendingPathComponent("release-entry.json"))
@@ -168,7 +175,9 @@ final class SignedSemanticJourneyTests: XCTestCase {
                     ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == 10
                     : self.button(in: presentations.currentExperienceViewController?.view) != nil)
             }
-            if scenario == .roles {
+            if let linkVector {
+                try await assertLinkState(linkVector, presentations: presentations, observer: observer, events: events)
+            } else if scenario == .roles {
                 try await assertAuthoredRoles(in: presentations.currentExperienceViewController?.view,
                     observer: observer, journal: journal)
             } else {
@@ -216,6 +225,55 @@ final class SignedSemanticJourneyTests: XCTestCase {
         await presentations.shutdownCurrentExperience()
         await events.close()
     }
+
+    private func assertLinkState(_ vector: [String: Any], presentations: ExperiencePresentationService,
+                                 observer: SemanticJourneyPresenter, events: EventLog) async throws {
+        let state = try XCTUnwrap(vector["state"] as? String)
+        let link = try XCTUnwrap(vector["link"] as? [String: Any])
+        let expected = try XCTUnwrap(vector["expected"] as? [String: Any])
+        let request = try XCTUnwrap(observer.lastRequest)
+        let controller = try XCTUnwrap(presentations.currentExperienceViewController)
+        try await waitUntil("Presentation must settle before link handoff") {
+            controller.view.window != nil && !controller.isBeingPresented
+        }
+        var top: UIViewController = controller
+        switch state {
+        case "sheet_active":
+            let sheet = UIViewController()
+            sheet.modalPresentationStyle = .pageSheet
+            await withCheckedContinuation { continuation in controller.present(sheet, animated: false) { continuation.resume() } }
+            top = sheet
+        case "button_dismissing": controller.performDismiss()
+        case "swipe_dismissing": controller.performInteractiveDismissal()
+        case "host_dismissed": await presentations.dismissCurrentExperienceFromHost()
+        case "owner_retired", "presentation_finished", "screenless": await presentations.finishJourneyPresentation(owner: request.owner)
+        case "background": presentations.onAppDidEnterBackground()
+        default: break
+        }
+        let probe = LinkHandoffProbe()
+        presentations.linkHandoff = { _, host in
+            probe.destinations.append(host == nil ? "external" : "in_app")
+            if let host { XCTAssertTrue(host === top, "Sheet links must use the topmost controller") }
+            return link["canOpen"] as? Bool ?? true
+        }
+        let expression = link["url"] as? [String: Any]
+        let url = expression?["type"] as? String == "String" ? expression?["value"] as? String : nil
+        var opened: ExperienceRendererOpenLinkRequest?
+        if let url, !url.isEmpty, link["kind"] as? String != "journey" || link["target"] is String {
+            opened = await presentations.openJourneyLink(owner: request.owner,
+                request: .init(urlString: url, target: link["target"] as? String, screenId: request.screenId, instanceId: nil))
+        }
+        // The production callback only records returned successful handoffs.
+        if let opened { await request.onLinkOpened(opened) }
+        XCTAssertEqual(opened != nil, expected["opened"] as? Bool, "\(vector["name"]!)")
+        XCTAssertEqual(opened?.destination, expected["destination"] as? String, "\(vector["name"]!)")
+        XCTAssertEqual(probe.destinations.count, (expected["opened"] as? Bool == true || link["canOpen"] as? Bool == false) ? 1 : 0)
+        let records = await events.countEvents(name: JourneyEvents.linkOpened, distinctId: request.owner.distinctId)
+        XCTAssertEqual(records, expected["recorded"] as? Bool == true ? 1 : 0, "\(vector["name"]!)")
+        presentations.onAppBecameActive()
+    }
+
+    @MainActor private final class LinkHandoffProbe { var destinations: [String] = [] }
 
     private func assertAuthoredRoles(in view: UIView?, observer: SemanticJourneyPresenter,
                                      journal: JourneyRunJournal) async throws {
@@ -344,18 +402,23 @@ private final class FixtureRequests: @unchecked Sendable {
 private final class SemanticJourneyPresenter: JourneyPresenting {
     let base: ExperiencePresentationService
     let journal: JourneyRunJournal
+    var lastRequest: JourneyPresentationRequest?
     var revealed = false
     var accepted: [ScreenEmissionBatch] = []
     var navigationResponses: ExactJSONObject<JourneyReleaseJSONValue>?
     var failureResponses: ExactJSONObject<JourneyReleaseJSONValue>?
 
     init(base: ExperiencePresentationService, journal: JourneyRunJournal) { self.base = base; self.journal = journal }
+    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest? {
+        await base.openJourneyLink(owner: owner, request: request)
+    }
     func journeyProfileRefreshDidComplete() { base.journeyProfileRefreshDidComplete() }
     func setJourneyPresentationAvailabilityHandler(_ handler: (@MainActor @Sendable () -> Void)?) { base.setJourneyPresentationAvailabilityHandler(handler) }
     func reserveJourneyPresentation(ownerDistinctId: String) -> (any JourneyPresentationReservation)? { base.reserveJourneyPresentation(ownerDistinctId: ownerDistinctId) }
     func ownsJourneyPresentation(owner: JourneyPresentationOwner) -> Bool { base.ownsJourneyPresentation(owner: owner) }
     func presentJourney(_ request: JourneyPresentationRequest) async -> JourneyPresentationResult {
-        await base.presentJourney(JourneyPresentationRequest(release: request.release, delivery: request.delivery,
+        lastRequest = request
+        return await base.presentJourney(JourneyPresentationRequest(release: request.release, delivery: request.delivery,
             pinnedArtifacts: request.pinnedArtifacts, screenId: request.screenId, owner: request.owner,
             reservation: request.reservation, presentationTraceContext: request.presentationTraceContext,
             onScreenChanged: request.onScreenChanged, onScreenDismissed: { screen, next, method in

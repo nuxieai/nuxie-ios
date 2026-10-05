@@ -60,6 +60,16 @@ The exact property schema, emitter files, delivery flags, and forwarding decisio
 
 ## Opened links
 
-`$link_opened` uses stable system capture after a runtime link or a Journey open-link step is handed to the browser or system. It carries `url`, `target`, `screen_id` when presented, optional `instance_id`, and the run's `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. Malformed and unopenable URLs do not emit it. Its public activity is `linkOpened`, with the forwarding name `link_opened`.
+`$link_opened` uses stable system capture after a runtime link or a Journey open-link step is handed to the browser or system. It carries `url`, actual `destination`, optional original `target`, `screen_id` when presented, optional `instance_id`, and the run's `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. Malformed and unopenable URLs do not emit it. Its public activity is `linkOpened`, with the forwarding name `link_opened`.
 
 The link record includes `destination` (`in_app` or `external`) and retains the authored `target` separately. A Journey link with no owned Experience opens externally. Invalid step inputs and unavailable handlers advance `next` without opening or recording.
+
+Links use the same state table for runtime hrefs and Journey steps. A settled, owned
+Experience opens web links in-app from its topmost controller for an omitted target,
+`_self`, `_parent`, `_top`, or `in_app`. `_blank` and `external` use the browser.
+Closing, closed, and screenless Experiences use the browser or system for every link.
+Background apps open and record nothing. Non-web schemes go to the system only when
+available. Broken Journey link steps advance without opening, recording, or dismissing.
+`$link_opened` and the public `linkOpened` activity include the actual `destination`
+(`in_app` or `external`) and the original optional `target`. Successful Journey links
+record under the step identity before `$journey_leg_completed`.
