@@ -1841,7 +1841,7 @@ actor ExperienceInteractiveScreen {
         do {
             videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
                 runtime: runtime, payload: payload,
-                artboardBounds: CGRect(x: 0, y: 0, width: manifestScreen.width, height: manifestScreen.height),
+                artboardBounds: .zero,
                 decoderPool: videoDecoderPool)
         } catch {
             try? await runtime.close()

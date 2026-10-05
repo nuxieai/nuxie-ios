@@ -857,6 +857,17 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let screen = try await ExperienceInteractiveScreen.open(payload: payload,
             pixelWidth: UInt32(width), pixelHeight: UInt32(height), videoDecoderPool: pool)
         defer { Task { try? await screen.close() } }
+        let playback = try XCTUnwrap(Mirror(reflecting: screen).children
+            .first { $0.label == "videoPlayback" }?.value as? ExperienceVideoPlayback)
+        let initialViewport = try XCTUnwrap(Mirror(reflecting: playback).children
+            .first { $0.label == "viewport" }?.value as? CGRect)
+        XCTAssertEqual(initialViewport, .zero, "Video visibility must wait for the first settled layout")
+        XCTAssertTrue(playback.playbackDiagnostics.isEmpty,
+            "Opening a screen must not acquire video decoders before its first layout")
+        _ = try await screen.resize(pixelWidth: UInt32(width), pixelHeight: UInt32(height), layoutScaleFactor: 1)
+        _ = try await screen.step(elapsedSeconds: 0)
+        XCTAssertFalse(playback.playbackDiagnostics.isEmpty,
+            "The settled first layout must admit visible video")
         let device = try await screen.metalDevice().value
         let layer = CAMetalLayer()
         layer.device = device
