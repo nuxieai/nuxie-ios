@@ -148,7 +148,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
         try await screen.enableSemantics()
         _ = try await screen.step(elapsedSeconds: 0)
-        let skipped = try await screen.renderFrame(drawable: nil, isOccluded: true, capturesSemantics: true)
+        let skipped = try await screen.renderFrame(layoutScaleFactor: 1, drawable: nil, isOccluded: true, capturesSemantics: true)
         XCTAssertNil(skipped.semantics)
         let device = try await screen.metalDevice()
         let layer = CAMetalLayer()
@@ -157,7 +157,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         layer.framebufferOnly = true
         layer.drawableSize = CGSize(width: 64, height: 64)
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
-        let frame = try await screen.renderFrame(drawable: ExperienceInteractiveDrawable(drawable),
+        let frame = try await screen.renderFrame(layoutScaleFactor: 1, drawable: ExperienceInteractiveDrawable(drawable),
             capturesSemantics: true)
         XCTAssertEqual(frame.outcome.disposition, .presented)
         XCTAssertNotNil(frame.semantics)
@@ -737,7 +737,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(deliveredSteps, 1)
         XCTAssertNil(deliveredText)
 
-        let skipped = try await session.perform(.render(.occluded, completion: .init({})))
+        let skipped = try await session.perform(.render(.occluded, layoutScaleFactor: 1, completion: .init({})))
         XCTAssertFalse(skipped.hasDelivery)
         await skipped.deliver()
         XCTAssertNil(deliveredText)
@@ -749,7 +749,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         layer.drawableSize = CGSize(width: 64, height: 64)
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
         let completed = expectation(description: "native render completed")
-        let rendered = try await session.perform(.render(.available(.init(value: drawable)),
+        let rendered = try await session.perform(.render(.available(.init(value: drawable)), layoutScaleFactor: 1,
             completion: .init({ completed.fulfill() })))
         await fulfillment(of: [completed], timeout: 2)
         XCTAssertTrue(rendered.hasDelivery)
@@ -768,7 +768,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80)
         layer.drawableSize = CGSize(width: 80, height: 80)
         guard let nextDrawable = layer.nextDrawable() else { throw XCTSkip("No second drawable") }
-        let afterResize = try await screen.renderFrame(drawable: .init(nextDrawable), capturesSemantics: false)
+        let afterResize = try await screen.renderFrame(layoutScaleFactor: 1, drawable: .init(nextDrawable), capturesSemantics: false)
         XCTAssertNil(afterResize.text, "Resize retires copied geometry until another settled step")
         try await screen.close()
     }
@@ -3882,7 +3882,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         guard let drawable = layer.nextDrawable() else {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
-        return try await screen.render(
+        return try await screen.render(layoutScaleFactor: 1,
             drawable: ExperienceInteractiveDrawable(drawable),
             clearColor: 0xFF11_2233
         )
@@ -3903,7 +3903,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
         let completion = expectation(description: "native frame completion")
-        let outcome = try await screen.render(
+        let outcome = try await screen.render(layoutScaleFactor: 1,
             drawable: ExperienceInteractiveDrawable(drawable),
             clearColor: 0xFF11_2233,
             completion: { completion.fulfill() }

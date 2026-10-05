@@ -942,7 +942,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let firstCompletion = expectation(description: "first native frame completion")
         firstCompletion.expectedFulfillmentCount = 1
 
-        let first = try await runtime.render(
+        let first = try await runtime.render(layoutScaleFactor: 1,
             drawable: .available(NuxieNativeDrawable(firstDrawable)),
             completion: { firstCompletion.fulfill() }
         )
@@ -958,7 +958,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let secondLayer = makeLayer(device: device.value, width: 64, height: 64)
         let secondDrawable = try XCTUnwrap(secondLayer.nextDrawable())
         let secondCompletion = expectation(description: "reattached native frame completion")
-        let second = try await runtime.render(
+        let second = try await runtime.render(layoutScaleFactor: 1,
             drawable: .available(NuxieNativeDrawable(secondDrawable)),
             completion: { secondCompletion.fulfill() }
         )
@@ -968,7 +968,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         try await runtime.close()
         let rejectedCompletion = expectation(description: "rejected frame completion")
         do {
-            _ = try await runtime.render(
+            _ = try await runtime.render(layoutScaleFactor: 1,
                 drawable: .timeout,
                 completion: { rejectedCompletion.fulfill() }
             )
@@ -1604,7 +1604,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         guard let drawable = layer.nextDrawable() else {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
-        return try await runtime.render(
+        return try await runtime.render(layoutScaleFactor: 1,
             drawable: .available(NuxieNativeDrawable(drawable)),
             clearColor: 0xFF11_2233
         )
@@ -1653,7 +1653,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         ), "Allocate shared storage for the submitted frame")
         let readback = NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: bytesPerRow)
         let completion = expectation(description: "native text frame completion")
-        let outcome = try await runtime.render(
+        let outcome = try await runtime.render(layoutScaleFactor: 1,
             drawable: .available(NuxieNativeDrawable(drawable)),
             clearColor: 0xFF11_2233,
             readback: readback,

@@ -3623,17 +3623,19 @@ actor ExperienceInteractiveScreen {
     }
 
     func render(
+        layoutScaleFactor: Float,
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderOutcome {
-        try await renderFrame(drawable: drawable, isOccluded: isOccluded,
+        try await renderFrame(layoutScaleFactor: layoutScaleFactor, drawable: drawable, isOccluded: isOccluded,
             clearColor: clearColor, capturesSemantics: false, completion: completion).outcome
     }
 
     /// Capture and render share the occurrence lock, preventing intervening state/geometry writes.
     func renderFrame(
+        layoutScaleFactor: Float,
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
@@ -3654,7 +3656,7 @@ actor ExperienceInteractiveScreen {
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
             let ready = try await videoPlayback?.isReadyForPresentation() ?? true
-            let outcome = try await runtime.render(drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
+            let outcome = try await runtime.render(layoutScaleFactor: layoutScaleFactor, drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
             let semantics: NuxieNativeSemanticCapture?
             if capturesSemantics, outcome.disposition == .presented {
                 semantics = try await runtime.captureSemantics(textRuns: textRuns, nativeInputs: nativeInputs)
