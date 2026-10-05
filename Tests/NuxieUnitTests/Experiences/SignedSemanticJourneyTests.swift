@@ -362,7 +362,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
                     self.failureResponses = try? await self.journal.runs().first?.context.responses
                 }
                 return await request.onScreenDismissed(screen, next, method)
-            }, onProductsUnavailable: request.onProductsUnavailable, onEmissionBatch: { batch in
+            }, onProductsUnavailable: request.onProductsUnavailable, eventSources: request.eventSources, onEmissionBatch: { batch in
                 let committed = await request.onEmissionBatch(batch)
                 if committed { self.accepted.append(batch) }
                 return committed

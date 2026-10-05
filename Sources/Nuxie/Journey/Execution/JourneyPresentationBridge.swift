@@ -65,6 +65,7 @@ struct JourneyPresentationRequest: Sendable {
             -> JourneyScreenDismissalResult
     let onProductsUnavailable:
         @MainActor @Sendable (String) async -> JourneyProductFailureResult
+    let eventSources: ExperienceEventSources
     let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
     let onPermissionEvent:
@@ -99,6 +100,7 @@ struct JourneyPresentationRequest: Sendable {
             @escaping @MainActor @Sendable (String) async -> JourneyProductFailureResult = {
                 _ in .rejected
             },
+        eventSources: ExperienceEventSources = ExperienceEventSources(),
         onEmissionBatch:
             @escaping @MainActor @Sendable (ScreenEmissionBatch) async -> Bool,
         onPermissionEvent:
@@ -124,6 +126,7 @@ struct JourneyPresentationRequest: Sendable {
         self.onScreenChanged = onScreenChanged
         self.onScreenDismissed = onScreenDismissed
         self.onProductsUnavailable = onProductsUnavailable
+        self.eventSources = eventSources
         self.onEmissionBatch = onEmissionBatch
         self.onPermissionEvent = onPermissionEvent
         self.onPresentationRevealed = onPresentationRevealed
@@ -234,6 +237,7 @@ final class JourneyRuntimeDelegate {
     private(set) var presentationTraceContext:
         ExperiencePresentationTraceContext?
     private let presentationTraceToken: ExperiencePresentationTraceToken?
+    private let eventSources: ExperienceEventSources
     private let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
     nonisolated private let onPermissionEvent:
@@ -291,6 +295,7 @@ final class JourneyRuntimeDelegate {
         onScreenDismissed = request.onScreenDismissed
         onProductsUnavailable = request.onProductsUnavailable
         onPresentationRevealed = request.onPresentationRevealed
+        eventSources = request.eventSources
         onEmissionBatch = request.onEmissionBatch
         onPermissionEvent = request.onPermissionEvent
         onOutcome = request.onOutcome
@@ -426,6 +431,9 @@ final class JourneyRuntimeDelegate {
               batch.presentationEpoch == presentationEpoch else {
             return false
         }
+        eventSources.put(controller.eventSources.take(invocationID: batch.invocationId),
+            invocationID: batch.invocationId)
+        defer { _ = eventSources.take(invocationID: batch.invocationId) }
         guard await onEmissionBatch(batch) else { return false }
         let changed = responseProjection.accept(batch.emissions)
         if !resolved, let activeScreenId {

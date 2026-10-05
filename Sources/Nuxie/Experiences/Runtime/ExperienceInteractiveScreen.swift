@@ -43,6 +43,7 @@ struct ExperienceInteractiveReportedEvent: Equatable, Sendable {
     let delay: Float
     let properties: [ExperienceInteractiveField]
     var sourceRejection: String? = nil
+    var resolvedSource: ExperienceResolvedEventSource? = nil
 }
 
 enum ExperienceInteractiveViewModelValue: Equatable, Sendable {
@@ -1942,7 +1943,7 @@ actor ExperienceInteractiveScreen {
             // before projecting this frame's changes. Native effects have
             // committed: a recoverable topology failure must not discard them.
             try? await refreshTrackedTopology()
-            let eventSnapshot = result.events.contains { $0.sourceViewModelInstanceID != nil }
+            let eventSnapshot = !result.events.isEmpty
                 ? try? await runtime.snapshot() : nil
             return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
         }
@@ -1967,12 +1968,22 @@ actor ExperienceInteractiveScreen {
     ) -> ExperienceInteractiveStepResult {
         let effects = router.project(
             reportedEvents: result.events.map { event in
-                ExperienceInteractiveEventSource.project(
+                var projected = ExperienceInteractiveEventSource.project(
                     Self.reportedEvent(event), nativeID: event.sourceViewModelInstanceID,
                     rootID: eventSnapshot?.rootInstanceID,
                     liveIDs: Set(eventSnapshot?.instances.map(\.id) ?? []),
                     identities: viewModelsByIdentity
                 )
+                projected.resolvedSource = eventSnapshot.map {
+                    ExperienceResolvedEventSource(
+                        nativeID: event.sourceViewModelInstanceID ?? $0.rootInstanceID,
+                        snapshot: Self.projectSnapshot($0),
+                        schemaNames: Dictionary(uniqueKeysWithValues: viewModelCatalog.schemas.map {
+                            ($0.index, $0.name)
+                        })
+                    )
+                }
+                return projected
             },
             viewModelChanges: publishableViewModelChanges(result.viewModelChanges),
             hostCommands: result.hostCommands.map(Self.hostCommand),
