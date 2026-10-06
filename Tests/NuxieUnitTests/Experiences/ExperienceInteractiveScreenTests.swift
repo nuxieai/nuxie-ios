@@ -14,6 +14,28 @@ import XCTest
 final class ExperienceInteractiveScreenTests: XCTestCase {
     #if canImport(UIKit)
     @MainActor
+    func testReservedFrameEventKeepsOnlyItsSiblingSource() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        var counts: [Int] = []
+        recorder.onBatchAsync = { sources in counts.append(sources?.drafts.count ?? -1) }
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        struct Vector: Decodable { let events: [String] }
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/events/reserved-event-filtering.json")))
+        let effects = vector.events.enumerated().map { index, name in
+            ExperienceInteractiveEffect(sequence: UInt64(index), correlationID: 1,
+                kind: .reportedEvent(.init(localIndex: index, coreType: 128, name: name,
+                    url: "", target: "", delay: 0, properties: [])))
+        }
+        await controller.deliverStep(effects: effects)
+        XCTAssertEqual(counts, [1])
+    }
+
+    @MainActor
     func testFrameHandsOffBatchBeforeOpeningLinksAndRejectsDuplicateControlKeys() async throws {
         let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
         let recorder = LinkFrameRecorder()

@@ -1104,6 +1104,7 @@ final class ExperienceScreenViewController: UIViewController {
                 }
                 assembler.appendControl(screenId: screenId, invocation: invocation)
             case .draft(let draft, let draftSource):
+                guard !draft.isReservedEvent else { continue }
                 if case .reportedEvent(let event) = effect.kind {
                     frameSources.drafts.append(event.resolvedSource)
                 } else {
