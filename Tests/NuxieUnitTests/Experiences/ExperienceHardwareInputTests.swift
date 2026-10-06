@@ -269,7 +269,11 @@ final class ExperienceHardwareInputTests: XCTestCase {
                 let expectedChild = modifiers.contains(.shift) ? "child3" : "child1"
                 guard case .referencedInstance(let childID) = snapshot.values.first(where: {
                     $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == expectedChild
-                })?.value else { return XCTFail("Missing authored child") }
+                })?.value else {
+                    XCTFail("Missing authored child")
+                    await controller.shutdownInteractiveScreen()
+                    return
+                }
                 XCTAssertEqual(snapshot.values.first(where: { $0.ownerInstanceID == childID && $0.name == "isFocused" })?.value,
                     .bool(true), "Tab direction selects the authored first or last child")
                 XCTAssertTrue(editor.becomeFirstResponder())
