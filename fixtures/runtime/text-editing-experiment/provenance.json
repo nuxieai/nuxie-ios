@@ -11,5 +11,28 @@
     "operation": "Insert property 1095 (obscured=true) into the sole TextInput object (core type 569). No other bytes change.",
     "sourceDefinition": "include/rive/generated/text/text_input_base.hpp:21,48",
     "insertionOffset": 877010
+  },
+  "observedVariants": {
+    "generator": "generate.py",
+    "operation": "Name TextInput ID 4 experiment-input and append TextField SemanticData before animations. Secure variant sets both TextInput.obscured and semantic isObscured. Input listeners and existing component IDs are unchanged.",
+    "sourceDefinitions": [
+      "include/rive/generated/component_base.hpp",
+      "include/rive/generated/text/text_input_base.hpp",
+      "include/rive/generated/semantic/semantic_data_base.hpp"
+    ],
+    "files": [
+      {
+        "file": "text_input_observed.riv",
+        "sha256": "e069ad0766aa5edafb396b98c1e5172ba5cbf71b7742aeee0d5297276ba292f5",
+        "source": "text_input.riv",
+        "obscured": false
+      },
+      {
+        "file": "text_input_secure_observed.riv",
+        "sha256": "4baab6ffdaf1c4ee30e0dffcf980144916b2aeb76ce4566504f0486129fff04a",
+        "source": "text_input.riv",
+        "obscured": true
+      }
+    ]
   }
 }
