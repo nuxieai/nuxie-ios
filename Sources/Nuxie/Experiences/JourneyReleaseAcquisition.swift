@@ -1117,6 +1117,21 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         )
     }
 
+    func prepareRunValues(
+        _ values: ExperienceRunValues,
+        release: AuthenticatedJourneyRelease,
+        delivery: JourneyReleaseDelivery,
+        pinnedArtifacts: JourneyPinnedReleaseArtifacts?
+    ) async throws {
+        guard let authority = try Self.journeyRuntimeAuthority(release) else { return }
+        let prepared = try await prepareRuntimeRelease(authority, delivery: delivery,
+            intent: .presentation, pinnedArtifacts: pinnedArtifacts)
+        guard let key = prepared.payloadsByScreenID.keys.sorted().first,
+              let payload = prepared.payloadsByScreenID[key] else { return }
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        try await preparation.prepareRunValues(values)
+    }
+
     func preparePresentation(
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,

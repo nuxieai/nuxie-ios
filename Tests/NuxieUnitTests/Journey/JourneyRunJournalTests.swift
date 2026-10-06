@@ -6,6 +6,92 @@ import XCTest
 #endif
 
 final class JourneyRunJournalTests: XCTestCase {
+    func testParkedCandidatesFromStaleObserversAreNotLost() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.transition(run.id, stepId: "wait", context: run.context,
+            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
+        let read = try await journal.runs()
+        let park = try XCTUnwrap(read.first?.park)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(), executionFence: fence, executionFenceToken: fence.token())
+        let rejected = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 101_000, properties: ["allowed": .bool(false)])
+        let accepted = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 102_000, properties: ["allowed": .bool(true)])
+        _ = try await journal.appendParkedCandidate(run.id, expectedStepId: "wait", expectedPark: park,
+            event: rejected, admission: admission)
+        _ = try await journal.appendParkedCandidate(run.id, expectedStepId: "wait", expectedPark: park,
+            event: accepted, admission: admission)
+        let after = try await journal.runs()
+        XCTAssertEqual(after.first?.park?.candidateEvents, [rejected, accepted])
+        _ = try await journal.removeParkedCandidates(run.id, expectedStepId: "wait", expectedPark: park,
+            evaluated: [rejected], admission: admission)
+        let remaining = try await journal.runs()
+        XCTAssertEqual(remaining.first?.park?.candidateEvents, [accepted])
+    }
+
+
+    func testPendingWaitEventDoesNotAcknowledgeADifferentCandidate() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let checkpoint = JourneyControlExecutor.Checkpoint(anchorAtMillis: 100_000, wakeAtMillis: 200_000)
+        try await journal.transition(run.id, stepId: "wait", context: run.context, checkpoint: checkpoint)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        let first = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 101_000, properties: ["choice": .string("A")])
+        let second = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 102_000, properties: ["choice": .string("B")])
+        let firstAccepted = try await journal.stageParkedEvent(run.id, expectedStepId: "wait",
+            expectedCheckpoint: checkpoint, event: first, admission: admission)
+        let secondAccepted = try await journal.stageParkedEvent(run.id, expectedStepId: "wait",
+            expectedCheckpoint: checkpoint, event: second, admission: admission)
+        XCTAssertTrue(firstAccepted)
+        XCTAssertFalse(secondAccepted)
+        let stored = try await journal.runs()
+        XCTAssertEqual(stored.first?.park?.pendingEvent, first)
+    }
+
+    func testStaleResumeCannotConsumeALaterWait() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.transition(run.id, stepId: "wait", context: run.context,
+            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
+        let read = try await journal.runs()
+        let oldPark = try XCTUnwrap(read.first?.park)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        _ = try await journal.resumeParked(run.id, expectedStepId: "wait", expectedPark: oldPark, admission: admission)
+        try await journal.transition(run.id, stepId: "later", context: run.context,
+            checkpoint: .init(anchorAtMillis: 200_000, wakeAtMillis: 300_000))
+        let stale = try await journal.resumeParked(run.id, expectedStepId: "wait", expectedPark: oldPark, admission: admission)
+        XCTAssertNil(stale)
+        let retained = try await journal.runs()
+        XCTAssertEqual(retained.first?.stepId, "later")
+        XCTAssertEqual(retained.first?.park?.wakeAt, date(300))
+        XCTAssertEqual(oldPark.wakeAt, date(200))
+    }
+
     func testResponseSaveSequenceAndNewestSheetSurviveRunCompletionAndRestart() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -287,7 +373,7 @@ final class JourneyRunJournalTests: XCTestCase {
             let admitted = try await journal.admit(arm: arm(binding: vector.binding), reentry: .init(type: .everyMatch, window: nil),
                                                    entryStepId: "step", at: date(vector.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
-            try await journal.recordResponses(run.id, values: vector.outputs.responses)
+
             try await journal.complete(run.id, outcome: vector.outcome, at: date(vector.completedAtMillis / 1000),
                                        eventOutputs: vector.outputs.event,
                                        responseOutputs: vector.outputs.responses)
@@ -545,7 +631,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 reentry: .init(type: .everyMatch, window: nil), entryStepId: "step", at: date(suite.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
             try await journal.markStartedQueued(run)
-            try await journal.recordResponses(run.id, values: vector.responses)
+
             if vector.beforeDeath == "parked" {
                 try await journal.park(run.id, stepId: "wait", until: vector.wakeAtMillis.map { date($0 / 1000) })
             } else if vector.beforeDeath == "completed" {
@@ -563,7 +649,7 @@ final class JourneyRunJournalTests: XCTestCase {
             XCTAssertEqual(recovered.generation, vector.expectedGeneration, vector.name)
             XCTAssertEqual(recovered.completion?.outcome, vector.expectedOutcome, vector.name)
             XCTAssertEqual(recovered.completion?.at, vector.expectedCompletedAtMillis.map { date($0 / 1000) }, vector.name)
-            let expected = try JSONEncoder().encode(vector.responses)
+            let expected = try JSONEncoder().encode(vector.beforeDeath == "completed" ? vector.responses : [:])
             let retainedResponses = recovered.completion == nil
                 ? recovered.context.responses
                 : recovered.outputs.responses
@@ -576,6 +662,8 @@ final class JourneyRunJournalTests: XCTestCase {
                 let fence = JourneyProfileFence()
                 _ = try await reopened.resumeParked(
                     run.id,
+                    expectedStepId: "wait",
+                    expectedPark: try XCTUnwrap(resumable.first?.park),
                     admission: .executionOnly(
                         identity: MockIdentityService(),
                         executionFence: fence,
@@ -785,6 +873,8 @@ final class JourneyRunJournalTests: XCTestCase {
 
         let resumed = try await journal.resumeParked(
             run.id,
+            expectedStepId: "wait",
+            expectedPark: .init(wakeAt: date(200)),
             admission: .executionOnly(
                 identity: MockIdentityService(),
                 executionFence: fence,
@@ -1279,18 +1369,6 @@ final class JourneyRunJournalTests: XCTestCase {
         let run = try XCTUnwrap(admitted)
         let answer = String(repeating: "y", count: 21 * 1_024 * 1_024)
 
-        try await journal.recordResponses(
-            run.id,
-            values: ["answer": .string(answer)]
-        )
-        let pendingRuns = try await journal.runs()
-        let pending = try XCTUnwrap(pendingRuns.first)
-        guard case .string(let pendingAnswer)? = pending.context.responses["answer"] else {
-            return XCTFail("Expected retained pending response")
-        }
-        XCTAssertEqual(pendingAnswer, answer)
-        XCTAssertTrue(pending.outputs.responses.isEmpty)
-
         try await journal.complete(
             run.id,
             outcome: "done",
@@ -1321,13 +1399,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.recordResponses(
-            run.id,
-            values: [
-                "declared": .string("publish"),
-                "private": .string("do-not-publish"),
-            ]
-        )
+
 
         try await journal.complete(
             run.id,
@@ -1768,7 +1840,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
     }
 
-    func testInterruptedCompletionCaptureReplaysTheSameEventAndBufferedAnswersAfterRelaunch() async throws {
+    func testInterruptedCompletionCaptureReplaysTheSameEventAndTerminalOutputsAfterRelaunch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let firstStore = SQLiteEventStore()
@@ -1777,7 +1849,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
                                                entryStepId: "survey", at: date(100))
         let run = try XCTUnwrap(admitted)
-        try await journal.recordResponses(run.id, values: ["answer": .string("yes")])
+
         try await journal.complete(
             run.id,
             outcome: "done",
@@ -1796,10 +1868,6 @@ final class JourneyRunJournalTests: XCTestCase {
         let secondLog = try await eventLog(directory: directory, store: secondStore, api: MockNuxieApiForQueue())
         let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
         try await reopened.complete(run.id, outcome: "abandoned", at: date(500))
-        do {
-            try await reopened.recordResponses(run.id, values: ["answer": .string("changed")])
-            XCTFail("A queued completion must freeze its outputs")
-        } catch JourneyJournalError.invalidState { }
         try await JourneyReporter(journal: reopened, events: secondLog).flushPending()
         let after = try await secondStore.queryEventsForUser("customer", limit: 10)
         XCTAssertEqual(Set(after.map(\.id)), Set(before.map(\.id)))

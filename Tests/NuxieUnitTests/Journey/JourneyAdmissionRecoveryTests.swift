@@ -1429,10 +1429,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         )
         let parked = try await journal.runs()
         XCTAssertEqual(parked.count, 1)
-        try await journal.recordResponses(
-            try XCTUnwrap(parked.first).id,
-            values: ["answer": .string("retained")]
-        )
+
 
         await service.profileDidCommit(
             removingDeliveredReleases(from: snapshot),
@@ -1450,7 +1447,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             completion.properties["outputs"] as? [String: Any]
         )
         let responses = try XCTUnwrap(outputs["responses"] as? [String: Any])
-        XCTAssertEqual(responses["answer"] as? String, "retained")
+        XCTAssertTrue(responses.isEmpty)
     }
 }
 

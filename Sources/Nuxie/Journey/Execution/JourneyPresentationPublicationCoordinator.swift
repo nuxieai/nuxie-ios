@@ -53,9 +53,8 @@ actor JourneyPresentationPublicationCoordinator {
         directlyRoutedRunByEventId.removeAll()
     }
 
-    /// Commits one renderer invocation as a durable unit. Response mutations
-    /// enter the run journal before ordinary events become visible, and the
-    /// pending marker is cleared by the same transition that consumes a routed
+    /// Commits the ordinary events of one renderer invocation before they
+    /// become visible. The pending marker is cleared by the transition consuming a routed
     /// event. The service only owns presentation validation and the resulting
     /// run continuation or terminal recovery.
     func process(
@@ -68,38 +67,13 @@ actor JourneyPresentationPublicationCoordinator {
         let expectedStepId = run.stepId
         let expectedCheckpoint = Self.controlCheckpoint(from: run.park)
         let screenId = batch.source.screenId
-        let responseCaptures = Set(
-            leg.screens.first(where: { $0.id == screenId })?.responseCaptures
-                ?? []
-        )
         var stagedRun = run
-        var responses = run.context.responses
-        var responsesChanged = false
         var publicationItems: [
             JourneyRun.PendingPresentationPublication.Item
         ] = []
         publicationItems.reserveCapacity(batch.emissions.count)
 
-        for emission in batch.emissions {
-            if emission.name == JourneyResponseControlNames.responseSet {
-                guard case .string(let field)? = emission.payload["field"],
-                      let value = emission.payload["value"],
-                      responseCaptures.contains(field) else {
-                    return .rejected
-                }
-                responses[field] = value.releaseJSONValue
-                responsesChanged = true
-                continue
-            }
-            if emission.name == JourneyResponseControlNames.responseUnset {
-                guard case .string(let field)? = emission.payload["field"],
-                      responseCaptures.contains(field) else {
-                    return .rejected
-                }
-                responses[field] = nil
-                responsesChanged = true
-                continue
-            }
+        for emission in batch.emissions where !emission.name.hasPrefix("$") {
             guard let occurredAt = JourneyPresentationEventProjector.date(
                 emission.occurredAt
             ), JourneyTime.milliseconds(occurredAt) != nil else {
@@ -122,13 +96,12 @@ actor JourneyPresentationPublicationCoordinator {
 
         let context = ArmedJourney.Context(
             event: run.context.event,
-            responses: responses
+            responses: [:]
         )
         let publication = JourneyRun.PendingPresentationPublication(
             invocationId: batch.invocationId,
             source: batch.source,
             context: context,
-            responsesChanged: responsesChanged,
             items: publicationItems
         )
         do {
@@ -319,17 +292,12 @@ actor JourneyPresentationPublicationCoordinator {
             stagedRun.pendingPresentationPublication = nil
             return .continueExecution(.init(
                 run: stagedRun,
-                signal: .init(
-                    event: controlEvent,
-                    responsesChanged: publication.responsesChanged
-                ),
+                signal: .init(event: controlEvent),
                 checkpoint: nil,
                 eventID: routedEvent.id
             ))
         }
 
-        let retainsResponseSignal = publication.responsesChanged
-            && Self.stepAcceptsResponseChange(stagedRun.stepId, in: leg)
         do {
             guard let admission = commitAdmission(
                 in: journal,
@@ -337,7 +305,6 @@ actor JourneyPresentationPublicationCoordinator {
             ), try await journal.clearPresentationPublication(
                 run.id,
                 invocationId: publication.invocationId,
-                retainingResponsesChanged: retainsResponseSignal,
                 admission: admission
             ) else {
                 return .publicationFailed(.init(
@@ -357,13 +324,7 @@ actor JourneyPresentationPublicationCoordinator {
             ))
         }
         stagedRun.pendingPresentationPublication = nil
-        guard retainsResponseSignal else { return .accepted }
-        stagedRun.park?.pendingResponsesChanged = true
-        return .continueExecution(.init(
-            run: stagedRun,
-            signal: .init(responsesChanged: true),
-            checkpoint: Self.controlCheckpoint(from: stagedRun.park)
-        ))
+        return .accepted
     }
 
     func publish(
@@ -529,20 +490,6 @@ actor JourneyPresentationPublicationCoordinator {
             executionFence: executionFence,
             executionFenceToken: executionFenceToken
         )
-    }
-
-    private static func stepAcceptsResponseChange(
-        _ stepId: String,
-        in leg: Journey
-    ) -> Bool {
-        guard let action = leg.steps.first(where: { $0.id == stepId })?.action,
-              JourneyActionType(action: action) == .waitUntil,
-              case .object(let trigger)? = action["trigger"],
-              case .string(let kind)? = trigger["kind"] else {
-            return false
-        }
-        return kind == "response_change"
-            || kind == "event_or_response_change"
     }
 
     private static func controlCheckpoint(

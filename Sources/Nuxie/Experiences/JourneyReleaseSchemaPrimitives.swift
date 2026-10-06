@@ -892,13 +892,6 @@ enum JourneyReleaseSchemaPrimitives {
                 _ = try object(action, required: ["type", "eventName"], optional: ["payload"], path: "\(path)[\(index)]")
                 try identifier(action["eventName"], path: "\(path)[\(index)].eventName")
                 if let payload = action["payload"] { try validateDeclarativePayload(payload, path: "\(path)[\(index)].payload") }
-            case "response_set":
-                _ = try object(action, required: ["type", "field", "value"], path: "\(path)[\(index)]")
-                try identifier(action["field"], path: "\(path)[\(index)].field")
-                try validateDeclarativeValueSource(action["value"], path: "\(path)[\(index)].value")
-            case "response_unset":
-                _ = try object(action, required: ["type", "field"], path: "\(path)[\(index)]")
-                try identifier(action["field"], path: "\(path)[\(index)].field")
             default: try invalid("\(path)[\(index)].type")
             }
         }
