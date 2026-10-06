@@ -198,9 +198,11 @@ actor JourneyResponseSaveDelivery {
                         catch is CancellationError { return }
                         catch {
                             LogWarning("Response save receipt could not be persisted")
-                            var backoff = receiptBackoffs[journal.distinctId] ?? RetryBackoff()
-                            backoff.failed(at: currentTime())
-                            receiptBackoffs[journal.distinctId] = backoff
+                            if observedGeneration == workGeneration {
+                                var backoff = receiptBackoffs[journal.distinctId] ?? RetryBackoff()
+                                backoff.failed(at: currentTime())
+                                receiptBackoffs[journal.distinctId] = backoff
+                            }
                             sent = true
                             break deliveryPass
                         }
