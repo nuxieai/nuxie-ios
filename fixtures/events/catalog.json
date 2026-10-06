@@ -676,7 +676,7 @@
       },
       "outputs": {
         "required": true,
-        "source": "declared buffered JSON event and response outputs",
+        "source": "declared JSON event outputs and native run values",
         "type": "object"
       },
       "started_at": {
