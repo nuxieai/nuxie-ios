@@ -135,6 +135,7 @@ final class ExperienceScreenViewController: UIViewController {
     private let experience: Experience
     private let artifact: LoadedExperienceArtifact
     private let screen: NativeExperienceScreen
+    private let runValues: ExperienceRunValues
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
     private let videoCaptionOverlay = ExperienceVideoCaptionOverlay()
@@ -181,6 +182,12 @@ final class ExperienceScreenViewController: UIViewController {
     weak var delegate: ExperienceScreenViewControllerDelegate?
 
     var screenId: String { screen.screenId }
+    var hasPresentedRuntimeFrame: Bool { didReportFirstPresentation }
+
+    func runtimeSnapshot() async throws -> ExperienceInteractiveViewModelSnapshot {
+        guard let interactiveScreen else { throw ExperienceInteractiveScreenControllerError.unavailable }
+        return try await interactiveScreen.snapshot()
+    }
     var lifecyclePhase: ExperienceScreenLifecyclePhase { lifecycleState.phase }
 
     private var journeyScreen: JourneyScreen? {
@@ -191,6 +198,7 @@ final class ExperienceScreenViewController: UIViewController {
         experience: Experience,
         artifact: LoadedExperienceArtifact,
         screen: NativeExperienceScreen,
+        runValues: ExperienceRunValues = ExperienceRunValues(),
         reduceMotion: Bool,
         usesSystemDisplayLink: Bool = true,
         acquireDrawable: @escaping @MainActor (CAMetalLayer) -> (any CAMetalDrawable)? = { $0.nextDrawable() },
@@ -203,6 +211,7 @@ final class ExperienceScreenViewController: UIViewController {
         self.acquireDrawable = acquireDrawable
         self.artifact = artifact
         self.screen = screen
+        self.runValues = runValues
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         self.videoDecoderPool = videoDecoderPool
         lifecycleState = ExperienceScreenLifecycleState(reduceMotion: reduceMotion)
@@ -404,6 +413,7 @@ final class ExperienceScreenViewController: UIViewController {
         let preparation = try await artifact.acquired.interactivePreparation.preparation()
         let interactive = try await preparation.openScreen(
             screenID: screenId,
+            runValues: runValues,
             products: artifact.acquired.products,
             pixelWidth: initialWidth,
             pixelHeight: initialHeight,
