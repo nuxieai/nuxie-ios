@@ -183,6 +183,8 @@ final class ExperiencePresentationService {
         var host: UIViewController?
         if appIsForeground && UIApplication.shared.activeWindowScene != nil {
             if identity.getDistinctId() == owner.distinctId,
+               let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
+               delegate.presentationFences.isCurrent(identity: identity),
                ownsJourneyPresentation(owner: owner), let controller = currentExperienceViewController,
                originatingController == nil || originatingController === controller,
                let id = currentPresentationID, !presentationTeardownIDs.contains(id),

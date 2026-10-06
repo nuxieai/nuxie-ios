@@ -1692,3 +1692,9 @@ final class RecordingJourneyPresenter {
 extension RecordingJourneyPresenter: JourneyPresenting {}
 extension RecordingJourneyPresenter.Reservation:
     JourneyPresentationReservation {}
+
+func testPresentationFences() -> JourneyPresentationFences {
+    let execution = JourneyProfileFence()
+    return .init(identityToken: .init(distinctId: "test-user", generation: 0),
+        executionFence: execution, executionToken: execution.token())
+}

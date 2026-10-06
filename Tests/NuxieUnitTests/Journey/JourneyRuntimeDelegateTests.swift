@@ -21,7 +21,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             startedAt: Date(timeIntervalSince1970: 10),
             startedAtMonotonicTime: 100
         )
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -115,7 +115,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -151,7 +151,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let reveals = JourneyRevealRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -223,7 +223,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let gate = JourneyScreenCommitGate()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -276,7 +276,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
             let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
             let reference = try XCTUnwrap(release.descriptor.leg.steps.first { $0.id == "purchase" }?.action?["placementId"])
-            let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
+            let request = JourneyPresentationRequest(fences: testPresentationFences(), release: release, delivery: snapshot.profile.delivery,
                 screenId: "screen", owner: .init(journeyId: "journey", distinctId: "customer"),
                 reservation: nil, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
             let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
@@ -328,7 +328,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -402,7 +402,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
         let recorded = OpenedLinkRecorder()
-        let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
+        let request = JourneyPresentationRequest(fences: testPresentationFences(), release: release, delivery: snapshot.profile.delivery,
             screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
             reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true })
@@ -428,7 +428,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let recorded = OpenedLinkRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -598,7 +598,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -647,7 +647,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         ])
         let screenDismissals = JourneyOutcomeCallRecorder()
         let outcomes = JourneyOutcomeCallRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -707,7 +707,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         ])
         let gate = JourneyScreenCommitGate()
         let calls = JourneyOutcomeCallRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -762,7 +762,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         ])
         let screenDismissals = JourneyOutcomeCallRecorder()
         let outcomes = JourneyOutcomeCallRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -821,7 +821,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let gate = JourneyScreenCommitGate()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -874,7 +874,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let recorder = JourneyEmissionBatchRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -942,7 +942,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -981,7 +981,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",

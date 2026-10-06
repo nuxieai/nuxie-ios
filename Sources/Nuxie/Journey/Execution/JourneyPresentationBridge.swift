@@ -49,7 +49,20 @@ extension ScreenEmissionValue {
     }
 }
 
+struct JourneyPresentationFences: Sendable {
+    let identityToken: IdentityFenceToken
+    let executionFence: JourneyProfileFence
+    let executionToken: JourneyProfileFenceToken
+
+    func isCurrent(identity: IdentityServiceProtocol) -> Bool {
+        executionFence.performIfCurrent(executionToken) {
+            identity.performIfCurrentIdentityFenceToken(identityToken) { true } == true
+        } == true
+    }
+}
+
 struct JourneyPresentationRequest: Sendable {
+    let fences: JourneyPresentationFences
     let release: AuthenticatedJourneyRelease
     let delivery: JourneyReleaseDelivery
     let pinnedArtifacts: JourneyPinnedReleaseArtifacts?
@@ -81,6 +94,7 @@ struct JourneyPresentationRequest: Sendable {
         @MainActor @Sendable () -> Void
 
     init(
+        fences: JourneyPresentationFences,
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,
         pinnedArtifacts: JourneyPinnedReleaseArtifacts? = nil,
@@ -115,6 +129,7 @@ struct JourneyPresentationRequest: Sendable {
         onPresentationFinished:
             @escaping @MainActor @Sendable () -> Void = {}
     ) {
+        self.fences = fences
         self.release = release
         self.delivery = delivery
         self.responseValues = responseValues
@@ -235,6 +250,7 @@ protocol JourneyPresenting: AnyObject, Sendable {
 
 @MainActor
 final class JourneyRuntimeDelegate {
+    let presentationFences: JourneyPresentationFences
     nonisolated let introEligibilityAuthorizationContext:
         IntroEligibilityAuthorizationContext
     nonisolated private let journeyId: String
@@ -280,6 +296,7 @@ final class JourneyRuntimeDelegate {
 
     init(request: JourneyPresentationRequest,
          openLink: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)? = nil) {
+        presentationFences = request.fences
         openLinkHandler = openLink
         introEligibilityAuthorizationContext = .init(
             distinctId: request.owner.distinctId,

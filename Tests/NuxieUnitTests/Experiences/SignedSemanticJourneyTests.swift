@@ -176,6 +176,9 @@ final class SignedSemanticJourneyTests: XCTestCase {
                         buildId: entry.locator.buildId, descriptorSHA256: reference.descriptorSha256))
             }, timezones: try XCTUnwrap(SignedTimezoneBundle.installed),
             onPresentationContinuationFinished: { continuationFinished.fulfill() })
+        let shutdownGate = LinkShutdownGate()
+        var profileClearTask: Task<Void, Never>?
+        defer { shutdownGate.release(); profileClearTask?.cancel() }
         let linkProbe = LinkHandoffProbe()
         if let linkVector {
             let link = try XCTUnwrap(linkVector["link"] as? [String: Any])
@@ -209,8 +212,27 @@ final class SignedSemanticJourneyTests: XCTestCase {
                         } else {
                             identity.setDistinctId("replacement-owner")
                         }
+                    case "identity_roundtrip":
+                        if afterHandoff {
+                            await journeys.handleUserChange(from: owner, to: "replacement-owner")
+                            await journeys.handleUserChange(from: "replacement-owner", to: owner)
+                        } else {
+                            identity.setDistinctId("replacement-owner")
+                            identity.setDistinctId(owner)
+                        }
                     case "profile_clear":
-                        if !afterHandoff { await journeys.profileDidClear(distinctId: owner) }
+                        if linkVector["beforeShutdown"] as? Bool == true {
+                            if afterHandoff {
+                                shutdownGate.release()
+                                await profileClearTask?.value
+                            } else {
+                                observer.beforeShutdown = { await shutdownGate.hold() }
+                                profileClearTask = Task { await journeys.profileDidClear(distinctId: owner) }
+                                do {
+                                    try await self.waitUntil("Profile clear must advance its fence before shutdown") { shutdownGate.entered }
+                                } catch { XCTFail("Profile clear never reached shutdown: \(error)") }
+                            }
+                        } else if !afterHandoff { await journeys.profileDidClear(distinctId: owner) }
                     default: XCTFail("Unknown retirement \(reason)")
                     }
                 })
@@ -334,7 +356,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 case "host_dismissed": await presentations.dismissCurrentExperienceFromHost()
                 case "owner_retired":
                     await retire(retirement, false)
-                    if retirement == "identity_change" {
+                    if retirement == "identity_change" || vector["beforeShutdown"] as? Bool == true {
                         XCTAssertTrue(presentations.ownsJourneyPresentation(owner: request.owner))
                         XCTAssertTrue(controller.view.window != nil)
                         XCTAssertFalse(controller.linkPresentationIsClosing)
@@ -380,7 +402,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             XCTAssertEqual(properties["destination"] as? String, expected["destination"] as? String)
         }
         if expected["opened"] as? Bool == true {
-            XCTAssertEqual(probe.destinations, [try XCTUnwrap(expected["destination"] as? String)])
+            XCTAssertEqual(probe.destinations, [try XCTUnwrap(expected["destination"] as? String)], "\(vector["name"]!)")
         }
         XCTAssertEqual(probe.destinations.count, (expected["opened"] as? Bool == true || link["canOpen"] as? Bool == false) ? 1 : 0)
         if vector["complete"] as? Bool == true {
@@ -392,6 +414,19 @@ final class SignedSemanticJourneyTests: XCTestCase {
             try await waitUntil("UIKit dismissal must finish before fixture teardown") { probe.dismissalCompleted }
         }
         presentations.onAppBecameActive()
+    }
+
+    @MainActor private final class LinkShutdownGate {
+        var entered = false
+        private var continuation: CheckedContinuation<Void, Never>?
+        func hold() async {
+            entered = true
+            await withCheckedContinuation { continuation = $0 }
+        }
+        func release() {
+            continuation?.resume()
+            continuation = nil
+        }
     }
 
     @MainActor private final class LinkHandoffProbe {
@@ -530,6 +565,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
     var lastRequest: JourneyPresentationRequest?
     var beforeLink: (() async -> Void)?
     var beforeBatch: (() async -> Void)?
+    var beforeShutdown: (() async -> Void)?
     var finishedBatch = false
     var finishedLinkRecording = false
     var revealed = false
@@ -549,7 +585,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
     func ownsJourneyPresentation(owner: JourneyPresentationOwner) -> Bool { base.ownsJourneyPresentation(owner: owner) }
     func presentJourney(_ request: JourneyPresentationRequest) async -> JourneyPresentationResult {
         lastRequest = request
-        return await base.presentJourney(JourneyPresentationRequest(release: request.release, delivery: request.delivery,
+        return await base.presentJourney(JourneyPresentationRequest(fences: request.fences, release: request.release, delivery: request.delivery,
             pinnedArtifacts: request.pinnedArtifacts, screenId: request.screenId, owner: request.owner,
             reservation: request.reservation, presentationTraceContext: request.presentationTraceContext,
             onScreenChanged: request.onScreenChanged, onScreenDismissed: { screen, next, method in
@@ -586,6 +622,10 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
         await base.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: effectId)
     }
     func finishJourneyPresentation(owner: JourneyPresentationOwner) async { await base.finishJourneyPresentation(owner: owner) }
-    func shutdownJourneyPresentation(ownerDistinctId: String) async { await base.shutdownJourneyPresentation(ownerDistinctId: ownerDistinctId) }
+    func shutdownJourneyPresentation(ownerDistinctId: String) async {
+        let hold = beforeShutdown; beforeShutdown = nil
+        await hold?()
+        await base.shutdownJourneyPresentation(ownerDistinctId: ownerDistinctId)
+    }
 }
 #endif
