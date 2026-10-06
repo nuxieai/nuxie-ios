@@ -2456,6 +2456,8 @@ private extension JourneyService {
                             at: .now(wallClock: dateProvider.now())
                         )
                     let result = await presenter.presentJourney(.init(
+                        fences: .init(identityToken: presentationIdentityFenceToken,
+                            executionFence: executionFence, executionToken: executionFenceToken),
                         release: release,
                         delivery: executionSnapshot.delivery,
                         pinnedArtifacts: pinnedArtifacts,
