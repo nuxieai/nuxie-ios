@@ -279,6 +279,7 @@ extension JourneyTestCase {
     func makeRenderedJourneyTestContext(
         snapshot: JourneyProfileCatalog.Snapshot? = nil,
         presenterAvailable: Bool = true,
+        readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         featureAccess: @escaping JourneyService.FeatureAccessLookup = { _ in nil },
         preparedTriggerBeforeSend:
             (@Sendable (NuxieEvent) -> NuxieEvent?)? = nil
@@ -311,7 +312,8 @@ extension JourneyTestCase {
                 events: events,
                 directory: directory,
                 featureAccess: featureAccess,
-                presenter: presenter
+                presenter: presenter,
+                readNativeValues: readNativeValues
             )
             await service.initialize()
             let journal = try JourneyRunJournal(
@@ -866,6 +868,7 @@ extension JourneyTestCase {
         dispatcher: (any JourneyDispatching)? = nil,
         presenter: (any JourneyPresenting)? = nil,
         prepareNativeValues: @escaping JourneyService.NativeValuesPreparer = { _, _, _, _ in },
+        readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         pinnedReleaseAuthenticator: @escaping JourneyService.PinnedReleaseAuthenticator = {
             _, _ in throw JourneyJournalError.invalidState
         },
@@ -886,6 +889,7 @@ extension JourneyTestCase {
             ),
             presenter: presenter,
             prepareNativeValues: prepareNativeValues,
+            readNativeValues: readNativeValues,
             pinnedReleaseAuthenticator: pinnedReleaseAuthenticator,
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!,
