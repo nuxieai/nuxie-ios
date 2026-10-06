@@ -3682,6 +3682,7 @@ actor ExperienceInteractiveScreen {
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
         capturesSemantics: Bool,
+        readback: NuxieNativeFrameReadback? = nil,
         capturesCaptions: Bool = false,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderedFrame {
@@ -3698,7 +3699,7 @@ actor ExperienceInteractiveScreen {
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
             let ready = try await videoPlayback?.isReadyForPresentation() ?? true
-            let outcome = try await runtime.render(layoutScaleFactor: layoutScaleFactor, drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
+            let outcome = try await runtime.render(layoutScaleFactor: layoutScaleFactor, drawable: ready ? state : .timeout, clearColor: clearColor, readback: readback, completion: completion)
             let semantics: NuxieNativeSemanticCapture?
             if capturesSemantics, outcome.disposition == .presented {
                 semantics = try await runtime.captureSemantics(textRuns: textRuns, nativeInputs: nativeInputs)
