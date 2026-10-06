@@ -247,13 +247,17 @@ actor NuxieApi: NuxieApiProtocol {
         
         // Handle request body
         if let body = body {
-            var payloadData = try (body as? BatchRequest)?.encodedForTransport() ?? encoder.encode(body)
-            
-            if var json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] {
-                json["apiKey"] = apiKey
-                payloadData = try JSONSerialization.data(withJSONObject: json)
+            var payloadData: Data
+            if let sheet = body as? JourneyResponseSave {
+                payloadData = try sheet.encodedForTransport(apiKey: apiKey)
+            } else {
+                payloadData = try (body as? BatchRequest)?.encodedForTransport() ?? encoder.encode(body)
+                if var json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] {
+                    json["apiKey"] = apiKey
+                    payloadData = try JSONSerialization.data(withJSONObject: json)
+                }
             }
-            
+
             if options.compressBody {
                 request.httpBody = try payloadData.gzipped()
                 request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
@@ -293,6 +297,11 @@ actor NuxieApi: NuxieApiProtocol {
             throw NuxieNetworkError.invalidResponse
         }
         return (data, httpResponse)
+    }
+
+    func sendResponseSave(_ sheet: JourneyResponseSave) async throws -> JourneyResponseSaveReply {
+        let (data, _) = try await performRequest(endpoint: .responseSave, body: sheet)
+        return JourneyResponseSaveReply.decode(data, attemptedSequence: sheet.sequence)
     }
 
     private func requireSuccess(_ response: HTTPURLResponse, data: Data) throws {

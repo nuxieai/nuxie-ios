@@ -121,6 +121,7 @@ actor JourneyService {
     private let dateProvider: DateProviderProtocol
     private let sleepProvider: SleepProviderProtocol
     private let journalDirectory: URL?
+    private let responseSaveDelivery: JourneyResponseSaveDelivery?
     private let journalBeforePersist: (@Sendable () throws -> Void)?
     /// Production starts without a journal namespace and installs one only
     /// after profile transport authenticates the configured Nuxie app. Tests
@@ -198,6 +199,7 @@ actor JourneyService {
         sleepProvider: SleepProviderProtocol,
         journalDirectory: URL?,
         storageScope: JourneyStorageScope? = .testFixture,
+        responseSaveDelivery: JourneyResponseSaveDelivery? = nil,
         featureAccess: @escaping FeatureAccessLookup,
         offerFeatureAccess: FeatureAccessLookup? = nil,
         storeEntitlements: @escaping StoreEntitlementLookup = { [] },
@@ -229,6 +231,7 @@ actor JourneyService {
         self.dateProvider = dateProvider
         self.sleepProvider = sleepProvider
         self.journalDirectory = journalDirectory
+        self.responseSaveDelivery = responseSaveDelivery
         self.journalBeforePersist = journalBeforePersist
         self.storageScope = storageScope
         acceptsProfileAuthorityScope = storageScope == nil
@@ -305,6 +308,7 @@ extension JourneyService {
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
         await profileDidClearAll()
         await experimentExposures.cancelAndAwaitRetries()
+        await responseSaveDelivery?.shutdown()
     }
 
     func profileDidCommit(
@@ -319,6 +323,7 @@ extension JourneyService {
             admissionGeneration: admissionGeneration,
             distinctId: distinctId
         ) else { return }
+        if let storageScope { await responseSaveDelivery?.activate(scope: storageScope) }
         await commitProfile(
             snapshot,
             artifacts: artifacts,

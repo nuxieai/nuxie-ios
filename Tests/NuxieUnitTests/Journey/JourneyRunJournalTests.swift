@@ -2043,7 +2043,7 @@ private extension JourneyRunJournal {
     }
 }
 
-private func testJourneyExecutionSnapshot() -> JourneyRun.ExecutionSnapshot {
+func testJourneyExecutionSnapshot() -> JourneyRun.ExecutionSnapshot {
     .init(
         delivery: .init(
             renderBaseUrl: "https://render.example.test/",
@@ -2053,7 +2053,7 @@ private func testJourneyExecutionSnapshot() -> JourneyRun.ExecutionSnapshot {
     )
 }
 
-private func testJourneyRelease(
+func testJourneyRelease(
     for reference: ArmedJourney.Reference
 ) -> JourneyReleaseProfileEntry {
     .init(

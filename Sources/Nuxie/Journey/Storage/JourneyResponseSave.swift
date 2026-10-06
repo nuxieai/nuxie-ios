@@ -30,10 +30,105 @@ enum JourneyResponseSaveError: Error {
 struct JourneyResponseSaveLane: Codable, Sendable {
     var sequence: Int64 = 0
     var pending: JourneyResponseSave?
+    var retry: JourneyResponseSaveRetry?
 }
 
 struct JourneyResponseSaveState: Codable, Sendable {
     let namespace: String
     let distinctId: String
     var journeys: ExactJSONObject<ExactJSONObject<JourneyResponseSaveLane>> = [:]
+}
+
+struct JourneyResponseSaveRetry: Codable, Sendable {
+    var attempts: Int
+    var observedAt: Date
+    var nextAttemptAt: Date
+    var unknownFormSince: Date?
+    var lastCode: JourneyResponseSaveReply.Code
+
+    mutating func normalizeClock(at now: Date) {
+        guard now < observedAt else { return }
+        let shift = now.timeIntervalSince(observedAt)
+        nextAttemptAt = nextAttemptAt.addingTimeInterval(shift)
+        unknownFormSince = unknownFormSince?.addingTimeInterval(shift)
+        observedAt = now
+    }
+}
+
+struct JourneyResponseSaveAttempt: Sendable {
+    let sheet: JourneyResponseSave
+    let retry: JourneyResponseSaveRetry?
+
+    func delay(at now: Date) -> TimeInterval {
+        max(0, retry?.nextAttemptAt.timeIntervalSince(now) ?? 0)
+    }
+
+    func unknownFormExpired(at now: Date) -> Bool {
+        retry?.lastCode == .unknownForm && retry?.unknownFormSince.map {
+            now.timeIntervalSince($0) >= 600
+        } == true
+    }
+}
+
+struct JourneyResponseSaveReply: Sendable {
+    enum Code: String, Codable, Sendable {
+        case saved, replayed, stale
+        case mergeInProgress = "merge_in_progress"
+        case customerUnavailable = "customer_unavailable"
+        case customerRedirectLoop = "customer_redirect_loop"
+        case saveUnavailable = "save_unavailable"
+        case unknownForm = "unknown_form"
+        case invalidRequest = "invalid_request"
+        case authenticationFailed = "authentication_failed"
+        case unknownExperienceVersion = "unknown_experience_version"
+        case pinnedVersionMismatch = "pinned_version_mismatch"
+        case sequenceConflict = "sequence_conflict"
+        case customerDeleted = "customer_deleted"
+        case noAnswer = "no_answer"
+    }
+
+    let code: Code
+    let sequence: Int64?
+    static let noAnswer = Self(code: .noAnswer, sequence: nil)
+
+    var confirmed: Bool { code == .saved || code == .replayed || code == .stale }
+    var terminal: Bool {
+        switch code {
+        case .invalidRequest, .authenticationFailed, .unknownExperienceVersion,
+             .pinnedVersionMismatch, .sequenceConflict, .customerDeleted: return true
+        default: return false
+        }
+    }
+
+    static func decode(_ data: Data, attemptedSequence: Int64) -> Self {
+        struct Wire: Decodable { let status: Code; let sequence: Int64? }
+        guard let wire = try? ExactJSONCodec.decode(Wire.self, from: data) else { return .noAnswer }
+        let reply = Self(code: wire.status, sequence: wire.sequence)
+        if reply.confirmed {
+            guard let sequence = wire.sequence, sequence >= attemptedSequence,
+                  sequence > 0, sequence <= JourneyResponseSave.maximumSequence else { return .noAnswer }
+        }
+        return reply
+    }
+}
+
+protocol JourneyResponseSaveTransport: Sendable {
+    func sendResponseSave(_ sheet: JourneyResponseSave) async throws -> JourneyResponseSaveReply
+}
+
+extension JourneyResponseSave {
+    func encodedForTransport(apiKey: String) throws -> Data {
+        let body: ExactJSONObject<JourneyReleaseJSONValue> = [
+            "apiKey": .string(apiKey), "distinct_id": .string(distinctId),
+            "journey_id": .string(journeyId), "experience_id": .string(experienceId),
+            "experience_version_id": .string(experienceVersionId), "form_name": .string(formName),
+            "sequence": .number(Double(sequence)), "answers": .object(answers),
+        ]
+        return try ExactJSONCodec.encode(body)
+    }
+}
+
+struct JourneyResponseSaveRecovery: Sendable {
+    let owners: [String]
+    let needsRetry: Bool
 }
