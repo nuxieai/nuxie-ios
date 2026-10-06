@@ -269,6 +269,38 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         await delivery.shutdown()
     }
 
+    func testReceiptWriteFailureNeverSendsAReplacedSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = directory.appendingPathComponent("journey-journal-v2")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        _ = try await journal.reserveResponseSave(run: run, formName: "first", answers: [:], queued: true)
+        _ = try await journal.reserveResponseSave(run: run, formName: "second", answers: [:], queued: true)
+        let started = expectation(description: "first request held")
+        let transport = HeldResponseSaveTransport(started: started)
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: transport,
+            clock: MockDateProvider(), sleeper: MockSleepProvider())
+        addTeardownBlock { await transport.release(); await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        await fulfillment(of: [started], timeout: 5)
+        let firstSheet = await transport.first()
+        let first = try XCTUnwrap(firstSheet)
+        let other = first.formName == "first" ? "second" : "first"
+        _ = try await delivery.enqueue(journal: journal, run: run, formName: other, answers: ["new": .bool(true)])
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+        await transport.release()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let requests = await transport.requests()
+        XCTAssertFalse(requests.contains { $0.formName == other && $0.sequence == 1 })
+        let retained = try await journal.pendingResponseSaves()
+        XCTAssertEqual(retained.count, 2, "Receipt persistence must have failed")
+        await delivery.shutdown()
+    }
+
     func testWorkerReselectsUnsentSheetsAfterAnAwaitedSend() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

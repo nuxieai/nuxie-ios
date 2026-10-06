@@ -7,6 +7,7 @@ actor JourneyResponseSaveDelivery {
     private let sleeper: any SleepProviderProtocol
     private var scope: JourneyStorageScope?
     private var journals: ExactJSONObject<JourneyRunJournal> = [:]
+    private var receiptRetryAt: ExactJSONObject<Date> = [:]
     private var discovered = false
     private var workGeneration: UInt64 = 0
     private var active = false
@@ -88,6 +89,14 @@ actor JourneyResponseSaveDelivery {
                 var nextDelay: TimeInterval? = discovered ? nil : 5
                 var sent = false
                 deliveryPass: for journal in journals.values {
+                    if let retryAt = receiptRetryAt[journal.distinctId] {
+                        let remaining = min(5, retryAt.timeIntervalSince(clock.now()))
+                        if remaining > 0 {
+                            nextDelay = min(nextDelay ?? remaining, remaining)
+                            continue
+                        }
+                        receiptRetryAt[journal.distinctId] = nil
+                    }
                     let attempts: [JourneyResponseSaveAttempt]
                     do { attempts = try await journal.responseSaveAttempts(at: clock.now()) }
                     catch is CancellationError { return }
@@ -116,8 +125,9 @@ actor JourneyResponseSaveDelivery {
                         catch is CancellationError { return }
                         catch {
                             LogWarning("Response save receipt could not be persisted")
-                            nextDelay = min(nextDelay ?? 5, 5)
-                            continue
+                            receiptRetryAt[journal.distinctId] = clock.now().addingTimeInterval(5)
+                            sent = true
+                            break deliveryPass
                         }
                         if stopped {
                             LogWarning("Response save stopped: code=\(reply.code.rawValue), journey=\(attempt.sheet.journeyId), form=\(attempt.sheet.formName), owner=\(attempt.sheet.distinctId)")
