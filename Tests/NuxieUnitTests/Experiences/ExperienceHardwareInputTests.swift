@@ -41,6 +41,15 @@ final class ExperienceHardwareInputTests: XCTestCase {
                 modifiers: 0, pressed: true, repeated: false))
             XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
                 modifiers: 0, pressed: false, repeated: false))
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: true, repeated: false))
+            XCTAssertTrue(controller.receiveFocusInput(.clear))
+            try await advance(controller, probe: probe)
+            XCTAssertFalse(controller.riveFocusState.hasFocus)
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: false, repeated: false), "An accepted press keeps its release after Rive loses focus")
+            XCTAssertTrue(controller.receiveFocusInput(.next))
+            try await advance(controller, probe: probe)
             var observed = [probe.flags]
             controller.pressesBegan([HardwarePress(HardwareKey(.keyboardB), time: 2)], with: nil)
             try await advance(controller, probe: probe)
