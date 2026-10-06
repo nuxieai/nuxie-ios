@@ -72,14 +72,14 @@ public final class MockSleepProvider: SleepProviderProtocol, @unchecked Sendable
         let id = UUID.v7()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                if Task.isCancelled {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
                 let pendingSleep = PendingSleep(duration: duration, continuation: continuation)
                 
                 lock.withLock {
-                    pendingSleeps[id] = pendingSleep
+                    if Task.isCancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else {
+                        pendingSleeps[id] = pendingSleep
+                    }
                 }
             }
         } onCancel: {
