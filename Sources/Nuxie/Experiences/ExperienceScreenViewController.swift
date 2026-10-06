@@ -331,10 +331,13 @@ final class ExperienceScreenViewController: UIViewController {
     @discardableResult
     func receiveHardwareKey(hid: Int, modifiers: UInt8, pressed: Bool, repeated: Bool) -> Bool {
         guard controllerIsVisible, !hasNativeTextFocus(view),
-              hid == UIKeyboardHIDUsage.keyboardTab.rawValue || riveFocusState.hasFocus,
+              hid == UIKeyboardHIDUsage.keyboardTab.rawValue || riveFocusState.hasFocus || pressedHardwareKeys.contains(hid),
               let input = ExperienceHardwareKey.input(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeated)
         else { return false }
-        return receiveFocusInput(input)
+        let accepted = receiveFocusInput(input)
+        if pressed && accepted { pressedHardwareKeys.insert(hid) }
+        if !pressed { pressedHardwareKeys.remove(hid) }
+        return accepted
     }
 
     @discardableResult
