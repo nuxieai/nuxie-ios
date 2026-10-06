@@ -101,11 +101,13 @@ struct JourneyResponseSaveReply: Sendable {
     }
 
     static func decode(_ data: Data, attemptedSequence: Int64) -> Self {
-        struct Status: Decodable { let status: String; let code: String? }
+        struct Status: Decodable { let status: String }
+        struct Refusal: Decodable { let code: String }
         struct Receipt: Decodable { let sequence: Int64 }
         guard let status = try? ExactJSONCodec.decode(Status.self, from: data) else { return .noAnswer }
         if status.status == "error" {
-            guard let rawCode = status.code, let code = Code(rawValue: rawCode),
+            guard let refusal = try? ExactJSONCodec.decode(Refusal.self, from: data),
+                  let code = Code(rawValue: refusal.code),
                   code != .saved, code != .replayed, code != .stale, code != .noAnswer else { return .noAnswer }
             return Self(code: code, sequence: nil)
         }
