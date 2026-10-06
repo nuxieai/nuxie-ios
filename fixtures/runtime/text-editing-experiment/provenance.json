@@ -1,0 +1,15 @@
+{
+  "sourceRepository": "https://github.com/rive-app/rive-runtime",
+  "sourceCommit": "9ed5b5168d95aab07e873db341fb65613d317cfc",
+  "sourcePath": "tests/unit_tests/assets/text_input.riv",
+  "sha256": "718b80e13fc25f89c34b66fb01732f7ea1eac924ff06ca6b2caa5ed882324a72",
+  "experiment": "Native marked text and replacement operations compared with queued runtime text inputs.",
+  "secureVariant": {
+    "file": "text_input_secure.riv",
+    "sha256": "01a4d8b44e9a1c08bd1df0d49062b2cc838a714171da71d82816fcd166dcafda",
+    "source": "text_input.riv",
+    "operation": "Insert property 1095 (obscured=true) into the sole TextInput object (core type 569). No other bytes change.",
+    "sourceDefinition": "include/rive/generated/text/text_input_base.hpp:21,48",
+    "insertionOffset": 877010
+  }
+}
