@@ -8,7 +8,7 @@ import XCTest
 final class JourneyResponseSaveDeliveryTests: XCTestCase {
     private struct Vectors: Decodable {
         struct Reply: Decodable {
-            let body: ExactJSONObject<JourneyReleaseJSONValue>
+            let bodyText: String
             let httpStatus: Int
             let expected: String
         }
@@ -54,7 +54,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
                 let sheet = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: expectedSheet.answers, queued: true)
                 let host = UUID().uuidString.lowercased() + ".test"
                 let expected = suite.request
-                let responseData = try ExactJSONCodec.encode(vector.body)
+                let responseData = Data(vector.bodyText.utf8)
                 StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
                     XCTAssertEqual(request.url?.path, "/responses/save")
                     XCTAssertEqual(request.httpMethod, "POST")
