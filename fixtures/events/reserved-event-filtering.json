@@ -1,0 +1,12 @@
+{
+  "events": [
+    "continue",
+    "$journey_leg_started"
+  ],
+  "expectedEvents": [
+    "continue"
+  ],
+  "expectedSequences": [
+    0
+  ]
+}
