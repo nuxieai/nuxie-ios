@@ -54,7 +54,7 @@ extension NuxieNativeRuntimeError: LocalizedError {
 package enum NuxieNativePlayerSelection: Equatable, Sendable {
     case defaultScene
     /// Advance and render the authored/default scene, while also forwarding
-    /// input to one named auxiliary state machine on the same artboard.
+    /// named inputs to one auxiliary state machine on the same artboard.
     /// The auxiliary is stepped once for initialization and thereafter only
     /// when an input transaction exists, avoiding a second transaction on
     /// ordinary animation-only frames.
@@ -321,9 +321,33 @@ package enum NuxieNativeTextGeometryCapture: Equatable, Sendable {
     case failed(NuxieNativeRuntimeError)
 }
 
+package enum NuxieNativeFocusLimits {
+    package static let inputsPerStep = Int(NUX_PLAYER_STEP_MAX_FOCUS_INPUTS)
+    package static let textBytesPerInput = Int(NUX_PLAYER_STEP_MAX_TEXT_BYTES)
+    package static let textBytesPerStep = 4 * 1_024 * 1_024
+}
+
+package enum NuxieNativeFocusInput: Equatable, Sendable {
+    case next, previous, clear
+    case key(code: UInt16, modifiers: UInt8, pressed: Bool, repeated: Bool)
+    case text(String)
+}
+
+package struct NuxieNativeFocusState: Equatable, Sendable {
+    package let hasFocus: Bool
+    package let expectsKeyboardInput: Bool
+
+    package init(hasFocus: Bool, expectsKeyboardInput: Bool) {
+        self.hasFocus = hasFocus
+        self.expectsKeyboardInput = expectsKeyboardInput
+    }
+}
+
 package struct NuxieNativePlayerStepResult: Equatable, Sendable {
     package var keepGoing: Bool
     package let pointerHits: [NuxieNativePointerHit]
+    package let focusResults: [Bool]
+    package let focusState: NuxieNativeFocusState?
     package let stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)]
     package let events: [NuxieNativeEvent]
     package let hostCommands: [NuxieNativeHostCommand]
@@ -337,7 +361,9 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
         events: [NuxieNativeEvent],
         hostCommands: [NuxieNativeHostCommand],
         viewModelChanges: [NuxieNativeViewModelChange],
-        textGeometry: NuxieNativeTextGeometryCapture = .notRequested
+        textGeometry: NuxieNativeTextGeometryCapture = .notRequested,
+        focusResults: [Bool] = [],
+        focusState: NuxieNativeFocusState? = nil
     ) {
         self.keepGoing = keepGoing
         self.pointerHits = pointerHits
@@ -346,11 +372,15 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
         self.hostCommands = hostCommands
         self.viewModelChanges = viewModelChanges
         self.textGeometry = textGeometry
+        self.focusResults = focusResults
+        self.focusState = focusState
     }
 
     package static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.keepGoing == rhs.keepGoing
             && lhs.pointerHits == rhs.pointerHits
+            && lhs.focusResults == rhs.focusResults
+            && lhs.focusState == rhs.focusState
             && lhs.stateChanges.elementsEqual(rhs.stateChanges) {
                 $0.layerIndex == $1.layerIndex
                     && $0.coreType == $1.coreType
@@ -758,6 +788,7 @@ package actor NuxieNativeRuntime {
     package func step(
         inputs: [NuxieNativePlayerInput] = [],
         pointers: [NuxieNativePointerEvent] = [],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64 = 0,
         textRunNames: [String] = []
@@ -767,6 +798,7 @@ package actor NuxieNativeRuntime {
             try state.step(
                 inputs: inputs,
                 pointers: pointers,
+                focusInputs: focusInputs,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
                 textRunNames: textRunNames
@@ -1174,18 +1206,27 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     func step(
         inputs: [NuxieNativePlayerInput],
         pointers: [NuxieNativePointerEvent],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64,
         textRunNames: [String] = []
     ) throws -> NuxieNativePlayerStepResult {
         var keepGoing = false
+        var focusResults: [Bool] = []
+        var focusState: NuxieNativeFocusState?
         var pointerHits = Array(repeating: NuxieNativePointerHit.none, count: pointers.count)
         var stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)] = []
         var events: [NuxieNativeEvent] = []
         var hostCommands: [NuxieNativeHostCommand] = []
         var viewModelChanges: [NuxieNativeViewModelChange] = []
         var textGeometry = NuxieNativeTextGeometryCapture.notRequested
-        let stepsAuxiliary = auxiliaryPlayersNeedInitialStep || !inputs.isEmpty || !pointers.isEmpty
+        let focusPlayerIndex: Int?
+        if !pointers.isEmpty || !focusInputs.isEmpty {
+            focusPlayerIndex = try players.firstIndex { try $0.info().kind == .stateMachine }
+        } else {
+            focusPlayerIndex = nil
+        }
+        let stepsAuxiliary = auxiliaryPlayersNeedInitialStep || !inputs.isEmpty || !pointers.isEmpty || !focusInputs.isEmpty
         let finalPlayerIndex = stepsAuxiliary ? players.count - 1 : 0
 
         for (index, player) in players.enumerated() {
@@ -1193,7 +1234,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if isAuxiliary,
                !auxiliaryPlayersNeedInitialStep,
                inputs.isEmpty,
-               pointers.isEmpty {
+               pointers.isEmpty,
+               focusInputs.isEmpty {
                 continue
             }
             let result = try player.step(
@@ -1208,10 +1250,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                     playerCount: players.count
                 ),
                 pointers: pointers,
+                focusInputs: index == focusPlayerIndex ? focusInputs : [],
                 elapsedSeconds: isAuxiliary ? 0 : elapsedSeconds,
                 correlationID: correlationID,
                 textRunNames: index == finalPlayerIndex ? textRunNames : []
             )
+            if index == focusPlayerIndex { focusResults = result.focusResults }
             if index == finalPlayerIndex { textGeometry = result.textGeometry }
             keepGoing = keepGoing || result.keepGoing
             for (index, hit) in result.pointerHits.enumerated() where index < pointerHits.count {
@@ -1225,6 +1269,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             viewModelChanges.append(contentsOf: result.viewModelChanges)
         }
         auxiliaryPlayersNeedInitialStep = false
+        if (!pointers.isEmpty || !focusInputs.isEmpty), let focusPlayerIndex {
+            focusState = try players[focusPlayerIndex].focusState()
+        }
 
         return NuxieNativePlayerStepResult(
             keepGoing: keepGoing,
@@ -1233,7 +1280,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             events: events,
             hostCommands: hostCommands,
             viewModelChanges: viewModelChanges,
-            textGeometry: textGeometry
+            textGeometry: textGeometry,
+            focusResults: focusResults,
+            focusState: focusState
         )
     }
 
@@ -2305,42 +2354,55 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
     func step(
         inputs: [NuxieNativePlayerInput],
         pointers: [NuxieNativePointerEvent],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64,
         textRunNames: [String] = []
     ) throws -> NuxieNativePlayerStepResult {
-        try withNativeInputChanges(inputs) { nativeInputs in
-            let nativePointers = pointers.map {
-                NuxPlayerPointerEvent(
-                    kind: $0.kind.rawValue,
-                    x: $0.x,
-                    y: $0.y,
-                    pointer_id: $0.pointerID,
-                    timestamp_seconds: $0.timestamp
-                )
-            }
-            return try nativeInputs.withUnsafeBufferPointer { inputBuffer in
-                try nativePointers.withUnsafeBufferPointer { pointerBuffer in
-                    var step = NuxPlayerStep()
-                    step.struct_size = UInt32(MemoryLayout<NuxPlayerStep>.size)
-                    step.inputs = inputBuffer.baseAddress
-                    step.input_count = inputBuffer.count
-                    step.pointers = pointerBuffer.baseAddress
-                    step.pointer_count = pointerBuffer.count
-                    step.elapsed_seconds = elapsedSeconds
-                    step.correlation_id = correlationID
-                    var result: OpaquePointer?
-                    let status = nux_player_step(try owned.require(), &step, &result)
-                    guard let result else {
-                        throw nativeFailure(status: status, operation: "step player")
+        let stateMachine = try !focusInputs.isEmpty && info().kind == .stateMachine
+        return try withNativeFocusInputs(stateMachine ? focusInputs : []) { focusBuffer in
+            try withNativeInputChanges(inputs) { nativeInputs in
+                let nativePointers = pointers.map {
+                    NuxPlayerPointerEvent(
+                        kind: $0.kind.rawValue,
+                        x: $0.x,
+                        y: $0.y,
+                        pointer_id: $0.pointerID,
+                        timestamp_seconds: $0.timestamp
+                    )
+                }
+                return try nativeInputs.withUnsafeBufferPointer { inputBuffer in
+                    try nativePointers.withUnsafeBufferPointer { pointerBuffer in
+                        var step = NuxPlayerStep()
+                        step.struct_size = UInt32(MemoryLayout<NuxPlayerStep>.size)
+                        step.inputs = inputBuffer.baseAddress
+                        step.input_count = inputBuffer.count
+                        step.pointers = pointerBuffer.baseAddress
+                        step.pointer_count = pointerBuffer.count
+                        step.focus_inputs = focusBuffer.baseAddress
+                        step.focus_input_count = focusBuffer.count
+                        step.elapsed_seconds = elapsedSeconds
+                        step.correlation_id = correlationID
+                        var result: OpaquePointer?
+                        let status = nux_player_step(try owned.require(), &step, &result)
+                        guard let result else {
+                            throw nativeFailure(status: status, operation: "step player")
+                        }
+                        let ownedResult = NuxieNativePlayerStepResultHandle(result)
+                        defer { try? ownedResult.close() }
+                        return try ownedResult.copy(callStatus: status,
+                            player: try owned.require(), textRunNames: textRunNames)
                     }
-                    let ownedResult = NuxieNativePlayerStepResultHandle(result)
-                    defer { try? ownedResult.close() }
-                    return try ownedResult.copy(callStatus: status,
-                        player: try owned.require(), textRunNames: textRunNames)
                 }
             }
         }
+    }
+
+    func focusState() throws -> NuxieNativeFocusState {
+        var state = NuxPlayerFocusState()
+        state.struct_size = UInt32(MemoryLayout<NuxPlayerFocusState>.size)
+        try requireOK(nux_player_focus_state(try owned.require(), &state), operation: "read focus state")
+        return .init(hasFocus: state.has_focus == 1, expectsKeyboardInput: state.expects_keyboard_input == 1)
     }
 
     func close() throws { try owned.close() }
@@ -2483,6 +2545,11 @@ private final class NuxieNativePlayerStepResultHandle {
                 readListItem: nux_player_step_result_view_model_change_list_item
             )
         }
+        let focusResults = try (0..<info.focus_input_result_count).map { index in
+            var value: UInt32 = 0
+            try requireOK(nux_player_step_result_focus_input(result, index, &value), operation: "read focus input result")
+            return value == 1
+        }
         return NuxieNativePlayerStepResult(
             keepGoing: info.keep_going,
             pointerHits: pointerHits,
@@ -2490,7 +2557,8 @@ private final class NuxieNativePlayerStepResultHandle {
             events: events,
             hostCommands: hostCommands,
             viewModelChanges: viewModelChanges,
-            textGeometry: copyTextGeometry(player: player, names: textRunNames)
+            textGeometry: copyTextGeometry(player: player, names: textRunNames),
+            focusResults: focusResults
         )
     }
 
@@ -3067,6 +3135,46 @@ private final class NuxieNativeBorrowedStorage {
         bytes.append(pointer)
         return NuxByteView(data: UnsafePointer(pointer), len: value.count)
     }
+}
+
+private func withNativeFocusInputs<T>(
+    _ inputs: [NuxieNativeFocusInput],
+    _ operation: (UnsafeBufferPointer<NuxPlayerFocusInput>) throws -> T
+) throws -> T {
+    guard inputs.count <= NuxieNativeFocusLimits.inputsPerStep else {
+        throw NuxieNativeRuntimeError.invalidNativeValue("too many focus inputs")
+    }
+    let storage = NuxieNativeBorrowedStorage()
+    defer { withExtendedLifetime(storage) {} }
+    var textBytes = 0
+    let native = try inputs.map { input in
+        var value = NuxPlayerFocusInput()
+        switch input {
+        case .next: value.kind = NUX_PLAYER_FOCUS_KIND_NEXT.rawValue
+        case .previous: value.kind = NUX_PLAYER_FOCUS_KIND_PREVIOUS.rawValue
+        case .clear: value.kind = NUX_PLAYER_FOCUS_KIND_CLEAR.rawValue
+        case .key(let code, let modifiers, let pressed, let repeated):
+            guard modifiers <= 15 else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("invalid focus modifiers")
+            }
+            value.kind = NUX_PLAYER_FOCUS_KIND_KEY.rawValue
+            value.key_code = UInt32(code)
+            value.modifiers = UInt32(modifiers)
+            value.pressed = pressed ? 1 : 0
+            value.repeat = repeated ? 1 : 0
+        case .text(let text):
+            let count = text.utf8.count
+            guard count <= NuxieNativeFocusLimits.textBytesPerInput,
+                  textBytes <= NuxieNativeFocusLimits.textBytesPerStep - count else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("focus text exceeds step limits")
+            }
+            textBytes += count
+            value.kind = NUX_PLAYER_FOCUS_KIND_TEXT.rawValue
+            value.text = storage.stringView(text)
+        }
+        return value
+    }
+    return try native.withUnsafeBufferPointer(operation)
 }
 
 private func withNativeInputChanges<T>(
