@@ -1,0 +1,22 @@
+{
+  "model": "Experience",
+  "property": "experience",
+  "screens": [
+    "first",
+    "long",
+    "short"
+  ],
+  "startingValues": {
+    "trip": "two weeks",
+    "trip_days": 23,
+    "wants_reminder": true
+  },
+  "component": {
+    "name": "tap-count",
+    "screen": "long",
+    "privateValue": "taps",
+    "startingValue": 0,
+    "afterOneTap": 1,
+    "afterTwoTaps": 2
+  }
+}

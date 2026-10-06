@@ -1,0 +1,16 @@
+{
+  "$schema": "https://nuxie.com/schema/frame/1.json",
+  "isComponent": true,
+  "props": {
+    "label": {
+      "type": "string",
+      "default": "Count"
+    }
+  },
+  "state": {
+    "taps": {
+      "type": "number",
+      "default": 0
+    }
+  }
+}

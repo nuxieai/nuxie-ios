@@ -1,0 +1,74 @@
+{
+  "publisherSourceCommit": "01b46107b74d833811ed3e0a51d8968ca3e05a7a",
+  "superprojectCommit": "01b46107b74d833811ed3e0a51d8968ca3e05a7a",
+  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
+  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
+  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
+  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
+  "sha256": "aae36371904c55b88cc745d6cfb9b72e29128a7580293d286521973d112adfdf",
+  "sizeBytes": 6636,
+  "publisherWasmSha256": "c7ea93a9ea99c6579e69c74f9706069a1851a0a4fc843a1c642cf12b4a479f30",
+  "authorityWasmSha256": "913c132754f615d375f351ab02256e6b26ec02656937d581907c216abe9857f5",
+  "qualification": "Real publisher output; C API defaults and shared links plus host-layer text and private counter verified. Phone integration remains separate.",
+  "files": {
+    "NOTES.md": {
+      "sha256": "fb11772ebef9a692895cc821ed342b735f96cb87dee37b82380e6915457b8462",
+      "sizeBytes": 7988
+    },
+    "expectations.json": {
+      "sha256": "5f1051280469c567664018745b9a0a6193b7d629b823cf7b0dbcd1a37b07b9bc",
+      "sizeBytes": 378
+    },
+    "screen.riv": {
+      "sha256": "aae36371904c55b88cc745d6cfb9b72e29128a7580293d286521973d112adfdf",
+      "sizeBytes": 6636
+    },
+    "source/components/tap-count/frame.json": {
+      "sha256": "61881deae2cadf3ca5a9eeee23a84bb89fda2d62612f8e1bf7aa75154a0e77d5",
+      "sizeBytes": 249
+    },
+    "source/components/tap-count/index.html": {
+      "sha256": "6b8195f3a59dd529b35ecf6af28ffb055211db7a17932b0e8595062d14f427c2",
+      "sizeBytes": 231
+    },
+    "source/experience.json": {
+      "sha256": "41638a35e823af94f037522d14847604ae2ac181dc688992eb4f8965cf7128ea",
+      "sizeBytes": 617
+    },
+    "source/screens/first/frame.json": {
+      "sha256": "d8c3a8e2fe9f63cb57a7d673110228861a1a11edce2e581ffa7571a2b0be93bf",
+      "sizeBytes": 137
+    },
+    "source/screens/first/index.html": {
+      "sha256": "6d53397b1eeccdb8501ada7bc901c4f6f50d67d67574c01844e2b3dcdbd10c13",
+      "sizeBytes": 152
+    },
+    "source/screens/long/frame.json": {
+      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
+      "sizeBytes": 100
+    },
+    "source/screens/long/index.html": {
+      "sha256": "4867d8d0dab06456b529f769ffd0472f5cf1553a7b334d8b24f8cd55434b258e",
+      "sizeBytes": 208
+    },
+    "source/screens/short/frame.json": {
+      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
+      "sizeBytes": 100
+    },
+    "source/screens/short/index.html": {
+      "sha256": "d24a2cada3cec193163d4b319fd9bd4ff0f67850c7e0869916629232b2964021",
+      "sizeBytes": 122
+    }
+  },
+  "fonts": [
+    {
+      "location": "system",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "required": true
+    }
+  ]
+}
