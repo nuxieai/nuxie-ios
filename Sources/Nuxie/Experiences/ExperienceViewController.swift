@@ -347,6 +347,8 @@ class ExperienceViewController: NuxiePlatformViewController {
         set { permissions.trackingUsageDescriptionProvider = newValue }
     }
 
+    private let standaloneRunValues = ExperienceRunValues()
+
     /// Delegate for runtime bridge messages
     weak var runtimeDelegate: ExperienceRuntimeDelegate? {
         didSet {
@@ -1199,6 +1201,7 @@ class ExperienceViewController: NuxiePlatformViewController {
                 let coordinator = ExperienceScreenTransitionCoordinator(
                     experience: self.experience,
                     artifact: artifact,
+                    runValues: (self.runtimeDelegate as? JourneyRuntimeDelegate)?.runValues ?? self.standaloneRunValues,
                     initialScreenID: self.presentationInitialScreenID,
                     presentationDiagnosticsEnabled: self.presentationDiagnosticsEnabled,
                     videoDecoderPool: self.videoDecoderPool,

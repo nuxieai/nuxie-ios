@@ -567,6 +567,7 @@ package actor NuxieNativePreparedFile {
     private let bytes: Data
     private let importMode: NuxieNativeImportMode
     private let preparedArtboards: [NuxieNativeArtboardInfo]
+    private let preparedCatalog: NuxieNativeViewModelCatalog
     private var fileImportCount = 1
     private var openedSessionCount = 0
 
@@ -574,12 +575,14 @@ package actor NuxieNativePreparedFile {
         executor: NuxieRuntimePinnedThreadExecutor,
         bytes: Data,
         importMode: NuxieNativeImportMode,
-        preparedArtboards: [NuxieNativeArtboardInfo]
+        preparedArtboards: [NuxieNativeArtboardInfo],
+        preparedCatalog: NuxieNativeViewModelCatalog
     ) {
         self.executor = executor
         self.bytes = bytes
         self.importMode = importMode
         self.preparedArtboards = preparedArtboards
+        self.preparedCatalog = preparedCatalog
     }
 
     package static func prepare(
@@ -588,7 +591,7 @@ package actor NuxieNativePreparedFile {
     ) async throws -> NuxieNativePreparedFile {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
-            let preparedArtboards = try await executor.call {
+            let metadata = try await executor.call {
                 let renderer = try NuxieNativeRendererHandle(
                     executor: executor,
                     pixelWidth: 1,
@@ -608,9 +611,10 @@ package actor NuxieNativePreparedFile {
                 }
                 do {
                     let artboards = try file.artboards()
+                    let catalog = try file.viewModelCatalog()
                     try file.close()
                     try renderer.close()
-                    return artboards
+                    return (artboards, catalog)
                 } catch {
                     try? file.close()
                     try? renderer.close()
@@ -621,7 +625,8 @@ package actor NuxieNativePreparedFile {
                 executor: executor,
                 bytes: bytes,
                 importMode: importMode,
-                preparedArtboards: preparedArtboards
+                preparedArtboards: metadata.0,
+                preparedCatalog: metadata.1
             )
         } catch {
             executor.shutdown()
@@ -660,6 +665,26 @@ package actor NuxieNativePreparedFile {
         )
     }
 
+    package nonisolated func hasSameBytes(as other: NuxieNativePreparedFile) -> Bool {
+        bytes == other.bytes
+    }
+
+    package func viewModelCatalog() -> NuxieNativeViewModelCatalog { preparedCatalog }
+
+    package func makeSessionGroup() async throws -> NuxieNativeSessionGroup {
+        let executor = executor
+        let bytes = bytes
+        let importMode = importMode
+        let context = try await executor.call {
+            try NuxieNativeFileContext(executor: executor, bytes: bytes,
+                importMode: importMode, pixelWidth: 1, pixelHeight: 1)
+        }
+        fileImportCount += 1
+        return NuxieNativeSessionGroup(preparedFile: self, executor: executor, context: context)
+    }
+
+    fileprivate func recordOpenedSession() { openedSessionCount += 1 }
+
     package func metrics() -> NuxieNativePreparedFileMetrics {
         NuxieNativePreparedFileMetrics(
             fileImportCount: fileImportCount,
@@ -669,6 +694,134 @@ package actor NuxieNativePreparedFile {
 
     package func artboards() async throws -> [NuxieNativeArtboardInfo] {
         preparedArtboards
+    }
+}
+
+/// A group of sessions sharing one imported file and its renderer domain.
+/// All mutable native handles remain confined to the prepared file's lane.
+package actor NuxieNativeSessionGroup {
+    private let preparedFile: NuxieNativePreparedFile
+    private let executor: NuxieRuntimePinnedThreadExecutor
+    private let context: NuxieNativeFileContext
+
+    fileprivate init(preparedFile: NuxieNativePreparedFile,
+        executor: NuxieRuntimePinnedThreadExecutor, context: NuxieNativeFileContext) {
+        self.preparedFile = preparedFile
+        self.executor = executor
+        self.context = context
+    }
+
+    package func retire() async throws {
+        let context = context
+        try await executor.call {
+            let models = Array(context.sharedViewModels.values)
+            context.sharedViewModels.removeAll()
+            var firstError: Error?
+            for model in models {
+                do { try model.close() } catch { firstError = firstError ?? error }
+            }
+            if let firstError { throw firstError }
+        }
+    }
+
+    package func viewModelCatalog() async throws -> NuxieNativeViewModelCatalog {
+        let context = context
+        return try await executor.call { try context.file.viewModelCatalog() }
+    }
+
+    package func makeViewModel(schemaIndex: Int, authoredInstanceIndex: Int) async throws
+        -> NuxieNativeViewModelReference {
+        let context = context
+        return try await executor.call {
+            let model = try context.file.makeViewModel(schemaIndex: schemaIndex,
+                authoredInstanceIndex: authoredInstanceIndex)
+            let reference = try model.reference()
+            context.sharedViewModels[reference.rawValue] = model
+            return reference
+        }
+    }
+
+    package func snapshot(_ reference: NuxieNativeViewModelReference) async throws
+        -> NuxieNativeViewModelSnapshot {
+        let context = context
+        return try await executor.call { try context.resolve(reference).snapshot() }
+    }
+
+    package func mutate(_ mutations: [NuxieNativeViewModelMutation], correlationID: UInt64 = 0) async throws
+        -> NuxieNativeViewModelMutationResult {
+        let context = context
+        return try await executor.call {
+            try NuxieNativeViewModelHandle.mutate(mutations, correlationID: correlationID,
+                resolve: context.resolve)
+        }
+    }
+
+    package func openSession(artboardName: String, player: NuxieNativePlayerSelection,
+        pixelWidth: UInt32, pixelHeight: UInt32, bindDefaultViewModel: Bool) async throws -> NuxieNativeRuntime {
+        let context = context
+        let state = try await executor.call {
+            try NuxieNativeRuntimeState(context: context, artboardName: artboardName,
+                selection: player, pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                bindDefaultViewModel: bindDefaultViewModel)
+        }
+        await preparedFile.recordOpenedSession()
+        return NuxieNativeRuntime(executor: executor, state: state, preparedFile: preparedFile)
+    }
+}
+
+private final class NuxieNativeFileContext: @unchecked Sendable {
+    let file: NuxieNativeFileHandle
+    let renderer: NuxieNativeRendererHandle
+    let executor: NuxieRuntimePinnedThreadExecutor
+    var sharedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    private var pixelWidth: UInt32
+    private var pixelHeight: UInt32
+
+    init(executor: NuxieRuntimePinnedThreadExecutor, bytes: Data,
+        importMode: NuxieNativeImportMode, pixelWidth: UInt32, pixelHeight: UInt32) throws {
+        self.executor = executor
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        renderer = try NuxieNativeRendererHandle(executor: executor,
+            pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        do {
+            file = try NuxieNativeFileHandle(executor: executor, renderer: renderer,
+                bytes: bytes, importMode: importMode)
+        } catch {
+            try? renderer.close()
+            throw error
+        }
+    }
+
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32) throws -> NuxieNativeRendererOutcome {
+        let outcome = try renderer.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        return outcome
+    }
+
+    func prepareRenderer(pixelWidth: UInt32, pixelHeight: UInt32) throws {
+        if self.pixelWidth != pixelWidth || self.pixelHeight != pixelHeight {
+            _ = try resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        }
+    }
+
+    func resolve(_ reference: NuxieNativeViewModelReference) throws -> NuxieNativeViewModelHandle {
+        guard let model = sharedViewModels[reference.rawValue] else {
+            throw NuxieNativeRuntimeError.missingHandle("shared view model")
+        }
+        return model
+    }
+
+    deinit {
+        let models = Array(sharedViewModels.values)
+        let file = file
+        let renderer = renderer
+        executor.enqueue {
+            for model in models { try? model.close() }
+            try? file.close()
+            try? renderer.close()
+        }
     }
 }
 
@@ -954,7 +1107,7 @@ package actor NuxieNativeRuntime {
     {
         let state = try requireState()
         return try await executor.call {
-            try state.renderer.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+            try state.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
         }
     }
 
@@ -977,7 +1130,11 @@ package actor NuxieNativeRuntime {
             throw error
         }
         return try await executor.call {
-            try state.renderer.render(
+            do { try state.prepareRenderer() } catch {
+                completion?()
+                throw error
+            }
+            return try state.renderer.render(
                 player: state.player,
                 layoutScaleFactor: layoutScaleFactor,
                 drawable: drawable,
@@ -1109,6 +1266,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     var player: NuxieNativePlayerHandle { players[0] }
     let viewModel: NuxieNativeViewModelHandle?
     let renderer: NuxieNativeRendererHandle
+    private let sharedContext: NuxieNativeFileContext?
+    private var pixelWidth: UInt32
+    private var pixelHeight: UInt32
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var auxiliaryPlayersNeedInitialStep = true
     private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle,
@@ -1126,6 +1286,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         bindDefaultViewModel: Bool,
         importMode: NuxieNativeImportMode
     ) throws {
+        sharedContext = nil
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
         let renderer = try NuxieNativeRendererHandle(
             executor: executor,
             pixelWidth: pixelWidth,
@@ -1173,6 +1336,43 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
     }
 
+    init(context: NuxieNativeFileContext, artboardName: String,
+        selection: NuxieNativePlayerSelection, pixelWidth: UInt32, pixelHeight: UInt32,
+        bindDefaultViewModel: Bool) throws {
+        self.sharedContext = context
+        self.file = context.file
+        self.renderer = context.renderer
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        let artboard = try context.file.makeArtboard(named: artboardName)
+        var root: NuxieNativeViewModelHandle?
+        do {
+            if bindDefaultViewModel {
+                let model = try artboard.makeDefaultViewModel()
+                root = model
+                try artboard.bind(viewModel: model)
+            }
+            self.players = try Self.makePlayers(artboard: artboard, selection: selection)
+            self.artboard = artboard
+            self.viewModel = root
+        } catch {
+            try? root?.close()
+            try? artboard.close()
+            throw error
+        }
+    }
+
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32) throws -> NuxieNativeRendererOutcome {
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        if let sharedContext { return try sharedContext.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight) }
+        return try renderer.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    }
+
+    func prepareRenderer() throws {
+        try sharedContext?.prepareRenderer(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    }
+
     func close() throws {
         guard !isClosed else { return }
         var firstError: Error?
@@ -1193,9 +1393,13 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         operations.append(contentsOf: [
             { try self.viewModel?.close() },
             { try self.artboard.close() },
-            { try self.file.close() },
-            { try self.renderer.close() },
         ])
+        if sharedContext == nil {
+            operations.append(contentsOf: [
+                { try self.file.close() },
+                { try self.renderer.close() },
+            ])
+        }
         for operation in operations {
             do { try operation() } catch { firstError = firstError ?? error }
         }
@@ -1628,7 +1832,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if let rootReference, reference == rootReference, let viewModel {
                 return viewModel
             }
-            guard let handle = retainedViewModels[reference.rawValue] else {
+            guard let handle = retainedViewModels[reference.rawValue]
+                    ?? sharedContext?.sharedViewModels[reference.rawValue] else {
                 throw NuxieNativeRuntimeError.missingHandle(
                     "view model \(reference.rawValue)"
                 )

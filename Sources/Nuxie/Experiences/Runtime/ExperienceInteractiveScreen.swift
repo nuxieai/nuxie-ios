@@ -985,6 +985,7 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
     init(
         snapshot: NuxieNativeViewModelSnapshot?,
         catalog: NuxieNativeViewModelCatalog,
+        sharedExperience: Bool = false,
         preserving previous: ExperienceInteractiveReservedChangeFilter? = nil
     ) {
         guard let snapshot,
@@ -998,7 +999,8 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
         let reservedRootPropertyIndexes: Set<Int> = Set(
             catalog.properties.compactMap { property -> Int? in
                 guard property.schemaIndex == root.schemaIndex,
-                      Self.reservedRootProperties.contains(property.name) else {
+                      (Self.reservedRootProperties.contains(property.name)
+                        || (sharedExperience && property.name == "experience")) else {
                     return nil
                 }
                 return property.index
@@ -1523,8 +1525,8 @@ struct ExperienceInteractivePreparationHandle: Sendable {
 }
 
 /// Immutable authenticated source preparation shared by every screen and
-/// presentation of one release. Every opened screen receives a fresh native
-/// import bound to that session's exact Metal renderer factory domain.
+/// presentation of one release. A run supplies its native session group;
+/// standalone screen sessions receive their own renderer-bound imports.
 actor ExperienceInteractivePreparation {
     private static let generatedInteractionStateMachineNames = [
         "Generated Nuxie Pressable Interaction",
@@ -1618,6 +1620,7 @@ actor ExperienceInteractivePreparation {
 
     func openScreen(
         screenID: String? = nil,
+        runValues: ExperienceRunValues? = nil,
         products: [StoreProduct] = [],
         player: ExperienceInteractivePlayerSelection = .defaultScene,
         pixelWidth: UInt32,
@@ -1645,6 +1648,7 @@ actor ExperienceInteractivePreparation {
             screen = try await ExperienceInteractiveScreen.openPrepared(
                 payload: payload,
                 preparedFile: preparedFile,
+                runValues: runValues,
                 imageIDsByName: imageIDsByName,
                 screenID: screenID,
                 products: products,
@@ -1692,9 +1696,10 @@ actor ExperienceInteractiveScreen {
         [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
     private var schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
     private var settableViewModels: Set<ExperienceInteractiveViewModelReference>
-    private let viewModelCatalog: NuxieNativeViewModelCatalog
+    let viewModelCatalog: NuxieNativeViewModelCatalog
     private let listIndexPathsBySchema: [Int: [String]]
     private let rootViewModelReference: ExperienceInteractiveViewModelReference?
+    private let sharedExperienceRootName: String?
     private var snapshotTopology: ExperienceInteractiveSnapshotTopology
     private var latestSnapshot: NuxieNativeViewModelSnapshot?
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1726,6 +1731,7 @@ actor ExperienceInteractiveScreen {
         viewModelCatalog: NuxieNativeViewModelCatalog,
         listIndexPathsBySchema: [Int: [String]],
         rootViewModelReference: ExperienceInteractiveViewModelReference?,
+        sharedExperienceRootName: String?,
         snapshotTopology: ExperienceInteractiveSnapshotTopology,
         latestSnapshot: NuxieNativeViewModelSnapshot?,
         trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1744,12 +1750,14 @@ actor ExperienceInteractiveScreen {
         self.viewModelCatalog = viewModelCatalog
         self.listIndexPathsBySchema = listIndexPathsBySchema
         self.rootViewModelReference = rootViewModelReference
+        self.sharedExperienceRootName = sharedExperienceRootName
         self.snapshotTopology = snapshotTopology
         self.latestSnapshot = latestSnapshot
         self.trackedLists = trackedLists
         self.reservedChangeFilter = ExperienceInteractiveReservedChangeFilter(
             snapshot: latestSnapshot,
-            catalog: viewModelCatalog
+            catalog: viewModelCatalog,
+            sharedExperience: sharedExperienceRootName != nil
         )
     }
 
@@ -1784,6 +1792,7 @@ actor ExperienceInteractiveScreen {
     fileprivate static func openPrepared(
         payload: AuthenticatedRuntimePayload,
         preparedFile: NuxieNativePreparedFile,
+        runValues: ExperienceRunValues?,
         imageIDsByName: [String: UInt64],
         screenID requestedScreenID: String?,
         products: [StoreProduct],
@@ -1811,13 +1820,19 @@ actor ExperienceInteractiveScreen {
             throw ExperienceInteractiveScreenError.journeyScreenNotFound(screenID)
         }
 
-        let runtime = try await preparedFile.openSession(
-            artboardName: manifestScreen.artboardName,
-            player: player.native,
-            pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight,
-            bindDefaultViewModel: journeyScreen.defaultViewModelName != nil
-        )
+        let shared = try await runValues?.native(in: preparedFile)
+        let runtime: NuxieNativeRuntime
+        if let shared {
+            runtime = try await shared.sessions.openSession(
+                artboardName: manifestScreen.artboardName, player: player.native,
+                pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                bindDefaultViewModel: journeyScreen.defaultViewModelName != nil)
+        } else {
+            runtime = try await preparedFile.openSession(
+                artboardName: manifestScreen.artboardName, player: player.native,
+                pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                bindDefaultViewModel: journeyScreen.defaultViewModelName != nil)
+        }
         let fontScope = ExperienceRuntimeFontScope()
         do {
             try ExperienceInteractiveExternalFontRegistration.register(
@@ -1832,6 +1847,7 @@ actor ExperienceInteractiveScreen {
         }
 
         let initialState: ExperienceInteractiveInitialState.Result
+        var sharedExperienceRootName: String?
         do {
             initialState = try await ExperienceInteractiveInitialState.apply(
                 journey: payload.journey,
@@ -1840,6 +1856,18 @@ actor ExperienceInteractiveScreen {
                 products: products,
                 runtime: runtime
             )
+            if let shared, let root = initialState.rootReference,
+               let schemaIndex = initialState.schemaIndexByViewModel[root],
+               initialState.catalog.properties.contains(where: {
+                   $0.schemaIndex == schemaIndex && $0.name == "experience"
+                       && $0.kind == .viewModel && $0.referencedSchemaIndex == shared.schemaIndex
+               }), let nativeRoot = NuxieNativeViewModelReference(rawValue: root.rawValue) {
+                sharedExperienceRootName = journeyScreen.defaultViewModelName
+                _ = try await runtime.mutateViewModel([
+                    .setViewModel(instance: nativeRoot, path: "experience", value: shared.reference),
+                ])
+                _ = try await runtime.step(elapsedSeconds: 0)
+            }
         } catch {
             try? await runtime.close()
             fontScope.close()
@@ -1910,6 +1938,7 @@ actor ExperienceInteractiveScreen {
             viewModelCatalog: initialState.catalog,
             listIndexPathsBySchema: initialState.listIndexPathsBySchema,
             rootViewModelReference: initialState.rootReference,
+            sharedExperienceRootName: sharedExperienceRootName,
             snapshotTopology: snapshotTopology,
             latestSnapshot: latestSnapshot,
             trackedLists: trackedLists
@@ -2595,6 +2624,7 @@ actor ExperienceInteractiveScreen {
         reservedChangeFilter = ExperienceInteractiveReservedChangeFilter(
             snapshot: snapshot,
             catalog: viewModelCatalog,
+            sharedExperience: sharedExperienceRootName != nil,
             preserving: reservedChangeFilter
         )
     }
@@ -2647,13 +2677,29 @@ actor ExperienceInteractiveScreen {
         try await videoPlayback.apply(action)
     }
 
+    private func screenOwnedValues(_ values: [ExperienceInteractiveStateCommand.Value])
+        -> [ExperienceInteractiveStateCommand.Value] {
+        guard let rootName = sharedExperienceRootName else { return values }
+        return values.compactMap { value in
+            guard value.viewModelName != "Experience" else { return nil }
+            guard value.viewModelName == rootName else { return value }
+            if value.path == "experience" || value.path.hasPrefix("experience/") { return nil }
+            if value.path.isEmpty, case .object(let fields) = value.value {
+                return .init(viewModelName: value.viewModelName, instanceID: value.instanceID,
+                    instanceName: value.instanceName, path: value.path,
+                    value: .object(fields.filter { $0.key != "experience" }))
+            }
+            return value
+        }
+    }
+
     private func applyStateCommandLocked(
         _ command: ExperienceInteractiveStateCommand,
         correlationID: UInt64
     ) async throws -> ExperienceInteractiveMutationResult {
         let command: ExperienceInteractiveStateCommand = switch command {
         case .snapshot(let values):
-            .snapshot(try stateCompiler.normalizeFlattenedEnvelopes(values))
+            .snapshot(try stateCompiler.normalizeFlattenedEnvelopes(screenOwnedValues(values)))
         default:
             command
         }
