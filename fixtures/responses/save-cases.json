@@ -390,6 +390,15 @@
       },
       "httpStatus": 200,
       "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 1,
+        "code": {}
+      },
+      "httpStatus": 200,
+      "expected": "confirmed"
     }
   ]
 }
