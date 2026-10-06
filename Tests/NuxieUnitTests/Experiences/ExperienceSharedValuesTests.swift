@@ -131,32 +131,92 @@ final class ExperienceSharedValuesTests: XCTestCase {
     func testComponentCopyKeepsItsOwnCounter() async throws {
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: SharedValuesFixture.payload())
         let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
         let screen = try await preparation.openScreen(screenID: "long", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        let catalog = await screen.viewModelCatalog
-        let schema = try XCTUnwrap(catalog.schemas.first { $0.name == "Untitled" })
-        let property = try XCTUnwrap(catalog.properties.first { $0.schemaIndex == schema.index && $0.name == "state:taps" })
+        addTeardownBlock { try await screen.close() }
+        _ = try await renderCopyPixels(screen)
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        let initial = try await renderCopyPixels(screen)
+        // Locate rendered ink using this platform's font, then ask the player which
+        // ink belongs to an interactive copy. No authored size or probe point is assumed.
+        var point: CGPoint?
+        for y in 0..<852 {
+            for x in 0..<393 where initial[(y * 393 + x) * 4..<(y * 393 + x) * 4 + 3] != initial[(y * 393 + 392) * 4..<(y * 393 + 392) * 4 + 3] {
+                for subpixel in [0.125, 0.375, 0.625, 0.875] {
+                    let candidate = CGPoint(x: Double(x) + 0.5, y: Double(y) + subpixel)
+                    let hit = try await screen.step(pointers: [.init(kind: .down, x: Float(candidate.x), y: Float(candidate.y))], elapsedSeconds: 0)
+                    _ = try await screen.step(pointers: [.init(kind: .exit, x: Float(candidate.x), y: Float(candidate.y))], elapsedSeconds: 0)
+                    if hit.pointerHits.contains(where: { $0 != .none }) { point = candidate; break }
+                }
+                if point != nil { break }
+            }
+            if point != nil { break }
+        }
+        let ink = try XCTUnwrap(point, "The rendered copy has interactive ink")
+        func hits(_ x: Double, _ y: Double) async throws -> Bool {
+            let result = try await screen.step(pointers: [.init(kind: .down, x: Float(x), y: Float(y))], elapsedSeconds: 0)
+            _ = try await screen.step(pointers: [.init(kind: .exit, x: Float(x), y: Float(y))], elapsedSeconds: 0)
+            return result.pointerHits.contains { $0 != .none }
+        }
+        func edge(_ inside: Double, _ outside: Double, probe: (Double) async throws -> Bool) async throws -> Double {
+            var yes = inside
+            var no = outside
+            for _ in 0..<20 {
+                let mid = (yes + no) / 2
+                if try await probe(mid) { yes = mid } else { no = mid }
+            }
+            return yes
+        }
+        let left = try await edge(ink.x, 0) { try await hits($0, ink.y) }
+        let right = try await edge(ink.x, 393) { try await hits($0, ink.y) }
+        let x = (left + right) / 2
+        let top = try await edge(ink.y, 0) { try await hits(x, $0) }
+        let bottom = try await edge(ink.y, 852) { try await hits(x, $0) }
+        let bounds = CGRect(x: left, y: top, width: right - left, height: bottom - top)
+        XCTAssertGreaterThan(bounds.width, 0)
+        XCTAssertGreaterThan(bounds.height, 0)
+        let tap = CGPoint(x: bounds.midX, y: bounds.midY)
+        let other = try await preparation.openScreen(screenID: "long", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await other.close() }
+        _ = try await renderCopyPixels(other)
+        for _ in 0..<20 { _ = try await other.step(elapsedSeconds: 0.016) }
+        let untouched = try await renderCopyPixels(other)
+        let runBefore = try await run.journeyValues()
+        var previous = try await renderCopyPixels(screen)
+        XCTAssertEqual(previous, initial, "Probing bounds without releasing a press does not change the count")
+        for _ in 0..<2 {
+            let down = try await screen.step(pointers: [.init(kind: .down, x: Float(tap.x), y: Float(tap.y))], elapsedSeconds: 0)
+            let up = try await screen.step(pointers: [.init(kind: .up, x: Float(tap.x), y: Float(tap.y))], elapsedSeconds: 0)
+            XCTAssertTrue(down.pointerHits.contains(where: { $0 != .none }))
+            XCTAssertTrue(up.pointerHits.contains(where: { $0 != .none }))
+            for _ in 0..<3 { _ = try await screen.step(elapsedSeconds: 1.0 / 60.0) }
+            let next = try await renderCopyPixels(screen)
+            XCTAssertNotEqual(previous, next, "The private copy redraws its count after each tap")
+            let otherPixels = try await renderCopyPixels(other)
+            XCTAssertEqual(otherPixels, untouched, "Another copy sharing the run keeps its own counter")
+            let runAfter = try await run.journeyValues()
+            XCTAssertEqual(runAfter, runBefore, "The private counter does not change shared run values")
+            previous = next
+        }
+    }
+    private func renderCopyPixels(_ screen: ExperienceInteractiveScreen) async throws -> Data {
+        let device = try await screen.metalDevice().value
         let layer = CAMetalLayer()
-        layer.device = try await screen.metalDevice().value
+        layer.device = device
         layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = false
         layer.drawableSize = CGSize(width: 393, height: 852)
         let drawable = try XCTUnwrap(layer.nextDrawable())
-        let completed = expectation(description: "Initial copy layout rendered")
-        _ = try await screen.render(drawable: ExperienceInteractiveDrawable(drawable), completion: { completed.fulfill() })
-        await fulfillment(of: [completed], timeout: 2)
-        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
-        let expected = try SharedValuesFixture.expectations().component
-        for expected in [expected.afterOneTap, expected.afterTwoTaps] {
-            let down = try await screen.step(pointers: [.init(kind: .down, x: 100, y: 60)], elapsedSeconds: 0)
-            let frame = try await screen.step(pointers: [.init(kind: .up, x: 100, y: 60)], elapsedSeconds: 0)
-            let numbers = (down.effects + frame.effects).compactMap { effect -> Float? in
-                guard case .viewModelChange(let change) = effect.kind,
-                      change.propertyIndex == property.index,
-                      case .number(let value) = change.value else { return nil }
-                return value
-            }
-            XCTAssertTrue(numbers.contains(expected), "Component counter changes: \(numbers), hits: \(down.pointerHits), \(frame.pointerHits)")
-        }
-        try await screen.close()
+        let stride = (393 * 4 + 255) & ~255
+        let buffer = try XCTUnwrap(device.makeBuffer(length: stride * 852, options: .storageModeShared))
+        let rendered = expectation(description: "Copy rendered")
+        _ = try await screen.renderFrame(drawable: ExperienceInteractiveDrawable(drawable), clearColor: 0xFF11_2233,
+            capturesSemantics: false, readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride),
+            completion: { rendered.fulfill() })
+        await fulfillment(of: [rendered], timeout: 2)
+        var pixels = Data()
+        for row in 0..<852 { pixels.append(buffer.contents().assumingMemoryBound(to: UInt8.self) + row * stride, count: 393 * 4) }
+        return pixels
     }
     #endif
 
