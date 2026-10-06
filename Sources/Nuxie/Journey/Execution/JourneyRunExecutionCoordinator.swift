@@ -105,13 +105,14 @@ struct JourneyRunExecutionCoordinator {
         }
     }
 
-    mutating func commit(_ command: AdvanceCommand) async throws {
-        _ = try await journal.transition(
+    mutating func commit(_ command: AdvanceCommand, admission: JourneyCommitAdmission? = nil) async throws {
+        guard try await journal.transition(
             run.id,
             stepId: command.stepId,
             context: command.context,
-            experimentExposure: command.experimentExposure
-        )
+            experimentExposure: command.experimentExposure,
+            admission: admission
+        ) else { throw JourneyJournalError.invalidState }
         run.stepId = command.stepId
         run.context = command.context
         if let exposure = command.experimentExposure {

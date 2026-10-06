@@ -78,6 +78,7 @@ actor JourneyService {
     }
 
     private struct PendingPresentationDismissalContinuation: Sendable {
+        let originAdmission: JourneyCommitAdmission
         let run: JourneyRun
         let release: AuthenticatedJourneyRelease
         let executionFenceToken: JourneyProfileFenceToken
@@ -169,6 +170,8 @@ actor JourneyService {
     private var journalRecoveryOperation: (id: UUID, task: Task<Void, Never>)?
     typealias NativeValuesPreparer = @Sendable (ExperienceRunValues, AuthenticatedJourneyRelease,
         JourneyReleaseDelivery, JourneyPinnedReleaseArtifacts?) async throws -> Void
+    typealias NativeValuesReader = @Sendable (ExperienceRunValues) async throws -> ExactJSONObject<JourneyReleaseJSONValue>
+    private let readNativeValues: NativeValuesReader
     private let prepareNativeValues: NativeValuesPreparer
     private var nativeValuesByRun: [String: (owner: String, values: ExperienceRunValues)] = [:]
     private var retainedReleasesByDigest: [String: AuthenticatedJourneyRelease] = [:]
@@ -211,6 +214,7 @@ actor JourneyService {
         dispatcher: any JourneyDispatching,
         presenter: (any JourneyPresenting)? = nil,
         prepareNativeValues: @escaping NativeValuesPreparer = { _, _, _, _ in },
+        readNativeValues: @escaping NativeValuesReader = { try await $0.journeyValues() },
         presentationTrace: JourneyPresentationTraceCoordinator = .init(
             recorder: DisabledExperiencePresentationTrace()
         ),
@@ -247,6 +251,7 @@ actor JourneyService {
         self.dispatcher = dispatcher
         self.presenter = presenter
         self.prepareNativeValues = prepareNativeValues
+        self.readNativeValues = readNativeValues
         self.presentationTrace = presentationTrace
         self.pinnedReleaseAuthenticator = pinnedReleaseAuthenticator
         self.timezones = timezones
@@ -1384,6 +1389,8 @@ private extension JourneyService {
                             }) == true else { continue }
                 }
                 let executionFenceToken = executionFence.token()
+                guard let admission = journalCommitAdmission(journal: journal,
+                    executionFenceToken: executionFenceToken) else { return }
                 guard let release = await release(
                     for: parked,
                     state: currentProfileState(),
@@ -1391,8 +1398,7 @@ private extension JourneyService {
                     executionFenceToken: executionFenceToken
                 ) else { continue }
                 let executionSnapshot = parked.executionSnapshot
-                guard executionFence.isCurrent(executionFenceToken),
-                      isCurrentIdentity(journal: journal) else {
+                guard admission.commitJournalIfCurrent({ true }) == true else {
                     return
                 }
                 let checkpoint = parked.park.flatMap { park -> JourneyControlExecutor.Checkpoint? in
@@ -1411,9 +1417,7 @@ private extension JourneyService {
                 let waitStep = release.descriptor.leg.steps.first { $0.id == parked.stepId }
                 if let candidate = event.flatMap(controlEvent), let park = parked.park,
                    let action = waitStep?.action, JourneyActionType(action: action) == .waitUntil {
-                    guard let admission = journalCommitAdmission(journal: journal,
-                        executionFenceToken: executionFenceToken),
-                        let updatedPark = try await journal.appendParkedCandidate(parked.id, expectedStepId: parked.stepId,
+                    guard let updatedPark = try await journal.appendParkedCandidate(parked.id, expectedStepId: parked.stepId,
                             expectedPark: park, event: candidate, admission: admission) else { continue }
                     parked.park = updatedPark
                 }
@@ -1422,17 +1426,15 @@ private extension JourneyService {
                 var evaluationContext = parked.context
                 do {
                     let values = try await preparedNativeValues(for: parked, release: release, journal: journal)
-                    evaluationContext = .init(event: parked.context.event, responses: try await values.journeyValues())
+                    evaluationContext = .init(event: parked.context.event, responses: try await readNativeValues(values))
                     nativeRestoreRetryAt.removeValue(forKey: parked.id)
                 } catch {
-                    guard executionFence.isCurrent(executionFenceToken),
-                          isCurrentIdentity(journal: journal) else { return }
+                    guard admission.commitJournalIfCurrent({ true }) == true else { return }
                     nativeRestoreRetryAt[parked.id] = dateProvider.now().addingTimeInterval(5)
                     LogWarning("JourneyService: parked native value restoration failed: \(error)")
                     continue
                 }
-                guard executionFence.isCurrent(executionFenceToken),
-                      isCurrentIdentity(journal: journal) else { return }
+                guard admission.commitJournalIfCurrent({ true }) == true else { return }
                 let acceptedEvent = parked.park?.pendingEvent ?? parked.park?.candidateEvents?.first { candidate in
                     guard let checkpoint, let waitStep else { return false }
                     return controlExecutor(for: release).parkedWaitAccepts(candidate, step: waitStep,
@@ -1440,25 +1442,17 @@ private extension JourneyService {
                         customer: executionSnapshot.customer ?? [:], checkpoint: checkpoint)
                 }
                 if let acceptedEvent, let checkpoint {
-                    guard let admission = journalCommitAdmission(journal: journal,
-                        executionFenceToken: executionFenceToken),
-                        try await journal.stageParkedEvent(parked.id, expectedStepId: parked.stepId,
+                    guard try await journal.stageParkedEvent(parked.id, expectedStepId: parked.stepId,
                             expectedCheckpoint: checkpoint, event: acceptedEvent, admission: admission) else { continue }
                     parked.park?.pendingEvent = acceptedEvent
                 }
                 if let park = parked.park, park.candidateEvents != nil {
-                    guard let admission = journalCommitAdmission(journal: journal,
-                        executionFenceToken: executionFenceToken),
-                        try await journal.removeParkedCandidates(parked.id, expectedStepId: parked.stepId,
+                    guard try await journal.removeParkedCandidates(parked.id, expectedStepId: parked.stepId,
                             expectedPark: park, evaluated: park.candidateEvents ?? [], admission: admission) else { continue }
                     parked.park?.candidateEvents = nil
                 }
                 if !foreground, !release.descriptor.leg.screens.isEmpty { continue }
                 if acceptedEvent == nil, let wake = parked.park?.wakeAt, wake > dateProvider.now() { continue }
-                guard let admission = journalCommitAdmission(
-                    journal: journal,
-                    executionFenceToken: executionFenceToken
-                ) else { return }
                 guard let expectedPark = parked.park,
                       let resumed = try await journal.resumeParked(
                     parked.id,
@@ -1475,7 +1469,8 @@ private extension JourneyService {
                     executionFenceToken: executionFenceToken,
                     signal: .init(event: acceptedEvent),
                     checkpoint: checkpoint,
-                    journal: journal
+                    journal: journal,
+                    originAdmission: admission
                 )
             }
         } catch {
@@ -1839,7 +1834,7 @@ private extension JourneyService {
     ) async -> Bool {
         guard executionFence.isCurrent(executionFenceToken),
               let journal,
-              isCurrentIdentity(journal: journal) else {
+              let originAdmission = journalCommitAdmission(journal: journal, executionFenceToken: executionFenceToken) else {
             return false
         }
         let runs: [JourneyRun]
@@ -1848,8 +1843,7 @@ private extension JourneyService {
         } catch {
             return false
         }
-        guard executionFence.isCurrent(executionFenceToken),
-              isCurrentIdentity(journal: journal) else {
+        guard originAdmission.commitJournalIfCurrent({ true }) == true else {
             return false
         }
         guard var run = runs.first(where: { $0.id == runId }) else {
@@ -1879,7 +1873,8 @@ private extension JourneyService {
                 leg: leg,
                 journal: journal,
                 dismissPresentation: false,
-                executionFenceToken: executionFenceToken
+                executionFenceToken: executionFenceToken,
+                originAdmission: originAdmission
             )
         }
         guard let routeStepId = presentationRoute(
@@ -1893,7 +1888,8 @@ private extension JourneyService {
                 leg: leg,
                 journal: journal,
                 dismissPresentation: false,
-                executionFenceToken: executionFenceToken
+                executionFenceToken: executionFenceToken,
+                originAdmission: originAdmission
             )
         }
         let hostDismissContext = ArmedJourney.Context(
@@ -1901,14 +1897,11 @@ private extension JourneyService {
             responses: run.context.responses
         )
         do {
-            guard let admission = journalCommitAdmission(
-                journal: journal,
-                executionFenceToken: executionFenceToken
-            ), try await journal.transition(
+            guard try await journal.transition(
                 run.id,
                 stepId: routeStepId,
                 context: hostDismissContext,
-                admission: admission
+                admission: originAdmission
             ) else { return false }
         } catch {
             LogWarning("JourneyService: failed to persist host-dismiss route: \(error)")
@@ -1917,12 +1910,12 @@ private extension JourneyService {
         run.stepId = routeStepId
         run.context = hostDismissContext
         run.park = nil
-        guard executionFence.isCurrent(executionFenceToken),
-              isCurrentIdentity(journal: journal) else {
+        guard originAdmission.commitJournalIfCurrent({ true }) == true else {
             return true
         }
         let now = JourneyTime.milliseconds(dateProvider.now()) ?? 0
         pendingPresentationDismissalContinuations[run.id] = .init(
+            originAdmission: originAdmission,
             run: run,
             release: release,
             executionFenceToken: executionFenceToken,
@@ -1946,7 +1939,8 @@ private extension JourneyService {
                 occurredAtMillis: pending.occurredAtMillis,
                 properties: [:]
             )),
-            journal: pending.journal
+            journal: pending.journal,
+            originAdmission: pending.originAdmission
         )
     }
 
@@ -2055,7 +2049,7 @@ private extension JourneyService {
         let occurredAt = dateProvider.now()
         guard executionFence.isCurrent(executionFenceToken),
               let journal,
-              isCurrentIdentity(journal: journal) else {
+              let originAdmission = journalCommitAdmission(journal: journal, executionFenceToken: executionFenceToken) else {
             return .rejected
         }
         guard let capture = await capturePresentationEvent(
@@ -2085,7 +2079,8 @@ private extension JourneyService {
                     leg: release.descriptor.leg,
                     journal: journal,
                     dismissPresentation: false,
-                    executionFenceToken: executionFenceToken
+                    executionFenceToken: executionFenceToken,
+                    originAdmission: originAdmission
                 )
                 return completed ? .completed : .rejected
             }
@@ -2107,7 +2102,8 @@ private extension JourneyService {
                     leg: release.descriptor.leg,
                     journal: journal,
                     dismissPresentation: false,
-                    executionFenceToken: executionFenceToken
+                    executionFenceToken: executionFenceToken,
+                    originAdmission: originAdmission
                 )
                 return completed ? .completed : .rejected
             }
@@ -2118,14 +2114,11 @@ private extension JourneyService {
             responses: run.context.responses
         )
         do {
-            guard let admission = journalCommitAdmission(
-                journal: journal,
-                executionFenceToken: executionFenceToken
-            ), try await journal.transition(
+            guard try await journal.transition(
                 run.id,
                 stepId: routeStepId,
                 context: context,
-                admission: admission
+                admission: originAdmission
             ) else { return .rejected }
         } catch {
             LogWarning("JourneyService: failed to persist screen lifecycle route: \(error)")
@@ -2146,7 +2139,8 @@ private extension JourneyService {
                     properties: controlEvent.properties
                 )),
                 dismissPresentationOnCompletion: dismissPresentationOnCompletion,
-                journal: journal
+                journal: journal,
+                originAdmission: originAdmission
             )
         }
         if awaitContinuation {
@@ -2204,7 +2198,8 @@ private extension JourneyService {
         presentationSource: ScreenEmissionSource? = nil,
         eventSource: ExperienceResolvedEventSource? = nil,
         dismissPresentationOnCompletion: Bool = true,
-        journal: JourneyRunJournal
+        journal: JourneyRunJournal,
+        originAdmission: JourneyCommitAdmission? = nil
     ) async {
         guard executionFence.isCurrent(executionFenceToken),
               isCurrentIdentity(journal: journal) else {
@@ -2225,7 +2220,8 @@ private extension JourneyService {
             journal: journal,
             presentationSource: presentationSource,
             eventSource: eventSource,
-            dismissPresentationOnCompletion: dismissPresentationOnCompletion
+            dismissPresentationOnCompletion: dismissPresentationOnCompletion,
+            originAdmission: originAdmission
         )
     }
 
@@ -2307,8 +2303,12 @@ private extension JourneyService {
         eventSource: ExperienceResolvedEventSource? = nil,
         dismissPresentationOnCompletion: Bool = true,
         presentationReservation initialPresentationReservation:
-            (any JourneyPresentationReservation)? = nil
+            (any JourneyPresentationReservation)? = nil,
+        originAdmission: JourneyCommitAdmission? = nil
     ) async {
+        guard let originAdmission = originAdmission ?? journalCommitAdmission(journal: journal,
+            executionFenceToken: executionFenceToken),
+            let originIdentityToken = originAdmission.identityFenceToken else { return }
         let leg = release.descriptor.leg
         let executionSnapshot = initial.executionSnapshot
         var coordinator = JourneyRunExecutionCoordinator(
@@ -2337,14 +2337,14 @@ private extension JourneyService {
                 } else {
                     values = nativeValuesByRun[durableRun.id]?.values
                 }
-                coordinator.useNativeValues(try await values?.journeyValues() ?? [:])
+                if let values { coordinator.useNativeValues(try await readNativeValues(values)) }
+                else { coordinator.useNativeValues([:]) }
             } catch {
                 LogWarning("JourneyService: native value read failed: \(error)")
                 return
             }
             let run = coordinator.run
-            guard executionFence.isCurrent(executionFenceToken),
-                  isCurrentIdentity(journal: journal) else {
+            guard originAdmission.commitJournalIfCurrent({ true }) == true else {
                 await finishAfterAuthorityLoss(
                     run,
                     leg: leg,
@@ -2356,7 +2356,7 @@ private extension JourneyService {
             switch coordinator.command(at: dateProvider.now()) {
             case .advance(let command):
                 do {
-                    try await coordinator.commit(command)
+                    try await coordinator.commit(command, admission: originAdmission)
                 } catch {
                     LogWarning("JourneyService: failed to persist control transition: \(error)")
                     return
@@ -2366,9 +2366,7 @@ private extension JourneyService {
                 do {
                     let values = try await preparedNativeValues(for: run, release: release, journal: journal)
                     let snapshot = try await values.snapshot()
-                    guard let admission = journalCommitAdmission(journal: journal,
-                        executionFenceToken: executionFenceToken) else { return }
-                    try await coordinator.commit(command, snapshot: snapshot, admission: admission)
+                    try await coordinator.commit(command, snapshot: snapshot, admission: originAdmission)
                 } catch {
                     LogWarning("JourneyService: failed to persist park point: \(error)")
                 }
@@ -2382,24 +2380,13 @@ private extension JourneyService {
                     leg: leg,
                     journal: journal,
                     dismissPresentation: dismissPresentationOnCompletion,
-                    executionFenceToken: executionFenceToken
+                    executionFenceToken: executionFenceToken,
+                    originAdmission: originAdmission
                 )
                 return
 
             case .dispatch(let command):
                 let action = command.action
-                guard let identityFence = identity.performWithCurrentIdentityFence(
-                    journal.distinctId,
-                    { _ in () }
-                ) else {
-                    await finishAfterAuthorityLoss(
-                        run,
-                        leg: leg,
-                        journal: journal,
-                        executionFenceToken: executionFenceToken
-                    )
-                    return
-                }
                 let effectId: String
                 do {
                     effectId = try await coordinator.claimEffect(for: command)
@@ -2409,7 +2396,7 @@ private extension JourneyService {
                 }
                 guard executionFence.isCurrent(executionFenceToken),
                       await isCurrentIdentity(
-                    identityFence.token,
+                    originIdentityToken,
                     journal: journal
                 ) else {
                     await finishAfterAuthorityLoss(
@@ -2436,7 +2423,7 @@ private extension JourneyService {
                     if let offer = leg.offers.first(where: { $0.screenId == screenId }) {
                         let decision = await offerDecision(offer, release: release)
                         guard executionFence.isCurrent(executionFenceToken),
-                              await isCurrentIdentity(identityFence.token, journal: journal) else {
+                              await isCurrentIdentity(originIdentityToken, journal: journal) else {
                                 await finishAfterAuthorityLoss(run, leg: leg, journal: journal, executionFenceToken: executionFenceToken)
                                 return
                             }
@@ -2552,7 +2539,7 @@ private extension JourneyService {
                         return
                     }
                     let presentedRun = run
-                    let presentationIdentityFenceToken = identityFence.token
+                    let presentationIdentityFenceToken = originIdentityToken
                     let presentationTraceContext = presentationTrace
                         .beginPresentation(
                             runId: presentedRun.id,
@@ -2695,7 +2682,7 @@ private extension JourneyService {
                         if let presenter, let opened = await presenter.openJourneyLink(owner: owner,
                             request: .init(urlString: url, target: target, screenId: nil, instanceId: nil, effectId: effectId)) {
                             await handlePresentationLinkOpened(opened, run: run, release: release,
-                                identityFenceToken: identityFence.token, executionFenceToken: executionFenceToken)
+                                identityFenceToken: originIdentityToken, executionFenceToken: executionFenceToken)
                         }
                     }
                     result = .outlet("next")
@@ -2749,7 +2736,7 @@ private extension JourneyService {
                         if let offer = JourneyOfferAccess.offer(forPurchaseStep: command.step.id, in: leg) {
                             let decision = await offerDecision(offer, release: release, placementId: placementId)
                             guard executionFence.isCurrent(executionFenceToken),
-                                  await isCurrentIdentity(identityFence.token, journal: journal) else {
+                                  await isCurrentIdentity(originIdentityToken, journal: journal) else {
                                 await finishAfterAuthorityLoss(run, leg: leg, journal: journal, executionFenceToken: executionFenceToken)
                                 return
                             }
@@ -2791,7 +2778,7 @@ private extension JourneyService {
                         )
                     guard executionFence.isCurrent(executionFenceToken),
                           await isCurrentIdentity(
-                            identityFence.token,
+                            originIdentityToken,
                             journal: journal
                           ) else {
                         await finishAfterAuthorityLoss(
@@ -2811,7 +2798,7 @@ private extension JourneyService {
                         if let offer = leg.offers.first(where: { $0.screenId == screenId }) {
                             let decision = await offerDecision(offer, release: release)
                             guard executionFence.isCurrent(executionFenceToken),
-                                  await isCurrentIdentity(identityFence.token, journal: journal) else {
+                                  await isCurrentIdentity(originIdentityToken, journal: journal) else {
                                 await presenter.cancelJourneyBackNavigation(owner: owner)
                                 await finishAfterAuthorityLoss(run, leg: leg, journal: journal,
                                     executionFenceToken: executionFenceToken)
@@ -2838,7 +2825,7 @@ private extension JourneyService {
                             transition: resolvedAction["transition"]
                         )
                         guard executionFence.isCurrent(executionFenceToken),
-                              await isCurrentIdentity(identityFence.token, journal: journal) else {
+                              await isCurrentIdentity(originIdentityToken, journal: journal) else {
                             await presenter.cancelJourneyBackNavigation(owner: owner)
                             await finishAfterAuthorityLoss(run, leg: leg, journal: journal,
                                 executionFenceToken: executionFenceToken)
@@ -2878,7 +2865,7 @@ private extension JourneyService {
                             event,
                             eventId: effectId,
                             run: run,
-                            identityFenceToken: identityFence.token,
+                            identityFenceToken: originIdentityToken,
                             executionFenceToken: executionFenceToken,
                             journal: journal
                         ) else {
@@ -2930,7 +2917,7 @@ private extension JourneyService {
                         context: run.context,
                         effectId: effectId,
                         distinctId: journal.distinctId,
-                        identityFence: identityFence.token,
+                        identityFence: originIdentityToken,
                         executionFence: executionFence,
                         executionFenceToken: executionFenceToken,
                         customer: run.executionSnapshot.customer ?? [:]
@@ -2938,7 +2925,7 @@ private extension JourneyService {
                 }
                 guard executionFence.isCurrent(executionFenceToken),
                       await isCurrentIdentity(
-                    identityFence.token,
+                    originIdentityToken,
                     journal: journal
                 ) else {
                     await finishAfterAuthorityLoss(
@@ -3056,7 +3043,8 @@ private extension JourneyService {
         journal: JourneyRunJournal,
         dismissPresentation: Bool = true,
         executionFenceToken: JourneyProfileFenceToken? = nil,
-        requireCurrentIdentity: Bool = true
+        requireCurrentIdentity: Bool = true,
+        originAdmission: JourneyCommitAdmission? = nil
     ) async -> Bool {
         guard let persisted = await persistCompletion(
             run,
@@ -3064,7 +3052,8 @@ private extension JourneyService {
             leg: leg,
             journal: journal,
             executionFenceToken: executionFenceToken,
-            requireCurrentIdentity: requireCurrentIdentity
+            requireCurrentIdentity: requireCurrentIdentity,
+            originAdmission: originAdmission
         ) else { return false }
         return await settlePersistedCompletion(
             run,
@@ -3084,11 +3073,25 @@ private extension JourneyService {
         leg: Journey,
         journal: JourneyRunJournal,
         executionFenceToken: JourneyProfileFenceToken? = nil,
-        requireCurrentIdentity: Bool = true
+        requireCurrentIdentity: Bool = true,
+        originAdmission: JourneyCommitAdmission? = nil
     ) async -> PersistedCompletion? {
+        let admission: JourneyCommitAdmission?
+        if let originAdmission {
+            admission = originAdmission
+        } else if let executionFenceToken {
+            guard let currentAdmission = journalCommitAdmission(
+                journal: journal,
+                executionFenceToken: executionFenceToken,
+                requireCurrentIdentity: requireCurrentIdentity
+            ) else { return nil }
+            admission = currentAdmission
+        } else {
+            admission = nil
+        }
         var context = run.context
         if let values = nativeValuesByRun[run.id], values.owner == journal.distinctId {
-            do { context = .init(event: context.event, responses: try await values.values.journeyValues()) }
+            do { context = .init(event: context.event, responses: try await readNativeValues(values.values)) }
             catch {
                 LogWarning("JourneyService: completion native value read failed: \(error)")
                 return nil
@@ -3104,17 +3107,6 @@ private extension JourneyService {
             ? "abandoned"
             : outcome
         do {
-            let admission: JourneyCommitAdmission?
-            if let executionFenceToken {
-                guard let currentAdmission = journalCommitAdmission(
-                    journal: journal,
-                    executionFenceToken: executionFenceToken,
-                    requireCurrentIdentity: requireCurrentIdentity
-                ) else { return nil }
-                admission = currentAdmission
-            } else {
-                admission = nil
-            }
             guard try await journal.complete(
                 run.id,
                 outcome: finalOutcome,

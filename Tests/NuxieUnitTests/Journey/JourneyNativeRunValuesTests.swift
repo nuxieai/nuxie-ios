@@ -18,7 +18,11 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         try await restartTimedWait(failFirstPreparation: true, wakeEvent: true)
     }
 
-    private func restartTimedWait(failFirstPreparation: Bool, wakeEvent: Bool = false) async throws {
+    func testIdentityRoundTripDuringRestoreCannotConsumeCheckpoint() async throws {
+        try await restartTimedWait(failFirstPreparation: false, revokeRead: true)
+    }
+
+    private func restartTimedWait(failFirstPreparation: Bool, wakeEvent: Bool = false, revokeRead: Bool = false) async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let initial = try await authenticatedRenderedSnapshot(fixture)
         var steps = try JSONDecoder().decode([Journey.Step].self, from: Data(#"""
@@ -86,8 +90,23 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
                 _ = try await values.native(in: file)
                 let restored = try await values.journeyValues()
                 XCTAssertEqual(restored["trip_days"], .number(30))
+            }, readNativeValues: { values in
+                let result = try await values.journeyValues()
+                if revokeRead {
+                    identity.setDistinctId("other")
+                    identity.setDistinctId("customer")
+                }
+                return result
             }, pinnedReleaseAuthenticator: { _, _ in release })
         await restarted.initialize()
+        if revokeRead {
+            let retained = try await journal.runs()
+            XCTAssertNotNil(retained.first?.park)
+            XCTAssertEqual(retained.first?.nativeSnapshot?.journeyValues["trip_days"], .number(30))
+            XCTAssertFalse(restartedEvents.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
+            await restarted.shutdown()
+            return
+        }
         if wakeEvent {
             await restarted.handleEvent(NuxieEvent(name: "unlock", distinctId: "customer", properties: [:], timestamp: clock.now()))
         }
@@ -111,6 +130,65 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         let newScreen = await MainActor.run { noScreen.request }
         XCTAssertNil(newScreen)
         await restarted.shutdown()
+    }
+
+    func testIdentityRoundTripDuringNativeCompletionReadCannotCompleteOldRun() async throws {
+        try await identityRoundTripDuringNativeRead(park: false)
+    }
+
+    func testIdentityRoundTripDuringNativeReadCannotParkOldRun() async throws {
+        try await identityRoundTripDuringNativeRead(park: true)
+    }
+
+    private func identityRoundTripDuringNativeRead(park: Bool) async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let original = try await authenticatedRenderedSnapshot(fixture)
+        let snapshot: JourneyProfileCatalog.Snapshot
+        if park {
+            let steps = try JSONDecoder().decode([Journey.Step].self, from: Data(#"""
+            [{"kind":"action","id":"present","action":{"type":"navigate","screenId":"screen_welcome"},"outlets":{}},
+             {"kind":"action","id":"wait","action":{"type":"delay","durationMs":259200000},"outlets":{"next":"done"}},
+             {"kind":"complete","id":"done","outcome":"done"}]
+            """#.utf8))
+            let routes = try JSONDecoder().decode([Journey.Route].self, from: Data(#"[{"eventName":"$screen_dismissed","host":{"kind":"screen","screenId":"screen_welcome"},"entryStepId":"wait"}]"#.utf8))
+            snapshot = replacing(original, entryStepId: "present", steps: steps, routes: routes)
+        } else { snapshot = replacing(original, routes: []) }
+        let gate = JourneyNthRoutedCaptureGate(eventName: "native", suspendedCall: 1)
+        let entered = expectation(description: "Native read suspended")
+        let context = try await makeRenderedJourneyTestContext(snapshot: snapshot, readNativeValues: { values in
+            let result = try await values.journeyValues()
+            if await gate.observationCount() == 0 { entered.fulfill() }
+            await gate.intercept(event: "native")
+            return result
+        })
+        defer { removeTemporaryDirectoryIfPresent(context.directory) }
+        await context.service.profileDidCommit(snapshot, distinctId: "customer")
+        let shown = await MainActor.run { context.presenter.request }
+        let request = try XCTUnwrap(shown)
+        let prepared = try await NuxieNativePreparedFile.prepare(bytes: SharedValuesFixture.payload().sceneBytes)
+        _ = try await request.runValues.native(in: prepared)
+        let finishing = Task {
+            if park {
+                _ = await request.onScreenDismissed("screen_welcome", nil, "user")
+                return true
+            }
+            return await request.onOutcome(.dismissed, "screen_welcome")
+        }
+        await fulfillment(of: [entered], timeout: 3)
+        for _ in 0..<100 {
+            if await gate.isSuspended() { break }
+            await Task.yield()
+        }
+        context.identity.setDistinctId("other")
+        context.identity.setDistinctId("customer")
+        await gate.release()
+        let accepted = await finishing.value
+        if !park { XCTAssertFalse(accepted) }
+        XCTAssertFalse(context.events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted && (!park || $0.properties["outcome"] as? String != "abandoned") })
+        let runs = try await context.journal.runs()
+        if !park { XCTAssertNil(runs.first?.completion) }
+        XCTAssertNil(runs.first?.park)
+        await context.service.shutdown()
     }
 
     func testHostDismissedBoundaryReadsTheLiveNativeValue() async throws {
