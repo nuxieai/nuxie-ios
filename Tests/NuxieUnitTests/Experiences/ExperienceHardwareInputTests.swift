@@ -238,10 +238,10 @@ final class ExperienceHardwareInputTests: XCTestCase {
     }
 
     func testNativeFieldTabAndShiftTabReachAuthoredRiveFocus() async throws {
-        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: "ViewModel1",
-            scene: Data(contentsOf: directory.appendingPathComponent("text_input_event.riv")))
-        let probe = InputStepProbe()
-        let controller = try ExperienceInputFixture.makeController(payload, probe: probe)
+        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: "Main",
+            scene: Data(contentsOf: directory.appendingPathComponent("focus_collapsing.riv")))
+        let probe = InputStepProbe(modelName: "Main")
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe, fixtureName: "focus_collapsing")
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 320, height: 640)
@@ -264,11 +264,21 @@ final class ExperienceHardwareInputTests: XCTestCase {
                 controller.pressesEnded([HardwarePress(HardwareKey(.keyboardTab, flags: modifiers), time: 2, pressed: false)], with: nil)
                 try await advance(controller, probe: probe)
                 XCTAssertTrue(controller.riveFocusState.hasFocus, "Native field Tab must traverse the authored Rive order")
+                XCTAssertFalse(editor.isFirstResponder)
+                let snapshot = try await controller.runtimeSnapshot()
+                let expectedChild = modifiers.contains(.shift) ? "child3" : "child1"
+                guard case .referencedInstance(let childID) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == expectedChild
+                })?.value else { return XCTFail("Missing authored child") }
+                XCTAssertEqual(snapshot.values.first(where: { $0.ownerInstanceID == childID && $0.name == "isFocused" })?.value,
+                    .bool(true), "Tab direction selects the authored first or last child")
                 XCTAssertTrue(editor.becomeFirstResponder())
                 controller.pressesBegan([HardwarePress(HardwareKey(.keyboardA), time: 3)], with: nil)
                 controller.pressesEnded([HardwarePress(HardwareKey(.keyboardA), time: 4, pressed: false)], with: nil)
                 try await advance(controller, probe: probe)
-                XCTAssertNotEqual(probe.values["hasKeyed"] as? Bool, true, "Every other key stays in the native field")
+                XCTAssertTrue(editor.isFirstResponder, "Every other key stays in the native field")
+                XCTAssertFalse(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardA.rawValue,
+                    modifiers: 0, pressed: true, repeated: false))
             }
         } catch {
             await controller.shutdownInteractiveScreen()
