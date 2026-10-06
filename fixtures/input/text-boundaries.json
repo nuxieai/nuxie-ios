@@ -1,0 +1,224 @@
+{
+  "cases": [
+    {
+      "name": "combining-accent",
+      "input": [
+        {
+          "text": "a",
+          "repeat": 1048575
+        },
+        {
+          "text": "é",
+          "repeat": 1
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "a",
+            "repeat": 1048575
+          }
+        ],
+        [
+          {
+            "text": "é",
+            "repeat": 1
+          }
+        ]
+      ]
+    },
+    {
+      "name": "joined-family",
+      "input": [
+        {
+          "text": "a",
+          "repeat": 1048570
+        },
+        {
+          "text": "👩‍👩‍👧‍👦",
+          "repeat": 1
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "a",
+            "repeat": 1048570
+          }
+        ],
+        [
+          {
+            "text": "👩‍👩‍👧‍👦",
+            "repeat": 1
+          }
+        ]
+      ]
+    },
+    {
+      "name": "skin-tone",
+      "input": [
+        {
+          "text": "a",
+          "repeat": 1048573
+        },
+        {
+          "text": "👍🏽",
+          "repeat": 1
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "a",
+            "repeat": 1048573
+          }
+        ],
+        [
+          {
+            "text": "👍🏽",
+            "repeat": 1
+          }
+        ]
+      ]
+    },
+    {
+      "name": "flag",
+      "input": [
+        {
+          "text": "a",
+          "repeat": 1048573
+        },
+        {
+          "text": "🇺🇸",
+          "repeat": 1
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "a",
+            "repeat": 1048573
+          }
+        ],
+        [
+          {
+            "text": "🇺🇸",
+            "repeat": 1
+          }
+        ]
+      ]
+    },
+    {
+      "name": "line-ending",
+      "input": [
+        {
+          "text": "a",
+          "repeat": 1048575
+        },
+        {
+          "text": "\r\n",
+          "repeat": 1
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "a",
+            "repeat": 1048575
+          }
+        ],
+        [
+          {
+            "text": "\r\n",
+            "repeat": 1
+          }
+        ]
+      ]
+    },
+    {
+      "name": "hangul",
+      "input": [
+        {
+          "text": "a",
+          "repeat": 1048573
+        },
+        {
+          "text": "각",
+          "repeat": 1
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "a",
+            "repeat": 1048573
+          }
+        ],
+        [
+          {
+            "text": "각",
+            "repeat": 1
+          }
+        ]
+      ]
+    },
+    {
+      "name": "indic-conjunct",
+      "input": [
+        {
+          "text": "a",
+          "repeat": 1048573
+        },
+        {
+          "text": "क्‍ष",
+          "repeat": 1
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "a",
+            "repeat": 1048573
+          }
+        ],
+        [
+          {
+            "text": "क्‍ष",
+            "repeat": 1
+          }
+        ]
+      ]
+    },
+    {
+      "name": "oversized-combined-character",
+      "input": [
+        {
+          "text": "e",
+          "repeat": 1
+        },
+        {
+          "text": "́",
+          "repeat": 524288
+        }
+      ],
+      "chunks": [
+        [
+          {
+            "text": "e",
+            "repeat": 1
+          },
+          {
+            "text": "́",
+            "repeat": 524287
+          }
+        ],
+        [
+          {
+            "text": "́",
+            "repeat": 1
+          }
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "unicodeVersion": "16.0.0",
+  "rules": "https://www.unicode.org/reports/tr29/tr29-45.html",
+  "sources": [
+    {
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/auxiliary/GraphemeBreakProperty.txt",
+      "sha256": "c29360bd6f7132811d701d29069541e827eb44bfc4c8fbde8c370d6982689dc1"
+    },
+    {
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/auxiliary/GraphemeBreakTest.txt",
+      "sha256": "ee2b9354d270ac061b29f09662cafea06341d77e704b8cc6bd72aaeeda363cb5"
+    },
+    {
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/emoji/emoji-data.txt",
+      "sha256": "f1365a5173eee18e1f98b240cdc492e84a25f1ce7e0c9d1094eb29c41a22696a"
+    },
+    {
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt",
+      "sha256": "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd"
+    },
+    {
+      "url": "https://www.unicode.org/license.txt",
+      "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+    }
+  ],
+  "encoding": "Sorted inclusive ranges. Low four bits: graphemeBreakNames index. Bits 4-5: indicBreakNames index. Bit 6: Extended_Pictographic. Hangul AC00-D7A3 uses its standard LV/LVT calculation.",
+  "sha256": {
+    "GraphemeBreakTest.txt": "ee2b9354d270ac061b29f09662cafea06341d77e704b8cc6bd72aaeeda363cb5",
+    "LICENSE.txt": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+    "properties.json": "e9254b78490baf7daf882c2b329742c2b97a3fc170b69c7278a99ab060af57c4"
+  }
+}
