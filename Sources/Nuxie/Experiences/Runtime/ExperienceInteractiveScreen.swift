@@ -243,6 +243,7 @@ actor ExperienceInteractiveOperationGate {
 struct ExperienceInteractiveStepResult: Equatable, Sendable {
     let keepGoing: Bool
     let pointerHits: [ExperienceInteractivePointerHit]
+    var focusState: NuxieNativeFocusState? = nil
     let effects: [ExperienceInteractiveEffect]
 }
 
@@ -1882,6 +1883,7 @@ actor ExperienceInteractiveScreen {
     func step(
         inputs: [ExperienceInteractiveInput] = [],
         pointers: [ExperienceInteractivePointerEvent] = [],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64 = 0,
         capturesTextLayout: Bool = false
@@ -1893,6 +1895,7 @@ actor ExperienceInteractiveScreen {
             var result = try await runtime.step(
                 inputs: nativeInputs,
                 pointers: nativePointers,
+                focusInputs: focusInputs,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
                 textRunNames: capturesTextLayout
@@ -1958,6 +1961,7 @@ actor ExperienceInteractiveScreen {
         return ExperienceInteractiveStepResult(
             keepGoing: result.keepGoing,
             pointerHits: result.pointerHits.map(Self.pointerHit),
+            focusState: result.focusState,
             effects: effects
         )
     }
@@ -3561,6 +3565,17 @@ actor ExperienceInteractiveScreen {
             }
             let owner = try await runtime.fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: name)
             return ExperienceTextInputSource(text: text, ownerInstanceID: owner)
+        }
+    }
+
+    func readPresentedFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> String {
+        let runtime = runtime
+        return try await operationGate.withLock {
+            let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: name)
+            guard let text = String(data: bytes, encoding: .utf8) else {
+                throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
+            }
+            return text
         }
     }
 

@@ -148,6 +148,8 @@ final class ExperienceScreenViewController: UIViewController {
     private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
 
     private var interactiveScreen: ExperienceInteractiveScreen?
+    private let usesSystemDisplayLink: Bool
+    private let acquireDrawable: @MainActor (CAMetalLayer) -> (any CAMetalDrawable)?
     private var presentationLoop: ExperienceRuntimePresentationLoop?
     private var runtimeFailure: Error?
     private var isShuttingDown = false
@@ -155,6 +157,8 @@ final class ExperienceScreenViewController: UIViewController {
     private var contentHidden = false
     private var semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
     private var controllerIsVisible = false
+    private var pressedHardwareKeys: Set<Int> = []
+    private(set) var riveFocusState = NuxieNativeFocusState(hasFocus: false, expectsKeyboardInput: false)
     private var lastPushedFontScale: Double?
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
     private var lifecycleState: ExperienceScreenLifecycleState
@@ -170,6 +174,9 @@ final class ExperienceScreenViewController: UIViewController {
     /// Terminal failures after a successful mount are surfaced here. A queued
     /// SDK mutation can be rejected without poisoning the presentation lane.
     var onRuntimeFailure: ((Error) -> Void)?
+    var onSemanticCapture: ((NuxieNativeSemanticCapture) -> Void)?
+    var hasCompletedLatestFrame: Bool { presentationLoop?.hasCompletedLatestFrame ?? false }
+    var hasDeliveredLatestSemanticFrame: Bool { presentationLoop?.hasDeliveredLatestSemanticFrame ?? false }
 
     weak var delegate: ExperienceScreenViewControllerDelegate?
 
@@ -185,11 +192,15 @@ final class ExperienceScreenViewController: UIViewController {
         artifact: LoadedExperienceArtifact,
         screen: NativeExperienceScreen,
         reduceMotion: Bool,
+        usesSystemDisplayLink: Bool = true,
+        acquireDrawable: @escaping @MainActor (CAMetalLayer) -> (any CAMetalDrawable)? = { $0.nextDrawable() },
         presentationDiagnosticsEnabled: Bool = false,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil,
         delegate: ExperienceScreenViewControllerDelegate?
     ) {
         self.experience = experience
+        self.usesSystemDisplayLink = usesSystemDisplayLink
+        self.acquireDrawable = acquireDrawable
         self.artifact = artifact
         self.screen = screen
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
@@ -205,6 +216,12 @@ final class ExperienceScreenViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+            name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+            name: UITextField.textDidBeginEditingNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+            name: UITextView.textDidBeginEditingNotification, object: nil)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(contentSizeCategoryDidChange),
@@ -257,13 +274,75 @@ final class ExperienceScreenViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         controllerIsVisible = true
+        if !hasNativeTextFocus(view) { becomeFirstResponder() }
         updatePresentationVisibility()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         controllerIsVisible = false
+        pressedHardwareKeys.removeAll()
         updatePresentationVisibility()
+    }
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    @objc private func clearHardwareKeys() { pressedHardwareKeys.removeAll() }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unhandled = routeHardwarePresses(presses, pressed: true)
+        if !unhandled.isEmpty { super.pressesBegan(unhandled, with: event) }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unhandled = routeHardwarePresses(presses, pressed: false)
+        if !unhandled.isEmpty { super.pressesEnded(unhandled, with: event) }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unhandled = routeHardwarePresses(presses, pressed: false)
+        if !unhandled.isEmpty { super.pressesCancelled(unhandled, with: event) }
+    }
+
+    private func routeHardwarePresses(_ presses: Set<UIPress>, pressed: Bool) -> Set<UIPress> {
+        guard controllerIsVisible else { return presses }
+        if hasNativeTextFocus(view) {
+            pressedHardwareKeys.removeAll()
+            return presses
+        }
+        var unhandled: Set<UIPress> = []
+        for press in presses.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard let key = press.key else { unhandled.insert(press); continue }
+            let hid = key.keyCode.rawValue
+            guard pressed || pressedHardwareKeys.contains(hid) else {
+                unhandled.insert(press)
+                continue
+            }
+            let repeatPress = pressed && pressedHardwareKeys.contains(hid)
+            let modifiers = ExperienceHardwareKey.modifiers(key.modifierFlags)
+            let accepted = receiveHardwareKey(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeatPress)
+            if pressed && accepted { pressedHardwareKeys.insert(hid) }
+            if !pressed { pressedHardwareKeys.remove(hid) }
+            if !accepted { unhandled.insert(press) }
+        }
+        return unhandled
+    }
+
+    @discardableResult
+    func receiveHardwareKey(hid: Int, modifiers: UInt8, pressed: Bool, repeated: Bool) -> Bool {
+        guard controllerIsVisible, !hasNativeTextFocus(view),
+              let input = ExperienceHardwareKey.input(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeated)
+        else { return false }
+        return receiveFocusInput(input)
+    }
+
+    @discardableResult
+    func receiveFocusInput(_ input: NuxieNativeFocusInput) -> Bool {
+        presentationLoop?.enqueueFocus(input) ?? false
+    }
+
+    private func hasNativeTextFocus(_ view: UIView) -> Bool {
+        (view.isFirstResponder && view is any UITextInput) || view.subviews.contains { hasNativeTextFocus($0) }
     }
 
     override func viewDidLayoutSubviews() {
@@ -359,11 +438,14 @@ final class ExperienceScreenViewController: UIViewController {
             session: interactive.presentationSession(
                 onSemantics: semanticConsumer,
                 onTextFrame: textConsumer,
-                onCaptions: captionConsumer
+                onCaptions: captionConsumer,
+                onFocus: { [weak self] state in self?.riveFocusState = state }
             ) { [weak self] effects in
                 await self?.deliverStep(effects: effects)
             },
             surfaceView: surfaceView,
+            usesSystemDisplayLink: usesSystemDisplayLink,
+            acquireDrawable: acquireDrawable,
             onSessionResult: { [weak self] in
                 guard let self else { return }
                 if let bounds = self.interactiveScreen?.artboardBounds {
@@ -447,6 +529,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func setContentHidden(_ hidden: Bool) {
+        if hidden { clearHardwareKeys() }
         contentHidden = hidden
         if hidden, requiresSceneSemantics { semanticContainer.setActive(false) }
         surfaceView.isHidden = hidden
@@ -561,6 +644,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func hide(reduceMotion: Bool) async {
+        clearHardwareKeys()
         presentationLoop?.setTimelineActive(false)
         let snapshot = lifecycleState.move(
             to: .hidden,
@@ -725,6 +809,21 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
+    /// Reads the captured field through the same serial lane as input and presentation.
+    func readPresentedFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> String {
+        guard !isShuttingDown, runtimeFailure == nil,
+              let interactiveScreen, let presentationLoop else { throw CancellationError() }
+        return try await withCheckedThrowingContinuation { continuation in
+            presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+                let value = try await interactiveScreen.readPresentedFieldString(
+                    captureID: captureID, nodeID: nodeID, name: name)
+                return .work(requestsFrame: false) { continuation.resume(returning: value) }
+            }, completion: { result in
+                if case .failure(let error) = result { continuation.resume(throwing: error) }
+            })
+        }
+    }
+
     private func enqueueStateCommand(
         _ command: ExperienceInteractiveStateCommand,
         logFailure: Bool = true,
@@ -769,6 +868,7 @@ final class ExperienceScreenViewController: UIViewController {
               let transform = ExperienceLayoutTransform(
                 artboardBounds: interactiveScreen.artboardBounds,
                 viewportBounds: surfaceView.bounds) else { return }
+        onSemanticCapture?(capture)
         let nativeControls = textInputOverlayBridge.applySemantics(capture)
         semanticContainer.update(capture: capture, nativeControls: nativeControls, project: { [weak self] node in
             guard let self, let role = NuxieNativeSemanticRole(rawValue: node.role), role != .none else { return nil }
