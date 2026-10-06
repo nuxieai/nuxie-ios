@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "name": "change only",
+      "value": "new:monthly",
+      "events": [],
+      "expectedEvents": []
+    },
+    {
+      "name": "change then emit",
+      "value": "new:monthly",
+      "events": [
+        "continue"
+      ],
+      "expectedEvents": [
+        "continue"
+      ]
+    },
+    {
+      "name": "later frame",
+      "value": "other:yearly",
+      "events": [
+        "continue"
+      ],
+      "expectedEvents": [
+        "continue"
+      ]
+    }
+  ]
+}
