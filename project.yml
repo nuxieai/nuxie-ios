@@ -111,7 +111,7 @@ targets:
       PRODUCT_NAME: Nuxie
       # Phase 1 guardrail: surface data races as warnings now; Phase 10 flips
       # the package to Swift 6 language mode (errors). Baseline recorded in the
-      # cleanup plan — ratchet down, never up.
+      # cleanup plan: ratchet down, never up.
       SWIFT_STRICT_CONCURRENCY: complete
       SWIFT_PACKAGE_NAME: Nuxie
       MARKETING_VERSION: 0.1.0
@@ -222,6 +222,7 @@ targets:
           # UIKit scenes and target-action delivery require the app host.
           # The full suite runs in the mandatory NuxieExperienceInputTests target.
           - Experiences/ExperienceTextInputSemanticsTests.swift
+          - Experiences/ExperienceHardwareInputTests.swift
       - path: Examples/Adapters/NuxieProviderCheckoutRoute.swift
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
@@ -498,6 +499,7 @@ targets:
         name: NuxieUnitTests
         includes:
           - Experiences/ExperienceTextInputSemanticsTests.swift
+          - Experiences/ExperienceHardwareInputTests.swift
           - Experiences/ExperienceTextInputTypographyTests.swift
           - Experiences/SignedSemanticJourneyTests.swift
           - Fixtures/semantic_text.riv
