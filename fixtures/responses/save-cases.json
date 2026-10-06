@@ -137,6 +137,30 @@
       },
       "httpStatus": 200,
       "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "customer_deleted",
+        "sequence": null
+      },
+      "httpStatus": 200,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "save_unavailable",
+        "sequence": null
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": null
+      },
+      "httpStatus": 503,
+      "expected": "retry"
     }
   ]
 }
