@@ -237,6 +237,46 @@ final class ExperienceHardwareInputTests: XCTestCase {
         await controller.shutdownInteractiveScreen()
     }
 
+    func testNativeFieldTabAndShiftTabReachAuthoredRiveFocus() async throws {
+        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: "ViewModel1",
+            scene: Data(contentsOf: directory.appendingPathComponent("text_input_event.riv")))
+        let probe = InputStepProbe()
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 640)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.view.layoutIfNeeded()
+        let editor = UITextField(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+        controller.view.addSubview(editor)
+        do {
+            try await controller.mountInteractiveScreen()
+            await controller.enter(reduceMotion: true)
+            await controller.activate(reduceMotion: true)
+            for modifiers in [UIKeyModifierFlags(), .shift] {
+                XCTAssertTrue(controller.receiveFocusInput(.clear))
+                try await advance(controller, probe: probe)
+                XCTAssertFalse(controller.riveFocusState.hasFocus)
+                XCTAssertTrue(editor.becomeFirstResponder())
+                controller.pressesBegan([HardwarePress(HardwareKey(.keyboardTab, flags: modifiers), time: 1)], with: nil)
+                controller.pressesEnded([HardwarePress(HardwareKey(.keyboardTab, flags: modifiers), time: 2, pressed: false)], with: nil)
+                try await advance(controller, probe: probe)
+                XCTAssertTrue(controller.riveFocusState.hasFocus, "Native field Tab must traverse the authored Rive order")
+                XCTAssertTrue(editor.becomeFirstResponder())
+                controller.pressesBegan([HardwarePress(HardwareKey(.keyboardA), time: 3)], with: nil)
+                controller.pressesEnded([HardwarePress(HardwareKey(.keyboardA), time: 4, pressed: false)], with: nil)
+                try await advance(controller, probe: probe)
+                XCTAssertNotEqual(probe.values["hasKeyed"] as? Bool, true, "Every other key stays in the native field")
+            }
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+        await controller.shutdownInteractiveScreen()
+    }
+
     func testIdleFrameRetiresFocusAfterBoundOpacityHidesControl() async throws {
         let bytes = try Data(contentsOf: directory.appendingPathComponent("focus_collapsing.riv"))
         let inspection = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "Artboard",
@@ -335,6 +375,14 @@ final class ExperienceHardwareInputTests: XCTestCase {
             controller.pressesEnded([HardwarePress(HardwareKey(.keyboardA), time: 4, pressed: false)], with: nil)
             try await advance(controller, probe: probe)
             XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 2, "The A-up listener fires once")
+            controller.pressesBegan([HardwarePress(HardwareKey(.keyboardB), time: 5)], with: nil)
+            for _ in 0..<40 { try await advance(controller, probe: probe) }
+            try await Task.sleep(nanoseconds: 650_000_000)
+            try await advance(controller, probe: probe)
+            XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 2, "A held key sends no repeat downs")
+            controller.pressesEnded([HardwarePress(HardwareKey(.keyboardB), time: 6, pressed: false)], with: nil)
+            try await advance(controller, probe: probe)
+            XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 3, "The B-up listener fires once")
         } catch {
             await controller.shutdownInteractiveScreen()
             throw error
