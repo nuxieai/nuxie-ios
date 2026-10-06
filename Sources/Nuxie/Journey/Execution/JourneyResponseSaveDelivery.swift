@@ -39,6 +39,25 @@ actor JourneyResponseSaveDelivery {
         return sheet
     }
 
+    func sendWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
+                     answers: ExactJSONObject<JourneyReleaseJSONValue>) async throws -> JourneyResponseSaveReply {
+        guard active, journal.responseSaveNamespace == scope?.conversionNamespace else {
+            throw JourneyResponseSaveError.wrongOwner
+        }
+        let sheet = try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: false)
+        try Task.checkCancellation()
+        guard active else { throw CancellationError() }
+        let reply: JourneyResponseSaveReply
+        do { reply = try await transport.sendResponseSave(sheet) }
+        catch is CancellationError { throw CancellationError() }
+        catch { try Task.checkCancellation(); return .noAnswer }
+        try Task.checkCancellation()
+        if reply.confirmed, let sequence = reply.sequence {
+            try await journal.confirmResponseSave(sheet, storedSequence: sequence)
+        }
+        return reply
+    }
+
     func shutdown() async {
         active = false
         let task = worker?.task
