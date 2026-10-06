@@ -31,10 +31,16 @@ final class ExperienceHardwareInputTests: XCTestCase {
             await controller.activate(reduceMotion: true)
             // The upstream default instance starts with three false flags.
             probe.values = ["isFocused": false, "hasKeyed": false, "hasTexted": false]
+            XCTAssertFalse(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: true, repeated: false), "An unfocused Rive player must leave Escape to the platform")
             let tab = HardwarePress(HardwareKey(.keyboardTab), time: 1)
             controller.pressesBegan([tab], with: nil)
             try await advance(controller, probe: probe)
             XCTAssertEqual(controller.riveFocusState, .init(hasFocus: true, expectsKeyboardInput: true))
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: true, repeated: false))
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: false, repeated: false))
             var observed = [probe.flags]
             controller.pressesBegan([HardwarePress(HardwareKey(.keyboardB), time: 2)], with: nil)
             try await advance(controller, probe: probe)
@@ -162,7 +168,7 @@ final class ExperienceHardwareInputTests: XCTestCase {
             observed.append(count()); try await advance(controller, probe: probe)
             key(.keyboardB, false)
             try await advance(controller, probe: probe); observed.append(count())
-            // UIKit derives repeat from a held key. B down is ignored by this fixture.
+            // The second began is synthetic and proves repeat mapping only. B down is ignored by this fixture.
             key(.keyboardB); key(.keyboardB)
             try await advance(controller, probe: probe); observed.append(count())
             key(.keyboardD)
@@ -215,6 +221,52 @@ final class ExperienceHardwareInputTests: XCTestCase {
             try await advance(controller, probe: probe)
             XCTAssertEqual(count(), 8, "Discarding queued input must retire the press ownership too")
             XCTAssertNil(probe.failure)
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+        await controller.shutdownInteractiveScreen()
+    }
+
+    func testOneHeldUIKitKeyProducesOneNonrepeatDownAndOneUp() async throws {
+        let children: [[String: Any]] = [
+            ["viewModelId": "KeyboardInputChildVM", "vmInstanceId": "key-e", "instanceName": "Instance 4"],
+            ["viewModelId": "KeyboardInputChildVM", "vmInstanceId": "key-d", "instanceName": "Instance 3"],
+            ["viewModelId": "KeyboardInputChildVM", "vmInstanceId": "key-c", "instanceName": "Instance 2"],
+            ["viewModelId": "KeyboardInputChildVM", "vmInstanceId": "key-b", "instanceName": "Instance 1"],
+            ["viewModelId": "KeyboardInputChildVM", "vmInstanceId": "key-a", "instanceName": "Instance"],
+        ]
+        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: "KeyboardInputVM",
+            values: [JourneyViewModelValue(viewModelName: "KeyboardInputVM", instanceId: "root-sdk-id",
+                path: "children", value: AnyCodable(children))],
+            scene: Data(contentsOf: directory.appendingPathComponent("keyboard_listener.riv")),
+            artboardName: "KeyboardInput")
+        let probe = InputStepProbe(modelName: "KeyboardInputVM")
+        probe.values["keyCount"] = 0
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe, fixtureName: "keyboard_listener")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 640)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.view.layoutIfNeeded()
+        do {
+            try await controller.mountInteractiveScreen()
+            await controller.enter(reduceMotion: true)
+            await controller.activate(reduceMotion: true)
+            controller.pressesBegan([HardwarePress(HardwareKey(.keyboardTab), time: 1)], with: nil)
+            controller.pressesEnded([HardwarePress(HardwareKey(.keyboardTab), time: 2, pressed: false)], with: nil)
+            try await advance(controller, probe: probe)
+            controller.pressesBegan([HardwarePress(HardwareKey(.keyboardA), time: 3)], with: nil)
+            try await advance(controller, probe: probe)
+            XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 1, "The nonrepeat A-down listener fires once")
+            try await advance(controller, probe: probe)
+            try await advance(controller, probe: probe)
+            XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 1, "A held key synthesizes no more downs")
+            controller.pressesEnded([HardwarePress(HardwareKey(.keyboardA), time: 4, pressed: false)], with: nil)
+            try await advance(controller, probe: probe)
+            XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 2, "The A-up listener fires once")
         } catch {
             await controller.shutdownInteractiveScreen()
             throw error
