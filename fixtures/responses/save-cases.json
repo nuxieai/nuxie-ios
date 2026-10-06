@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "request": {
+    "apiKey": "test-key",
+    "distinct_id": "anon",
+    "journey_id": "journey-1",
+    "experience_id": "experience-1",
+    "experience_version_id": "version-1",
+    "form_name": "feedback",
+    "sequence": 1,
+    "answers": {
+      "stars": 2,
+      "email": "not an email",
+      "enabled": false,
+      "comment": "",
+      "interests": []
+    }
+  },
+  "replies": [
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 1
+      },
+      "httpStatus": 503,
+      "expected": "confirmed"
+    },
+    {
+      "body": {
+        "status": "replayed",
+        "sequence": 7
+      },
+      "httpStatus": 409,
+      "expected": "confirmed"
+    },
+    {
+      "body": {
+        "status": "stale",
+        "sequence": 9
+      },
+      "httpStatus": 400,
+      "expected": "confirmed"
+    },
+    {
+      "body": {
+        "status": "merge_in_progress"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "customer_unavailable"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "customer_redirect_loop"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "save_unavailable"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "unknown_form"
+      },
+      "httpStatus": 200,
+      "expected": "retry_until_deadline"
+    },
+    {
+      "body": {
+        "status": "invalid_request"
+      },
+      "httpStatus": 200,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "authentication_failed"
+      },
+      "httpStatus": 200,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "unknown_experience_version"
+      },
+      "httpStatus": 200,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "pinned_version_mismatch"
+      },
+      "httpStatus": 200,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "sequence_conflict"
+      },
+      "httpStatus": 200,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "customer_deleted"
+      },
+      "httpStatus": 200,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "unexpected_gateway_code"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {},
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 0
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    }
+  ]
+}
