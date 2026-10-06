@@ -145,7 +145,7 @@ enum JourneyJournalError {
 }
 
 /// The leg's retry state and reentry checklist share one atomic snapshot. The
-/// existing event database remains the sole delivery queue. Nothing in this
+/// existing event database remains the sole event delivery queue. Nothing in this
 /// journal reads, migrates, or deletes event history or commerce evidence.
 struct JourneyRunJournal {
     fileprivate struct Snapshot {
@@ -155,9 +155,11 @@ struct JourneyRunJournal {
         var stateArmReceipts: Set<JourneyStateArmReceipt> = []
         var conversionWatches: [String: JourneyConversionWatch] = [:]
         var conversionReceipts: [String: Int] = [:]
+        var responseSaves: JourneyResponseSaveState?
     }
 
     let distinctId: String
+    private let saveNamespace: String
     private let root: URL
     private let file: URL
     private let releasePins: JourneyReleasePinStore
@@ -178,6 +180,7 @@ struct JourneyRunJournal {
         beforePersist: (@Sendable () throws -> Void)? = nil
     ) throws {
         self.distinctId = distinctId
+        self.saveNamespace = storageScope.conversionNamespace
         self.beforePersist = beforePersist
         let root = directory.appendingPathComponent("journey-journal-v2", isDirectory: true)
         self.root = root
@@ -384,6 +387,67 @@ struct JourneyRunJournal {
         let now = JourneyConversionWatch.millis(at)
         state.conversionWatches = state.conversionWatches.filter {
             $0.value.shouldRetain(at: now, executing: executing.contains($0.key))
+        }
+    }
+
+    func reserveResponseSave(
+        run: JourneyRun,
+        formName: String,
+        answers: ExactJSONObject<JourneyReleaseJSONValue>,
+        queued: Bool
+    ) async throws -> JourneyResponseSave {
+        let distinctId = distinctId
+        let namespace = saveNamespace
+        return try await update { state in
+            var saves = state.responseSaves ?? .init(namespace: namespace, distinctId: distinctId)
+            guard saves.namespace == namespace,
+                  saves.distinctId.utf16.elementsEqual(distinctId.utf16) else {
+                throw JourneyResponseSaveError.wrongOwner
+            }
+            guard state.runs[run.id]?.startedEventId == run.startedEventId
+                    || saves.journeys[run.journeyId]?[formName] != nil else {
+                throw JourneyResponseSaveError.wrongOwner
+            }
+            var forms = saves.journeys[run.journeyId] ?? [:]
+            var lane = forms[formName] ?? .init()
+            guard lane.sequence < JourneyResponseSave.maximumSequence else {
+                throw JourneyResponseSaveError.sequenceExhausted
+            }
+            lane.sequence += 1
+            let sheet = JourneyResponseSave(distinctId: distinctId, journeyId: run.journeyId,
+                experienceId: run.reference.experienceId, experienceVersionId: run.reference.versionId,
+                formName: formName, sequence: lane.sequence, answers: answers)
+            if queued { lane.pending = sheet }
+            forms[formName] = lane
+            saves.journeys[run.journeyId] = forms
+            state.responseSaves = saves
+            return sheet
+        }
+    }
+
+    func pendingResponseSaves() async throws -> [JourneyResponseSave] {
+        try await read { state in
+            state.responseSaves?.journeys.values.flatMap { $0.values.compactMap(\.pending) } ?? []
+        }
+    }
+
+    func confirmResponseSave(_ sheet: JourneyResponseSave, storedSequence: Int64) async throws {
+        guard sheet.distinctId.utf16.elementsEqual(distinctId.utf16) else {
+            throw JourneyResponseSaveError.wrongOwner
+        }
+        guard sheet.sequence > 0, storedSequence >= sheet.sequence,
+              storedSequence <= JourneyResponseSave.maximumSequence else {
+            throw JourneyResponseSaveError.invalidReceipt
+        }
+        try await update { state in
+            guard var saves = state.responseSaves,
+                  var forms = saves.journeys[sheet.journeyId],
+                  var lane = forms[sheet.formName] else { throw JourneyResponseSaveError.invalidReceipt }
+            lane.sequence = max(lane.sequence, storedSequence)
+            if let pending = lane.pending, pending.sequence <= sheet.sequence { lane.pending = nil }
+            forms[sheet.formName] = lane
+            saves.journeys[sheet.journeyId] = forms
+            state.responseSaves = saves
         }
     }
 
