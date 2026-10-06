@@ -2,6 +2,32 @@ import XCTest
 @testable import Nuxie
 
 final class JourneyScreenEmissionDispatcherTests: XCTestCase {
+    func testReservedEventDropsOnlyItselfFromSharedFrame() async throws {
+        struct Vector: Decodable {
+            let events: [String]
+            let expectedEvents: [String]
+            let expectedSequences: [UInt64]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/events/reserved-event-filtering.json")))
+        let run = ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
+            lifecycleGeneration: 0, presentationEpoch: 0)
+        for scripted in [false, true] {
+            let dispatcher = ScreenEmissionDispatcher(createId: incrementingID(), now: { "2026-10-06T00:00:00Z" },
+                executeScriptAction: { _ in vector.events.map { .event(name: $0, payload: [:]) } })
+            let result = scripted
+                ? await dispatcher.dispatch(run: run, screenId: "screen",
+                    definition: .init(actionId: "control", binding: .script), invocation: .init(actionId: "control"))
+                : await dispatcher.dispatch(run: run, source: .init(screenId: "screen", actionId: "runtime", componentId: nil, instanceId: nil),
+                    drafts: vector.events.map { .event(name: $0, payload: [:]) })
+            let batch = try XCTUnwrap(result.success)
+            XCTAssertEqual(batch.emissions.map(\.name), vector.expectedEvents)
+            XCTAssertEqual(batch.emissions.map(\.sequence), vector.expectedSequences)
+        }
+    }
+
     func testUnaliasedControlDropsOnlyItsOwnDrafts() async throws {
         let dispatcher = ScreenEmissionDispatcher(createId: incrementingID(), now: { "2026-08-17T22:00:00.000Z" }, executeScriptAction: { _ in [] })
         let result = await dispatcher.dispatch(run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0, lifecycleGeneration: 0, presentationEpoch: 0),
