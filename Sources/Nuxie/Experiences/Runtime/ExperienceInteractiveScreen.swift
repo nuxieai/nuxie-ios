@@ -184,8 +184,6 @@ enum ExperienceInteractiveEffectKind: Equatable, Sendable {
     case controlAction(actionId: String, event: ExperienceInteractiveReportedEvent)
     case reportedEvent(ExperienceInteractiveReportedEvent)
     case viewModelChange(ExperienceInteractiveViewModelChange)
-    case responseSet(field: String, value: ExperienceInteractiveValue)
-    case responseUnset(field: String)
     case journeyEvent(name: String, payload: ExperienceInteractiveValue)
     case hostCommand(name: String, payload: ExperienceInteractiveValue)
     case rejectedHostCommand(name: String, reason: String)
@@ -480,25 +478,6 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         declaredEventNames: Set<String>
     ) -> ExperienceInteractiveEffectKind {
         switch command.name {
-        case JourneyResponseControlNames.responseSet:
-            guard case .string(let field) = command.payload["field"],
-                  !field.isEmpty,
-                  let value = command.payload["value"] else {
-                return .rejectedHostCommand(
-                    name: command.name,
-                    reason: "expected a non-empty string field and a value"
-                )
-            }
-            return .responseSet(field: field, value: value)
-        case JourneyResponseControlNames.responseUnset:
-            guard case .string(let field) = command.payload["field"],
-                  !field.isEmpty else {
-                return .rejectedHostCommand(
-                    name: command.name,
-                    reason: "expected a non-empty string field"
-                )
-            }
-            return .responseUnset(field: field)
         case "$navigate":
             // Screens emit events; Journey Routes are the sole navigation authority.
             return .rejectedHostCommand(
@@ -1496,6 +1475,10 @@ actor ExperienceInteractivePreparation {
         "Generated Nuxie Pressable Interaction",
         "Generated Nuxie Interaction",
     ]
+
+    func prepareRunValues(_ values: ExperienceRunValues) async throws {
+        _ = try await values.native(in: preparedFile)
+    }
 
     private let payload: AuthenticatedRuntimePayload
     private let preparedFile: NuxieNativePreparedFile

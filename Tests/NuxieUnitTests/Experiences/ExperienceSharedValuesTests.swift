@@ -78,6 +78,21 @@ final class ExperienceSharedValuesTests: XCTestCase {
     }
     #endif
 
+    func testJourneyReadsNativeRunValuesAfterEveryWrite() async throws {
+        let prepared = try await NuxieNativePreparedFile.prepare(bytes: SharedValuesFixture.payload().sceneBytes)
+        let run = ExperienceRunValues()
+        let result = try await run.native(in: prepared)
+        let native = try XCTUnwrap(result)
+        for days: Float in [30, 7] {
+            _ = try await native.sessions.mutate([.setNumber(instance: native.reference, path: "trip_days", value: days)])
+            let fields = try await run.journeyValues()
+            XCTAssertEqual(fields["trip_days"], .number(Double(days)))
+            let context = ArmedJourney.Context(event: [:], responses: fields)
+            XCTAssertEqual(JourneyValues.resolve(.responseField("trip_days"), context: context), .number(Double(days)))
+        }
+        await run.retire()
+    }
+
     func testRetirementReleasesTheRunOwnedNativeHandle() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(bytes: SharedValuesFixture.payload().sceneBytes)
         let run = ExperienceRunValues()

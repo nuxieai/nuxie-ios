@@ -764,50 +764,6 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    nonisolated static func responseSetDraft(
-        for input: NativeExperienceTextInput,
-        text: String,
-        snapshot: ExperienceInteractiveViewModelSnapshot? = nil
-    ) throws -> ScreenEmissionDraft? {
-        guard let fieldKey = input.responseFieldKey, !fieldKey.isEmpty else { return nil }
-        guard input.responseCapture == .binding else {
-            return .responseSet(field: fieldKey, value: .string(text))
-        }
-        guard let snapshot else {
-            throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' requires an evaluated response binding")
-        }
-        var owner = snapshot.rootInstanceID
-        let path = ["response", "values", fieldKey]
-        for (index, segment) in path.enumerated() {
-            let matches = snapshot.values.filter { $0.ownerInstanceID == owner && $0.name == segment }
-            guard matches.count == 1 else {
-                throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is missing or ambiguous")
-            }
-            let value = matches[0].value
-            if index < path.count - 1 {
-                guard case .referencedInstance(let child) = value else {
-                    throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding has invalid topology")
-                }
-                owner = child
-                continue
-            }
-            let captured: ScreenEmissionValue
-            switch value {
-            case .number(let number) where number.isFinite: captured = .number(Double(number))
-            case .bool(let boolean): captured = .bool(boolean)
-            case .bytes(let bytes):
-                guard let string = String(data: bytes, encoding: .utf8) else {
-                    throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is not UTF-8")
-                }
-                captured = .string(string)
-            default:
-                throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is not a supported scalar")
-            }
-            return .responseSet(field: fieldKey, value: captured)
-        }
-        return nil
-    }
-
     func applyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
         guard !isShuttingDown, runtimeFailure == nil,
               let interactiveScreen, let presentationLoop else { return false }
@@ -909,56 +865,17 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func configureTextInputCallbacks() {
-        textInputOverlayBridge.onAcceptedTextChange = { [weak self] input, text in
-            guard let self,
-                  let interactiveScreen = self.interactiveScreen,
+        textInputOverlayBridge.onAcceptedTextChange = { [weak self] _, _ in
+            guard let self, let screen = self.interactiveScreen,
                   let loop = self.presentationLoop else { return }
-            let originatingRun = self.delegate?.screenEmissionRun(for: self)
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
-                // Accepted text reaches the native target before this queued work.
-                // Settle its reverse binding before reading the authoritative source.
-                let step = input.responseCapture == .binding
-                    ? try await interactiveScreen.step(elapsedSeconds: 0) : nil
-                let draftResult: Result<ScreenEmissionDraft?, Error>
-                do {
-                    let snapshot = input.responseCapture == .binding
-                        ? try await interactiveScreen.snapshot() : nil
-                    draftResult = .success(try Self.responseSetDraft(for: input, text: text, snapshot: snapshot))
-                } catch {
-                    draftResult = .failure(error)
-                }
-                return .work(requestsFrame: step != nil) { [weak self] in
-                    guard let self else { return }
-                    if let step { await self.deliverStep(effects: step.effects) }
-                    guard self.semanticInputIsEligible else { return }
-                    let draft: ScreenEmissionDraft?
-                    switch draftResult {
-                    case .success(let value): draft = value
-                    case .failure(let error): self.handleTerminalFailure(error); return
-                    }
-                    guard let draft else { return }
-                    await self.delegate?.experienceScreenViewController(
-                        self,
-                        didEmitScreenEmission: .effects(
-                            source: ScreenEmissionSource(
-                                screenId: input.screenId,
-                                actionId: "text_input:\(input.inputId)",
-                                componentId: input.inputId,
-                                instanceId: nil
-                            ),
-                            drafts: [draft]
-                        ),
-                        originatingRun: originatingRun,
-                        frameSources: nil
-                    )
+                let step = try await screen.step(elapsedSeconds: 0)
+                return .work(requestsFrame: true) { [weak self] in
+                    await self?.deliverStep(effects: step.effects)
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
-                if case .failure(let error) = result {
-                    if input.responseCapture == .binding, !(error is CancellationError) {
-                        self?.handleTerminalFailure(error)
-                    } else {
-                        self?.logRejectedState(error)
-                    }
+                if case .failure(let error) = result, !(error is CancellationError) {
+                    self?.handleTerminalFailure(error)
                 }
             })
         }
@@ -1250,19 +1167,6 @@ final class ExperienceScreenViewController: UIViewController {
                 handleTerminalFailure(error)
             }
             return nil
-        case .responseSet(let field, let value):
-            return .draft(
-                .responseSet(
-                    field: field,
-                    value: ScreenEmissionValue(rendererValue: Self.rendererValue(value))
-                ),
-                source: runtimeEmissionSource(for: effect)
-            )
-        case .responseUnset(let field):
-            return .draft(
-                .responseUnset(field: field),
-                source: runtimeEmissionSource(for: effect)
-            )
         case .journeyEvent(let name, let payload),
              .hostCommand(let name, let payload):
             let properties = Self.rendererProperties(payload)

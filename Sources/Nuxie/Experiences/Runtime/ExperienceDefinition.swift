@@ -146,20 +146,6 @@ struct ExperienceDefinition: Sendable {
                 }
             }
             return .emit(eventName: eventName, payload: payload)
-        case "response_set":
-            guard case .string(let field) = action["field"],
-                  let value = action["value"] else {
-                throw JourneyReleaseAuthenticationError.invalidDescriptor
-            }
-            return .responseSet(
-                field: field,
-                value: try declarativeValueSource(value)
-            )
-        case "response_unset":
-            guard case .string(let field) = action["field"] else {
-                throw JourneyReleaseAuthenticationError.invalidDescriptor
-            }
-            return .responseUnset(field: field)
         default:
             throw JourneyReleaseAuthenticationError.invalidDescriptor
         }
