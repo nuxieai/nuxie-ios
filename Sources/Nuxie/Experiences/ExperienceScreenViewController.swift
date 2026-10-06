@@ -315,14 +315,15 @@ final class ExperienceScreenViewController: UIViewController {
 
     private func routeHardwarePresses(_ presses: Set<UIPress>, pressed: Bool) -> Set<UIPress> {
         guard controllerIsVisible else { return presses }
-        if hasNativeTextFocus(view) {
-            pressedHardwareKeys.removeAll()
-            return presses
-        }
         var unhandled: Set<UIPress> = []
         for press in presses.sorted(by: { $0.timestamp < $1.timestamp }) {
             guard let key = press.key else { unhandled.insert(press); continue }
             let hid = key.keyCode.rawValue
+            if hasNativeTextFocus(view), hid != UIKeyboardHIDUsage.keyboardTab.rawValue {
+                pressedHardwareKeys.remove(hid)
+                unhandled.insert(press)
+                continue
+            }
             guard pressed || pressedHardwareKeys.contains(hid) else {
                 unhandled.insert(press)
                 continue
@@ -338,12 +339,16 @@ final class ExperienceScreenViewController: UIViewController {
     @discardableResult
     func receiveHardwareKey(hid: Int, modifiers: UInt8, pressed: Bool, repeated: Bool) -> Bool {
         defer { if !pressed { pressedHardwareKeys.remove(hid) } }
-        guard controllerIsVisible, !hasNativeTextFocus(view),
+        let isTab = hid == UIKeyboardHIDUsage.keyboardTab.rawValue
+        guard controllerIsVisible, isTab || !hasNativeTextFocus(view),
               hid == UIKeyboardHIDUsage.keyboardTab.rawValue || riveFocusState.hasFocus || pressedHardwareKeys.contains(hid),
               let input = ExperienceHardwareKey.input(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeated)
         else { return false }
         let accepted = receiveFocusInput(input)
-        if pressed && accepted { pressedHardwareKeys.insert(hid) }
+        if pressed && accepted {
+            pressedHardwareKeys.insert(hid)
+            if isTab && hasNativeTextFocus(view) { becomeFirstResponder() }
+        }
         return accepted
     }
 
