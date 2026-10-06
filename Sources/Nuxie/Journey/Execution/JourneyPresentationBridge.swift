@@ -66,6 +66,7 @@ struct JourneyPresentationRequest: Sendable {
     let release: AuthenticatedJourneyRelease
     let delivery: JourneyReleaseDelivery
     let pinnedArtifacts: JourneyPinnedReleaseArtifacts?
+    let runValues: ExperienceRunValues
     let responseValues: ExactJSONObject<JourneyReleaseJSONValue>
     let screenId: String
     let owner: JourneyPresentationOwner
@@ -98,6 +99,7 @@ struct JourneyPresentationRequest: Sendable {
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,
         pinnedArtifacts: JourneyPinnedReleaseArtifacts? = nil,
+        runValues: ExperienceRunValues = ExperienceRunValues(),
         responseValues: ExactJSONObject<JourneyReleaseJSONValue> = [:],
         screenId: String,
         owner: JourneyPresentationOwner,
@@ -132,6 +134,7 @@ struct JourneyPresentationRequest: Sendable {
         self.fences = fences
         self.release = release
         self.delivery = delivery
+        self.runValues = runValues
         self.responseValues = responseValues
         self.pinnedArtifacts = pinnedArtifacts
         self.screenId = screenId
@@ -250,6 +253,7 @@ protocol JourneyPresenting: AnyObject, Sendable {
 
 @MainActor
 final class JourneyRuntimeDelegate {
+    let runValues: ExperienceRunValues
     let presentationFences: JourneyPresentationFences
     nonisolated let introEligibilityAuthorizationContext:
         IntroEligibilityAuthorizationContext
@@ -296,6 +300,7 @@ final class JourneyRuntimeDelegate {
 
     init(request: JourneyPresentationRequest,
          openLink: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)? = nil) {
+        runValues = request.runValues
         presentationFences = request.fences
         openLinkHandler = openLink
         introEligibilityAuthorizationContext = .init(

@@ -167,6 +167,7 @@ actor JourneyService {
     private var journalGeneration: UInt64 = 0
     private var recoveredJournalGeneration: UInt64?
     private var journalRecoveryOperation: (id: UUID, task: Task<Void, Never>)?
+    private var nativeValuesByRun: [String: (owner: String, values: ExperienceRunValues)] = [:]
     private var retainedReleasesByDigest: [String: AuthenticatedJourneyRelease] = [:]
     private var retainedReleaseOrder: [String] = []
     private var retainedReleaseBytes = 0
@@ -590,7 +591,9 @@ extension JourneyService {
         inFlightAttempts.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
+        let retiredValues = takeNativeValues(owner: distinctId)
         await presentationPublications.clearDirectRoutes()
+        for values in retiredValues { await values.retire() }
         await presenter?.shutdownJourneyPresentation(
             ownerDistinctId: distinctId
         )
@@ -627,7 +630,10 @@ extension JourneyService {
         inFlightAttempts.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
+        let retiredValues = nativeValuesByRun.values.map(\.values)
+        nativeValuesByRun.removeAll()
         await presentationPublications.clearDirectRoutes()
+        for values in retiredValues { await values.retire() }
         if let presentationOwner {
             await presenter?.shutdownJourneyPresentation(
                 ownerDistinctId: presentationOwner
@@ -846,6 +852,7 @@ extension JourneyService {
         to newDistinctId: String
     ) async {
         cancelWake()
+        await retireNativeValues(owner: oldDistinctId)
         pendingPresentationPurchasePlacements.removeAll()
         await presenter?.shutdownJourneyPresentation(
             ownerDistinctId: oldDistinctId
@@ -1105,6 +1112,7 @@ private extension JourneyService {
             LogWarning("JourneyService: failed to durably revoke Journey journal: \(error)")
             return false
         }
+        await retireNativeValues(owner: journal.distinctId)
         var finalized = false
         do {
             _ = try await experimentExposures.flushPending(in: journal)
@@ -1582,6 +1590,7 @@ private extension JourneyService {
                 at: dateProvider.now(),
                 responseOutputs: run.context.responses
             )
+            await retireNativeValues(runID: run.id)
             _ = try await experimentExposures.flushPending(in: journal)
             try await JourneyReporter(journal: journal, events: events)
                 .flushPending()
@@ -2217,6 +2226,30 @@ private extension JourneyService {
 // MARK: - Durable execution
 
 private extension JourneyService {
+    func retireNativeValues(runID: String) async {
+        let values = nativeValuesByRun.removeValue(forKey: runID)?.values
+        await values?.retire()
+    }
+
+    func takeNativeValues(owner: String) -> [ExperienceRunValues] {
+        let values = nativeValuesByRun.values.filter { $0.owner == owner }.map(\.values)
+        nativeValuesByRun = nativeValuesByRun.filter { $0.value.owner != owner }
+        return values
+    }
+
+    func retireNativeValues(owner: String) async {
+        for value in takeNativeValues(owner: owner) { await value.retire() }
+    }
+
+    func nativeValues(for runID: String, owner: String) -> ExperienceRunValues {
+        if let existing = nativeValuesByRun[runID], existing.owner == owner { return existing.values }
+        let values = ExperienceRunValues()
+        nativeValuesByRun[runID] = (owner, values)
+        return values
+    }
+}
+
+private extension JourneyService {
     private func execute(
         _ initial: JourneyRun,
         release: AuthenticatedJourneyRelease,
@@ -2466,6 +2499,7 @@ private extension JourneyService {
                         release: release,
                         delivery: executionSnapshot.delivery,
                         pinnedArtifacts: pinnedArtifacts,
+                        runValues: nativeValues(for: presentedRun.id, owner: journal.distinctId),
                         responseValues: presentedRun.context.responses,
                         screenId: screenId,
                         owner: .init(
@@ -3030,6 +3064,7 @@ private extension JourneyService {
         admission: JourneyCommitAdmission?,
         dismissPresentation: Bool
     ) async -> Bool {
+        await retireNativeValues(runID: run.id)
         do {
             _ = try await experimentExposures.flushPending(
                 in: journal,

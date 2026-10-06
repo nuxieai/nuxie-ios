@@ -502,6 +502,8 @@ targets:
           - Experiences/ExperienceHardwareInputTests.swift
           - Experiences/ExperienceTextInputTypographyTests.swift
           - Experiences/SignedSemanticJourneyTests.swift
+          - Experiences/ExperienceSharedValuesTests.swift
+          - Experiences/ExperienceSharedValuesPresentationTests.swift
           - Fixtures/semantic_text.riv
           - Fixtures/native_input_layout.riv
       - path: fixtures/journeys/rendered-semantic-screen-control
