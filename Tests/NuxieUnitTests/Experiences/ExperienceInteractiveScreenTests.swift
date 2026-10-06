@@ -188,13 +188,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                     ])
                 let result = await screen.projectStep(step, eventSnapshot: snapshot, correlationID: 42)
                 guard case .viewModelChange(let change) = result.effects.first?.kind else {
-                    return XCTFail("The frame must publish its value change first: \(vector.name)")
+                    throw ExperienceInteractiveScreenError.stateContract("Missing first frame change: \(vector.name)")
                 }
                 XCTAssertEqual(change.value, .bytes(Data(vector.value.utf8)))
                 var published: [String] = []
                 for effect in result.effects.dropFirst() {
                     guard case .reportedEvent(let event) = effect.kind else {
-                        return XCTFail("Unexpected customer effect: \(vector.name)")
+                        throw ExperienceInteractiveScreenError.stateContract("Unexpected customer effect: \(vector.name)")
                     }
                     published.append(event.name)
                     XCTAssertEqual(event.resolvedSource?.string(path: VmPathRef(path: "placementId")),
