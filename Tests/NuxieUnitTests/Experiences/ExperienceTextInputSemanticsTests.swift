@@ -1,12 +1,204 @@
 #if canImport(UIKit)
 import UIKit
 import QuartzCore
+import Metal
 import XCTest
 @testable import Nuxie
 @testable import NuxieRuntime
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
+    #if NUXIE_HOSTED_INPUT_TESTS
+    func testTypingTransportExperiment() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let surface = UIView(frame: window.bounds)
+        controller.view.addSubview(surface)
+        let bridge = ExperienceTextInputOverlayBridge()
+        var kept = ""
+        bridge.bind(screenID: "screen", renderPlan: makePlan(native: true),
+            surfaceView: surface, artboardBounds: surface.bounds,
+            semanticTextWriter: { _, _, text, done in kept = text; done(.accepted) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: kept))) },
+            textWriter: { _, _, _ in XCTFail("Native field bypassed captured ownership") })
+        defer { bridge.clear() }
+        presentField(on: bridge)
+        let native = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1] as? UITextField)
+        XCTAssertTrue(native.becomeFirstResponder())
+        func clearNative() {
+            native.selectedTextRange = native.textRange(from: native.beginningOfDocument, to: native.endOfDocument)
+            native.insertText("")
+            bridge.flushTextChange(for: native)
+        }
+        clearNative()
+        native.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+        XCTAssertNotNil(native.markedTextRange)
+        native.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0))
+        native.unmarkText()
+        bridge.flushTextChange(for: native)
+        let compositionNative = kept
+        XCTAssertEqual(compositionNative, "日本")
+        clearNative()
+        native.insertText("teh")
+        native.selectedTextRange = native.textRange(from: native.beginningOfDocument, to: native.endOfDocument)
+        native.insertText("the")
+        bridge.flushTextChange(for: native)
+        let correctionNative = kept
+        XCTAssertEqual(correctionNative, "the")
+
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/text-editing-experiment")
+        native.resignFirstResponder()
+        let clear: [NuxieNativeFocusInput] = [
+            .key(code: 65, modifiers: 8, pressed: true, repeated: false),
+            .key(code: 259, modifiers: 0, pressed: true, repeated: false)
+        ]
+        func experiment(secure: Bool) async throws -> [String: String] {
+            let name = secure ? "text_input_secure_observed" : "text_input_observed"
+            let payload = try await ExperienceInputFixture.payload(defaultViewModelName: nil,
+                scene: Data(contentsOf: directory.appendingPathComponent(name + ".riv")),
+                artboardName: "Text Input - Multiline", semantics: true)
+            let probe = InputStepProbe()
+            var lastDrawable: (any CAMetalDrawable)?
+            let screen = try ExperienceInputFixture.makeController(payload, probe: probe,
+                fixtureName: name, directory: directory, acquireDrawable: { layer in
+                    layer.framebufferOnly = false
+                    let drawable = layer.nextDrawable()
+                    lastDrawable = drawable
+                    return drawable
+                })
+            let riveWindow = UIWindow(windowScene: scene)
+            riveWindow.frame = window.frame
+            riveWindow.rootViewController = screen
+            riveWindow.makeKeyAndVisible()
+            defer { riveWindow.isHidden = true; riveWindow.rootViewController = nil }
+            screen.view.layoutIfNeeded()
+            var lastCapture: NuxieNativeSemanticCapture?
+            screen.onSemanticCapture = { capture in lastCapture = capture }
+            do {
+                try await screen.mountInteractiveScreen()
+                await screen.enter(reduceMotion: true)
+                await screen.activate(reduceMotion: true)
+                func waitForPresentedFrames() async throws {
+                    let deadline = Date().addingTimeInterval(5)
+                    while !screen.hasDeliveredLatestSemanticFrame, Date() < deadline, probe.failure == nil {
+                        try await Task.sleep(nanoseconds: 1_000_000)
+                    }
+                    XCTAssertNil(probe.failure)
+                    XCTAssertTrue(screen.hasDeliveredLatestSemanticFrame, "Both native completion and semantic delivery must settle")
+                }
+                try await waitForPresentedFrames()
+                func apply(_ inputs: [NuxieNativeFocusInput]) async throws -> (node: NuxieNativeSemanticNode, text: String) {
+                    lastCapture = nil
+                    for input in inputs { XCTAssertTrue(screen.receiveFocusInput(input)) }
+                    screen.advance(delta: 0.016)
+                    try await waitForPresentedFrames()
+                    let capture = try XCTUnwrap(lastCapture, "The input's frame must deliver a fresh capture")
+                    let node = try XCTUnwrap(capture.tree.nodes.first {
+                        $0.role == NuxieNativeSemanticRole.textField.rawValue
+                    })
+                    let text = try await screen.readPresentedFieldString(
+                        captureID: capture.id, nodeID: node.id, name: "experiment-input")
+                    return (node, text)
+                }
+                _ = try await apply([.next])
+                XCTAssertEqual(screen.riveFocusState.hasFocus, true)
+                let empty = try await apply(clear)
+                XCTAssertEqual(empty.text, "")
+                var result: [String: String]
+                if secure {
+                    let field = try await apply([.text("private-test")])
+                    let obscured = field.node.stateFlags & NuxieNativeSemanticNode.obscured != 0
+                    XCTAssertTrue(obscured)
+                    XCTAssertFalse(field.node.value.contains("private-test"))
+                    XCTAssertEqual(field.text, "private-test")
+                    func pixels() async throws -> Data {
+                        let texture = try XCTUnwrap(lastDrawable?.texture)
+                        let rowBytes = ((texture.width * 4 + 255) / 256) * 256
+                        let buffer = try XCTUnwrap(texture.device.makeBuffer(length: rowBytes * texture.height,
+                            options: .storageModeShared))
+                        let queue = try XCTUnwrap(texture.device.makeCommandQueue())
+                        let command = try XCTUnwrap(queue.makeCommandBuffer())
+                        let blit = try XCTUnwrap(command.makeBlitCommandEncoder())
+                        blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: .init(),
+                            sourceSize: .init(width: texture.width, height: texture.height, depth: 1),
+                            to: buffer, destinationOffset: 0, destinationBytesPerRow: rowBytes,
+                            destinationBytesPerImage: rowBytes * texture.height)
+                        blit.endEncoding()
+                        let copied = expectation(description: "Presented secure frame copied")
+                        command.addCompletedHandler { _ in copied.fulfill() }
+                        command.commit()
+                        await fulfillment(of: [copied], timeout: 5)
+                        XCTAssertEqual(command.status, .completed)
+                        var data = Data()
+                        let bytes = buffer.contents().assumingMemoryBound(to: UInt8.self)
+                        for row in 0..<texture.height { data.append(bytes + row * rowBytes, count: texture.width * 4) }
+                        return data
+                    }
+                    let first = try await pixels()
+                    _ = try await apply(clear + [.text("hidden-value")])
+                    let sameLength = try await pixels()
+                    _ = try await apply(clear + [.text("tiny")])
+                    let shorter = try await pixels()
+                    XCTAssertEqual(first, sameLength, "Secure drawing conceals which same-length text was typed")
+                    XCTAssertNotEqual(first, shorter, "Typing must change the secure drawing")
+                    result = ["obscured": String(obscured), "semanticValue": field.node.value,
+                        "sameLengthPixelsMatch": String(first == sameLength), "shorterPixelsDiffer": String(first != shorter)]
+                } else {
+                    let marked = try await apply([.text("に")])
+                    let composition = try await apply([.text("日本")])
+                    XCTAssertNotEqual(marked.text, composition.text, "The second composition payload must reach Rive")
+                    _ = try await apply(clear)
+                    let word = try await apply([.text("teh")])
+                    let correction = try await apply([.text("the")])
+                    XCTAssertNotEqual(word.text, correction.text, "The replacement payload must reach Rive")
+                    result = ["composition": composition.text, "wordReplacement": correction.text]
+                }
+                await screen.shutdownInteractiveScreen()
+                return result
+            } catch { await screen.shutdownInteractiveScreen(); throw error }
+        }
+        let rive = try await experiment(secure: false)
+        let editingData = try JSONSerialization.data(withJSONObject: rive, options: [.sortedKeys])
+        print("TYPING_EDITING " + String(decoding: editingData, as: UTF8.self))
+        window.makeKeyAndVisible()
+        bridge.clear()
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+            surfaceView: surface, artboardBounds: surface.bounds,
+            semanticTextWriter: { _, _, text, done in kept = text; done(.accepted) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: kept))) },
+            textWriter: { _, _, _ in XCTFail("Secure editor bypassed ownership") })
+        presentField(on: bridge)
+        let secureNative = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: true))[1] as? UITextField)
+        XCTAssertTrue(secureNative.becomeFirstResponder())
+        secureNative.selectedTextRange = secureNative.textRange(from: secureNative.beginningOfDocument, to: secureNative.endOfDocument)
+        secureNative.insertText("private-test")
+        bridge.flushTextChange(for: secureNative)
+        XCTAssertTrue(secureNative.isSecureTextEntry)
+        XCTAssertEqual(kept, "private-test")
+        secureNative.resignFirstResponder()
+        let secureRive = try await experiment(secure: true)
+        let observations = ["composition": ["native": compositionNative, "rive": rive["composition"] ?? "missing"],
+            "wordReplacement": ["native": correctionNative, "rive": rive["wordReplacement"] ?? "missing"],
+            "secure": ["native": String(secureNative.isSecureTextEntry), "rive": secureRive["obscured"] ?? "missing",
+                "riveSemanticValue": secureRive["semanticValue"] ?? "missing",
+                "sameLengthPixelsMatch": secureRive["sameLengthPixelsMatch"] ?? "missing",
+                "shorterPixelsDiffer": secureRive["shorterPixelsDiffer"] ?? "missing"]]
+        let data = try JSONSerialization.data(withJSONObject: observations, options: [.sortedKeys])
+        print("TYPING_EXPERIMENT " + String(decoding: data, as: UTF8.self))
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = "typing-experiment.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+    #endif
+
     func testSecureSelectionSurvivesViewportRelayout() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
