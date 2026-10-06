@@ -17,6 +17,17 @@ so the band clears the surface at any angle, animating `startPoint`/`endPoint`
 rather than the clamped `locations`, smoothstep-interpolated gradient stops, and
 the nested animation group that produces the interval between traversals.
 
+## Rive runtime test fixtures
+
+Copyright (c) 2020 Rive
+
+Source: https://github.com/rive-app/rive-runtime
+
+The fixtures in `fixtures/runtime/rive-focus/` and
+`fixtures/runtime/text-editing-experiment/` come from the Rive runtime unit
+tests. Their source revisions, modifications and checksums are in
+`provenance.json`.
+
 ---
 
 ## MIT License
