@@ -273,7 +273,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let selection = try await tap(240, 65)
         XCTAssertFalse(selection.contains {
             if case .controlAction = $0.kind { return true }
-            if case .responseSet = $0.kind { return true }
             return false
         })
         let snapshot = try await screen.snapshot()
@@ -3383,7 +3382,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             [
                 .viewModelChange(change),
                 .reportedEvent(reported),
-                .responseSet(field: "plan", value: .string("pro")),
+                .hostCommand(name: "$response_set", payload: Self.object([("field", .string("plan")), ("value", .string("pro"))])),
                 .journeyEvent(name: "purchase_tapped", payload: Self.object([
                     ("placementId", .string("pro_paywall:annual")),
                 ])),
@@ -3394,10 +3393,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                     ("channel", .string("editor")),
                     ("sampled", .bool(true)),
                 ])),
-                .rejectedHostCommand(
-                    name: "$response_set",
-                    reason: "expected a non-empty string field and a value"
-                ),
+                .hostCommand(name: "$response_set", payload: Self.object([
+                    ("field", .number(42)), ("value", .string("rejected-in-swift")),
+                ])),
             ]
         )
 
@@ -3617,7 +3615,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         assembler.appendControl(screenId: "survey", invocation: invocation)
         assembler.appendDraft(
-            .responseSet(field: "plan", value: .string("pro")),
+            .event(name: "plan_changed", payload: ["plan": .string("pro")]),
             source: source
         )
         assembler.appendDraft(
@@ -3630,7 +3628,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             screenId: "survey",
             invocation: invocation,
             additionalDrafts: [
-                .responseSet(field: "plan", value: .string("pro")),
+                .event(name: "plan_changed", payload: ["plan": .string("pro")]),
                 .event(name: "submitted", payload: ["plan": .string("pro")]),
             ]
         ))

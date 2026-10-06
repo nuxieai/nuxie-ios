@@ -223,7 +223,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                     id: "00000000-0000-7000-8000-000000000320",
                     sequence: 0,
                     occurredAt: "2026-08-29T12:00:00.122Z",
-                    name: JourneyResponseControlNames.responseSet,
+                    name: "$response_set",
                     payload: [
                         "field": .string("plan"),
                         "value": .string("yearly"),
@@ -255,11 +255,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         let runsAfterFailure = try await journal.runs()
         let runAfterFailure = try XCTUnwrap(runsAfterFailure.first)
         XCTAssertEqual(runAfterFailure.stepId, initialStep)
-        guard case .string(let stagedResponse)? =
-            runAfterFailure.context.responses["plan"] else {
-            return XCTFail("Expected the response to be staged before event publication")
-        }
-        XCTAssertEqual(stagedResponse, "yearly")
+        XCTAssertTrue(runAfterFailure.context.responses.isEmpty)
         XCTAssertEqual(
             runAfterFailure.pendingPresentationPublication?.invocationId,
             batch.invocationId
@@ -339,7 +335,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                         id: "00000000-0000-7000-8000-000000000337",
                         sequence: 0,
                         occurredAt: "2026-08-29T12:00:00.120Z",
-                        name: JourneyResponseControlNames.responseSet,
+                        name: "$response_set",
                         payload: [
                             "field": .string("plan"),
                             "value": .string("yearly"),
@@ -366,11 +362,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                 run.pendingPresentationPublication?.invocationId,
                 "restart-publication"
             )
-            guard case .string(let response)? =
-                run.context.responses["plan"] else {
-                return XCTFail("Expected the staged response to survive capture failure")
-            }
-            XCTAssertEqual(response, "yearly")
+            XCTAssertTrue(run.context.responses.isEmpty)
             XCTAssertFalse(events.routedEvents.contains {
                 $0.name == "continue"
             })
@@ -406,7 +398,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             completion.properties["outputs"] as? [String: Any]
         )
         let responses = try XCTUnwrap(outputs["responses"] as? [String: Any])
-        XCTAssertEqual(responses["plan"] as? String, "yearly")
+        XCTAssertNil(responses["plan"])
         let journal = try JourneyRunJournal(
             directory: directory,
             distinctId: "customer"
@@ -416,117 +408,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         await recoveryService.shutdown()
     }
 
-    func testPendingResponseChangeResumesItsWaitAfterRestart() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let snapshot = renderedResponseWaitSnapshot(
-            try await authenticatedRenderedSnapshot(fixture)
-        )
-        let retainedRelease = try XCTUnwrap(
-            snapshot.releasesByDigest.values.first
-        )
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let presenter = await MainActor.run { RecordingJourneyPresenter() }
-        let persistenceFailures = JourneyJournalPersistenceFailures()
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter,
-            journalBeforePersist: { try persistenceFailures.beforePersist() }
-        )
 
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        let routedToWait = await request.onEmissionBatch(presentationBatch(
-            request: request,
-            invocationId: "route-to-response-wait",
-            emissions: [.init(
-                id: "00000000-0000-7000-8000-000000000341",
-                sequence: 0,
-                occurredAt: "2026-08-29T12:00:00.120Z",
-                name: "continue",
-                payload: [:]
-            )]
-        ), nil)
-        XCTAssertTrue(routedToWait)
-        let journal = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        for _ in 0..<200 {
-            let runs = try await journal.runs()
-            if runs.first?.stepId == "wait", runs.first?.park != nil {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        let waitingRuns = try await journal.runs()
-        let waitingRun = try XCTUnwrap(waitingRuns.first)
-        XCTAssertEqual(waitingRun.stepId, "wait")
-        XCTAssertNotNil(waitingRun.park)
-
-        // The response publication itself is durable, then the simulated
-        // process dies before its response-change signal can clear the outbox.
-        persistenceFailures.failAfterSuccessfulWrites(1)
-        let responseAccepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
-            batchSequence: 1,
-            previousCommittedBatchSequence: 0,
-            invocationId: "response-before-restart",
-            emissions: [.init(
-                id: "00000000-0000-7000-8000-000000000342",
-                sequence: 0,
-                occurredAt: "2026-08-29T12:00:00.121Z",
-                name: JourneyResponseControlNames.responseSet,
-                payload: [
-                    "field": .string("consent"),
-                    "value": .bool(true),
-                ]
-            )]
-        ), nil)
-        XCTAssertFalse(responseAccepted)
-        let stagedRuns = try await journal.runs()
-        let staged = try XCTUnwrap(stagedRuns.first)
-        XCTAssertEqual(
-            staged.pendingPresentationPublication?.invocationId,
-            "response-before-restart"
-        )
-
-        let recoveryIdentity = MockIdentityService()
-        recoveryIdentity.setDistinctId("customer")
-        let recoveryEvents = MockEventLog()
-        recoveryEvents.identity = recoveryIdentity
-        let recoveryService = makeService(
-            identity: recoveryIdentity,
-            events: recoveryEvents,
-            directory: directory,
-            pinnedReleaseAuthenticator: { _, _ in retainedRelease }
-        )
-
-        await recoveryService.initialize()
-
-        let completion = try XCTUnwrap(recoveryEvents.routedEvents.first {
-            $0.name == JourneyEvents.journeyCompleted
-        })
-        XCTAssertEqual(completion.properties["outcome"] as? String, "responded")
-        let outputs = try XCTUnwrap(
-            completion.properties["outputs"] as? [String: Any]
-        )
-        let responses = try XCTUnwrap(outputs["responses"] as? [String: Any])
-        XCTAssertEqual(responses["consent"] as? Bool, true)
-        let remainingRuns = try await journal.runs()
-        XCTAssertTrue(remainingRuns.isEmpty)
-        await recoveryService.shutdown()
-    }
 
     func testRendererBatchRemainsRejectedWhenPublicationCannotStage() async throws {
         let directory = temporaryDirectory()
@@ -592,7 +474,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                     id: "00000000-0000-7000-8000-000000000339",
                     sequence: 0,
                     occurredAt: "2026-08-29T12:00:00.120Z",
-                    name: JourneyResponseControlNames.responseSet,
+                    name: "$response_set",
                     payload: [
                         "field": .string("plan"),
                         "value": .string("yearly"),
@@ -629,11 +511,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         )
         let runsAfterRetry = try await journal.runs()
         let persistedAfterRetry = try XCTUnwrap(runsAfterRetry.first)
-        guard case .string(let response)? =
-            persistedAfterRetry.context.responses["plan"] else {
-            return XCTFail("Expected the retried response to be durable")
-        }
-        XCTAssertEqual(response, "yearly")
+        XCTAssertTrue(persistedAfterRetry.context.responses.isEmpty)
         XCTAssertNil(persistedAfterRetry.pendingPresentationPublication)
     }
 
@@ -817,7 +695,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         )
     }
 
-    func testRenderedBatchDurablyStagesResponsesBeforePublishingAllEventsAndUsesFirstRoute() async throws {
+    func testRenderedBatchStagesStableEventsWithoutAnswersAndUsesFirstRoute() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -892,17 +770,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             directory: directory,
             distinctId: "customer"
         )
-        let persistence = JourneyResponsePersistenceProbe()
+        let persistence = JourneyPublicationPersistenceProbe()
         events.prepareEventPropertiesHandler = {
             let runs = try? await journal.runs()
-            let durableResponse: String?
-            if let run = runs?.first,
-               case .string(let value)? = run.context.responses["plan"] {
-                durableResponse = value
-            } else {
-                durableResponse = nil
-            }
-            await persistence.record(durableResponse)
+            await persistence.record(runs?.first?.pendingPresentationPublication?.invocationId)
         }
 
         let accepted = await request.onEmissionBatch(ScreenEmissionBatch(
@@ -924,7 +795,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                     id: "00000000-0000-7000-8000-000000000331",
                     sequence: 0,
                     occurredAt: "2026-08-29T12:00:00.120Z",
-                    name: JourneyResponseControlNames.responseSet,
+                    name: "$response_set",
                     payload: [
                         "field": .string("plan"),
                         "value": .string("yearly"),
@@ -955,7 +826,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
                     id: "00000000-0000-7000-8000-000000000335",
                     sequence: 4,
                     occurredAt: "2026-08-29T12:00:00.124Z",
-                    name: JourneyResponseControlNames.responseSet,
+                    name: "$response_set",
                     payload: [
                         "field": .string("plan"),
                         "value": .string("monthly"),
@@ -975,10 +846,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         XCTAssertTrue(accepted)
         let persistenceObservations = await persistence.observations()
         XCTAssertEqual(persistenceObservations, [
-            "monthly",
-            "monthly",
-            "monthly",
-            "monthly",
+            "response-route-invocation",
+            "response-route-invocation",
+            "response-route-invocation",
+            "response-route-invocation",
         ])
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyStarted,
@@ -989,9 +860,6 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         ])
         let runs = try await journal.runs()
         let run = try XCTUnwrap(runs.first)
-        guard case .string(let response)? = run.context.responses["plan"] else {
-            return XCTFail("Expected the response to remain durable")
-        }
-        XCTAssertEqual(response, "monthly")
+        XCTAssertTrue(run.context.responses.isEmpty)
     }
 }

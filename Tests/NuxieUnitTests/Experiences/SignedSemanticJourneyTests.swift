@@ -246,7 +246,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 if scenario == .success || scenario == .condition {
                     try await waitUntil("Authored navigation must follow durable emission admission") { observer.navigationResponses != nil && observer.accepted.count == 1 }
                     XCTAssertEqual(observer.navigationResponses?["selection"], .string("pro"))
-                    XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), [JourneyResponseControlNames.responseSet, "script_control_activated"])
+                    XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), ["script_control_activated"])
                     for emission in try XCTUnwrap(observer.accepted.first).emissions {
                         let occurredAt = try XCTUnwrap(JourneyPresentationEventProjector.date(emission.occurredAt))
                         // Millisecond wire precision must not move an action before
@@ -500,11 +500,8 @@ final class SignedSemanticJourneyTests: XCTestCase {
         field.text = "typed-password"
         field.sendActions(for: .editingChanged)
         XCTAssertTrue(field.resignFirstResponder())
-        try await waitUntil("The native editor must commit a response emission") {
-            observer.accepted.flatMap(\.emissions).contains { $0.name == JourneyResponseControlNames.responseSet }
-        }
         let runs = try await journal.runs()
-        XCTAssertEqual(runs.first?.context.responses["password"], .string("typed-password"))
+        XCTAssertTrue(runs.first?.context.responses.isEmpty == true)
         XCTAssertNotEqual(field.accessibilityValue, "typed-password")
         XCTAssertFalse(elements.contains { $0.accessibilityValue == "fixture-secret-never-publish" })
         XCTAssertEqual(semanticElements(in: view).filter { $0.accessibilityLabel == "Password" }.count, 1)
@@ -512,7 +509,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(observer.accepted.map { $0.emissions.map(\.name) }, [
             ["plan_toggled"], ["plan_toggled"],
-            ["seat_increased"], ["seat_decreased"], [JourneyResponseControlNames.responseSet],
+            ["seat_increased"], ["seat_decreased"],
         ])
     }
 

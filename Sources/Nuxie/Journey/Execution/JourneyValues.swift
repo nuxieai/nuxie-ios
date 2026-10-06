@@ -1,6 +1,6 @@
 import Foundation
 
-/// Resolves only the leg's declared event and buffered response context. An
+/// Resolves the leg's event context and freshly read native run values. An
 /// absent field is unknown; explicit JSON null stays a known value. In
 /// particular, negation cannot turn an unavailable input into permission.
 enum JourneyValues {

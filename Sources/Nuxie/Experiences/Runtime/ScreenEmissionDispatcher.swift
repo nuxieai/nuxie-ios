@@ -94,8 +94,6 @@ enum DeclarativeScreenAction: Equatable, Sendable {
         eventName: String,
         payload: [String: DeclarativeScreenValueSource]
     )
-    case responseSet(field: String, value: DeclarativeScreenValueSource)
-    case responseUnset(field: String)
 }
 
 enum ScreenControlActionBinding: Equatable, Sendable {
@@ -110,8 +108,6 @@ struct ScreenControlActionDefinition: Equatable, Sendable {
 
 enum ScreenEmissionDraft: Equatable, Sendable {
     case event(name: String, payload: [String: ScreenEmissionValue])
-    case responseSet(field: String, value: ScreenEmissionValue)
-    case responseUnset(field: String)
 
     var isReservedEvent: Bool {
         if case .event(let name, _) = self { return name.hasPrefix("$") }
@@ -436,13 +432,6 @@ private actor ScreenEmissionDispatcherState {
                         try resolve($0, invocation: invocation)
                     }
                 )
-            case .responseSet(let field, let source):
-                return .responseSet(
-                    field: field,
-                    value: try resolve(source, invocation: invocation)
-                )
-            case .responseUnset(let field):
-                return .responseUnset(field: field)
             }
         }
     }
@@ -497,12 +486,6 @@ private actor ScreenEmissionDispatcherState {
         case .event(let eventName, let eventPayload):
             name = eventName
             payload = eventPayload
-        case .responseSet(let field, let value):
-            name = JourneyResponseControlNames.responseSet
-            payload = ["field": .string(field), "value": value]
-        case .responseUnset(let field):
-            name = JourneyResponseControlNames.responseUnset
-            payload = ["field": .string(field)]
         }
         return ScreenEmission(
             id: createId(),

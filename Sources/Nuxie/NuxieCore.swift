@@ -228,6 +228,9 @@ final class NuxieCore: @unchecked Sendable {
           appActionHandler: appActionHandler
         ),
         presenter: journeyPresentation,
+        prepareNativeValues: { values, release, delivery, artifacts in
+          try await releaseStore.prepareRunValues(values, release: release, delivery: delivery, pinnedArtifacts: artifacts)
+        },
         presentationTrace: journeyPresentationTrace,
         pinnedReleaseAuthenticator: { entry, reference in
           try await journeyProfiles.authenticatePinnedRelease(
