@@ -5,12 +5,15 @@ enum APIEndpoint {
     case event(EventRequest)
     case batch(BatchRequest)
     case checkFeature(FeatureCheckRequest)
+    case responseSave
     case consumeFeature
     case purchase(PurchaseRequest)
     case appStoreIntroEligibility(AppStoreIntroEligibilityRequest)
 
     var path: String {
         switch self {
+        case .responseSave:
+            return "/responses/save"
         case .profile:
             return "/profile"
         case .event:
@@ -30,7 +33,7 @@ enum APIEndpoint {
 
     var method: HTTPMethod {
         switch self {
-        case .profile, .event, .batch, .checkFeature, .purchase, .appStoreIntroEligibility, .consumeFeature:
+        case .responseSave, .profile, .event, .batch, .checkFeature, .purchase, .appStoreIntroEligibility, .consumeFeature:
             return .POST
         }
     }

@@ -209,6 +209,9 @@ final class NuxieCore: @unchecked Sendable {
         // The profile transport supplies the stable authenticated app scope.
         // The publishable key is rotatable and must not address durable runs.
         storageScope: nil,
+        responseSaveDelivery: releasePaths.admission.map {
+          JourneyResponseSaveDelivery(directory: $0, transport: api, clock: dateProvider, sleeper: sleepProvider)
+        },
         featureAccess: { featureId in
           await builtFeatureService.get().getForJourney(featureId: featureId, resolveUnknown: false)
         },

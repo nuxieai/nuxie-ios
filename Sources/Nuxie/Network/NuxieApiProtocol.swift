@@ -129,5 +129,6 @@ protocol NuxieApiProtocol:
     FeatureChecking,
     PurchaseSynchronizing,
     PurchaseBackedFeatureUsing,
-    IntroEligibilityTokenRequesting
+    IntroEligibilityTokenRequesting,
+    JourneyResponseSaveTransport
 {}

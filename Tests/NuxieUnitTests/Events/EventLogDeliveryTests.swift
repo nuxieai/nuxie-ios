@@ -9,6 +9,10 @@ import Nimble
 // MARK: - Mock API Client
 
 actor MockNuxieApiForQueue: NuxieApiProtocol {
+    func sendResponseSave(_ sheet: JourneyResponseSave) async throws -> JourneyResponseSaveReply {
+        throw URLError(.notConnectedToInternet)
+    }
+
     func consumeFeature(_ request: FeatureConsumeRequest) async throws -> EventResponse {
         var properties: [String: Any] = ["feature_extId": request.featureId, "value": request.quantity]
         if let entityId = request.entityId { properties["entityId"] = entityId }
