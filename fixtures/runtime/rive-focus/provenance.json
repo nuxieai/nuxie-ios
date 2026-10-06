@@ -4,12 +4,14 @@
   "sourceDirectory": "tests/unit_tests/assets",
   "sha256": {
     "keyboard_listener.riv": "cf7355e3064fdb87bf979910bab0f340364bc89ca9850795e2add7374898252d",
-    "text_input_event.riv": "0d851dc67f9efc6382d400263931fd1be57fad92a9b90e709f174b6b72c20df2"
+    "text_input_event.riv": "0d851dc67f9efc6382d400263931fd1be57fad92a9b90e709f174b6b72c20df2",
+    "focus_collapsing.riv": "5f9b979a23692919cece02ac6121c4c9575ef2e9a302f81cb299a04881ab9d74"
   },
   "oracle": "tests/unit_tests/runtime/focus_test.cpp:2267-2428",
   "focusStateOracle": {
     "repository": "https://github.com/nuxieai/nuxie-runtime",
     "commit": "79ea4691971958501c64f7ff55076790ec8c9c4d",
     "path": "crates/nux-capi/tests/focus_input.rs:264-326"
-  }
+  },
+  "idleFocusOracle": "tests/unit_tests/runtime/focus_test.cpp:2067-2142: bound opacity 0 drops focus after two advances; restoring opacity permits focus again"
 }
