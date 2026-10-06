@@ -210,7 +210,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let stride = (393 * 4 + 255) & ~255
         let buffer = try XCTUnwrap(device.makeBuffer(length: stride * 852, options: .storageModeShared))
         let rendered = expectation(description: "Copy rendered")
-        _ = try await screen.renderFrame(drawable: ExperienceInteractiveDrawable(drawable), clearColor: 0xFF11_2233,
+        _ = try await screen.renderFrame(layoutScaleFactor: 1, drawable: ExperienceInteractiveDrawable(drawable), clearColor: 0xFF11_2233,
             capturesSemantics: false, readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride),
             completion: { rendered.fulfill() })
         await fulfillment(of: [rendered], timeout: 2)
