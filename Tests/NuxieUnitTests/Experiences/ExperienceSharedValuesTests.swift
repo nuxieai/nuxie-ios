@@ -6,6 +6,7 @@ import XCTest
 @testable import NuxieRuntime
 
 final class ExperienceSharedValuesTests: XCTestCase {
+    #if os(iOS)
     func testScreensShareAuthoredExperienceValues() async throws {
         let expected = try SharedValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload()
@@ -75,6 +76,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         XCTAssertEqual(retained.values.first { $0.name == "trip_days" }?.value, .number(23))
         try await screen.close()
     }
+    #endif
 
     func testRetirementReleasesTheRunOwnedNativeHandle() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(bytes: SharedValuesFixture.payload().sceneBytes)
@@ -110,6 +112,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         try await screen.close()
     }
 
+    #if os(iOS)
     func testComponentCopyKeepsItsOwnCounter() async throws {
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: SharedValuesFixture.payload())
         let run = ExperienceRunValues()
@@ -140,6 +143,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         }
         try await screen.close()
     }
+    #endif
 
 }
 
