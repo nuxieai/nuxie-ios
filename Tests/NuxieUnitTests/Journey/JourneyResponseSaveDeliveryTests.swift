@@ -108,6 +108,41 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         XCTAssertEqual(next.sequence, 4)
     }
 
+    func testAppBackgroundDoesNotDiscardAnAcceptedSave() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        let started = expectation(description: "background request held")
+        let transport = HeldResponseSaveTransport(started: started)
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: transport,
+            clock: MockDateProvider(), sleeper: MockSleepProvider())
+        let identity = MockIdentityService()
+        identity.setDistinctId("anon")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = JourneyService(identity: identity, events: events, dateProvider: MockDateProvider(),
+            sleepProvider: MockSleepProvider(), journalDirectory: directory, responseSaveDelivery: delivery,
+            featureAccess: { _ in nil }, dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
+        addTeardownBlock { await transport.release(); await service.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        _ = try await delivery.enqueue(journal: journal, run: run, formName: "feedback", answers: [:])
+        await fulfillment(of: [started], timeout: 5)
+        await service.onAppDidEnterBackground()
+        await transport.release()
+        for _ in 0..<100 {
+            if try await journal.pendingResponseSaves().isEmpty { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let pending = try await journal.pendingResponseSaves()
+        XCTAssertTrue(pending.isEmpty)
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.map(\.sequence), [1])
+        await service.shutdown()
+    }
+
     func testWaitingReplyAfterRunEndsDoesNotEraseNewerQueuedSheet() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
