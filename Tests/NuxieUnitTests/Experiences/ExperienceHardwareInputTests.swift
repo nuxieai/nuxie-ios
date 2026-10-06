@@ -237,6 +237,65 @@ final class ExperienceHardwareInputTests: XCTestCase {
         await controller.shutdownInteractiveScreen()
     }
 
+    func testIdleFrameRetiresFocusAfterBoundOpacityHidesControl() async throws {
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("focus_collapsing.riv"))
+        let inspection = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"), pixelWidth: 64, pixelHeight: 64, bindDefaultViewModel: true)
+        let modelName: String
+        do {
+            let snapshot = try await inspection.snapshot()
+            let root = try XCTUnwrap(snapshot.instances.first { $0.id == snapshot.rootInstanceID })
+            let catalog = try await inspection.viewModelCatalog()
+            modelName = try XCTUnwrap(catalog.schemas.first { $0.index == root.schemaIndex }).name
+            try await inspection.close()
+        } catch { try? await inspection.close(); throw error }
+        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: modelName, scene: bytes)
+        let probe = InputStepProbe(modelName: modelName)
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe, fixtureName: "focus_collapsing")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 640)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.view.layoutIfNeeded()
+        do {
+            try await controller.mountInteractiveScreen()
+            await controller.enter(reduceMotion: true)
+            await controller.activate(reduceMotion: true)
+            for _ in 0..<2 {
+                XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardTab.rawValue,
+                    modifiers: 0, pressed: true, repeated: false))
+                controller.pressesEnded([HardwarePress(HardwareKey(.keyboardTab), time: 2, pressed: false)], with: nil)
+                try await advance(controller, probe: probe)
+            }
+            XCTAssertTrue(controller.riveFocusState.hasFocus)
+            XCTAssertTrue(controller.applyValue(path: .init(viewModelName: modelName, path: "opacity"),
+                value: 0, screenId: nil, instanceId: nil))
+            try await advance(controller, probe: probe)
+            try await advance(controller, probe: probe)
+            XCTAssertFalse(controller.riveFocusState.hasFocus)
+            XCTAssertFalse(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: true, repeated: false))
+            XCTAssertTrue(controller.applyValue(path: .init(viewModelName: modelName, path: "opacity"),
+                value: 1, screenId: nil, instanceId: nil))
+            try await advance(controller, probe: probe)
+            for _ in 0..<2 {
+                XCTAssertTrue(controller.receiveFocusInput(.next))
+                try await advance(controller, probe: probe)
+            }
+            XCTAssertTrue(controller.riveFocusState.hasFocus)
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: true, repeated: false))
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: false, repeated: false))
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+        await controller.shutdownInteractiveScreen()
+    }
+
     func testOneHeldUIKitKeyProducesOneNonrepeatDownAndOneUp() async throws {
         let children: [[String: Any]] = [
             ["viewModelId": "KeyboardInputChildVM", "vmInstanceId": "key-e", "instanceName": "Instance 4"],

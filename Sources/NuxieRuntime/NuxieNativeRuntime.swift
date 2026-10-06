@@ -1270,6 +1270,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     private var pixelWidth: UInt32
     private var pixelHeight: UInt32
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    private let focusPlayerIndex: Int?
     private var auxiliaryPlayersNeedInitialStep = true
     private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle,
         fields: [String: NuxieNativeSemanticNode], tree: NuxieNativeSemanticTree,
@@ -1325,6 +1326,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             self.file = file
             self.artboard = artboard
             self.players = players
+            self.focusPlayerIndex = try players.firstIndex { try $0.info().kind == .stateMachine }
             self.viewModel = viewModel
             self.renderer = renderer
         } catch {
@@ -1352,7 +1354,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 root = model
                 try artboard.bind(viewModel: model)
             }
-            self.players = try Self.makePlayers(artboard: artboard, selection: selection)
+            let players = try Self.makePlayers(artboard: artboard, selection: selection)
+            self.players = players
+            self.focusPlayerIndex = try players.firstIndex { try $0.info().kind == .stateMachine }
             self.artboard = artboard
             self.viewModel = root
         } catch {
@@ -1424,12 +1428,6 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         var hostCommands: [NuxieNativeHostCommand] = []
         var viewModelChanges: [NuxieNativeViewModelChange] = []
         var textGeometry = NuxieNativeTextGeometryCapture.notRequested
-        let focusPlayerIndex: Int?
-        if !pointers.isEmpty || !focusInputs.isEmpty {
-            focusPlayerIndex = try players.firstIndex { try $0.info().kind == .stateMachine }
-        } else {
-            focusPlayerIndex = nil
-        }
         let stepsAuxiliary = auxiliaryPlayersNeedInitialStep || !inputs.isEmpty || !pointers.isEmpty || !focusInputs.isEmpty
         let finalPlayerIndex = stepsAuxiliary ? players.count - 1 : 0
 
@@ -1473,7 +1471,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             viewModelChanges.append(contentsOf: result.viewModelChanges)
         }
         auxiliaryPlayersNeedInitialStep = false
-        if (!pointers.isEmpty || !focusInputs.isEmpty), let focusPlayerIndex {
+        if let focusPlayerIndex {
             focusState = try players[focusPlayerIndex].focusState()
         }
 
