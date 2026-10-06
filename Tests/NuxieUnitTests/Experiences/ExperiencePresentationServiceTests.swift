@@ -347,7 +347,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     controller.canOpenLink = false
                     mockExperienceService.mockViewControllers[versionID] = controller
                     let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
-                    let request = JourneyPresentationRequest(release: makeJourneyRelease(versionId: versionID, screenId: screenID),
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(), release: makeJourneyRelease(versionId: versionID, screenId: screenID),
                         delivery: journeyDelivery(), screenId: screenID, owner: owner,
                         reservation: service.reserveJourneyPresentation(ownerDistinctId: "user-1"),
                         onLinkOpened: { _ in XCTFail("An unopenable link must not be recorded") },
@@ -394,7 +394,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -453,7 +453,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     mockExperienceService.mockViewControllers[versionID] = controller
                     let outcomes = JourneyPresentationOutcomeRecorder()
                     let reservation = service.reserveJourneyPresentation(ownerDistinctId: "user-1")
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: makeJourneyRelease(versionId: versionID, screenId: screenID),
                         delivery: journeyDelivery(), screenId: screenID,
                         owner: .init(journeyId: "journey-owner", distinctId: "user-1"),
@@ -500,7 +500,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -546,7 +546,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -589,7 +589,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let ownerRequest = JourneyPresentationRequest(
+                    let ownerRequest = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -604,7 +604,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let ownerResult = await service.presentJourney(ownerRequest)
                     expect(ownerResult).to(equal(.shown))
 
-                    let contenderRequest = JourneyPresentationRequest(
+                    let contenderRequest = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -641,7 +641,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -707,7 +707,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -789,7 +789,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -875,7 +875,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -933,7 +933,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -1004,7 +1004,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -1105,7 +1105,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -1156,7 +1156,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
