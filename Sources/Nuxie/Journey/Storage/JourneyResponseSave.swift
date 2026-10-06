@@ -101,14 +101,19 @@ struct JourneyResponseSaveReply: Sendable {
     }
 
     static func decode(_ data: Data, attemptedSequence: Int64) -> Self {
-        struct Wire: Decodable { let status: Code; let sequence: Int64? }
-        guard let wire = try? ExactJSONCodec.decode(Wire.self, from: data) else { return .noAnswer }
-        let reply = Self(code: wire.status, sequence: wire.sequence)
-        if reply.confirmed {
-            guard let sequence = wire.sequence, sequence >= attemptedSequence,
-                  sequence > 0, sequence <= JourneyResponseSave.maximumSequence else { return .noAnswer }
+        struct Status: Decodable { let status: String; let code: String? }
+        struct Receipt: Decodable { let sequence: Int64 }
+        guard let status = try? ExactJSONCodec.decode(Status.self, from: data) else { return .noAnswer }
+        if status.status == "error" {
+            guard let rawCode = status.code, let code = Code(rawValue: rawCode),
+                  code != .saved, code != .replayed, code != .stale, code != .noAnswer else { return .noAnswer }
+            return Self(code: code, sequence: nil)
         }
-        return reply
+        guard let code = Code(rawValue: status.status), [.saved, .replayed, .stale].contains(code),
+              let receipt = try? ExactJSONCodec.decode(Receipt.self, from: data),
+              receipt.sequence >= attemptedSequence, receipt.sequence > 0,
+              receipt.sequence <= JourneyResponseSave.maximumSequence else { return .noAnswer }
+        return Self(code: code, sequence: receipt.sequence)
     }
 }
 

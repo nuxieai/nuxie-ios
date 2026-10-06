@@ -26,7 +26,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     private func run(_ journal: JourneyRunJournal) async throws -> JourneyRun {
         let arm = ArmedJourney(reference: .init(experienceId: "experience-1", versionId: "version-1",
             legId: String(repeating: "a", count: 64), descriptorSha256: String(repeating: "b", count: 64)),
-            binding: .init(type: .continuation, journeyId: "journey-1", generation: 1),
+            binding: .init(type: .continuation, journeyId: "01900000-0000-7000-8000-000000000001", generation: 1),
             entryCondition: .init(type: .appForegrounded, eventName: nil, segmentId: nil, member: nil, condition: nil),
             context: .init(event: [:], responses: [:]))
         let admitted = try await journal.admit(arm: arm, release: testJourneyRelease(for: arm.reference),
@@ -72,6 +72,10 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
                 if vector.expected.hasPrefix("retry") {
                     let attempts = try await journal.responseSaveAttempts(at: Date(timeIntervalSince1970: 1000))
                     XCTAssertEqual(attempts.first?.delay(at: Date(timeIntervalSince1970: 1000)), 5)
+                    if vector.expected == "retry_until_deadline" {
+                        XCTAssertEqual(reply.code, .unknownForm)
+                        XCTAssertEqual(attempts.first?.unknownFormExpired(at: Date(timeIntervalSince1970: 1600)), true)
+                    }
                 }
             }
         }
@@ -89,7 +93,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             let sheet = try ExactJSONCodec.decode(JourneyResponseSave.self, from: XCTUnwrap(request.httpBody))
             XCTAssertEqual(sheet.distinctId, "anon")
             XCTAssertTrue([2, 3].contains(sheet.sequence))
-            let body = sheet.sequence == 2 ? #"{"status":"save_unavailable"}"# : #"{"status":"replayed","sequence":3}"#
+            let body = sheet.sequence == 2 ? #"{"status":"error","code":"save_unavailable"}"# : #"{"status":"replayed","sequence":3}"#
             return (HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
         }
         let delivery = JourneyResponseSaveDelivery(directory: directory, transport: api(host: host),
@@ -186,7 +190,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
                 let sheet = try ExactJSONCodec.decode(JourneyResponseSave.self, from: XCTUnwrap(request.httpBody))
                 XCTAssertEqual(sheet.answers, answers)
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"status":"invalid_request"}"#.utf8))
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"status":"error","code":"invalid_request"}"#.utf8))
             }
             let delivery = JourneyResponseSaveDelivery(directory: directory, transport: api(host: host),
                 clock: MockDateProvider(), sleeper: MockSleepProvider())
@@ -203,7 +207,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let sheet = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
-        let unknown = JourneyResponseSaveReply.decode(Data(#"{"status":"unknown_form"}"#.utf8), attemptedSequence: 1)
+        let unknown = JourneyResponseSaveReply.decode(Data(#"{"status":"error","code":"unknown_form"}"#.utf8), attemptedSequence: 1)
         _ = try await journal.recordResponseSaveReply(sheet, reply: unknown, at: Date(timeIntervalSince1970: 1000))
         let reopened = try JourneyRunJournal(directory: directory, distinctId: "anon")
         let backward = try await reopened.responseSaveAttempts(at: Date(timeIntervalSince1970: 900))
@@ -257,7 +261,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         XCTAssertTrue(currentSheets.isEmpty)
         let online = expectation(description: "recovered send")
         let onlineHost = UUID().uuidString.lowercased() + ".test"
-        let expected = Data(#"{"apiKey":"test-key","distinct_id":"anon","journey_id":"journey-1","experience_id":"experience-1","experience_version_id":"version-1","form_name":"feedback","sequence":2,"answers":{"stars":2}}"#.utf8)
+        let expected = Data(#"{"apiKey":"test-key","distinct_id":"anon","journey_id":"01900000-0000-7000-8000-000000000001","experience_id":"experience-1","experience_version_id":"version-1","form_name":"feedback","sequence":2,"answers":{"stars":2}}"#.utf8)
         StubURLProtocol.register(matcher: { $0.url?.host == onlineHost }) { request in
             XCTAssertEqual(try ExactJSONCodec.decode(JourneyReleaseJSONValue.self, from: XCTUnwrap(request.httpBody)),
                 try ExactJSONCodec.decode(JourneyReleaseJSONValue.self, from: expected))
@@ -301,6 +305,77 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         await delivery.activate(scope: .testFixture)
         await fulfillment(of: [sent], timeout: 5)
         XCTAssertEqual(try Data(contentsOf: damaged), Data("unreadable journal".utf8))
+        await delivery.shutdown()
+    }
+
+    func testLongBackoffSleepsOnceAndEnqueueWakesIt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
+        let sheet = try await journal.reserveResponseSave(run: run, formName: "old", answers: [:], queued: true)
+        for _ in 0..<7 { _ = try await journal.recordResponseSaveReply(sheet, reply: .noAnswer, at: clock.now()) }
+        let sleeper = MockSleepProvider()
+        let sent = expectation(description: "new sheet wakes long sleep")
+        let host = UUID().uuidString.lowercased() + ".test"
+        StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
+            let body = try ExactJSONCodec.decode(JourneyResponseSave.self, from: XCTUnwrap(request.httpBody))
+            XCTAssertEqual(body.formName, "new")
+            sent.fulfill()
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"status":"saved","sequence":1}"#.utf8))
+        }
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: api(host: host), clock: clock, sleeper: sleeper)
+        addTeardownBlock { await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        for _ in 0..<200 {
+            if sleeper.pendingSleepCount > 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(sleeper.sleepCalls.map(\.duration), [300])
+        _ = try await delivery.enqueue(journal: journal, run: run, formName: "new", answers: [:])
+        await fulfillment(of: [sent], timeout: 3)
+        await delivery.shutdown()
+    }
+
+    func testUnreadableDiscoveryBacksOffWhileValidOwnerDelivers() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        _ = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
+        let damaged = directory.appendingPathComponent("journey-journal-v2/" + String(repeating: "c", count: 64) + ".json")
+        try Data("broken".utf8).write(to: damaged)
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
+        let sleeper = MockSleepProvider()
+        let sent = expectation(description: "healthy sheet")
+        let host = UUID().uuidString.lowercased() + ".test"
+        StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
+            sent.fulfill()
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"status":"saved","sequence":1}"#.utf8))
+        }
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: api(host: host), clock: clock, sleeper: sleeper)
+        addTeardownBlock { await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        await fulfillment(of: [sent], timeout: 3)
+        for (index, duration) in [5.0, 10, 20].enumerated() {
+            for _ in 0..<200 {
+                if sleeper.sleepCalls.count > index + (index > 0 ? 1 : 0) && sleeper.pendingSleepCount > 0 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(sleeper.sleepCalls.last?.duration, duration)
+            if index == 0 {
+                clock.advance(by: -86_400)
+                sleeper.completeAllSleeps()
+                for _ in 0..<200 {
+                    if sleeper.sleepCalls.count > 1 && sleeper.pendingSleepCount > 0 { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                XCTAssertEqual(sleeper.sleepCalls.last?.duration, 5, "Clock rollback preserves the remaining recovery delay")
+            }
+            clock.advance(by: duration)
+            sleeper.completeAllSleeps()
+        }
         await delivery.shutdown()
     }
 
