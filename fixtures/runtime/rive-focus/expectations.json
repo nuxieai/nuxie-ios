@@ -1,0 +1,59 @@
+{
+  "keyboard": {
+    "sourceLines": "2267-2381",
+    "artboard": "KeyboardInput",
+    "property": "keyCount",
+    "checks": [
+      1,
+      1,
+      2,
+      2,
+      2,
+      2,
+      3,
+      4,
+      4,
+      5,
+      5,
+      6,
+      6
+    ]
+  },
+  "text": {
+    "sourceLines": "2383-2428",
+    "properties": [
+      "isFocused",
+      "hasKeyed",
+      "hasTexted"
+    ],
+    "checks": [
+      [
+        true,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        true
+      ],
+      [
+        true,
+        true,
+        true
+      ]
+    ]
+  },
+  "focusState": {
+    "sourceLines": "focus_input.rs:283-284",
+    "hasFocus": true,
+    "expectsKeyboardInput": true,
+    "afterClearHasFocus": false,
+    "afterClearSourceLines": "focus_input.rs:316-322"
+  }
+}
