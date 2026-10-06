@@ -397,11 +397,11 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         staged.reserveCapacity(
             reportedEvents.count + viewModelChanges.count + hostCommands.count
         )
-        staged.append(contentsOf: reportedEvents.map { event in
-            interpret(event, controlActionIds: controlActionIds)
-        })
         staged.append(contentsOf: viewModelChanges.map {
             .viewModelChange($0)
+        })
+        staged.append(contentsOf: reportedEvents.map { event in
+            interpret(event, controlActionIds: controlActionIds)
         })
         staged.append(contentsOf: hostCommands.map {
             interpret(
