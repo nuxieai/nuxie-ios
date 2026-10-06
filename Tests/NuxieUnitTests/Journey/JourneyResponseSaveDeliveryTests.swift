@@ -77,6 +77,91 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         }
     }
 
+    func testWaitingFailureKeepsOlderSheetAndNewTapConfirmsWithoutQueueing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        let older = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(1)], queued: true)
+        _ = try await journal.recordResponseSaveReply(older, reply: .noAnswer, at: Date(timeIntervalSince1970: 1000))
+        let host = UUID().uuidString.lowercased() + ".test"
+        StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
+            let sheet = try ExactJSONCodec.decode(JourneyResponseSave.self, from: XCTUnwrap(request.httpBody))
+            XCTAssertEqual(sheet.distinctId, "anon")
+            XCTAssertTrue([2, 3].contains(sheet.sequence))
+            let body = sheet.sequence == 2 ? #"{"status":"save_unavailable"}"# : #"{"status":"replayed","sequence":3}"#
+            return (HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: api(host: host),
+            clock: MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000)), sleeper: MockSleepProvider())
+        addTeardownBlock { await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        let failed = try await delivery.sendWaiting(journal: journal, run: run, formName: "feedback", answers: [:])
+        XCTAssertFalse(failed.confirmed)
+        let pending = try await journal.pendingResponseSaves()
+        XCTAssertEqual(pending, [older])
+        let confirmed = try await delivery.sendWaiting(journal: journal, run: run, formName: "feedback", answers: [:])
+        XCTAssertTrue(confirmed.confirmed)
+        let final = try await journal.pendingResponseSaves()
+        XCTAssertTrue(final.isEmpty)
+        let next = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: false)
+        XCTAssertEqual(next.sequence, 4)
+    }
+
+    func testWaitingReplyAfterRunEndsDoesNotEraseNewerQueuedSheet() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        let started = expectation(description: "waiting request held")
+        let transport = HeldResponseSaveTransport(started: started)
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: transport,
+            clock: MockDateProvider(), sleeper: MockSleepProvider())
+        addTeardownBlock { await transport.release(); await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        let waiting = Task { try await delivery.sendWaiting(journal: journal, run: run, formName: "feedback", answers: [:]) }
+        await fulfillment(of: [started], timeout: 5)
+        await delivery.shutdown()
+        let replacement = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(2)], queued: true)
+        try await journal.markStartedQueued(run)
+        try await journal.complete(run.id, outcome: "done", at: Date())
+        try await journal.markCompletionQueued(run)
+        await transport.release()
+        let reply = try await waiting.value
+        XCTAssertTrue(reply.confirmed)
+        let pending = try await journal.pendingResponseSaves()
+        XCTAssertEqual(pending, [replacement])
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.map(\.sequence), [1])
+        await delivery.shutdown()
+    }
+
+    func testWaitingTransportPreservesEmptyAndLargeExactAnswerSheets() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        var large: ExactJSONObject<JourneyReleaseJSONValue> = [:]
+        for index in 0..<300 { large["field-\(index)"] = .string("invalid as typed") }
+        large["é"] = .string("composed")
+        large["e\u{301}"] = .string("decomposed")
+        large["__proto__"] = .bool(false)
+        for answers in [ExactJSONObject<JourneyReleaseJSONValue>(), large] {
+            let host = UUID().uuidString.lowercased() + ".test"
+            StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
+                let sheet = try ExactJSONCodec.decode(JourneyResponseSave.self, from: XCTUnwrap(request.httpBody))
+                XCTAssertEqual(sheet.answers, answers)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"status":"invalid_request"}"#.utf8))
+            }
+            let delivery = JourneyResponseSaveDelivery(directory: directory, transport: api(host: host),
+                clock: MockDateProvider(), sleeper: MockSleepProvider())
+            await delivery.activate(scope: .testFixture)
+            let reply = try await delivery.sendWaiting(journal: journal, run: run, formName: "feedback", answers: answers)
+            XCTAssertEqual(reply.code, .invalidRequest)
+            await delivery.shutdown()
+        }
+    }
+
     func testUnknownFormDeadlineAndBackoffSurviveRestartAndBackwardClock() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
