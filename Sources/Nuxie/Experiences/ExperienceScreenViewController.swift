@@ -321,8 +321,6 @@ final class ExperienceScreenViewController: UIViewController {
             let repeatPress = pressed && pressedHardwareKeys.contains(hid)
             let modifiers = ExperienceHardwareKey.modifiers(key.modifierFlags)
             let accepted = receiveHardwareKey(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeatPress)
-            if pressed && accepted { pressedHardwareKeys.insert(hid) }
-            if !pressed { pressedHardwareKeys.remove(hid) }
             if !accepted { unhandled.insert(press) }
         }
         return unhandled
