@@ -26,11 +26,11 @@ final class SignedSemanticJourneyTests: XCTestCase {
         }
     }
 
-    func testSignedSemanticActivationPersistsResponsesBeforeAuthoredNavigation() async throws {
+    func testSignedSemanticActivationPublishesOnlyOrdinaryEventsBeforeNavigation() async throws {
         try await exercise(.success)
     }
 
-    func testFailedSignedSemanticActionDoesNotCommitPartialResponses() async throws {
+    func testFailedSignedSemanticActionPublishesNothing() async throws {
         try await exercise(.scriptFailure)
     }
 
@@ -38,12 +38,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         try await exercise(.roles)
     }
 
-    func testSignedConditionReadsResponseAndEventFromTheSameNativeEmission() async throws {
-        try await exercise(.condition)
-    }
-
     private enum Scenario: String {
-        case condition = "rendered-semantic-screen-control-condition"
         case roles = "rendered-semantic-roles"
         case success = "rendered-semantic-screen-control"
         case scriptFailure = "rendered-semantic-screen-control-error"
@@ -243,9 +238,9 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 XCTAssertTrue(button.accessibilityTraits.contains(.button))
                 let activationStartedAt = Date()
                 XCTAssertTrue(button.accessibilityActivate())
-                if scenario == .success || scenario == .condition {
+                if scenario == .success {
                     try await waitUntil("Authored navigation must follow durable emission admission") { observer.navigationResponses != nil && observer.accepted.count == 1 }
-                    XCTAssertEqual(observer.navigationResponses?["selection"], .string("pro"))
+                    XCTAssertTrue(observer.navigationResponses?.isEmpty == true)
                     XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), ["script_control_activated"])
                     for emission in try XCTUnwrap(observer.accepted.first).emissions {
                         let occurredAt = try XCTUnwrap(JourneyPresentationEventProjector.date(emission.occurredAt))
@@ -256,7 +251,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                         XCTAssertLessThanOrEqual(occurredAt, Date())
                     }
                     let stored = try await journal.runs()
-                    XCTAssertEqual(stored.first?.context.responses["selection"], .string("pro"))
+                    XCTAssertTrue(stored.first?.context.responses.isEmpty == true)
                     XCTAssertTrue(presentations.isExperiencePresented)
                 } else {
                     try await waitUntil("A throwing script must retire the presentation") { observer.failureResponses != nil && !presentations.isExperiencePresented }
@@ -582,7 +577,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
     func presentJourney(_ request: JourneyPresentationRequest) async -> JourneyPresentationResult {
         lastRequest = request
         return await base.presentJourney(JourneyPresentationRequest(fences: request.fences, release: request.release, delivery: request.delivery,
-            pinnedArtifacts: request.pinnedArtifacts, screenId: request.screenId, owner: request.owner,
+            pinnedArtifacts: request.pinnedArtifacts, runValues: request.runValues, screenId: request.screenId, owner: request.owner,
             reservation: request.reservation, presentationTraceContext: request.presentationTraceContext,
             onScreenChanged: request.onScreenChanged, onScreenDismissed: { screen, next, method in
                 if method == "error" {
