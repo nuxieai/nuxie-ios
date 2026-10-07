@@ -9,6 +9,99 @@ import XCTest
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
     #if NUXIE_HOSTED_INPUT_TESTS
+    func testPublishedInputLocatorReadsFocusedOccurrence() async throws {
+        let expected = try PublishedInputFixture.expectations()
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload:
+            SharedValuesFixture.payload(directory: PublishedInputFixture.directory, screens: expected.screens))
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let screen = try await preparation.openScreen(screenID: "input", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await screen.close() }
+        try await screen.enableSemantics()
+        _ = try await screen.step(focusInputs: [.next], elapsedSeconds: 0)
+        let table = try JSONSerialization.jsonObject(with: Data(contentsOf:
+            PublishedInputFixture.directory.appendingPathComponent("text-inputs.json"))) as? [[String: Any]]
+        let locator = try XCTUnwrap(table?.first?["textInputName"] as? String)
+        let layer = CAMetalLayer()
+        layer.device = try await screen.metalDevice().value
+        layer.pixelFormat = .bgra8Unorm
+        layer.drawableSize = CGSize(width: 393, height: 852)
+        let drawable = try XCTUnwrap(layer.nextDrawable())
+        let frame = try await screen.renderFrame(layoutScaleFactor: 1,
+            drawable: ExperienceInteractiveDrawable(drawable), capturesSemantics: true)
+        let capture = try XCTUnwrap(frame.semantics)
+        let fields = capture.tree.nodes.filter { $0.role == NuxieNativeSemanticRole.textField.rawValue }
+        XCTAssertEqual(fields.count, 1)
+        let occurrence = try XCTUnwrap(fields.first)
+        XCTAssertEqual(occurrence.stateFlags & (NuxieNativeSemanticNode.hidden | NuxieNativeSemanticNode.disabled), 0)
+        let text = try await screen.readPresentedFieldString(captureID: capture.id,
+            nodeID: occurrence.id, name: locator)
+        XCTAssertEqual(text, expected.startingValues.name,
+            "Seed from the delivered TextInput locator, not the table's empty value")
+    }
+
+    func testPublishedInputReplacementPreservesNativeCompositionAndCorrection() async throws {
+        let expected = try PublishedInputFixture.expectations()
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload:
+            SharedValuesFixture.payload(directory: PublishedInputFixture.directory, screens: expected.screens))
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let screen = try await preparation.openScreen(screenID: "input", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await screen.close() }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        let field = UITextField(frame: CGRect(x: 20, y: 40, width: 300, height: 40))
+        controller.view.addSubview(field)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        field.text = expected.startingValues.name
+        _ = try await screen.step(focusInputs: [.next], elapsedSeconds: 0)
+        XCTAssertTrue(field.becomeFirstResponder())
+        let root = try await screen.rootViewModel()
+        func sendNativeReplacement(_ expectedText: String) async throws {
+            let current = try XCTUnwrap(field.text)
+            XCTAssertEqual(current, expectedText)
+            _ = try await screen.step(elapsedSeconds: 0)
+            _ = try await screen.mutateState([.setNumber(root, path: "state/typed", value: 0)])
+            // The native editor owns composition and replacement. These are
+            // existing Rive select-all and insertion inputs, in one step.
+            let replacement: NuxieNativeFocusInput = current.isEmpty
+                ? .key(code: 259, modifiers: 0, pressed: true, repeated: false)
+                : .text(current)
+            _ = try await screen.step(focusInputs: [
+                .key(code: 65, modifiers: 8, pressed: true, repeated: false), replacement,
+            ], elapsedSeconds: 0)
+            let values = try await run.journeyValues()
+            XCTAssertEqual(values["name"], .string(expectedText))
+            let immediate = try await screen.snapshot()
+            XCTAssertEqual(immediate.values.first { $0.name == "typed" }?.value, .number(0),
+                "F3 dispatches the input handler on the next advance")
+            _ = try await screen.step(elapsedSeconds: 0)
+            let snapshot = try await screen.snapshot()
+            XCTAssertEqual(snapshot.values.first { $0.name == "typed" }?.value, .number(1))
+        }
+        field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+        field.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+        XCTAssertNotNil(field.markedTextRange)
+        try await sendNativeReplacement("に")
+        field.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0))
+        XCTAssertNotNil(field.markedTextRange)
+        try await sendNativeReplacement("日本")
+        field.unmarkText()
+        XCTAssertNil(field.markedTextRange)
+        field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+        field.insertText("teh")
+        try await sendNativeReplacement("teh")
+        field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+        field.insertText("the")
+        try await sendNativeReplacement("the")
+        field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+        field.insertText("")
+        try await sendNativeReplacement("")
+    }
+
     func testTypingTransportExperiment() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
