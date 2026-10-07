@@ -19,7 +19,7 @@ actor ExperienceRunValues {
         guard !retired, let native = try await nativeTask?.value else { return nil }
         let snapshot = try await native.sessions.snapshot(native.reference)
         guard !retired else { throw CancellationError() }
-        return ExperienceRunSnapshot(native: snapshot, catalog: native.catalog)
+        return ExperienceRunSnapshot(native: snapshot, catalog: native.catalog, origins: native.origins, authoredIDs: native.authoredIDs)
         #else
         return nil
         #endif
@@ -52,6 +52,8 @@ actor ExperienceRunValues {
         let reference: NuxieNativeViewModelReference
         let schemaIndex: Int
         let catalog: NuxieNativeViewModelCatalog
+        let origins: [UInt64: [ExperienceRunListSnapshot.OriginStep]]
+        let authoredIDs: Set<UInt64>
     }
 
     private var preparation: NuxieNativePreparedFile?
@@ -79,11 +81,21 @@ actor ExperienceRunValues {
             guard let schema = catalog.schemas.first(where: { $0.name == "Experience" }) else { return nil as Native? }
             let sessions = try await preparedFile.makeSessionGroup()
             let reference = try await sessions.makeViewModel(schemaIndex: schema.index, authoredInstanceIndex: 0)
-            if let restoredSnapshot {
-                let mutations = try restoredSnapshot.mutations(for: reference)
-                if !mutations.isEmpty { _ = try await sessions.mutate(mutations) }
+            do {
+                let initial = try await sessions.snapshot(reference)
+                let origins = ExperienceRunListSnapshot.authoredOrigins(initial)
+                if let lists = restoredSnapshot?.lists {
+                    try await lists.restore(sessions: sessions, root: reference)
+                } else if let restoredSnapshot {
+                    let mutations = try restoredSnapshot.mutations(for: reference)
+                    if !mutations.isEmpty { _ = try await sessions.mutate(mutations) }
+                }
+                return Native(sessions: sessions, reference: reference, schemaIndex: schema.index,
+                    catalog: catalog, origins: origins, authoredIDs: Set(initial.instances.map(\.id)))
+            } catch {
+                try? await sessions.retire()
+                throw error
             }
-            return Native(sessions: sessions, reference: reference, schemaIndex: schema.index, catalog: catalog)
         }
         preparationGeneration += 1
         nativeTask = task

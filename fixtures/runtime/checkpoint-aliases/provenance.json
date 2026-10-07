@@ -1,0 +1,20 @@
+{
+  "kind": "handwritten SDK recovery test fixture",
+  "schemaRevision": "370205cd578a965a07a2b43fd97ecd2d6edebf60",
+  "schemaFile": "crates/nuxie-schema/src/generated/schema.rs",
+  "reference": "crates/nux-capi/src/list_acquire_tests.rs fixture_impl",
+  "sha256": "c62960f16c1422898cb98133dc9d6b3f0a13398781c1e56b328444a3f29ba1fd",
+  "bytes": 151,
+  "expectations": {
+    "initialGoals": [
+      "A",
+      "B"
+    ],
+    "selectedAfterLink": "same native identity as goals[1]",
+    "afterRecoverySelectedWrite": [
+      "A",
+      "Edited through selected"
+    ]
+  },
+  "notes": "The Row artboard supplies the existing list-insert adapter, matching the runtime reference fixture. No renderer behavior is asserted."
+}

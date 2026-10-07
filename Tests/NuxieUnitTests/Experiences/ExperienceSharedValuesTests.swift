@@ -10,6 +10,50 @@ import UIKit
 
 final class ExperienceSharedValuesTests: XCTestCase {
     #if os(iOS)
+    func testBothPublishedGoalsScreensShareRestoredRows() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("forms-saves/goals")
+        let payload = try SharedValuesFixture.payload(directory: directory, screens: ["goals", "quiet"])
+        let prepared = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes)
+        let original = ExperienceRunValues()
+        addTeardownBlock { await original.retire() }
+        let result = try await original.native(in: prepared)
+        let native = try XCTUnwrap(result)
+        _ = try await native.sessions.mutate([
+            .listMove(instance: native.reference, path: "goals", from: 1, to: 0),
+        ])
+        let captured = try await original.snapshot()
+        let checkpoint = try XCTUnwrap(captured)
+        await original.retire()
+        let restored = ExperienceRunValues(snapshot: checkpoint)
+        addTeardownBlock { await restored.retire() }
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let first = try await preparation.openScreen(screenID: "goals", runValues: restored,
+            pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await first.close() }
+        let second = try await preparation.openScreen(screenID: "quiet", runValues: restored,
+            pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await second.close() }
+        let a = try await first.snapshot()
+        let b = try await second.snapshot()
+        let ownerA = try XCTUnwrap(a.values.first {
+            $0.ownerInstanceID == a.rootInstanceID && $0.name == "experience"
+        })
+        let ownerB = try XCTUnwrap(b.values.first {
+            $0.ownerInstanceID == b.rootInstanceID && $0.name == "experience"
+        })
+        XCTAssertEqual(ownerA.value, ownerB.value)
+        guard case .referencedInstance(let owner) = ownerA.value else {
+            return XCTFail("Both screens must bind the shared Experience")
+        }
+        let listA = try XCTUnwrap(a.values.first { $0.ownerInstanceID == owner && $0.name == "goals" })
+        let listB = try XCTUnwrap(b.values.first { $0.ownerInstanceID == owner && $0.name == "goals" })
+        XCTAssertEqual(listA.value, listB.value)
+        guard case .list(let ids) = listA.value else { return XCTFail("Goals must remain a list") }
+        XCTAssertEqual(ids.map { id in a.values.first { $0.ownerInstanceID == id && $0.name == "title" }?.value },
+            [.bytes(Data("Walk".utf8)), .bytes(Data("Read".utf8))])
+    }
+
     func testPublishedInputFocusTypingAndGreetingShareTheRun() async throws {
         let expected = try PublishedInputFixture.expectations()
         let payload = try SharedValuesFixture.payload(directory: PublishedInputFixture.directory,
