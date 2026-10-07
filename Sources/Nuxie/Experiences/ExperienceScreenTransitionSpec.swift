@@ -54,7 +54,12 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
             return
         }
 
-        self.init(kind: ExperienceScreenTransitionSpec.kind(from: record))
+        let kind = ExperienceScreenTransitionSpec.kind(from: record)
+        self.init(kind: kind, presentation: kind == .modal ? ExperienceLayerPresentation(
+            kind: (record["present"] as? String).flatMap(ExperienceLayerPresentation.Kind.init(rawValue:)) ?? .sheet,
+            height: (record["height"] as? String).flatMap(ExperienceLayerPresentation.Height.init(rawValue:)) ?? .large,
+            closedBy: (record["closedby"] as? String).flatMap(ExperienceLayerPresentation.ClosedBy.init(rawValue:)) ?? .any
+        ) : .modalDefault)
     }
 
     private static func transitionRecord(from raw: Any?) -> [String: Any]? {
