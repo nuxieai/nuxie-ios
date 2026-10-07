@@ -464,6 +464,11 @@ final class ExperiencePresentationService {
     func presentJourney(
         _ request: JourneyPresentationRequest
     ) async -> JourneyPresentationResult {
+        guard request.transition.kind != .modal || request.transition.presentation.isAvailable else {
+            LogWarning("ExperiencePresentationService: content-height sheets await the runtime root Hug seam")
+            request.reservation?.release()
+            return .failed
+        }
         guard appIsForeground,
               journeyForegroundAuthorityReady else {
             request.reservation?.release()

@@ -32,6 +32,23 @@ final class ExperienceLayerPresentationTests: XCTestCase {
         }
     }
 
+    func testSharedPresentationOptionsAndStrictValidation() throws {
+        let vector = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture("presentation-options")) as? [String: Any])
+        for item in try XCTUnwrap(vector["cases"] as? [[String: Any]]) {
+            let transition = try XCTUnwrap(item["transition"] as? [String: Any])
+            XCTAssertNoThrow(try JourneyReleaseSchemaPrimitives.validateJourneyTransition(transition, path: "transition"))
+            let parsed = ExperienceScreenTransitionSpec(raw: transition)
+            XCTAssertEqual(parsed.kind, .modal)
+            XCTAssertEqual(parsed.presentation.kind.rawValue, item["present"] as? String)
+            XCTAssertEqual(parsed.presentation.height.rawValue, item["height"] as? String)
+            XCTAssertEqual(parsed.presentation.closedBy.rawValue, item["closedby"] as? String)
+            XCTAssertEqual(parsed.presentation.isAvailable, item["available"] as? Bool)
+        }
+        for transition in try XCTUnwrap(vector["invalid"] as? [[String: Any]]) {
+            XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateJourneyTransition(transition, path: "transition"))
+        }
+    }
+
     func testNativeSheetDetentsAndCloseFlags() throws {
         let looks = try JSONDecoder().decode(ExperiencePresentationLooks.self, from: fixture("presentation-looks"))
         for height in [ExperienceLayerPresentation.Height.medium, .large] {

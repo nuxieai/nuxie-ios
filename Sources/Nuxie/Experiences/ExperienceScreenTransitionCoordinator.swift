@@ -465,6 +465,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     @discardableResult
     func navigate(to screenId: String, transition rawTransition: Any?, completion: @escaping Completion) -> Bool {
+        let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
+        guard spec.kind != .modal || spec.presentation.isAvailable else {
+            LogWarning("ExperienceScreenTransitionCoordinator: content-height sheets await the runtime root Hug seam")
+            completion(.failed, screenId)
+            return false
+        }
         guard lifecycle == .installed,
               !navigationAdmissionRevoked,
               artifact.renderPlan.screens.contains(where: { $0.screenId == screenId }) else {

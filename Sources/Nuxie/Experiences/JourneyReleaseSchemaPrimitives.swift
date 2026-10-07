@@ -587,11 +587,22 @@ enum JourneyReleaseSchemaPrimitives {
         }
     }
 
-    private static func validateJourneyTransition(_ value: Any?, path: String) throws {
+    static func validateJourneyTransition(_ value: Any?, path: String) throws {
         let transition = try dictionary(value, path: path)
         guard let type = transition["type"] as? String else { try invalid("\(path).type") }
         switch type {
-        case "none", "push", "modal", "fade": _ = try object(transition, required: ["type"], path: path)
+        case "none", "push", "fade": _ = try object(transition, required: ["type"], path: path)
+        case "modal":
+            _ = try object(transition, required: ["type"], optional: ["present", "height", "closedby"], path: path)
+            if let value = transition["present"] {
+                try enumeration(value, values: ["sheet", "fullscreen", "dialog"], path: "\(path).present")
+            }
+            if let value = transition["height"] {
+                try enumeration(value, values: ["large", "medium", "fit-content"], path: "\(path).height")
+            }
+            if let value = transition["closedby"] {
+                try enumeration(value, values: ["any", "none"], path: "\(path).closedby")
+            }
         case "custom": _ = try object(transition, required: ["type", "transitionId"], path: path); try identifier(transition["transitionId"], path: "\(path).transitionId")
         default: try invalid("\(path).type")
         }
