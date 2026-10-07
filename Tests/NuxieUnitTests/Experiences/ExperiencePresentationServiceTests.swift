@@ -848,6 +848,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         didChangeScreen: "screen-next"
                     )
 
+                    controller.backNavigationTarget = screenID
                     service.onAppDidEnterBackground()
                     service.onAppBecameActive()
                     let completed = ExperiencePresentationTestSignal()
@@ -884,6 +885,9 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         owner: request.owner, screenId: screenID, transition: nil
                     )
                     expect(navigation).to(equal(.navigated))
+                    #if canImport(UIKit)
+                    expect(controller.backNavigationSteps).to(equal([1]))
+                    #endif
                     expect(controller.navigationScreenIds).to(equal([screenID]))
                     expect(service.isExperiencePresented).to(beTrue())
                     await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")

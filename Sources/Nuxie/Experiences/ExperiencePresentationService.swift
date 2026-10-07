@@ -544,10 +544,17 @@ final class ExperiencePresentationService {
         case .rejected:
             return .failed
         }
-        let navigationResult = await controller.navigateAndWaitResult(
-            to: screenId,
-            transition: journeyFoundationValue(transition)
-        )
+        let navigationResult: ExperienceScreenNavigationResult
+        if let steps = (currentRuntimeDelegate as? JourneyRuntimeDelegate)?.consumeBackNavigation(target: screenId) {
+            navigationResult = await controller.backAndWaitResult(
+                to: screenId, steps: steps, transition: journeyFoundationValue(transition)
+            )
+        } else {
+            navigationResult = await controller.navigateAndWaitResult(
+                to: screenId,
+                transition: journeyFoundationValue(transition)
+            )
+        }
         guard ownsCurrentJourneyPresentation(
             owner,
             presentationID: presentationID
@@ -647,7 +654,9 @@ final class ExperiencePresentationService {
                 return .failed
             }
             guard let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
-                  let target = delegate.prepareBackNavigation(steps: steps) else {
+                  let target = delegate.prepareBackNavigation(
+                    steps: steps, target: controller.backTarget(steps: steps)
+                  ) else {
                 return .failed
             }
             // Resolve history first; JourneyService checks the target offer

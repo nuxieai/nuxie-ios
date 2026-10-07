@@ -1,0 +1,417 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "push and back stay in the sheet; modal over modal reveals the prior layer",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "push",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details",
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "back",
+          "count": 1,
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "modal",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ],
+            [
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "back",
+          "count": 20,
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a modal copy leaves the lower screen instance intact",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a replacement stays in the top layer",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "replace",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fade back stays inside the upper layer",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "push",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details",
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "back",
+          "count": 1,
+          "transition": {
+            "type": "fade"
+          },
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "custom back stays inside the upper layer",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "push",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details",
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "back",
+          "count": 1,
+          "transition": {
+            "type": "custom",
+            "transitionId": "not-declared"
+          },
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "replace reuses the earlier screen in its layer",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "push",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details",
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "replace",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fade reuses the earlier screen in its layer",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "push",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details",
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "fade",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "custom reuses the earlier screen in its layer",
+      "root": "screen",
+      "steps": [
+        {
+          "operation": "modal",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "push",
+          "screen": "screen",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details",
+              "screen"
+            ]
+          ]
+        },
+        {
+          "operation": "custom",
+          "screen": "details",
+          "layers": [
+            [
+              "screen"
+            ],
+            [
+              "details"
+            ]
+          ]
+        },
+        {
+          "operation": "close",
+          "layers": [
+            [
+              "screen"
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

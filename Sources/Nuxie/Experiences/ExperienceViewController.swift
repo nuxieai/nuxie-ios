@@ -1152,6 +1152,35 @@ class ExperienceViewController: NuxiePlatformViewController {
         #endif
     }
 
+    @MainActor
+    func backTarget(steps: Int) -> String? {
+        #if canImport(UIKit)
+        return screenTransitionCoordinator?.backTarget(steps: steps)
+        #else
+        return nil
+        #endif
+    }
+
+    @MainActor
+    func backAndWaitResult(to screenId: String, steps: Int, transition: Any?) async -> ExperienceScreenNavigationResult {
+        #if canImport(UIKit)
+        let generation = runtimeSession.generation
+        guard runtimeSession.isReady(generation),
+              let coordinator = screenTransitionCoordinator else { return .failed }
+        return await withCheckedContinuation { continuation in
+            var resumed = false
+            let accepted = coordinator.back(to: screenId, steps: steps, transition: transition) { result, _ in
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: result)
+            }
+            if !accepted, !resumed { continuation.resume(returning: .failed) }
+        }
+        #else
+        return .failed
+        #endif
+    }
+
     // MARK: - Setup
 
     private func setupBindings() {
