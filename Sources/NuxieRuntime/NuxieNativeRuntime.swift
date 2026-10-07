@@ -729,7 +729,7 @@ package actor NuxieNativeSessionGroup {
         return try await executor.call { try context.file.viewModelCatalog() }
     }
 
-    package func makeViewModel(schemaIndex: Int, authoredInstanceIndex: Int) async throws
+    package func makeViewModel(schemaIndex: Int, authoredInstanceIndex: Int?) async throws
         -> NuxieNativeViewModelReference {
         let context = context
         return try await executor.call {

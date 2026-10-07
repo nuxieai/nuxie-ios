@@ -14,9 +14,22 @@ struct ExperienceRunSnapshot: Codable, Equatable, Sendable {
         case bytes(Data), number(Float), bool(Bool), integer(UInt64)
     }
     let fields: [Field]
+    let lists: ExperienceRunListSnapshot?
+
+    init(fields: [Field], lists: ExperienceRunListSnapshot? = nil) {
+        self.fields = fields
+        self.lists = lists
+    }
 
     #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
-    init(native: NuxieNativeViewModelSnapshot, catalog: NuxieNativeViewModelCatalog) {
+    init(native: NuxieNativeViewModelSnapshot, catalog: NuxieNativeViewModelCatalog,
+        origins: [UInt64: [ExperienceRunListSnapshot.OriginStep]] = [:], authoredIDs: Set<UInt64> = []) {
+        fields = Self.captureFields(native: native, catalog: catalog, root: native.rootInstanceID)
+        lists = ExperienceRunListSnapshot(native: native, catalog: catalog, origins: origins, authoredIDs: authoredIDs)
+    }
+
+    static func captureFields(native: NuxieNativeViewModelSnapshot,
+        catalog: NuxieNativeViewModelCatalog, root: UInt64) -> [Field] {
         let instances = Dictionary(uniqueKeysWithValues: native.instances.map { ($0.id, $0) })
         var fields: [Field] = []
         func visit(_ id: UInt64, prefix: String, ancestors: Set<UInt64>) {
@@ -43,8 +56,8 @@ struct ExperienceRunSnapshot: Codable, Equatable, Sendable {
                 fields.append(.init(path: path, kind: property.kind.rawValue, value: value))
             }
         }
-        visit(native.rootInstanceID, prefix: "", ancestors: [])
-        self.fields = fields
+        visit(root, prefix: "", ancestors: [])
+        return fields
     }
 
     func mutations(for reference: NuxieNativeViewModelReference) throws -> [NuxieNativeViewModelMutation] {
@@ -77,6 +90,9 @@ struct ExperienceRunSnapshot: Codable, Equatable, Sendable {
             case .integer(let integer): value = .number(Double(integer))
             }
             result[field.path] = value
+        }
+        if let lists {
+            for (path, value) in lists.journeyLists { result[path] = value }
         }
         return result
     }

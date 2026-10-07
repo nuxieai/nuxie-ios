@@ -6,6 +6,101 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyNativeRunValuesTests: JourneyTestCase {
+    func testTimedWaitRestoresPublishedGoalsBeforeContinuingWithoutAScreen() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let initial = try await authenticatedRenderedSnapshot(fixture)
+        let steps = try JSONDecoder().decode([Journey.Step].self, from: Data(#"""
+        [
+          {"kind":"action","id":"present","action":{"type":"navigate","screenId":"screen_welcome"},"outlets":{}},
+          {"kind":"action","id":"wait","action":{"type":"delay","durationMs":259200000},"outlets":{"next":"restored"}},
+          {"kind":"action","id":"restored","action":{"type":"condition","branches":[{"id":"saved","condition":{"type":"Compare","op":"==","left":{"type":"Response.Field","key":"goals"},"right":{"type":"Array","items":[{"type":"Object","fields":{"title":{"type":"String","value":"Walk"}}},{"type":"Object","fields":{"title":{"type":"String","value":"Sleep"}}},{"type":"Object","fields":{"title":{"type":"String","value":"Read"}}}]}}}]},"outlets":{"saved":"done","default":"lost"}},
+          {"kind":"complete","id":"done","outcome":"done"},
+          {"kind":"complete","id":"lost","outcome":"lost"}
+        ]
+        """#.utf8))
+        let routes = try JSONDecoder().decode([Journey.Route].self, from: Data(#"[{"eventName":"continue","host":{"kind":"screen","screenId":"screen_welcome"},"entryStepId":"wait"}]"#.utf8))
+        let snapshot = replacing(initial, entryStepId: "present", steps: steps, routes: routes)
+        let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let clock = MockDateProvider()
+        let presenter = await MainActor.run { RecordingJourneyPresenter() }
+        let service = makeService(identity: identity, events: events, directory: directory,
+            dateProvider: clock, presenter: presenter)
+        addTeardownBlock { await service.shutdown() }
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let shown = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(shown)
+        let goalsDirectory = SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("forms-saves/goals")
+        let bytes = try Data(contentsOf: goalsDirectory.appendingPathComponent("screen.riv"))
+        let prepared = try await NuxieNativePreparedFile.prepare(bytes: bytes)
+        let nativeResult = try await request.runValues.native(in: prepared)
+        let native = try XCTUnwrap(nativeResult)
+        let before = try await native.sessions.snapshot(native.reference)
+        let list = try XCTUnwrap(before.values.first {
+            $0.ownerInstanceID == before.rootInstanceID && $0.name == "goals"
+        })
+        guard case .list(let ids) = list.value, let firstID = ids.first else {
+            return XCTFail("F5 must start with authored goal rows")
+        }
+        let schema = try XCTUnwrap(before.instances.first { $0.id == firstID }?.schemaIndex)
+        let added = try await native.sessions.makeViewModel(schemaIndex: schema, authoredInstanceIndex: nil)
+        _ = try await native.sessions.mutate([
+            .setString(instance: added, path: "title", value: Data("Sleep".utf8)),
+            .listMove(instance: native.reference, path: "goals", from: 1, to: 0),
+            .listInsert(instance: native.reference, path: "goals", index: 1, value: added),
+        ])
+        let expected: JourneyReleaseJSONValue = .array([
+            .object(["title": .string("Walk")]), .object(["title": .string("Sleep")]),
+            .object(["title": .string("Read")]),
+        ])
+        let accepted = await request.onEmissionBatch(presentationBatch(request: request,
+            invocationId: "goals-wait", emissions: [.init(id: UUID().uuidString, sequence: 0,
+                occurredAt: "2026-08-29T12:00:00.120Z", name: "continue", payload: [:])]), nil)
+        XCTAssertTrue(accepted)
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        for _ in 0..<200 {
+            if try await journal.runs().first?.park != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let waiting = try await journal.runs()
+        let parked = try XCTUnwrap(waiting.first)
+        XCTAssertEqual(parked.park?.wakeAt, clock.now().addingTimeInterval(259200))
+        XCTAssertEqual(parked.nativeSnapshot?.journeyValues["goals"], expected)
+        await service.onAppDidEnterBackground()
+        await request.runValues.retire()
+        clock.advance(by: 259200)
+        let restartedEvents = MockEventLog()
+        restartedEvents.identity = identity
+        let noScreen = await MainActor.run { RecordingJourneyPresenter() }
+        let restoredBeforeContinue = expectation(description: "Restore published list before continuing")
+        let restarted = makeService(identity: identity, events: restartedEvents, directory: directory,
+            dateProvider: clock, presenter: noScreen, prepareNativeValues: { values, pinned, _, _ in
+                XCTAssertEqual(pinned.descriptorSHA256, release.descriptorSHA256)
+                let file = try await NuxieNativePreparedFile.prepare(bytes: bytes)
+                _ = try await values.native(in: file)
+                let restored = try await values.journeyValues()
+                XCTAssertEqual(restored["goals"], expected)
+                XCTAssertFalse(restartedEvents.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
+                restoredBeforeContinue.fulfill()
+            }, readNativeValues: { try await $0.journeyValues() },
+            pinnedReleaseAuthenticator: { _, _ in release })
+        addTeardownBlock { await restarted.shutdown() }
+        await restarted.initialize()
+        await fulfillment(of: [restoredBeforeContinue], timeout: 3)
+        let completed = restartedEvents.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed.first?.properties["outcome"] as? String, "done")
+        let newScreen = await MainActor.run { noScreen.request }
+        XCTAssertNil(newScreen)
+    }
+
     func testThreeDayWaitRestoresNativeValuesBeforeAnyScreenPreparation() async throws {
         try await restartTimedWait(failFirstPreparation: false)
     }

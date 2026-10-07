@@ -1,0 +1,210 @@
+{
+  "header": [
+    7,
+    0,
+    3593,
+    0
+  ],
+  "objects": [
+    {
+      "type": "Backboard",
+      "key": 23,
+      "properties": []
+    },
+    {
+      "type": "ViewModel",
+      "key": 435,
+      "properties": [
+        {
+          "name": "name",
+          "key": 557,
+          "value": "Row"
+        }
+      ]
+    },
+    {
+      "type": "ViewModelPropertyString",
+      "key": 443,
+      "properties": [
+        {
+          "name": "name",
+          "key": 557,
+          "value": "title"
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstance",
+      "key": 437,
+      "properties": [
+        {
+          "name": "viewModelId",
+          "key": 566,
+          "value": 0
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstanceString",
+      "key": 433,
+      "properties": [
+        {
+          "name": "viewModelPropertyId",
+          "key": 554,
+          "value": 0
+        },
+        {
+          "name": "propertyValue",
+          "key": 561,
+          "value": "A"
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstance",
+      "key": 437,
+      "properties": [
+        {
+          "name": "viewModelId",
+          "key": 566,
+          "value": 0
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstanceString",
+      "key": 433,
+      "properties": [
+        {
+          "name": "viewModelPropertyId",
+          "key": 554,
+          "value": 0
+        },
+        {
+          "name": "propertyValue",
+          "key": 561,
+          "value": "B"
+        }
+      ]
+    },
+    {
+      "type": "ViewModel",
+      "key": 435,
+      "properties": [
+        {
+          "name": "name",
+          "key": 557,
+          "value": "Experience"
+        }
+      ]
+    },
+    {
+      "type": "ViewModelPropertyList",
+      "key": 434,
+      "properties": [
+        {
+          "name": "name",
+          "key": 557,
+          "value": "goals"
+        }
+      ]
+    },
+    {
+      "type": "ViewModelPropertyViewModel",
+      "key": 436,
+      "properties": [
+        {
+          "name": "name",
+          "key": 557,
+          "value": "selected"
+        },
+        {
+          "name": "viewModelReferenceId",
+          "key": 565,
+          "value": 0
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstance",
+      "key": 437,
+      "properties": [
+        {
+          "name": "viewModelId",
+          "key": 566,
+          "value": 1
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstanceViewModel",
+      "key": 444,
+      "properties": [
+        {
+          "name": "viewModelPropertyId",
+          "key": 554,
+          "value": 1
+        },
+        {
+          "name": "propertyValue",
+          "key": 577,
+          "value": 0
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstanceList",
+      "key": 441,
+      "properties": [
+        {
+          "name": "viewModelPropertyId",
+          "key": 554,
+          "value": 0
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstanceListItem",
+      "key": 427,
+      "properties": [
+        {
+          "name": "viewModelId",
+          "key": 549,
+          "value": 0
+        },
+        {
+          "name": "viewModelInstanceId",
+          "key": 550,
+          "value": 0
+        }
+      ]
+    },
+    {
+      "type": "ViewModelInstanceListItem",
+      "key": 427,
+      "properties": [
+        {
+          "name": "viewModelId",
+          "key": 549,
+          "value": 0
+        },
+        {
+          "name": "viewModelInstanceId",
+          "key": 550,
+          "value": 1
+        }
+      ]
+    },
+    {
+      "type": "Artboard",
+      "key": 1,
+      "properties": [
+        {
+          "name": "viewModelId",
+          "key": 583,
+          "value": 0
+        }
+      ]
+    }
+  ]
+}
