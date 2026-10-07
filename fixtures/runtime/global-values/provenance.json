@@ -1,0 +1,33 @@
+{
+  "source": "/Users/levi/dev/nuxie-codex/runtime-global-fixture",
+  "commit": "3bbd68e35e8c6f7aa1423c5336203f62fdc58b50",
+  "commands": [
+    [
+      "rustc",
+      "--edition=2024",
+      "--crate-name",
+      "nuxie_schema",
+      "--crate-type",
+      "rlib",
+      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/source/crates/nuxie-schema/src/lib.rs",
+      "-o",
+      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/libnuxie_schema.rlib"
+    ],
+    [
+      "rustc",
+      "--edition=2024",
+      "-A",
+      "dead_code",
+      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/export.rs",
+      "--extern",
+      "nuxie_schema=/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/libnuxie_schema.rlib",
+      "-o",
+      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/export"
+    ],
+    [
+      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/export",
+      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/globals.riv"
+    ]
+  ],
+  "sha256": "b8413e12898cd32469157081befc3d5361afe5e22265cb53edccdaeb295aeca3"
+}

@@ -1,0 +1,22 @@
+{
+  "enabledLabels": [
+    "1",
+    "1",
+    "1"
+  ],
+  "disabledLabels": [
+    "0",
+    "0",
+    "0"
+  ],
+  "notFound": 3,
+  "handleMismatch": 9,
+  "sources": {
+    "enabledLabels": "crates/nux-capi/tests/global_view_models.rs:135",
+    "disabledLabels": "crates/nux-capi/tests/global_view_models.rs:147",
+    "notFound": "crates/nux-capi/tests/global_view_models.rs:180",
+    "handleMismatch": "crates/nux-capi/tests/global_view_models.rs:182"
+  },
+  "commit": "3bbd68e35e8c6f7aa1423c5336203f62fdc58b50",
+  "notes": "Handwritten from runtime assertions; three labels are screen, nested copy and list row. Boolean converter uses pinned upstream 1/0."
+}
