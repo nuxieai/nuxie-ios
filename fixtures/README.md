@@ -43,3 +43,5 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 - `features/command-recovery.json`: persisted server cooldowns and active-session retry eligibility for durable Feature commands.
 - `purchases/outcome-commit.json`: one purchase outcome committer across StoreKit and host-delegate sources.
 - `ir/eval-vectors.json` and `ir/response-field-conformance.json`: expression and buffered-response evaluation used by Journey controls.
+
+- `runtime/forms-saves/goals/`: F5 goals from publisher `81fa73c87f0638d151d0a4082fbcab1cd61ec73c`. The unchanged source and oracle qualify ordered native list snapshot/recovery. SDK timed-wait persistence remains its own proof; this fixture has no row-remove event, forms or saves.
