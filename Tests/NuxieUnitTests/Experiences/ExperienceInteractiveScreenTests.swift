@@ -542,30 +542,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     @MainActor
-
-    func testDialogReadsRootHeightBeforeHostingViewportResizesIt() async throws {
-        let fixture = try await twoScreenStatePayload()
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: fixture.payload)
-        let dialog = try await preparation.openScreen(screenID: fixture.firstScreenID, pixelWidth: 32, pixelHeight: 32)
-        let fixed = try await preparation.openScreen(screenID: fixture.firstScreenID, pixelWidth: 32, pixelHeight: 32)
-        addTeardownBlock { try? await dialog.close(); try? await fixed.close() }
-        let original = try await dialog.laidOutSize()
-        XCTAssertGreaterThan(original.height, 0)
-        try await dialog.preserveRootHeightForDialog()
-        let width = UInt32(original.width + 40)
-        let height = UInt32(original.height + 80)
-        for screen in [dialog, fixed] {
-            _ = try await screen.resize(pixelWidth: width, pixelHeight: height, layoutScaleFactor: 1)
-            _ = try await screen.step(elapsedSeconds: 0)
-        }
-        let dialogSize = try await dialog.laidOutSize()
-        let fixedSize = try await fixed.laidOutSize()
-        XCTAssertEqual(dialogSize.width, CGFloat(width))
-        XCTAssertEqual(dialogSize.height, original.height)
-        XCTAssertEqual(fixedSize.height, CGFloat(height))
-    }
-
-    @MainActor
     func testPreparedAuthenticatedRIVOpensTwoRendererBoundScreensWithFreshState() async throws {
         let fixture = try await twoScreenStatePayload()
 

@@ -1,12 +1,5 @@
 {
-  "ios": {
-    "background": "systemBackground",
-    "cornerRadius": null,
-    "shadow": null,
-    "dimming": null
-  },
   "android": {
-    "dialog": "material",
     "sheet": "material"
   },
   "fitContentBeforeLayout": "held"

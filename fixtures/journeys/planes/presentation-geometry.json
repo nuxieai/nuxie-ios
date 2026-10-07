@@ -3,38 +3,12 @@
     "width": 393,
     "height": 852
   },
-  "safeArea": {
-    "top": 59,
-    "bottom": 34,
-    "left": 0,
-    "right": 0
-  },
   "sheetCases": [
     {
       "name": "Android medium",
       "platform": "android",
       "height": "medium",
       "expectedHeight": 426
-    }
-  ],
-  "dialogCases": [
-    {
-      "laidOutHeight": 200,
-      "expectedFrame": {
-        "x": 16,
-        "y": 338.5,
-        "width": 361,
-        "height": 200
-      }
-    },
-    {
-      "laidOutHeight": 900,
-      "expectedFrame": {
-        "x": 16,
-        "y": 59,
-        "width": 361,
-        "height": 759
-      }
     }
   ]
 }

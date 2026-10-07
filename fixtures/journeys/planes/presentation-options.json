@@ -165,84 +165,6 @@
       "closedby": "none",
       "available": true,
       "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "dialog",
-        "height": "large",
-        "closedby": "any"
-      },
-      "present": "dialog",
-      "height": "large",
-      "closedby": "any",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "dialog",
-        "height": "large",
-        "closedby": "none"
-      },
-      "present": "dialog",
-      "height": "large",
-      "closedby": "none",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "dialog",
-        "height": "medium",
-        "closedby": "any"
-      },
-      "present": "dialog",
-      "height": "medium",
-      "closedby": "any",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "dialog",
-        "height": "medium",
-        "closedby": "none"
-      },
-      "present": "dialog",
-      "height": "medium",
-      "closedby": "none",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "dialog",
-        "height": "fit-content",
-        "closedby": "any"
-      },
-      "present": "dialog",
-      "height": "fit-content",
-      "closedby": "any",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "dialog",
-        "height": "fit-content",
-        "closedby": "none"
-      },
-      "present": "dialog",
-      "height": "fit-content",
-      "closedby": "none",
-      "available": true,
-      "firstLayer": "fullscreen"
     }
   ],
   "invalid": [
@@ -281,6 +203,10 @@
     {
       "type": "none",
       "closedby": "none"
+    },
+    {
+      "type": "modal",
+      "present": "dialog"
     }
   ]
 }

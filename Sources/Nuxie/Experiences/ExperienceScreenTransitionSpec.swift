@@ -23,6 +23,8 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
 
     let kind: Kind
     let presentation: ExperienceLayerPresentation
+    private let presentationIsSupported: Bool
+    var isAvailable: Bool { presentationIsSupported && presentation.isAvailable }
 
     var isAnimated: Bool {
         switch kind {
@@ -43,9 +45,10 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
 
     static let none = ExperienceScreenTransitionSpec(kind: .none)
 
-    init(kind: Kind, presentation: ExperienceLayerPresentation = .modalDefault) {
+    init(kind: Kind, presentation: ExperienceLayerPresentation = .modalDefault, presentationIsSupported: Bool = true) {
         self.kind = kind
         self.presentation = presentation
+        self.presentationIsSupported = presentationIsSupported
     }
 
     init(raw: Any?) {
@@ -59,7 +62,8 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
             kind: (record["present"] as? String).flatMap(ExperienceLayerPresentation.Kind.init(rawValue:)) ?? .sheet,
             height: (record["height"] as? String).flatMap(ExperienceLayerPresentation.Height.init(rawValue:)) ?? .large,
             closedBy: (record["closedby"] as? String).flatMap(ExperienceLayerPresentation.ClosedBy.init(rawValue:)) ?? .any
-        ) : .modalDefault)
+        ) : .modalDefault, presentationIsSupported: kind != .modal || record["present"] == nil
+            || (record["present"] as? String).flatMap(ExperienceLayerPresentation.Kind.init(rawValue:)) != nil)
     }
 
     private static func transitionRecord(from raw: Any?) -> [String: Any]? {
