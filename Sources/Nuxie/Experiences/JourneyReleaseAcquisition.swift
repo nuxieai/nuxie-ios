@@ -517,44 +517,11 @@ struct JourneyReleasePlacementDocument: Decodable, Equatable, Sendable {
 }
 
 private struct JourneyReleasePresentationDocument: Decodable {
-    struct Sheet: Decodable {
-        let detent: ExperienceBehaviorPresentation.Sheet.Detent
-        let dismissible: Bool
-    }
-
-    struct Drawer: Decodable {
-        let edge: ExperienceBehaviorPresentation.Drawer.Edge
-        let extentRatio: Double
-        let cornerRadius: Double
-        let dismissible: Bool
-    }
-
-    let style: String
     let orientation: ExperienceBehaviorPresentationOrientation
     let backgroundColor: String
-    let sheet: Sheet?
-    let drawer: Drawer?
 
     func behaviorPresentation() throws -> ExperienceBehaviorPresentation {
-        guard let style = ExperienceBehaviorPresentationStyle(rawValue: style) else {
-            throw JourneyReleaseAcquisitionError.invalidProfileEntry
-        }
-        return ExperienceBehaviorPresentation(
-            style: style,
-            orientation: orientation,
-            backgroundColor: backgroundColor,
-            sheet: sheet.map {
-                .init(detent: $0.detent, dismissible: $0.dismissible)
-            },
-            drawer: drawer.map {
-                .init(
-                    edge: $0.edge,
-                    extentRatio: $0.extentRatio,
-                    cornerRadius: $0.cornerRadius,
-                    dismissible: $0.dismissible
-                )
-            }
-        )
+        .init(orientation: orientation, backgroundColor: backgroundColor)
     }
 }
 
