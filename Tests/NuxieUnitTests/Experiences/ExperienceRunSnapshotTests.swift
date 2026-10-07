@@ -81,6 +81,49 @@ final class ExperienceRunSnapshotTests: XCTestCase {
         XCTAssertNotEqual(finalIDs[0], finalIDs[1])
     }
 
+    func testPublishedListChildAcquisitionKeepsIdentityAndRejectsStaleSlot() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("forms-saves/goals")
+        let prepared = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")))
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let result = try await run.native(in: prepared)
+        let native = try XCTUnwrap(result)
+        let before = try await native.sessions.snapshot(native.reference)
+        let ids = try listIDs(before)
+        XCTAssertEqual(ids.count, 2)
+        guard ids.count == 2 else { return }
+        let child = try await native.sessions.acquireListItem(owner: native.reference,
+            path: "goals", index: 0, expectedIdentity: ids[0])
+        let unchanged = try await native.sessions.snapshot(native.reference)
+        XCTAssertEqual(unchanged, before, "Acquisition must not mutate the list")
+        _ = try await native.sessions.mutate([
+            .setString(instance: child, path: "title", value: Data("Rest".utf8)),
+            .listMove(instance: native.reference, path: "goals", from: 0, to: 1),
+        ])
+        let moved = try await native.sessions.snapshot(native.reference)
+        XCTAssertEqual(try listIDs(moved), [ids[1], ids[0]])
+        XCTAssertEqual(moved.values.first { $0.ownerInstanceID == ids[0] && $0.name == "title" }?.value,
+            .bytes(Data("Rest".utf8)))
+        do {
+            _ = try await native.sessions.acquireListItem(owner: native.reference,
+                path: "goals", index: 0, expectedIdentity: ids[0])
+            XCTFail("An old list position must not acquire a different row")
+        } catch NuxieNativeRuntimeError.invalidNativeValue { }
+        let retained = try await native.sessions.acquireListItem(owner: native.reference,
+            path: "goals", index: 1, expectedIdentity: ids[0])
+        XCTAssertEqual(retained, child)
+        _ = try await native.sessions.mutate([
+            .listRemove(instance: native.reference, path: "goals", index: 1),
+            .setString(instance: child, path: "title", value: Data("Still retained".utf8)),
+        ])
+        let detached = try await native.sessions.snapshot(child)
+        XCTAssertEqual(detached.rootInstanceID, ids[0])
+        XCTAssertEqual(detached.values.first { $0.name == "title" }?.value,
+            .bytes(Data("Still retained".utf8)))
+    }
+
     func testPublishedListChildCannotBeAddressedByAnIndexedMutationPath() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("forms-saves/goals")
