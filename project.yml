@@ -87,6 +87,8 @@ targets:
         buildPhase: resources
       - path: Sources/Nuxie/Resources/timezone-bundle.json
         buildPhase: resources
+      - path: Sources/Nuxie/Resources/presentation-schema.json
+        buildPhase: resources
       - path: Sources/Nuxie/Resources/LICENSE-unicode.txt
         buildPhase: resources
     dependencies:
@@ -135,6 +137,8 @@ targets:
       - path: Sources/Nuxie/PrivacyInfo.xcprivacy
         buildPhase: resources
       - path: Sources/Nuxie/Resources/timezone-bundle.json
+        buildPhase: resources
+      - path: Sources/Nuxie/Resources/presentation-schema.json
         buildPhase: resources
       - path: Sources/Nuxie/Resources/LICENSE-unicode.txt
         buildPhase: resources
