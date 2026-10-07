@@ -50,8 +50,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     private final class ScreenCache {
         var controllers: [String: ExperienceScreenViewController] = [:]
-        var presentation: ExperienceLayerPresentation?
-        var presentationConfigurator: ExperienceLayerPresentationConfigurator?
     }
 
     private var navigationLayers: [UINavigationController] = []
@@ -466,8 +464,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     @discardableResult
     func navigate(to screenId: String, transition rawTransition: Any?, completion: @escaping Completion) -> Bool {
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
-        guard spec.kind != .modal || spec.presentation.isAvailable else {
-            LogWarning("ExperienceScreenTransitionCoordinator: content-height sheets await the runtime root Hug seam")
+        guard spec.kind != .modal || spec.isAvailable else {
+            LogWarning("ExperienceScreenTransitionCoordinator: unsupported modal presentation or content height")
             completion(.failed, screenId)
             return false
         }
@@ -549,9 +547,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             do {
                 let spec = ExperienceScreenTransitionSpec(raw: request.rawTransition)
                 let opensLayer = request.backLayer == nil && spec.kind == .modal
-                let dialog = opensLayer ? spec.presentation.kind == .dialog : activeCache.presentation?.kind == .dialog
                 if opensLayer { pendingModalCache = ScreenCache() }
-                _ = try await ensureScreenController(for: request.screenId, preservingRootHeight: dialog)
+                _ = try await ensureScreenController(for: request.screenId)
                 guard lifecycle == .installed, !Task.isCancelled,
                       !navigationAdmissionRevoked, navigationController === sourceLayer else {
                     await discardPendingModal()
@@ -609,9 +606,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             reduceMotion: reduceMotion,
             isBack: isBack
         )
-        if navigated, activeCache.presentation?.kind == .dialog {
-            navigationController?.preferredContentSize = targetController.preferredContentSize
-        }
+
         return navigated
     }
 
@@ -625,14 +620,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     ) async throws -> Bool {
         let sourceLayer = navigationController
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
-        if (spec.kind == .modal && !isBack && spec.presentation.kind == .dialog)
-            || ((spec.kind != .modal || isBack) && activeCache.presentation?.kind == .dialog) {
-            let size = try await targetController.laidOutSize()
-            guard size.height.isFinite, size.height > 0 else {
-                throw ExperienceScreenTransitionCoordinatorError.invalidLayout(screenId)
-            }
-            targetController.preferredContentSize = size
-        }
         if case .custom(let transitionId) = spec.kind,
            let sourceController,
            sourceController !== targetController,
@@ -834,8 +821,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func ensureScreenController(
-        for screenId: String,
-        preservingRootHeight: Bool = false
+        for screenId: String
     ) async throws -> ExperienceScreenViewController {
         guard !terminalScreenIds.contains(screenId) else {
             throw ExperienceScreenTransitionCoordinatorError.terminalScreen(screenId)
@@ -874,7 +860,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         controller.setContentHidden(contentHidden)
         do {
-            try await controller.mountInteractiveScreen(preservingRootHeight: preservingRootHeight)
+            try await controller.mountInteractiveScreen()
             guard lifecycle != .tearingDown,
                   lifecycle != .tornDown,
                   !Task.isCancelled,
@@ -987,13 +973,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let controller = try screenController(for: screenId)
         let layer = UINavigationController(rootViewController: controller)
         layer.setNavigationBarHidden(true, animated: false)
-        layer.preferredContentSize = controller.preferredContentSize
-        let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation) { [weak self, weak layer] in
-            guard let self, let layer else { return }
-            Task { @MainActor in await self.handlePresentedLayerDidDismiss(layer) }
-        }
-        cache.presentation = presentation
-        cache.presentationConfigurator = configurator
+        let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation)
         configurator.configure(layer)
         layer.presentationController?.delegate = self
         controller.setContentHidden(contentHidden)
@@ -1036,12 +1016,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private func handlePresentedControllerDidDismiss(
         _ presentationController: UIPresentationController
     ) async {
-        guard let layer = presentationController.presentedViewController as? UINavigationController else { return }
-        await handlePresentedLayerDidDismiss(layer)
-    }
-
-    private func handlePresentedLayerDidDismiss(_ dismissedLayer: UINavigationController) async {
-        guard navigationLayers.count > 1,
+        guard let dismissedLayer = presentationController.presentedViewController as? UINavigationController,
+              navigationLayers.count > 1,
               navigationLayers.last === dismissedLayer,
               let dismissedController = dismissedLayer.topViewController as? ExperienceScreenViewController else {
             return
@@ -1251,7 +1227,6 @@ private enum ExperienceScreenTransitionCoordinatorError: LocalizedError {
     case hostUnavailable
     case missingScreen(String)
     case screenNotMounted(String)
-    case invalidLayout(String)
     case terminalScreen(String)
 
     var errorDescription: String? {
@@ -1262,8 +1237,6 @@ private enum ExperienceScreenTransitionCoordinatorError: LocalizedError {
             return "Experience artifact does not contain screen \(screenId)."
         case .screenNotMounted(let screenId):
             return "Experience screen \(screenId) has not mounted its interactive runtime."
-        case .invalidLayout(let screenId):
-            return "Experience screen \(screenId) has no positive laid-out height."
         case .terminalScreen(let screenId):
             return "Experience screen \(screenId) previously encountered a terminal runtime failure."
         }

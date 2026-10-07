@@ -24,7 +24,5 @@ final class ExperienceShellLayoutTests: XCTestCase {
             presentation: .init(height: .medium, closedBy: .none))
         XCTAssertEqual(experience.shellContract(screenId: screenID, transition: transition)?.layer,
                        .init(height: .medium, closedBy: .none))
-        let dialog = ExperienceScreenTransitionSpec(kind: .modal, presentation: .init(kind: .dialog))
-        XCTAssertEqual(experience.shellContract(screenId: screenID, transition: dialog)?.layer.kind, .fullscreen)
     }
 }

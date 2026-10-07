@@ -595,7 +595,7 @@ enum JourneyReleaseSchemaPrimitives {
         case "modal":
             _ = try object(transition, required: ["type"], optional: ["present", "height", "closedby"], path: path)
             if let value = transition["present"] {
-                try enumeration(value, values: ["sheet", "fullscreen", "dialog"], path: "\(path).present")
+                try enumeration(value, values: ["sheet", "fullscreen"], path: "\(path).present")
             }
             if let value = transition["height"] {
                 try enumeration(value, values: ["large", "medium", "fit-content"], path: "\(path).height")

@@ -4,15 +4,11 @@ import UIKit
 /// Owns the weak UIKit delegates for the first native layer.
 @MainActor
 final class ExperienceShellPresentationConfigurator {
-    private var layerConfigurator: ExperienceLayerPresentationConfigurator?
     private var adaptiveDismissalDelegate: ExperienceAdaptivePresentationDismissalDelegate?
 
     func configure(_ controller: UIViewController, shell: ExperienceShellContract?) {
         let presentation = shell?.layer ?? .init(kind: .fullscreen)
-        let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation) { [weak controller] in
-            (controller as? ExperienceViewController)?.performInteractiveDismissal()
-        }
-        layerConfigurator = configurator
+        let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation)
         configurator.configure(controller)
         let delegate = ExperienceAdaptivePresentationDismissalDelegate { [weak controller] in
             (controller as? ExperienceViewController)?.performInteractiveDismissal()

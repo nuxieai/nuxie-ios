@@ -417,7 +417,7 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    func mountInteractiveScreen(preservingRootHeight: Bool = false) async throws {
+    func mountInteractiveScreen() async throws {
         guard interactiveScreen == nil, presentationLoop == nil else {
             throw ExperienceInteractiveScreenControllerError.alreadyMounted
         }
@@ -524,7 +524,6 @@ final class ExperienceScreenViewController: UIViewController {
             lastPushedSafeAreaInsets = insets
             lastPushedViewport = viewport
             lastPushedFold = fold
-            if preservingRootHeight { try await interactive.preserveRootHeightForDialog() }
             try await loop.start()
             configureTextInputCallbacks()
             bindTextInputs(to: interactive, loop: loop)
@@ -816,19 +815,6 @@ final class ExperienceScreenViewController: UIViewController {
         lastPushedViewport = values.1
         lastPushedFold = values.2
         return values
-    }
-
-    func laidOutSize() async throws -> CGSize {
-        guard !isShuttingDown, runtimeFailure == nil,
-              let interactiveScreen, let presentationLoop else { throw CancellationError() }
-        return try await withCheckedThrowingContinuation { continuation in
-            presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
-                let size = try await interactiveScreen.laidOutSize()
-                return .work(requestsFrame: false) { continuation.resume(returning: size) }
-            }, completion: { result in
-                if case .failure(let error) = result { continuation.resume(throwing: error) }
-            })
-        }
     }
 
     /// Reads the captured field through the same serial lane as input and presentation.
