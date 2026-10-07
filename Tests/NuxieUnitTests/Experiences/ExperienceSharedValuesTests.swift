@@ -170,6 +170,19 @@ final class ExperienceSharedValuesTests: XCTestCase {
         // The published source varies only Tick visibility with level; trip_days stays 23.
         XCTAssertTrue(frames[0] == frames[2], "Independent selected copies have identical first drawn pixels")
         XCTAssertTrue(frames[0] != frames[1], "Tick changes actual first-frame pixels when level changes")
+        // This source places its only two text items at the top; the bottom-right pixel is clear background.
+        let background = frames[1].suffix(4)
+        var visibleTickPixels = 0
+        for offset in stride(from: 0, to: frames[0].count, by: 4) {
+            let selected = frames[0][offset..<(offset + 4)]
+            let unselected = frames[1][offset..<(offset + 4)]
+            if selected != unselected {
+                XCTAssertTrue(unselected.elementsEqual(background),
+                    "Tick's differing pixels must be absent at level 0, not at level 1")
+                visibleTickPixels += 1
+            }
+        }
+        XCTAssertGreaterThan(visibleTickPixels, 0, "The selected first frame contains visible Tick ink")
     }
 
     func testComponentCopyKeepsItsOwnCounter() async throws {
