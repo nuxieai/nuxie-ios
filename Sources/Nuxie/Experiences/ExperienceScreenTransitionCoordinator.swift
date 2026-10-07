@@ -989,8 +989,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         layer.setNavigationBarHidden(true, animated: false)
         layer.preferredContentSize = controller.preferredContentSize
         let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation) { [weak self, weak layer] in
-            guard let controller = layer?.presentationController else { return }
-            self?.presentationControllerDidDismiss(controller)
+            guard let self, let layer else { return }
+            Task { @MainActor in await self.handlePresentedLayerDidDismiss(layer) }
         }
         cache.presentation = presentation
         cache.presentationConfigurator = configurator
@@ -1036,8 +1036,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private func handlePresentedControllerDidDismiss(
         _ presentationController: UIPresentationController
     ) async {
-        guard let dismissedLayer = presentationController.presentedViewController as? UINavigationController,
-              navigationLayers.count > 1,
+        guard let layer = presentationController.presentedViewController as? UINavigationController else { return }
+        await handlePresentedLayerDidDismiss(layer)
+    }
+
+    private func handlePresentedLayerDidDismiss(_ dismissedLayer: UINavigationController) async {
+        guard navigationLayers.count > 1,
               navigationLayers.last === dismissedLayer,
               let dismissedController = dismissedLayer.topViewController as? ExperienceScreenViewController else {
             return
