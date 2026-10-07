@@ -2,7 +2,7 @@
 
 Signed release fixtures that differ only in their `presentation` block.
 They exist so the iOS presentation shell (shimmer, recovery, floating
-controls, and every supported presentation mode) can be reviewed on
+controls, and background contrast) can be reviewed on
 device through the ordinary authenticate/admit/acquire path.
 
 These are review scenarios, not the cross-SDK renderer contract. The shared

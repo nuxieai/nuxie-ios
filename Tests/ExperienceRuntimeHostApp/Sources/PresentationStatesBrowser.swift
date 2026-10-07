@@ -5,14 +5,13 @@ import UIKit
 ///
 /// Every row presents a signed presentation-state fixture through the real
 /// shell path under one acquisition condition, so the loading treatment,
-/// recovery affordances, floating controls, and each presentation mode can be
+/// recovery affordances, floating controls, and background contrast can be
 /// reviewed as a user would see them.
 final class PresentationStatesBrowserViewController: UITableViewController {
     private struct Scenario {
         let id: String
         let title: String
         let summary: String
-        let style: String
     }
 
     private struct Row {
@@ -193,7 +192,6 @@ final class PresentationStatesBrowserViewController: UITableViewController {
                 let id: String
                 let title: String
                 let summary: String
-                let style: String
             }
 
             let schemaVersion: String
@@ -212,7 +210,7 @@ final class PresentationStatesBrowserViewController: UITableViewController {
                 "Unsupported presentation-state index"
             )
             return index.scenarios.map {
-                Scenario(id: $0.id, title: $0.title, summary: $0.summary, style: $0.style)
+                Scenario(id: $0.id, title: $0.title, summary: $0.summary)
             }
         } catch {
             preconditionFailure("Invalid states-index.json: \(error)")
