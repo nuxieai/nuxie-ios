@@ -1,0 +1,5 @@
+<!doctype html>
+<html><head></head><body><main>
+  <p data-bind="experience.trip_days | string">Days</p>
+  <button data-on:click="set(experience.trip_days, 30); emit('continue')">Continue</button>
+</main></body></html>

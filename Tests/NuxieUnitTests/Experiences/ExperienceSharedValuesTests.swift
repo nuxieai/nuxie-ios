@@ -2,6 +2,9 @@
 import Foundation
 import QuartzCore
 import XCTest
+#if os(iOS)
+import UIKit
+#endif
 @testable import Nuxie
 @testable import NuxieRuntime
 
@@ -128,6 +131,47 @@ final class ExperienceSharedValuesTests: XCTestCase {
     }
 
     #if os(iOS)
+    func testPublishedCopyDrawsSelectedValueOnItsFirstFrame() async throws {
+        let expected = try PublishedRunValuesFixture.expectations()
+        let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,
+            screens: expected.screens)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes)
+        var frames: [Data] = []
+        for level in [expected.level.tickValue, expected.level.noTickValue, expected.level.tickValue] {
+            let run = ExperienceRunValues()
+            addTeardownBlock { await run.retire() }
+            // Prepare the run with the platform's imported System font before inspecting its handle.
+            try await preparation.prepareRunValues(run)
+            let prepared = try await run.native(in: file)
+            let native = try XCTUnwrap(prepared)
+            XCTAssertEqual(native.catalog.schemas.first { $0.index == native.schemaIndex }?.name, expected.model)
+            let initial = try await run.journeyValues()
+            XCTAssertEqual(initial["level"], .number(Double(expected.startingValues.level)))
+            if level != expected.startingValues.level {
+                _ = try await native.sessions.mutate([.setNumber(instance: native.reference, path: "level", value: level)])
+            }
+            let screen = try await preparation.openScreen(screenID: "level", runValues: run, pixelWidth: 393, pixelHeight: 852)
+            addTeardownBlock { try await screen.close() }
+            // No settling steps or preliminary draw: this is this copy's first rendered frame.
+            frames.append(try await renderCopyPixels(screen))
+        }
+        for (index, frame) in frames.enumerated() {
+            let provider = try XCTUnwrap(CGDataProvider(data: frame as CFData))
+            let image = try XCTUnwrap(CGImage(width: 393, height: 852, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: 393 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+                    .union(.byteOrder32Little), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+            let attachment = XCTAttachment(image: UIImage(cgImage: image))
+            attachment.name = "F4 first frame \(index): level \(index == 1 ? expected.level.noTickValue : expected.level.tickValue)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        // The published source varies only Tick visibility with level; trip_days stays 23.
+        XCTAssertTrue(frames[0] == frames[2], "Independent selected copies have identical first drawn pixels")
+        XCTAssertTrue(frames[0] != frames[1], "Tick changes actual first-frame pixels when level changes")
+    }
+
     func testComponentCopyKeepsItsOwnCounter() async throws {
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: SharedValuesFixture.payload())
         let run = ExperienceRunValues()
@@ -210,12 +254,13 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let stride = (393 * 4 + 255) & ~255
         let buffer = try XCTUnwrap(device.makeBuffer(length: stride * 852, options: .storageModeShared))
         let rendered = expectation(description: "Copy rendered")
-        _ = try await screen.renderFrame(layoutScaleFactor: 1, drawable: ExperienceInteractiveDrawable(drawable), clearColor: 0xFF11_2233,
+        let frame = try await screen.renderFrame(layoutScaleFactor: 1, drawable: ExperienceInteractiveDrawable(drawable), clearColor: 0xFF11_2233,
             capturesSemantics: false, readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride),
             completion: { rendered.fulfill() })
         await fulfillment(of: [rendered], timeout: 2)
         var pixels = Data()
         for row in 0..<852 { pixels.append(buffer.contents().assumingMemoryBound(to: UInt8.self) + row * stride, count: 393 * 4) }
+        XCTAssertEqual(frame.outcome.disposition, .presented)
         return pixels
     }
     #endif
@@ -253,7 +298,7 @@ enum SharedValuesFixture {
             .appendingPathComponent("fixtures/runtime/shared-values")
     }
 
-    static func payload() throws -> AuthenticatedRuntimePayload {
+    static func payload(directory: URL = SharedValuesFixture.directory, screens: [String] = ["first", "long", "short"]) throws -> AuthenticatedRuntimePayload {
         let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
         struct Provenance: Decodable {
             struct Font: Decodable {
@@ -266,13 +311,12 @@ enum SharedValuesFixture {
         }
         let provenance = try JSONDecoder().decode(Provenance.self,
             from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
-        let screens = ["first", "long", "short"]
         return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
             requiredCapabilities: ["system-fonts"],
             renderPlan: NativeExperienceRenderPlan(
                 identity: .init(experienceId: "shared-values", buildId: "shared-values-build", appId: "test-app", environment: "test"),
                 scene: .init(key: "screen.riv", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
-                entry: .init(screenId: "first"),
+                entry: .init(screenId: try XCTUnwrap(screens.first)),
                 screens: screens.map { .init(screenId: $0, artboardId: $0, artboardName: $0,
                     width: 393, height: 852, exit: nil) },
                 transitions: [], textInputs: [], images: [], fonts: [],
@@ -281,6 +325,28 @@ enum SharedValuesFixture {
             journey: JourneyDocument(screens: screens.map {
                 JourneyScreen(id: $0, defaultViewModelName: "Runtime \($0) scr_screens_s\($0)", defaultInstanceId: "\($0)-root")
             }, viewModelValues: []), sceneBytes: scene, assets: [])
+    }
+}
+
+enum PublishedRunValuesFixture {
+    struct Expectations: Decodable {
+        struct StartingValues: Decodable { let trip_days: Float; let level: Float }
+        struct Tap: Decodable { let buttonLabel: String; let before: Float; let after: Float }
+        struct Level: Decodable { let tickValue: Float; let noTickValue: Float; let tickText: String }
+        let model: String
+        let property: String
+        let screens: [String]
+        let startingValues: StartingValues
+        let tap: Tap
+        let level: Level
+    }
+
+    static var directory: URL {
+        SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("run-values")
+    }
+
+    static func expectations() throws -> Expectations {
+        try JSONDecoder().decode(Expectations.self, from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
     }
 }
 #endif
