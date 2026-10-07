@@ -417,7 +417,7 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    func mountInteractiveScreen() async throws {
+    func mountInteractiveScreen(preservingRootHeight: Bool = false) async throws {
         guard interactiveScreen == nil, presentationLoop == nil else {
             throw ExperienceInteractiveScreenControllerError.alreadyMounted
         }
@@ -524,6 +524,7 @@ final class ExperienceScreenViewController: UIViewController {
             lastPushedSafeAreaInsets = insets
             lastPushedViewport = viewport
             lastPushedFold = fold
+            if preservingRootHeight { try await interactive.preserveRootHeightForDialog() }
             try await loop.start()
             configureTextInputCallbacks()
             bindTextInputs(to: interactive, loop: loop)
