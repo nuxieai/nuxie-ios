@@ -499,6 +499,7 @@ targets:
       - path: Tests/NuxieUnitTests
         name: NuxieUnitTests
         includes:
+          - Experiences/ExperienceLayerNavigationTests.swift
           - Experiences/ExperienceTextInputSemanticsTests.swift
           - Experiences/ExperienceHardwareInputTests.swift
           - Experiences/ExperienceTextInputTypographyTests.swift
