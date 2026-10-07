@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "globalName": "$nuxie.presentation",
+  "property": {
+    "name": "heightMode",
+    "type": "number",
+    "default": 0,
+    "values": { "fixed": 0, "hug": 2 }
+  }
+}
