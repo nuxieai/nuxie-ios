@@ -1,0 +1,31 @@
+{
+  "source": "/Users/levi/dev/nuxie-codex/runtime-landing-notes/evidence/fit-content",
+  "adaptation": "Replace exactly one length-prefixed UTF-8 Presentation global name with $nuxie.presentation. Preserve every other byte. Originals under proof/.",
+  "oracle": "Upstream C++ root-height probe; padding16 + child120 + padding16 =152; fixed restores supplied height. Edge provenance in README.",
+  "files": {
+    "dynamic-child.riv": {
+      "sha256": "11bebc4214751af379670c623f1d9a1b1d132461a353240d586704c5ab9eaa6a",
+      "proofSha256": "ae6ca3616e4792b426e84e5242874543ce1025e3433ca4e54a28366516b995e9"
+    },
+    "fill-child.riv": {
+      "sha256": "cc2905a85703dce7b96a3e4a19df6f61060bf91e65182decc960d292c8066d7e",
+      "proofSha256": "2790ff82cbfc9ea3e03b38839bf2f18bb9868a940001731f971c78a5311ab90f"
+    },
+    "root-height-binding.riv": {
+      "sha256": "dbf3e36f515361159a4bc44e8b9badc25a97ebfd9426de1905c1f2cab75b9f0d",
+      "proofSha256": "97f7d6f3cf2e729c09d230282de4d7bdad7a37114f99c3c9cbe98e916aecef61"
+    },
+    "root-height-no-binding.riv": {
+      "sha256": "8957c1840e2dcf5d3695f7c631c8d7f2fd194b895bd1d3bcad3164d90db260c1",
+      "proofSha256": "215e61470bbc57b319d171817f18d032340c9b46a1ea9eff6913a6a9c11a393b"
+    },
+    "tall-child.riv": {
+      "sha256": "334f014ade5b2c76bcb505880aae4497e8b4e76dc2a20357434820206453c4a7",
+      "proofSha256": "31fce9813f0e842de55e2dbfff5c95e785ab0e43cd06607f3922a2a002b0eb42"
+    },
+    "wrapping-children.riv": {
+      "sha256": "0256cdb9b668ee4ae33180c4a22d0c1654482ed8bc18fe281779f13f221a4453",
+      "proofSha256": "89e8f3b4b539e31245e0f834eedbb3d531e7448bb3b6c480b89aee81f759f777"
+    }
+  }
+}

@@ -64,7 +64,9 @@ class DefaultWindowProvider: WindowProviderProtocol {
 import UIKit
 
 @MainActor
-private final class IOSPresentationWindow: PresentationWindowProtocol {
+final class IOSPresentationWindow: PresentationWindowProtocol {
+    private var presentationGeneration = 0
+    private var destroyed = false
     private let window: UIWindow
     private let rootViewController: UIViewController
     private let presentationConfigurator = ExperienceShellPresentationConfigurator()
@@ -83,6 +85,16 @@ private final class IOSPresentationWindow: PresentationWindowProtocol {
         _ viewController: NuxiePlatformViewController,
         shell: ExperienceShellContract?
     ) async {
+        guard !destroyed else { return }
+        let generation = presentationGeneration
+        viewController.loadViewIfNeeded()
+        viewController.view.frame = window.bounds
+        viewController.view.layoutIfNeeded()
+        if shell?.layer.fitsContent == true {
+            if let experience = viewController as? ExperienceViewController,
+               await experience.waitForInitialContentHeight() == false { return }
+        }
+        guard !destroyed, generation == presentationGeneration, !Task.isCancelled else { return }
         presentationConfigurator.configure(viewController, shell: shell)
         window.makeKeyAndVisible()
 
@@ -94,6 +106,7 @@ private final class IOSPresentationWindow: PresentationWindowProtocol {
     }
 
     func dismiss() async {
+        presentationGeneration &+= 1
         guard rootViewController.presentedViewController != nil else { return }
 
         await withCheckedContinuation { continuation in
@@ -104,6 +117,8 @@ private final class IOSPresentationWindow: PresentationWindowProtocol {
     }
 
     func destroy() {
+        destroyed = true
+        presentationGeneration &+= 1
         window.isHidden = true
         window.rootViewController = nil
     }

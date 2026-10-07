@@ -374,6 +374,44 @@ final class ExperienceScreenViewController: UIViewController {
         (view.isFirstResponder && view is any UITextInput) || view.subviews.contains { hasNativeTextFocus($0) }
     }
 
+    private weak var heightPresentationTarget: UIViewController?
+    private var measuresContentHeight = false
+    private var lastPresentedHeight: CGFloat?
+
+    func configurePresentationHeight(_ presentation: ExperienceLayerPresentation,
+                                     target: UIViewController, availableSize: CGSize) async throws {
+        heightPresentationTarget = target
+        lastPresentedHeight = nil
+        guard let interactiveScreen, let presentationLoop else { throw CancellationError() }
+        try await presentationLoop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork { [weak self] in
+            let available = try await interactiveScreen.setPresentationHeight(
+                fitContent: presentation.fitsContent, availableSize: availableSize)
+            return .work(requestsFrame: false) { [weak self] in
+                self?.measuresContentHeight = presentation.fitsContent && available
+            }
+        })
+        if presentation.fitsContent {
+            if measuresContentHeight { publishContentHeight() }
+            else { ExperienceLayerPresentationConfigurator.updateContentHeight(target, height: 0) }
+        }
+    }
+
+    func setHeightPresentationTarget(_ target: UIViewController) {
+        heightPresentationTarget = target
+        lastPresentedHeight = nil
+        publishContentHeight()
+    }
+
+    private func publishContentHeight() {
+        guard measuresContentHeight, let target = heightPresentationTarget,
+              let height = interactiveScreen?.artboardBounds.height,
+              height.isFinite, height > 0, lastPresentedHeight != height else { return }
+        if let navigation = target as? UINavigationController,
+           navigation.topViewController !== self { return }
+        lastPresentedHeight = height
+        ExperienceLayerPresentationConfigurator.updateContentHeight(target, height: height)
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         syncSafeAreaInsets()
@@ -494,6 +532,7 @@ final class ExperienceScreenViewController: UIViewController {
                 if let bounds = self.interactiveScreen?.artboardBounds {
                     self.textInputOverlayBridge.updateArtboardBounds(bounds)
                 }
+                self.publishContentHeight()
                 self.delegate?.experienceScreenViewControllerDidAdvance(self)
             },
             onPresentedDrawable: { [weak self] drawable in

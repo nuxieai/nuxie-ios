@@ -855,14 +855,22 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         hasCompletedLatestFrame && lastSemanticFrame == frameSequence && semanticDeliveriesInFlight == 0
     }
 
-    func advanceZeroDelta() async throws {
+    func advanceZeroDelta(after work: ExperienceRuntimePresentationQueuedWork? = nil) async throws {
         guard isStarted, !isShuttingDown, terminalError == nil else {
             throw terminalError ?? CancellationError()
         }
         zeroDeltaRequestGeneration &+= 1
         let generation = zeroDeltaRequestGeneration
         pendingZeroDeltaFrame = true
-        reconcile()
+        if let work {
+            // Reserve the zero step in the same MainActor turn as its write.
+            // A queued display tick must not advance time between them.
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                enqueue(work, completion: { continuation.resume(with: $0) })
+            }
+        } else {
+            reconcile()
+        }
         while completedZeroDeltaGeneration < generation, terminalError == nil {
             await withCheckedContinuation { idleWaiters.append($0) }
         }

@@ -72,7 +72,7 @@
       "present": "sheet",
       "height": "fit-content",
       "closedby": "any",
-      "available": false,
+      "available": true,
       "firstLayer": "sheet"
     },
     {
@@ -85,7 +85,7 @@
       "present": "sheet",
       "height": "fit-content",
       "closedby": "none",
-      "available": false,
+      "available": true,
       "firstLayer": "sheet"
     },
     {
