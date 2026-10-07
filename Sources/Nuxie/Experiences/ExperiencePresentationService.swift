@@ -224,6 +224,7 @@ final class ExperiencePresentationService {
         runtimeDelegate: ExperienceRuntimeDelegate?,
         colorSchemeMode: ExperienceColorSchemeMode,
         initialScreenID: String,
+        transition: ExperienceScreenTransitionSpec,
         owner: PresentationOwner,
         journeyContext: JourneyPresentationContext,
         journeyReservation: JourneyReservation? = nil,
@@ -311,11 +312,10 @@ final class ExperiencePresentationService {
             with: presentationID
         )
 
-        // Journey persistence is not an authentication boundary. Always
-        // rebuild presentation geometry and behavior from the currently
-        // authenticated release carried by the loaded Experience.
+        // The authenticated navigate chooses the first layer; the release
+        // still supplies its orientation and background.
         let shell = experienceViewController.experience.shellContract(
-            screenId: initialScreenID
+            screenId: initialScreenID, transition: transition
         )
         // Hold the prepared release for the whole show, so later screens hit
         // the same prepared release, and learn whether this show can skip the
@@ -492,6 +492,7 @@ final class ExperiencePresentationService {
                 runtimeDelegate: runtimeDelegate,
                 colorSchemeMode: .system,
                 initialScreenID: request.screenId,
+                transition: request.transition,
                 owner: .journey(request.owner),
                 journeyContext: .init(
                     owner: request.owner,

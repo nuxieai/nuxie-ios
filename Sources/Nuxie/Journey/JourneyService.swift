@@ -2848,6 +2848,7 @@ private extension JourneyService {
                         pinnedArtifacts: pinnedArtifacts,
                         runValues: nativeValues(for: presentedRun.id, owner: journal.distinctId, policy: release.descriptor.valuePolicy),
                         screenId: screenId,
+                        transition: .init(raw: journeyFoundationValue(action["transition"])),
                         owner: .init(
                             journeyId: run.journeyId,
                             distinctId: journal.distinctId

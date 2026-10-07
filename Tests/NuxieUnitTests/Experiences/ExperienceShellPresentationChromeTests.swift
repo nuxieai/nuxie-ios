@@ -189,14 +189,9 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         )
         controller.configurePresentationShell(
             ExperienceShellContract(
-                presentation: .init(
-                    style: .sheet,
-                    orientation: .portrait,
-                    backgroundColor: "#123326FF",
-                    sheet: .init(detent: .large, dismissible: false),
-                    drawer: nil
-                ),
-                screen: .init(width: 390, height: 844)
+                presentation: .init(orientation: .portrait, backgroundColor: "#123326FF"),
+                screen: .init(width: 390, height: 844),
+                layer: .init(kind: .sheet, height: .large, closedBy: .none)
             )
         )
         _ = controller.view
@@ -370,30 +365,13 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
     /// thing twice.
     @MainActor
     func testEverySignedPresentationShimmersOverItsBackground() {
-        for presentation in [
-            ExperienceBehaviorPresentation.fullScreenDefault,
-            .init(
-                style: .sheet,
-                orientation: .portrait,
-                backgroundColor: "#1E2A5AFF",
-                sheet: .init(detent: .medium, dismissible: true),
-                drawer: nil
-            ),
-            .init(
-                style: .drawer,
-                orientation: .portrait,
-                backgroundColor: "#241528FF",
-                sheet: nil,
-                drawer: .init(
-                    edge: .trailing,
-                    extentRatio: 0.8,
-                    cornerRadius: 0,
-                    dismissible: true
-                )
-            ),
-        ] {
+        for (index, presentation) in [
+            ExperienceBehaviorPresentation.standard,
+            .init(orientation: .portrait, backgroundColor: "#1E2A5AFF"),
+            .init(orientation: .portrait, backgroundColor: "#241528FF"),
+        ].enumerated() {
             let controller = MockExperienceViewController(
-                mockExperienceVersionId: "version-\(presentation.style.rawValue)-shimmers"
+                mockExperienceVersionId: "version-\(index)-shimmers"
             )
             controller.configurePresentationShell(
                 ExperienceShellContract(
@@ -669,34 +647,6 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         }
     }
 
-    /// A drawer thinner than its own chrome is clamped to a presentable
-    /// extent. The authored edge is preserved, so this is not a substituted
-    /// mode.
-    func testUndersizedDrawersClampToAPresentableExtent() {
-        let bounds = CGRect(x: 0, y: 0, width: 390, height: 844)
-        for edge in [
-            ExperienceBehaviorPresentation.Drawer.Edge.bottom,
-            .top, .leading, .trailing,
-        ] {
-            let layout = ExperienceShellLayout(drawer: .init(
-                edge: edge,
-                extentRatio: 0.02,
-                cornerRadius: 0,
-                dismissible: false
-            ))
-            let frame = layout.frame(in: bounds)
-            let extent = (edge == .bottom || edge == .top)
-                ? frame.height
-                : frame.width
-            XCTAssertGreaterThanOrEqual(
-                extent,
-                ExperienceShellLayout.minimumExtent,
-                "\(edge) drawer stayed unusably small"
-            )
-            XCTAssertTrue(bounds.contains(frame), "\(edge) drawer escaped its container")
-        }
-    }
-
     // MARK: - Recovery copy
 
     /// Connectivity copy is reserved for the one case the device itself
@@ -778,7 +728,7 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         }
     }
 
-    /// A drawer may sign any extent in (0, 1], and Dynamic Type can push this
+    /// A small surface and Dynamic Type can push this
     /// copy past even a full screen. The surface has to stay laid out rather
     /// than forcing UIKit to break a constraint and overlap the action with
     /// the copy exactly when loading has already failed.
@@ -863,101 +813,28 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         await controller.shutdownRuntime()
     }
 
-    // MARK: - Mode fidelity
-
-    /// The authenticated descriptor is authoritative: every supported style
-    /// maps to its own UIKit geometry and none of them fall through to
-    /// another mode's behavior.
-    @MainActor
-    func testConfiguratorMapsEachSignedStyleToItsOwnGeometry() {
-        let configurator = ExperienceShellPresentationConfigurator()
-
-        let fullScreen = UIViewController()
-        configurator.configure(fullScreen, shell: Self.shell())
-        XCTAssertEqual(fullScreen.modalPresentationStyle, .fullScreen)
-
-        let sheet = UIViewController()
-        configurator.configure(
-            sheet,
-            shell: ExperienceShellContract(
-                presentation: .init(
-                    style: .sheet,
-                    orientation: .portrait,
-                    backgroundColor: "#12233BFF",
-                    sheet: .init(detent: .medium, dismissible: true),
-                    drawer: nil
-                ),
-                screen: .init(width: 390, height: 844)
-            )
-        )
-        XCTAssertEqual(sheet.modalPresentationStyle, .pageSheet)
-        XCTAssertFalse(sheet.isModalInPresentation)
-
-        let drawer = UIViewController()
-        configurator.configure(
-            drawer,
-            shell: ExperienceShellContract(
-                presentation: .init(
-                    style: .drawer,
-                    orientation: .portrait,
-                    backgroundColor: "#1B1206FF",
-                    sheet: nil,
-                    drawer: .init(
-                        edge: .bottom,
-                        extentRatio: 0.55,
-                        cornerRadius: 28,
-                        dismissible: true
-                    )
-                ),
-                screen: .init(width: 390, height: 844)
-            )
-        )
-        XCTAssertEqual(drawer.modalPresentationStyle, .custom)
-        XCTAssertNotNil(drawer.transitioningDelegate)
-    }
+    // MARK: - First layer
 
     @MainActor
-    func testNonDismissibleSheetRefusesInteractiveDismissal() {
-        let configurator = ExperienceShellPresentationConfigurator()
-        let sheet = UIViewController()
-        configurator.configure(
-            sheet,
-            shell: ExperienceShellContract(
-                presentation: .init(
-                    style: .sheet,
-                    orientation: .portrait,
-                    backgroundColor: "#123326FF",
-                    sheet: .init(detent: .large, dismissible: false),
-                    drawer: nil
-                ),
-                screen: .init(width: 390, height: 844)
-            )
-        )
-        XCTAssertTrue(sheet.isModalInPresentation)
-        XCTAssertEqual(sheet.sheetPresentationController?.prefersGrabberVisible, false)
-    }
-
-    /// A drawer style signed without drawer geometry cannot be honored. It
-    /// fails closed to full screen instead of borrowing sheet behavior.
-    @MainActor
-    func testDrawerWithoutGeometryFailsClosedToFullScreen() {
+    func testFirstNavigateSheetUsesItsHeightAndCloseRules() {
         let configurator = ExperienceShellPresentationConfigurator()
         let controller = UIViewController()
-        configurator.configure(
-            controller,
-            shell: ExperienceShellContract(
-                presentation: .init(
-                    style: .drawer,
-                    orientation: .portrait,
-                    backgroundColor: "#1B1206FF",
-                    sheet: nil,
-                    drawer: nil
-                ),
-                screen: .init(width: 390, height: 844)
-            )
-        )
+        var shell = Self.shell()
+        shell.layer = .init(height: .medium, closedBy: .none)
+        configurator.configure(controller, shell: shell)
+        XCTAssertEqual(controller.modalPresentationStyle, .pageSheet)
+        XCTAssertTrue(controller.isModalInPresentation)
+        XCTAssertEqual(controller.sheetPresentationController?.prefersGrabberVisible, false)
+        if #available(iOS 16.0, *) {
+            XCTAssertEqual(controller.sheetPresentationController?.detents.map(\.identifier), [.medium])
+        }
+    }
+
+    @MainActor
+    func testMissingNavigatePresentationCoversTheApp() {
+        let controller = UIViewController()
+        ExperienceShellPresentationConfigurator().configure(controller, shell: Self.shell())
         XCTAssertEqual(controller.modalPresentationStyle, .fullScreen)
-        XCTAssertNil(controller.transitioningDelegate)
     }
 
     // MARK: - Presentation readiness
@@ -1096,15 +973,10 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         background: String = "#0B1220FF"
     ) -> ExperienceShellContract {
         ExperienceShellContract(
-            presentation: .init(
-                style: .fullScreen,
-                orientation: .portrait,
-                backgroundColor: background,
-                sheet: nil,
-                drawer: nil
-            ),
-            screen: .init(width: 390, height: 844)
-        )
+                presentation: .init(orientation: .portrait, backgroundColor: background),
+                screen: .init(width: 390, height: 844),
+                layer: .init(kind: .fullscreen, height: .large, closedBy: .any)
+            )
     }
 }
 

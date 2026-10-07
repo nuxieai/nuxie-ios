@@ -2,10 +2,10 @@ import Foundation
 import CoreGraphics
 
 /// Native geometry for one modal layer. Content-height sheets await the root Hug seam.
-struct ExperienceLayerPresentation: Equatable, Sendable {
-    enum Kind: String, Sendable { case sheet, fullscreen, dialog }
-    enum Height: String, Sendable { case large, medium }
-    enum ClosedBy: String, Sendable { case any, none }
+struct ExperienceLayerPresentation: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable { case sheet, fullscreen, dialog }
+    enum Height: String, Codable, Sendable { case large, medium }
+    enum ClosedBy: String, Codable, Sendable { case any, none }
 
     var kind: Kind = .sheet
     var height: Height = .large

@@ -115,14 +115,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         )
         controller.configurePresentationShell(
             ExperienceShellContract(
-                presentation: .init(
-                    style: .fullScreen,
-                    orientation: .any,
-                    backgroundColor: "#102030FF",
-                    sheet: nil,
-                    drawer: nil
-                ),
-                screen: .init(width: 390, height: 844)
+                presentation: .init(orientation: .any, backgroundColor: "#102030FF"),
+                screen: .init(width: 390, height: 844),
+                layer: .init(kind: .fullscreen, height: .large, closedBy: .any)
             )
         )
 
@@ -154,14 +149,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         )
         controller.configurePresentationShell(
             ExperienceShellContract(
-                presentation: .init(
-                    style: .sheet,
-                    orientation: .landscape,
-                    backgroundColor: "#102030FF",
-                    sheet: .init(detent: .large, dismissible: true),
-                    drawer: nil
-                ),
-                screen: .init(width: 844, height: 390)
+                presentation: .init(orientation: .landscape, backgroundColor: "#102030FF"),
+                screen: .init(width: 844, height: 390),
+                layer: .init(kind: .sheet, height: .large, closedBy: .any)
             )
         )
 
@@ -196,7 +186,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         )
         controller.configurePresentationShell(
             ExperienceShellContract(
-                presentation: .fullScreenDefault,
+                presentation: .standard,
                 screen: .init(width: 390, height: 844)
             )
         )
@@ -221,7 +211,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         )
         controller.configurePresentationShell(
             ExperienceShellContract(
-                presentation: .fullScreenDefault,
+                presentation: .standard,
                 screen: .init(width: 390, height: 844)
             )
         )
@@ -242,20 +232,10 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
             recoveryAffordanceDelay: 0.01
         )
         let shell = ExperienceShellContract(
-            presentation: .init(
-                style: .drawer,
-                orientation: .portrait,
-                backgroundColor: "#102030FF",
-                sheet: nil,
-                drawer: .init(
-                    edge: .bottom,
-                    extentRatio: 0.6,
-                    cornerRadius: 24,
-                    dismissible: true
-                )
-            ),
-            screen: .init(width: 390, height: 640)
-        )
+                presentation: .init(orientation: .portrait, backgroundColor: "#102030FF"),
+                screen: .init(width: 390, height: 640),
+                layer: .init(kind: .fullscreen, height: .large, closedBy: .any)
+            )
         controller.configurePresentationShell(shell)
 
         _ = controller.view
@@ -589,7 +569,7 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
             buildId: buildId,
             artifactContentHash: artifactContentHash,
             authenticatedReleaseID: nil,
-            behaviorPresentation: .fullScreenDefault,
+            behaviorPresentation: .standard,
             behaviorPresentationScreens: [
                 "screen-1": .init(width: 390, height: 844)
             ],

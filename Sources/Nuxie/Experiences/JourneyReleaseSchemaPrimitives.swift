@@ -423,70 +423,7 @@ enum JourneyReleaseSchemaPrimitives {
 
     static func validatePresentation(_ value: Any?) throws {
         let raw = try dictionary(value, path: "presentation")
-        guard let style = raw["style"] as? String else { try invalid("presentation.style") }
-        let presentation: [String: Any]
-        switch style {
-        case "full_screen":
-            presentation = try object(
-                raw,
-                required: ["style", "orientation", "backgroundColor"],
-                path: "presentation"
-            )
-        case "sheet":
-            presentation = try object(
-                raw,
-                required: ["style", "orientation", "backgroundColor", "sheet"],
-                path: "presentation"
-            )
-            _ = try object(
-                presentation["sheet"],
-                required: ["detent", "dismissible"],
-                path: "presentation.sheet"
-            )
-            let sheet = presentation["sheet"] as! [String: Any]
-            try enumeration(
-                sheet["detent"],
-                values: ["medium", "large"],
-                path: "presentation.sheet.detent"
-            )
-            guard isJSONBoolean(sheet["dismissible"]) else {
-                try invalid("presentation.sheet.dismissible")
-            }
-        case "drawer":
-            presentation = try object(
-                raw,
-                required: ["style", "orientation", "backgroundColor", "drawer"],
-                path: "presentation"
-            )
-            _ = try object(
-                presentation["drawer"],
-                required: ["edge", "extentRatio", "cornerRadius", "dismissible"],
-                path: "presentation.drawer"
-            )
-            let drawer = presentation["drawer"] as! [String: Any]
-            try enumeration(
-                drawer["edge"],
-                values: ["bottom", "top", "leading", "trailing"],
-                path: "presentation.drawer.edge"
-            )
-            try finiteNumber(
-                drawer["extentRatio"],
-                minimum: 0,
-                maximum: 1,
-                exclusiveMinimum: true,
-                path: "presentation.drawer.extentRatio"
-            )
-            try finiteNumber(
-                drawer["cornerRadius"],
-                minimum: 0,
-                maximum: 128,
-                path: "presentation.drawer.cornerRadius"
-            )
-            guard isJSONBoolean(drawer["dismissible"]) else {
-                try invalid("presentation.drawer.dismissible")
-            }
-        default: try invalid("presentation.style")
-        }
+        let presentation = try object(raw, required: ["orientation", "backgroundColor"], path: "presentation")
         try enumeration(
             presentation["orientation"],
             values: ["portrait", "landscape", "any"],

@@ -462,7 +462,7 @@ enum ExperienceInputFixture {
     static func makeController(_ payload: AuthenticatedRuntimePayload, probe: InputStepProbe, fixtureName: String = "text_input_event", directory: URL = focusDirectory,
         acquireDrawable: @escaping @MainActor (CAMetalLayer) -> (any CAMetalDrawable)? = { $0.nextDrawable() }) throws -> ExperienceScreenViewController {
         let experience = Experience(id: "state-experience", versionId: "focus-version", buildId: "state-build",
-            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .fullScreenDefault,
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
             behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
         let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
             sceneURL: directory.appendingPathComponent(fixtureName + ".riv"), sceneBytes: payload.sceneBytes,

@@ -1,63 +1,18 @@
 import Foundation
 
-enum ExperienceBehaviorPresentationStyle: String, Codable, Sendable {
-    case fullScreen = "full_screen"
-    case sheet
-    case drawer
-}
-
 enum ExperienceBehaviorPresentationOrientation: String, Codable, Sendable {
     case portrait
     case landscape
     case any
 }
 
-/// The descriptor-authenticated native presentation contract. It is carried
-/// as one value so admission, journey persistence, and window shape cannot
-/// silently select different presentation semantics.
-///
-/// The loading treatment is deliberately not part of this contract. Every
-/// presentation shimmers over `backgroundColor` while it acquires; making that
-/// authorable only ever produced one value from the publisher and gave authors
-/// a choice with no product meaning.
+/// Release-authenticated orientation and background. Native geometry belongs
+/// to each navigate, while the loading treatment uses this background.
 struct ExperienceBehaviorPresentation: Codable, Equatable, Sendable {
-    struct Sheet: Codable, Equatable, Sendable {
-        enum Detent: String, Codable, Sendable {
-            case medium
-            case large
-        }
-
-        let detent: Detent
-        let dismissible: Bool
-    }
-
-    struct Drawer: Codable, Equatable, Sendable {
-        enum Edge: String, Codable, Sendable {
-            case bottom
-            case top
-            case leading
-            case trailing
-        }
-
-        let edge: Edge
-        let extentRatio: Double
-        let cornerRadius: Double
-        let dismissible: Bool
-    }
-
-    let style: ExperienceBehaviorPresentationStyle
     let orientation: ExperienceBehaviorPresentationOrientation
     let backgroundColor: String
-    let sheet: Sheet?
-    let drawer: Drawer?
 
-    static let fullScreenDefault = Self(
-        style: .fullScreen,
-        orientation: .any,
-        backgroundColor: "#FFFFFFFF",
-        sheet: nil,
-        drawer: nil
-    )
+    static let standard = Self(orientation: .any, backgroundColor: "#FFFFFFFF")
 }
 
 struct ExperienceBehaviorScreenGeometry: Codable, Equatable, Sendable {
@@ -69,6 +24,7 @@ struct ExperienceBehaviorScreenGeometry: Codable, Equatable, Sendable {
 struct ExperienceShellContract: Codable, Equatable, Sendable {
     let presentation: ExperienceBehaviorPresentation
     let screen: ExperienceBehaviorScreenGeometry
+    var layer: ExperienceLayerPresentation = .init(kind: .fullscreen)
 }
 
 // MARK: - Signed journey member

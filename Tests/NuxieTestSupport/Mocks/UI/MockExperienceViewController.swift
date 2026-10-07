@@ -72,7 +72,7 @@ class MockExperienceViewController: ExperienceViewController {
             buildId: "test-build",
             artifactContentHash: nil,
             authenticatedReleaseID: nil,
-            behaviorPresentation: .fullScreenDefault,
+            behaviorPresentation: .standard,
             behaviorPresentationScreens: [
                 mockScreenId: .init(width: 390, height: 844)
             ],

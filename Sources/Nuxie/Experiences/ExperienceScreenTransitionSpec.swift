@@ -1,7 +1,7 @@
 import Foundation
 
-struct ExperienceScreenTransitionSpec: Equatable {
-    enum Kind: Equatable, CaseIterable {
+struct ExperienceScreenTransitionSpec: Equatable, Sendable {
+    enum Kind: Equatable, CaseIterable, Sendable {
         case none
         case push
         case modal

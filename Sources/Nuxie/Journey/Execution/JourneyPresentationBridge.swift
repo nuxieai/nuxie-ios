@@ -68,6 +68,7 @@ struct JourneyPresentationRequest: Sendable {
     let pinnedArtifacts: JourneyPinnedReleaseArtifacts?
     let runValues: ExperienceRunValues
     let screenId: String
+    let transition: ExperienceScreenTransitionSpec
     let owner: JourneyPresentationOwner
     let reservation: (any JourneyPresentationReservation)?
     let presentationTraceContext: ExperiencePresentationTraceContext?
@@ -101,6 +102,7 @@ struct JourneyPresentationRequest: Sendable {
         pinnedArtifacts: JourneyPinnedReleaseArtifacts? = nil,
         runValues: ExperienceRunValues = ExperienceRunValues(),
         screenId: String,
+        transition: ExperienceScreenTransitionSpec = .none,
         owner: JourneyPresentationOwner,
         reservation: (any JourneyPresentationReservation)?,
         presentationTraceContext: ExperiencePresentationTraceContext? = nil,
@@ -137,6 +139,7 @@ struct JourneyPresentationRequest: Sendable {
         self.runValues = runValues
         self.pinnedArtifacts = pinnedArtifacts
         self.screenId = screenId
+        self.transition = transition
         self.owner = owner
         self.reservation = reservation
         self.presentationTraceContext = presentationTraceContext

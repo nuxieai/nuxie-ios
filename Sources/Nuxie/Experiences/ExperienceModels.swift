@@ -15,9 +15,6 @@ struct Experience: Sendable {
     var products: [StoreProduct]
     var introEligibilityAuthorization: IntroEligibilityAuthorizationContext?
 
-    var behaviorPresentationStyle: ExperienceBehaviorPresentationStyle {
-        behaviorPresentation.style
-    }
     var screens: JourneyDocument { journey }
     var screensId: String { versionId }
 
@@ -59,7 +56,7 @@ struct Experience: Sendable {
         return scoped
     }
 
-    func shellContract(screenId: String?) -> ExperienceShellContract? {
+    func shellContract(screenId: String?, transition: ExperienceScreenTransitionSpec = .none) -> ExperienceShellContract? {
         guard let screenId = screenId
                 ?? (behaviorPresentationScreens.count == 1
                     ? behaviorPresentationScreens.keys.first
@@ -69,7 +66,10 @@ struct Experience: Sendable {
         }
         return ExperienceShellContract(
             presentation: behaviorPresentation,
-            screen: screen
+            screen: screen,
+            layer: transition.kind == .modal && transition.presentation.kind == .sheet
+                ? transition.presentation
+                : .init(kind: .fullscreen, closedBy: transition.presentation.closedBy)
         )
     }
 }
