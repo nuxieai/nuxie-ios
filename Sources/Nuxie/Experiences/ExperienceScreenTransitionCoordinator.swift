@@ -547,10 +547,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
             let sourceLayer = navigationController
             do {
-                if request.backLayer == nil, ExperienceScreenTransitionSpec(raw: request.rawTransition).kind == .modal {
-                    pendingModalCache = ScreenCache()
-                }
-                _ = try await ensureScreenController(for: request.screenId)
+                let spec = ExperienceScreenTransitionSpec(raw: request.rawTransition)
+                let opensLayer = request.backLayer == nil && spec.kind == .modal
+                let dialog = opensLayer ? spec.presentation.kind == .dialog : activeCache.presentation?.kind == .dialog
+                if opensLayer { pendingModalCache = ScreenCache() }
+                _ = try await ensureScreenController(for: request.screenId, preservingRootHeight: dialog)
                 guard lifecycle == .installed, !Task.isCancelled,
                       !navigationAdmissionRevoked, navigationController === sourceLayer else {
                     await discardPendingModal()
@@ -833,7 +834,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func ensureScreenController(
-        for screenId: String
+        for screenId: String,
+        preservingRootHeight: Bool = false
     ) async throws -> ExperienceScreenViewController {
         guard !terminalScreenIds.contains(screenId) else {
             throw ExperienceScreenTransitionCoordinatorError.terminalScreen(screenId)
@@ -872,7 +874,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         controller.setContentHidden(contentHidden)
         do {
-            try await controller.mountInteractiveScreen()
+            try await controller.mountInteractiveScreen(preservingRootHeight: preservingRootHeight)
             guard lifecycle != .tearingDown,
                   lifecycle != .tornDown,
                   !Task.isCancelled,

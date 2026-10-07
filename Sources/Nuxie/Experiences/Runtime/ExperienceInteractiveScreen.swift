@@ -1638,6 +1638,7 @@ actor ExperienceInteractiveScreen {
     private nonisolated let layoutBounds: ExperienceLayoutBounds
     nonisolated var artboardBounds: CGRect { layoutBounds.read() }
     private var needsLayoutReadback = false
+    private var dialogRootHeight: Float?
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
     private let valuePolicy: JourneyReleaseValuePolicy
@@ -3616,11 +3617,12 @@ actor ExperienceInteractiveScreen {
         -> ExperienceInteractiveRenderOutcome
     {
         let runtime = runtime
+        let preservedHeight = dialogRootHeight
         return try await operationGate.withLock { [self] in
             await discardTextFrame()
             if pixelWidth > 0, pixelHeight > 0 {
                 try await runtime.setLayoutSize(width: Float(pixelWidth) / layoutScaleFactor,
-                    height: Float(pixelHeight) / layoutScaleFactor)
+                    height: preservedHeight ?? Float(pixelHeight) / layoutScaleFactor)
                 await markLayoutReadbackPending(true)
             } else {
                 await markLayoutReadbackPending(false)
@@ -3638,6 +3640,16 @@ actor ExperienceInteractiveScreen {
             let outcome = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
             return Self.renderOutcome(outcome)
         }
+    }
+
+    /// Capture the runtime root before the temporary hosting viewport resizes it.
+    /// Dialogs keep that fixed height; this does not request content Hug.
+    func preserveRootHeightForDialog() async throws {
+        let size = try await laidOutSize()
+        guard size.height.isFinite, size.height > 0 else {
+            throw ExperienceInteractiveScreenError.invalidScreen("dialog layout")
+        }
+        dialogRootHeight = Float(size.height)
     }
 
     func laidOutSize() async throws -> CGSize {
