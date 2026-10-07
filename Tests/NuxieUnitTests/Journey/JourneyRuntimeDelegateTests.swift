@@ -823,7 +823,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         await fulfillment(of: [misattributed], timeout: 0.2)
     }
 
-    func testRuntimeDelegatePreservesForwardNavigationForAuthoredBack() async throws {
+    func testRuntimeDelegatePreservesTheTopLayerBackTarget() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
@@ -865,7 +865,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         )
 
         let backTarget = await MainActor.run {
-            delegate.prepareBackNavigation(steps: 1)
+            delegate.prepareBackNavigation(steps: 1, target: "screen_welcome")
         }
         XCTAssertEqual(backTarget, "screen_welcome")
     }

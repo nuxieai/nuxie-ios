@@ -298,8 +298,10 @@ final class JourneyRuntimeDelegate {
     private let viewModelState: ExperienceViewModelStateCoordinator?
     private let initialScreenId: String
     private(set) var activeScreenId: String?
+    #if !canImport(UIKit)
     private var navigationHistory: [String] = []
-    private var pendingBackNavigation: (target: String, history: [String])?
+    #endif
+    private var pendingBackNavigation: (target: String, steps: Int, history: [String]?)?
     private var dismissedSurfaceScreenId: String?
     private var screenDismissalWasRejected = false
     private var topLevelScreenDismissalWasProcessed = false
@@ -357,15 +359,20 @@ final class JourneyRuntimeDelegate {
         dismissedSurfaceScreenId = nil
         screenDismissalWasRejected = false
         topLevelScreenDismissalWasProcessed = false
+        #if !canImport(UIKit)
         if let pendingBackNavigation,
-           pendingBackNavigation.target == screenId {
-            navigationHistory = pendingBackNavigation.history
+           pendingBackNavigation.target == screenId,
+           let history = pendingBackNavigation.history {
+            navigationHistory = history
             self.pendingBackNavigation = nil
         } else if let activeScreenId,
                   activeScreenId != screenId {
             navigationHistory.append(activeScreenId)
             pendingBackNavigation = nil
         }
+        #else
+        pendingBackNavigation = nil
+        #endif
         if presentationIsRevealed, becameVisible {
             // Once the outer surface is revealed, screen activation is the
             // visibility boundary for later variants. The navigation request
@@ -416,6 +423,7 @@ final class JourneyRuntimeDelegate {
             dismissedSurfaceScreenId = screenId
             topLevelScreenDismissalWasProcessed = result != .rejected
         }
+        #if !canImport(UIKit)
         if let revealingScreenId {
             if let revealIndex = navigationHistory.lastIndex(of: revealingScreenId) {
                 navigationHistory = Array(navigationHistory[..<revealIndex])
@@ -429,6 +437,7 @@ final class JourneyRuntimeDelegate {
                 navigationHistory.append(activeScreenId)
             }
         }
+        #endif
         pendingBackNavigation = nil
         // The transition coordinator reports the destination as active in a
         // separate callback. Keep this interval ownerless so that callback is
@@ -762,15 +771,32 @@ final class JourneyRuntimeDelegate {
         onPermissionEvent(eventName, UncheckedSendable(properties))
     }
 
-    func prepareBackNavigation(steps: Int) -> String? {
-        guard !resolved, !navigationHistory.isEmpty else { return nil }
+    func prepareBackNavigation(steps: Int, target: String? = nil) -> String? {
+        guard !resolved else { return nil }
+        if let target {
+            pendingBackNavigation = (target: target, steps: steps, history: nil)
+            return target
+        }
+        #if !canImport(UIKit)
+        guard !navigationHistory.isEmpty else { return nil }
         let targetIndex = max(0, navigationHistory.count - max(1, steps))
         let target = navigationHistory[targetIndex]
-        pendingBackNavigation = (
-            target: target,
-            history: Array(navigationHistory[..<targetIndex])
-        )
+        pendingBackNavigation = (target: target, steps: steps,
+            history: Array(navigationHistory[..<targetIndex]))
         return target
+        #else
+        return nil
+        #endif
+    }
+
+    func consumeBackNavigation(target: String) -> Int? {
+        #if canImport(UIKit)
+        guard let pending = pendingBackNavigation, pending.target == target else { return nil }
+        pendingBackNavigation = nil
+        return pending.steps
+        #else
+        return nil
+        #endif
     }
 
     func cancelBackNavigation() {

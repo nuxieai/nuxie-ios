@@ -19,6 +19,8 @@ class MockExperienceViewController: ExperienceViewController {
     var prepareForPresentationHandler: (@MainActor () async -> Void)?
     var shutdownRuntimeHandler: (@MainActor () async -> Void)?
     var prepareForDismissalHandler: (@MainActor () async -> Void)?
+    var backNavigationTarget: String?
+    private(set) var backNavigationSteps: [Int] = []
     var navigationResult = ExperienceScreenNavigationResult.navigated
     var notificationPermissionEvent = JourneyPresentationPermissionEvent(
         name: SystemEventNames.notificationsEnabled,
@@ -142,6 +144,17 @@ class MockExperienceViewController: ExperienceViewController {
             method: reason.map { ExperienceScreenDismissalMethod.value(for: $0) }
                 ?? "experience"
         )
+    }
+
+    override func backTarget(steps: Int) -> String? {
+        backNavigationTarget
+    }
+
+    override func backAndWaitResult(
+        to screenId: String, steps: Int, transition: Any?
+    ) async -> ExperienceScreenNavigationResult {
+        backNavigationSteps.append(steps)
+        return await navigateAndWaitResult(to: screenId, transition: transition)
     }
 
     override func navigateAndWait(
