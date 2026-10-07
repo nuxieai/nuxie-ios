@@ -29,5 +29,19 @@
       "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/globals.riv"
     ]
   ],
-  "sha256": "b8413e12898cd32469157081befc3d5361afe5e22265cb53edccdaeb295aeca3"
+  "sha256": "b8413e12898cd32469157081befc3d5361afe5e22265cb53edccdaeb295aeca3",
+  "files": {
+    "globals.riv": {
+      "builderFile": "crates/nux-capi/tests/support/global_values.rs",
+      "function": "fixture",
+      "arguments": [
+        false
+      ],
+      "sha256": "b8413e12898cd32469157081befc3d5361afe5e22265cb53edccdaeb295aeca3",
+      "artboards": {
+        "0": "GlobalValuesRow",
+        "1": "GlobalValuesScreen"
+      }
+    }
+  }
 }
