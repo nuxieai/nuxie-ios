@@ -1,9 +1,9 @@
 {
   "source": "/Users/levi/dev/nuxie-handoff/fixtures/fit-content",
-  "originalProvenanceSha256": "305458018d9dd4dd66eee0a43be6b2cf0c054d104c4ca7c4bc08760a309b4a4d",
-  "fullEvidence": "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/fit-content/compiler-delivery",
+  "originalProvenanceSha256": "a9f7592b4827b0a410168bce9485c0979abfa2599b686fa1797d7ed149e8b3a8",
+  "fullEvidence": "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/fit-content/compiler-delivery-3b776e0e",
   "files": {
-    "NOTES.md": "eb7ce9a41a264080ffeaf46dee3308e62f82ad8998e4f29dad7d3f4493e0f5cc",
+    "NOTES.md": "3790543d6b7915ae1c05f656d0f0d56aaebe4ac52c5691b3b15720eb00905fd4",
     "evidence/fit-capi-probe-False-False.log": "c62f93f4565d8c7b14b071ad04bca6d7531612a98a3d6409b84206191382fdd8",
     "evidence/fit-capi-probe-False-True.log": "0c123290a4105b95f555500a52a88b35a3b29c056813c92b9c4a39a2532dfffa",
     "evidence/fit-capi-probe-True-False.log": "645986ba320ef033d70888cb821e302c4ad72ba0d942144ab48b4e616a14167c",
@@ -13,8 +13,8 @@
     "evidence/fit-probe-True-False.log": "bf5cb6bfbcd874aa71c8d4e27ccc89b8cc5a74c1cbea2d5e4bd4dfba4e0409da",
     "evidence/fit-probe-True-True.log": "a0bc472b51c88db2550668e9fb72ba546ffca5f5065c5ae7ba4fda9760e8c6be",
     "expectations.json": "47859ff2830154020c9dad6e4f23f995cacef0fd8d13cf1a9c1e7b1cea9a3127",
-    "published/no-binding.riv": "dcc5e724202b7fb2209ee507f69a3beb42d49be251c2d456c24805c2e7277315",
-    "published/screen.riv": "1d65be16f5a978bb380825a88f59be9d96b2c097c64baedd5c90c76908dc8011",
+    "published/no-binding.riv": "8aa8c47a7e015dcb6e51fcad112c87f5c90d430010cf3434c149afe5e0bee173",
+    "published/screen.riv": "106288fa9a8997b5590bf20b73911b8db435c70bf58552455ba3ba7937f7a941",
     "source/experience.json": "20bd6465e3d090d6308669871b4bfada0c8f4405fc2432b26182f14c232464ad",
     "source/screens/background/frame.json": "03a6dd20550f10213f96d15ada8a6c1caefcf354714691bd1610c8f18b78e4f3",
     "source/screens/background/index.html": "0ee884ed9dd1c41b3204ea3a300c94030a9db948a80a8f4c8fe6f2afdd39ddc0",
@@ -22,5 +22,6 @@
     "source/screens/fill-child/index.html": "11710f3cea0f39d6a14b2e224852fd295b9250527fe2fcef1b8ee2b56e0756e0",
     "source/screens/sheet/frame.json": "03a6dd20550f10213f96d15ada8a6c1caefcf354714691bd1610c8f18b78e4f3",
     "source/screens/sheet/index.html": "46148726283ecc608c78d67025cf9ad1efbd405cf124b8c580c9f52117acc164"
-  }
+  },
+  "compilerCommit": "3b776e0e266421d46be4f23b2821d76002029238"
 }

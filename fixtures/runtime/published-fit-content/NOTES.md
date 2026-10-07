@@ -1,6 +1,6 @@
 # Fit-content compiler fixture
 
-The source folder contains real Experience files. The publisher example loads them through experience-editor-bridge Pipeline, obtains the document snapshot, then calls the same editor build and RIV encoder as the publication compiler. No expected height is read from the published artifact.
+The source folder contains real Experience files. The publisher example loads them through experience-editor-bridge Pipeline, obtains the document snapshot, then calls editor_publisher_wasm::publish, including resource and roundtrip validation. The bound fixture bytes are asserted equal to that full publisher output. The control preserves the publisher header and removes only the root-height binding records. No expected height is read from the published artifact.
 
 The sheet has 16 pixels of top padding, a fixed 120-pixel child, and 16 pixels of bottom padding. Its independent expected Hug height is 152, at widths 300 and 500. Fixed uses the supplied 700. A second player remains 500 by 700 throughout. Both Fixed-first and Hug-first runs return to the sheet after the edge screens. Every newly created presentation instance defaults to Fixed.
 
