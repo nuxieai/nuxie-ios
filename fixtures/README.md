@@ -2,6 +2,10 @@
 
 These JSON vectors define the contracts shared by SDK implementations.
 
+## Published runtime values
+
+- `runtime/run-values/`: F4 tap and level screens from publisher `97d23aae674d8035ffda773cefdf936f85a1ea46`, with unchanged source, handwritten expectations and file hashes. Platform tests check native `continue` admission in a signed Journey, write-before-route ordering and the component copy's first drawn pixels. The published event has no action id; the test release keeps its control table empty.
+
 ## Journey
 
 - `journeys/planes/release.json`: signed Journey release envelopes and canonical release schema.
