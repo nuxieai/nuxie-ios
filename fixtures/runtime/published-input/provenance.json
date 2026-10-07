@@ -1,0 +1,62 @@
+{
+  "superprojectCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65",
+  "publisherSourceCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65",
+  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
+  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
+  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
+  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
+  "sha256": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+  "sizeBytes": 4540,
+  "publisherWasmSha256": "48fe3746ac1b4f19c693343c5b96480d6a439f1a46d7b04a88e79cd32eaea575",
+  "authorityWasmSha256": "26aef623f6d0926633367f40effc2c7586f01cd103ad9a3a7c483bd3b616f850",
+  "qualification": "C3 first cut: real publisher output; native focus, blur, delayed input, shared typing/greeting and locator checks pass. Platform delivery and signed release admission remain separate.",
+  "files": {
+    "NOTES.md": {
+      "sha256": "e1856f61f29d9cd3b3d90634cd480b168e9aadccc433fd8aa1eae167e6845cb1",
+      "sizeBytes": 7763
+    },
+    "expectations.json": {
+      "sha256": "fbc6255f49f79894ac4e2cbbe9d0089aba9ef96f2efe1ac8a0fe9940a830c7d7",
+      "sizeBytes": 993
+    },
+    "screen.riv": {
+      "sha256": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+      "sizeBytes": 4540
+    },
+    "source/experience.json": {
+      "sha256": "3f585e4bea920c974081d215908e5d93a2053f175d2a6d1a3627a3a91bcac9b5",
+      "sizeBytes": 281
+    },
+    "source/screens/greeting/frame.json": {
+      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
+      "sizeBytes": 100
+    },
+    "source/screens/greeting/index.html": {
+      "sha256": "71add267e98f4565eae652e0b4788d70b3cc5e212fa41c8a90992deb536dda6c",
+      "sizeBytes": 128
+    },
+    "source/screens/input/frame.json": {
+      "sha256": "c783391be8624324606fce86e80f70a879c6475d6e3514a0cdee1dd258926d3d",
+      "sizeBytes": 316
+    },
+    "source/screens/input/index.html": {
+      "sha256": "75ee57accba92f2b16241e7cc2281dd57304313b3f4ec4992ca2bfd46a3f34bf",
+      "sizeBytes": 269
+    },
+    "text-inputs.json": {
+      "sha256": "876cb9ee44130543dad0012db8ad1b97cfdd1af72c94286c1fc2068d7556af70",
+      "sizeBytes": 1288
+    }
+  },
+  "fonts": [
+    {
+      "location": "system",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "required": true
+    }
+  ]
+}

@@ -10,6 +10,60 @@ import UIKit
 
 final class ExperienceSharedValuesTests: XCTestCase {
     #if os(iOS)
+    func testPublishedInputFocusTypingAndGreetingShareTheRun() async throws {
+        let expected = try PublishedInputFixture.expectations()
+        let payload = try SharedValuesFixture.payload(directory: PublishedInputFixture.directory,
+            screens: expected.screens)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let input = try await preparation.openScreen(screenID: "input", runValues: run,
+            pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await input.close() }
+        func handler(_ name: String) async throws -> ExperienceInteractiveViewModelValue? {
+            let snapshot = try await input.snapshot()
+            let state = snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "state" }
+            guard case .referencedInstance(let owner) = state?.value else {
+                XCTFail("Published input has no screen state"); return nil
+            }
+            return snapshot.values.first { $0.ownerInstanceID == owner && $0.name == name }?.value
+        }
+        for item in expected.handlers.values {
+            let value = try await handler(item.property)
+            XCTAssertEqual(value, .number(item.before))
+        }
+        let initial = try await run.journeyValues()
+        XCTAssertEqual(initial["name"], .string(expected.startingValues.name))
+        let focused = try await input.step(focusInputs: [.next], elapsedSeconds: 0)
+        XCTAssertEqual(focused.focusState, .init(hasFocus: true, expectsKeyboardInput: true))
+        let focus = try XCTUnwrap(expected.handlers["focus"])
+        let focusedValue = try await handler(focus.property)
+        XCTAssertEqual(focusedValue, .number(focus.after))
+        _ = try await input.step(focusInputs: [.key(code: 269, modifiers: 0, pressed: true, repeated: false)], elapsedSeconds: 0)
+        let typed = try XCTUnwrap(expected.handlers["input"])
+        let before = try await handler(typed.property)
+        XCTAssertEqual(before, .number(typed.before), "Cursor movement must not invoke input")
+        _ = try await input.step(focusInputs: [.text(expected.typing.append)], elapsedSeconds: 0)
+        let edited = try await run.journeyValues()
+        XCTAssertEqual(edited["name"], .string(expected.typing.after))
+        let queued = try await handler(typed.property)
+        XCTAssertEqual(queued, .number(typed.before), "The authored input reaction waits for the next advance")
+        _ = try await input.step(elapsedSeconds: 0)
+        let reacted = try await handler(typed.property)
+        XCTAssertEqual(reacted, .number(typed.after))
+        let blurred = try await input.step(focusInputs: [.next], elapsedSeconds: 0)
+        XCTAssertEqual(blurred.focusState?.hasFocus, false)
+        let blur = try XCTUnwrap(expected.handlers["blur"])
+        let blurredValue = try await handler(blur.property)
+        XCTAssertEqual(blurredValue, .number(blur.after))
+        let greeting = try await preparation.openScreen(screenID: "greeting", runValues: run,
+            pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await greeting.close() }
+        let greetingSnapshot = try await greeting.snapshot()
+        XCTAssertEqual(greetingSnapshot.values.first { $0.name == "name" }?.value,
+            .bytes(Data(expected.typing.after.utf8)))
+    }
+
     func testScreensShareAuthoredExperienceValues() async throws {
         let expected = try SharedValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload()
@@ -360,6 +414,27 @@ enum PublishedRunValuesFixture {
 
     static func expectations() throws -> Expectations {
         try JSONDecoder().decode(Expectations.self, from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
+    }
+}
+
+enum PublishedInputFixture {
+    struct Expectations: Decodable {
+        struct StartingValues: Decodable { let name: String }
+        struct Handler: Decodable { let property: String; let before: Float; let after: Float }
+        struct Typing: Decodable { let append: String; let after: String }
+        let screens: [String]
+        let startingValues: StartingValues
+        let handlers: [String: Handler]
+        let typing: Typing
+    }
+
+    static var directory: URL {
+        SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("published-input")
+    }
+
+    static func expectations() throws -> Expectations {
+        try JSONDecoder().decode(Expectations.self,
+            from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
     }
 }
 #endif

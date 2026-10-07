@@ -1,0 +1,20 @@
+{
+  "$schema": "https://nuxie.com/schema/frame/1.json",
+  "size": {
+    "device": "iphone-16"
+  },
+  "state": {
+    "focused": {
+      "type": "number",
+      "default": 0
+    },
+    "blurred": {
+      "type": "number",
+      "default": 0
+    },
+    "typed": {
+      "type": "number",
+      "default": 0
+    }
+  }
+}
