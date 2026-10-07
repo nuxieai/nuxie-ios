@@ -158,14 +158,18 @@ package struct NuxieNativeSemanticCapture: Sendable {
     package let tree: NuxieNativeSemanticTree
     package let fieldsByTextRun: [String: NuxieNativeSemanticNode]
     package let nativeInputs: [String: [NuxieNativeInputOccurrence]]
+    /// Privacy diagnostic captured before SDK redaction, without copying native text.
+    package let containsNativeObscuredValue: Bool
 
     package init(id: UUID, tree: NuxieNativeSemanticTree,
         fieldsByTextRun: [String: NuxieNativeSemanticNode],
-        nativeInputs: [String: [NuxieNativeInputOccurrence]] = [:]) {
+        nativeInputs: [String: [NuxieNativeInputOccurrence]] = [:],
+        containsNativeObscuredValue: Bool = false) {
         self.id = id
         self.tree = tree
         self.fieldsByTextRun = fieldsByTextRun
         self.nativeInputs = nativeInputs
+        self.containsNativeObscuredValue = containsNativeObscuredValue
     }
 }
 

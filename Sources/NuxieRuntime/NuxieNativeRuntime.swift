@@ -1505,11 +1505,15 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             try requireOK(nux_semantic_snapshot_info(pointer, &info), operation: "read semantic snapshot info")
             guard info.node_count <= 16_384 else { throw NuxieNativeSemanticTreeError.tooManyNodes }
             var nodes: [NuxieNativeSemanticNode] = []
+            var containsNativeObscuredValue = false
             nodes.reserveCapacity(info.node_count)
             for index in 0..<info.node_count {
                 var node = NuxSemanticNodeView()
                 node.struct_size = UInt32(MemoryLayout<NuxSemanticNodeView>.size)
                 try requireOK(nux_semantic_snapshot_node(pointer, index, &node), operation: "read semantic node")
+                if node.state_flags & NuxieNativeSemanticNode.obscured != 0, node.value.len != 0 {
+                    containsNativeObscuredValue = true
+                }
                 let value = node.state_flags & NuxieNativeSemanticNode.obscured == 0
                     ? try copyString(node.value, label: "semantic value") : ""
                 nodes.append(NuxieNativeSemanticNode(
@@ -1582,7 +1586,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             }
             try retireSemanticCapture()
             semanticCapture = (id, owned, fields, tree, inputIDs)
-            return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields, nativeInputs: inputs)
+            return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields, nativeInputs: inputs,
+                containsNativeObscuredValue: containsNativeObscuredValue)
         } catch {
             try? owned.close()
             throw error

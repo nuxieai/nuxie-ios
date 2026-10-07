@@ -2,6 +2,7 @@
 import UIKit
 import QuartzCore
 import Metal
+import OSLog
 import XCTest
 @testable import Nuxie
 @testable import NuxieRuntime
@@ -9,6 +10,79 @@ import XCTest
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
     #if NUXIE_HOSTED_INPUT_TESTS
+    func testQualifiedSecureInputKeepsTextOutOfSemanticsAndSDKLogs() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/text-editing-experiment")
+        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: nil,
+            scene: Data(contentsOf: directory.appendingPathComponent("text_input_secure_observed.riv")),
+            artboardName: "Text Input - Multiline", semantics: true)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let screen = try await preparation.openScreen(runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await screen.close() }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let field = UITextField(frame: CGRect(x: 20, y: 40, width: 300, height: 40))
+        field.isSecureTextEntry = true
+        controller.view.addSubview(field)
+        XCTAssertTrue(field.becomeFirstResponder())
+        let secret = UUID().uuidString
+        let store = try OSLogStore(scope: .currentProcessIdentifier)
+        let position = store.position(date: Date())
+        NuxieLogger.shared.configure(logLevel: .verbose, enableConsoleLogging: true, redactSensitiveData: false)
+        defer { NuxieLogger.shared.configure(logLevel: .debug, enableConsoleLogging: true, redactSensitiveData: true) }
+        field.insertText(secret)
+        XCTAssertTrue(field.text == secret, "The native secure control must retain the typed text")
+        try await screen.enableSemantics()
+        let layer = CAMetalLayer()
+        layer.device = try await screen.metalDevice().value
+        layer.pixelFormat = .bgra8Unorm
+        layer.drawableSize = CGSize(width: 393, height: 852)
+        func renderCapture() async throws -> NuxieNativeSemanticCapture {
+            let drawable = try XCTUnwrap(layer.nextDrawable())
+            let frame = try await screen.renderFrame(layoutScaleFactor: 1,
+                drawable: ExperienceInteractiveDrawable(drawable), capturesSemantics: true)
+            return try XCTUnwrap(frame.semantics)
+        }
+        _ = try await screen.step(elapsedSeconds: 0)
+        _ = try await renderCapture()
+        let focused = try await screen.step(focusInputs: [.next], elapsedSeconds: 0.016)
+        XCTAssertEqual(focused.focusState?.hasFocus, true)
+        _ = try await renderCapture()
+        _ = try await screen.step(focusInputs: [
+            .key(code: 65, modifiers: 8, pressed: true, repeated: false),
+            .key(code: 259, modifiers: 0, pressed: true, repeated: false)], elapsedSeconds: 0.016)
+        _ = try await renderCapture()
+        _ = try await screen.step(focusInputs: [.text(try XCTUnwrap(field.text))], elapsedSeconds: 0.016)
+        let capture = try await renderCapture()
+        let node = try XCTUnwrap(capture.tree.nodes.first { $0.role == NuxieNativeSemanticRole.textField.rawValue })
+        XCTAssertTrue(node.stateFlags & NuxieNativeSemanticNode.obscured != 0)
+        XCTAssertFalse(capture.containsNativeObscuredValue, "The native semantic capture must omit obscured values before SDK redaction")
+        XCTAssertFalse(String(describing: capture.tree).contains(secret), "Secure text must be absent from the entire semantic capture")
+        let current = try await screen.readPresentedFieldString(captureID: capture.id, nodeID: node.id, name: "experiment-input")
+        XCTAssertTrue(current == secret, "The qualified narrow read must retain the typed text")
+        let marker = "Secure boundary " + UUID().uuidString
+        LogError("\(marker, privacy: .publicValue)")
+        var messages: [String] = []
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            messages = try store.getEntries(at: position).compactMap { entry in
+                guard let entry = entry as? OSLogEntryLog, entry.subsystem == "io.nuxie.sdk" else { return nil }
+                return entry.composedMessage
+            }
+            if messages.contains(where: { $0.contains(marker) }) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        } while Date() < deadline
+        XCTAssertTrue(messages.contains { $0.contains(marker) }, "SDK log capture must be active")
+        XCTAssertFalse(messages.contains { $0.contains(secret) }, "Secure text must not enter SDK log output")
+    }
+
     func testPublishedInputLocatorReadsFocusedOccurrence() async throws {
         let expected = try PublishedInputFixture.expectations()
         let preparation = try await ExperienceInteractivePreparation.prepare(payload:
