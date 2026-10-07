@@ -3823,6 +3823,25 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         } catch { try? await screen.close(); throw error }
     }
 
+    func testLiveHugResizeReflowsWrappingChildren() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/fit-content/wrapping-children.riv"))
+        let payload = try await statePayload(defaultViewModelName: "Root", values: [], scene: bytes, artboardName: "Sheet")
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 300, pixelHeight: 700)
+        do {
+            _ = try await screen.setPresentationHeight(fitContent: true, availableSize: CGSize(width: 300, height: 700))
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 300, height: 392))
+            // Resize the same live player without reinstalling height mode. Neither
+            // expected result equals the available height, so Fixed cannot pass.
+            _ = try await screen.resize(pixelWidth: 500, pixelHeight: 700, layoutScaleFactor: 1)
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 500, height: 272))
+            try await screen.close()
+        } catch { try? await screen.close(); throw error }
+    }
+
     private func statePayload(
         defaultViewModelName: String?,
         values: [JourneyViewModelValue]? = nil,
