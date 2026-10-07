@@ -1,0 +1,13 @@
+{
+  "$schema": "https://nuxie.com/schema/frame/1.json",
+  "isComponent": true,
+  "size": {
+    "width": 200,
+    "height": 40
+  },
+  "props": {
+    "title": {
+      "type": "string"
+    }
+  }
+}

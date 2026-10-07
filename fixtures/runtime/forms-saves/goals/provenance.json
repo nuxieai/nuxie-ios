@@ -1,0 +1,67 @@
+{
+  "superprojectCommit": "81fa73c87f0638d151d0a4082fbcab1cd61ec73c",
+  "publisherSourceCommit": "81fa73c87f0638d151d0a4082fbcab1cd61ec73c",
+  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
+  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
+  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
+  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
+  "tipSelection": "Earliest clean approved lists pick through 81fa73c87f, before excluded golden; no later dirty host work included.",
+  "sha256": "a62578818e941eb3366fae0cde4348ac60af3a0294dc6a97a4e054292f03f1cb",
+  "sizeBytes": 3173,
+  "publisherWasmSha256": "b60b08561842733fa5ef29a6e9183c25849e13e97b8dff4ca9915fbb3df9966b",
+  "authorityWasmSha256": "2f2c81c3d08337d7f904bfc1e46c67bc53e6926a51a5c206f4d9af088ac5bf49",
+  "qualification": "C19 goals cut: native list snapshot and ordered in-place recovery exercise. SDK timed-wait persistence, pixels, forms/saves and C16 remain separate.",
+  "files": {
+    "NOTES.md": {
+      "sha256": "6cbc10836685a3e3b798146abfce4376d4126040430717d6d4af4c904a30ccfa",
+      "sizeBytes": 10335
+    },
+    "expectations.json": {
+      "sha256": "5cce0b85e95db28dc1272d6deb39921c5ce5f2dca2f91c5496cd73d35c3e61a2",
+      "sizeBytes": 1065
+    },
+    "screen.riv": {
+      "sha256": "a62578818e941eb3366fae0cde4348ac60af3a0294dc6a97a4e054292f03f1cb",
+      "sizeBytes": 3173
+    },
+    "source/components/goal-card/frame.json": {
+      "sha256": "a1425db12b450ca2d058a12d0d08d2499767792fd7de83994d290efa6847cbc3",
+      "sizeBytes": 194
+    },
+    "source/components/goal-card/index.html": {
+      "sha256": "09db06631c3e35013dbfde8e9b6dce0dbafeb3b44d977da77e93301084574c4a",
+      "sizeBytes": 63
+    },
+    "source/experience.json": {
+      "sha256": "543cd2d2d01aae3c6cd35aad09321bcb6c63995f38fa0bb80705cb623d5f4506",
+      "sizeBytes": 459
+    },
+    "source/screens/goals/frame.json": {
+      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
+      "sizeBytes": 100
+    },
+    "source/screens/goals/index.html": {
+      "sha256": "3519156241dcc73bec0321cf188e3552c334f34fc13eb7358841f9ac05f67108",
+      "sizeBytes": 201
+    },
+    "source/screens/quiet/frame.json": {
+      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
+      "sizeBytes": 100
+    },
+    "source/screens/quiet/index.html": {
+      "sha256": "a80b7ee2c25054a1effdc4b976e06e8a9828c6fbb0b0933cd8c073b8b98dc08c",
+      "sizeBytes": 39
+    }
+  },
+  "fonts": [
+    {
+      "location": "system",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "required": true
+    }
+  ]
+}
