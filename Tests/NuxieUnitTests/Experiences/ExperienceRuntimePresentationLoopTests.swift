@@ -340,6 +340,40 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testQueuedLayoutWriteCannotOvertakePendingFrameRender() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        await recorder.holdNextDelivery()
+        loop.displayLinkDidFire(at: 1)
+        let stepped = await recorder.waitForStepCount(1)
+        XCTAssertTrue(stepped)
+        let queued = expectation(description: "height work submitted")
+        let measurement = Task {
+            queued.fulfill()
+            try await loop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork {
+                .work(requestsFrame: false)
+            })
+        }
+        await fulfillment(of: [queued], timeout: 2)
+        loop.displayLinkDidFire(at: 2)
+        let before = await recorder.operationNames()
+        XCTAssertFalse(before.contains("queued"))
+        await recorder.releaseDelivery()
+        let wrote = await recorder.waitForOperation(named: "queued")
+        XCTAssertTrue(wrote)
+        let after = await recorder.operationNames()
+        XCTAssertTrue(after.containsSequence(["step", "render", "queued"]))
+        try await measurement.value
+        let steps = await recorder.steps()
+        XCTAssertEqual(steps[1].elapsedSeconds, 0, "A pending display tick cannot advance the height measurement")
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testZeroDeltaAcknowledgementWaitsForNativePresentationCompletion() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")

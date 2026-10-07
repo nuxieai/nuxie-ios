@@ -1,5 +1,8 @@
 import XCTest
 @testable import Nuxie
+#if SWIFT_PACKAGE
+@testable import NuxieTestSupport
+#endif
 #if canImport(UIKit)
 import UIKit
 
@@ -21,7 +24,7 @@ final class ExperienceLayerPresentationTests: XCTestCase {
             XCTAssertEqual(parsed.presentation.kind.rawValue, item["present"] as? String)
             XCTAssertEqual(parsed.presentation.height.rawValue, item["height"] as? String)
             XCTAssertEqual(parsed.presentation.closedBy.rawValue, item["closedby"] as? String)
-            XCTAssertEqual(parsed.presentation.isAvailable, item["available"] as? Bool)
+            XCTAssertEqual(parsed.isAvailable, item["available"] as? Bool)
         }
         for transition in try XCTUnwrap(vector["invalid"] as? [[String: Any]]) {
             XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateJourneyTransition(transition, path: "transition"))
@@ -52,6 +55,21 @@ final class ExperienceLayerPresentationTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testContentHeightUsesNativeMaximumAndSystemDetents() {
+        XCTAssertEqual(ExperienceLayerPresentationConfigurator.contentHeight(300, maximum: 852), 300)
+        XCTAssertEqual(ExperienceLayerPresentationConfigurator.contentHeight(900, maximum: 852), 852)
+        XCTAssertTrue(ExperienceLayerPresentationConfigurator.usesMediumDetent(contentHeight: 300, availableHeight: 852))
+        XCTAssertFalse(ExperienceLayerPresentationConfigurator.usesMediumDetent(contentHeight: 600, availableHeight: 852))
+        XCTAssertFalse(ExperienceLayerPresentationConfigurator.usesMediumDetent(contentHeight: 0, availableHeight: 852))
+        let controller = UIViewController()
+        ExperienceLayerPresentationConfigurator(presentation: .init(height: .fitContent)).configure(controller)
+        if #available(iOS 16.0, *) {
+            XCTAssertEqual(controller.sheetPresentationController?.detents.map(\.identifier), [.large])
+        }
+        ExperienceLayerPresentationConfigurator.updateContentHeight(controller, height: 152)
+        XCTAssertEqual(controller.preferredContentSize.height, 152)
     }
 
     func testFullscreenHasNoCustomDismissal() throws {

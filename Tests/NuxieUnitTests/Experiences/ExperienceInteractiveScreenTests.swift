@@ -3753,6 +3753,211 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try await screen.close()
     }
 
+    private func twoScreenStatePayload() async throws -> (
+        payload: AuthenticatedRuntimePayload,
+        firstScreenID: String,
+        secondScreenID: String
+    ) {
+        let base = try await statePayload(defaultViewModelName: "Test")
+        let authoredScreen = try XCTUnwrap(base.renderPlan.screens.first)
+        let secondScreen = NativeExperienceScreen(
+            screenId: "state-screen-2",
+            artboardId: authoredScreen.artboardId,
+            artboardName: authoredScreen.artboardName,
+            width: authoredScreen.width,
+            height: authoredScreen.height,
+            exit: authoredScreen.exit
+        )
+        return (
+            AuthenticatedRuntimePayload(
+                authenticatedKeyID: base.authenticatedKeyID,
+                renderPlan: NativeExperienceRenderPlan(
+                    identity: base.renderPlan.identity,
+                    scene: base.renderPlan.scene,
+                    entry: base.renderPlan.entry,
+                    screens: base.renderPlan.screens + [secondScreen],
+                    transitions: base.renderPlan.transitions,
+                    textInputs: base.renderPlan.textInputs,
+                    images: base.renderPlan.images,
+                    fonts: base.renderPlan.fonts
+                ),
+                journey: JourneyDocument(
+                    screens: base.journey.screens + [JourneyScreen(
+                        id: secondScreen.screenId,
+                        defaultViewModelName: "Test",
+                        defaultInstanceId: "root-sdk-id"
+                    )],
+                    viewModelValues: base.journey.viewModelValues
+                ),
+                sceneBytes: base.sceneBytes,
+                assets: base.assets
+            ),
+            authoredScreen.screenId,
+            secondScreen.screenId
+        )
+    }
+
+    func testContentHeightReadbackFollowsMutationAndWidthWithoutUsingLastSheetHeight() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/fit-content/dynamic-child.riv"))
+        let payload = try await statePayload(defaultViewModelName: "Root", values: [], scene: bytes, artboardName: "Sheet")
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 300, pixelHeight: 600)
+        do {
+            let bound = try await screen.setPresentationHeight(fitContent: true,
+                availableSize: CGSize(width: 300, height: 600))
+            XCTAssertTrue(bound)
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.artboardBounds.height, 152)
+            _ = try await screen.applyStateCommand(.snapshot([.init(viewModelName: "Root", instanceID: "root-sdk-id",
+                instanceName: nil, path: "contentHeight", value: .number(240))]))
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.artboardBounds.height, 272)
+            _ = try await screen.resize(pixelWidth: 500, pixelHeight: 272, layoutScaleFactor: 1)
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 500, height: 272))
+            _ = try await screen.setPresentationHeight(fitContent: false, availableSize: CGSize(width: 500, height: 700))
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 500, height: 700))
+            try await screen.close()
+        } catch { try? await screen.close(); throw error }
+    }
+
+    private func statePayload(
+        defaultViewModelName: String?,
+        values: [JourneyViewModelValue]? = nil,
+        scene suppliedScene: Data? = nil,
+        artboardName: String = "Artboard"
+    ) async throws -> AuthenticatedRuntimePayload {
+        let scene = try suppliedScene ?? fixture(named: "data_binding_test", extension: "riv")
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        var images: [NativeExperienceImageAsset] = []
+        var fonts: [NativeExperienceFontAsset] = []
+        var assetMembers: [(String, Data)] = []
+        for descriptor in catalog where descriptor.kind == .image || descriptor.kind == .font {
+            guard descriptor.isEmbedded, let authoredID = descriptor.authoredID else {
+                throw XCTSkip("State fixture requires only embedded identified assets")
+            }
+            let uniqueName = "\(descriptor.name)-\(authoredID)"
+            let assetBytes = Data("asset-\(descriptor.ordinal)".utf8)
+            let assetHash = SHA256Provider.hexDigest(assetBytes)
+            let fileExtension = descriptor.kind == .image ? "png" : "ttf"
+            let member = "assets/sha256/\(assetHash).\(fileExtension)"
+            assetMembers.append((member, assetBytes))
+            if descriptor.kind == .image {
+                images.append(NativeExperienceImageAsset(
+                    location: .embedded(member: member),
+                    authoredAssetId: UInt64(authoredID),
+                    assetUniqueName: uniqueName,
+                    sha256: assetHash,
+                    sizeBytes: assetBytes.count,
+                    contentType: "image/png",
+                    required: true
+                ))
+            } else {
+                fonts.append(NativeExperienceFontAsset(
+                    location: .embedded(member: member),
+                    authoredAssetId: UInt64(authoredID),
+                    assetUniqueName: uniqueName,
+                    family: "Inter",
+                    weight: "400",
+                    style: "normal",
+                    sha256: assetHash,
+                    sizeBytes: assetBytes.count,
+                    contentType: "font/ttf",
+                    format: "ttf",
+                    required: true
+                ))
+            }
+        }
+        let defaultValues: [JourneyViewModelValue]
+        if let defaultViewModelName {
+            defaultValues = [
+                JourneyViewModelValue(
+                    viewModelName: defaultViewModelName,
+                    instanceId: "root-sdk-id",
+                    path: "Number",
+                    value: AnyCodable(23)
+                ),
+                JourneyViewModelValue(
+                    viewModelName: defaultViewModelName,
+                    instanceId: "root-sdk-id",
+                    path: "Boolean",
+                    value: AnyCodable(true)
+                ),
+                JourneyViewModelValue(
+                    viewModelName: defaultViewModelName,
+                    instanceId: "root-sdk-id",
+                    path: "String",
+                    value: AnyCodable("signed-state")
+                ),
+            ]
+        } else {
+            defaultValues = []
+        }
+        let journey = JourneyDocument(
+            screens: [JourneyScreen(
+                id: "state-screen",
+                defaultViewModelName: defaultViewModelName,
+                defaultInstanceId: defaultViewModelName == nil ? nil : "root-sdk-id"
+            )],
+            viewModelValues: values ?? defaultValues
+        )
+        let sceneHash = SHA256Provider.hexDigest(scene)
+        let bytesByPath = Dictionary(uniqueKeysWithValues: assetMembers)
+        let runtimeAssets = try images.map { image in
+            AuthenticatedRuntimeAsset(
+                kind: .image,
+                authoredAssetID: try XCTUnwrap(UInt32(exactly: image.authoredAssetId)),
+                assetUniqueName: image.assetUniqueName,
+                sourceKey: image.location.contentAddressedPath,
+                contentType: image.contentType,
+                sha256: image.sha256,
+                required: image.required,
+                bytes: bytesByPath[image.location.contentAddressedPath]
+            )
+        } + fonts.map { font in
+            AuthenticatedRuntimeAsset(
+                kind: .font,
+                authoredAssetID: try XCTUnwrap(UInt32(exactly: font.authoredAssetId)),
+                assetUniqueName: font.assetUniqueName,
+                sourceKey: font.location.contentAddressedPath,
+                contentType: font.contentType,
+                sha256: font.sha256,
+                required: font.required,
+                bytes: bytesByPath[font.location.contentAddressedPath]
+            )
+        }
+        return AuthenticatedRuntimePayload(
+            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
+            renderPlan: NativeExperienceRenderPlan(
+                identity: .init(
+                    experienceId: "state-experience",
+                    buildId: "state-build",
+                    appId: "test-app",
+                    environment: "test"
+                ),
+                scene: .init(key: "scene.riv", sha256: sceneHash, sizeBytes: scene.count),
+                entry: .init(screenId: "state-screen"),
+                screens: [NativeExperienceScreen(
+                    screenId: "state-screen",
+                    artboardId: artboardName,
+                    artboardName: artboardName,
+                    width: 100,
+                    height: 100,
+                    exit: nil
+                )],
+                transitions: [],
+                textInputs: [],
+                images: images,
+                fonts: fonts
+            ),
+            journey: journey,
+            sceneBytes: scene,
+            assets: runtimeAssets
+        )
+    }
+
     private func componentListStatePayload(
         values: [JourneyViewModelValue]
     ) async throws -> AuthenticatedRuntimePayload {

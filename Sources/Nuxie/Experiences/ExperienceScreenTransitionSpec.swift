@@ -24,7 +24,7 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
     let kind: Kind
     let presentation: ExperienceLayerPresentation
     private let presentationIsSupported: Bool
-    var isAvailable: Bool { presentationIsSupported && presentation.isAvailable }
+    var isAvailable: Bool { presentationIsSupported }
 
     var isAnimated: Bool {
         switch kind {

@@ -1,0 +1,13 @@
+{
+  "source": "runtime-fit-content-answer.md; upstream C++ de3e86090892b68072e7d4505e8d979386fc9a30",
+  "paddingTop": 16,
+  "childHeight": 120,
+  "paddingBottom": 16,
+  "hugHeight": 152,
+  "widths": [
+    300,
+    500
+  ],
+  "fixedHeight": 600,
+  "restoredHeight": 700
+}

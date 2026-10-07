@@ -650,10 +650,38 @@ class ExperienceViewController: NuxiePlatformViewController {
     /// Every show builds a new controller, which begins artifact loading when
     /// its view is first loaded; a controller whose view is already loaded
     /// reacquires its artifact and never shares earlier runtime state.
+    /// Resets presentation-scoped state and starts fresh interactive screens for
+    /// cached controllers. A newly created controller begins artifact loading
+    /// when its view is first loaded; a reused controller reacquires its
+    /// artifact and never shares the previous presentation's runtime state.
+    #if canImport(UIKit)
+    private var initialContentHeightResolution: Bool?
+    private var initialContentHeightWaiters: [CheckedContinuation<Bool, Never>] = []
+
+    func waitForInitialContentHeight() async -> Bool {
+        if let result = initialContentHeightResolution { return result }
+        guard presentationShellContract?.layer.fitsContent == true else { return true }
+        return await withCheckedContinuation { initialContentHeightWaiters.append($0) }
+    }
+
+    func resolveInitialContentHeight(ready: Bool = true) {
+        // Cancellation wins over any late acquisition or measurement completion.
+        guard !ready || initialContentHeightResolution == nil else { return }
+        initialContentHeightResolution = ready
+        let waiters = initialContentHeightWaiters
+        initialContentHeightWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: ready) }
+    }
+    #endif
+
     func prepareForPresentation(
         traceToken: ExperiencePresentationTraceToken?,
         initialScreenID: String? = nil
     ) async {
+        #if canImport(UIKit)
+        resolveInitialContentHeight(ready: false)
+        initialContentHeightResolution = nil
+        #endif
         presentationInitialScreenID = initialScreenID
         viewModel.setInitialScreenID(initialScreenID)
         let preparationGeneration = beginPresentationScope(
@@ -786,6 +814,9 @@ class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func prepareForDismissal(reason: CloseReason? = nil) async {
+        #if canImport(UIKit)
+        resolveInitialContentHeight(ready: false)
+        #endif
         failPendingDisplayPresentationTrace(error: CancellationError())
         await joinPresentationRevealNotification()
         #if canImport(UIKit)
@@ -1582,6 +1613,10 @@ class ExperienceViewController: NuxiePlatformViewController {
             platformBringPresentationShellToFront()
 
         case .error:
+            #if canImport(UIKit)
+            resolveInitialContentHeight()
+            #endif
+            releasePresentationWarmReservation()
             platformCancelPresentationRevealTransition()
             contentIsRevealed = false
             setExperienceContentHidden(true)

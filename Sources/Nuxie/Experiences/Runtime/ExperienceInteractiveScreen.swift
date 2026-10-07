@@ -1638,6 +1638,23 @@ actor ExperienceInteractiveScreen {
     private nonisolated let layoutBounds: ExperienceLayoutBounds
     nonisolated var artboardBounds: CGRect { layoutBounds.read() }
     private var needsLayoutReadback = false
+    private let presentationHeight = ExperiencePresentationHeight()
+    private var fitsContentHeight = false
+
+    func setPresentationHeight(fitContent: Bool, availableSize: CGSize) async throws -> Bool {
+        try await operationGate.withLock { [self] in
+            await discardTextFrame()
+            let available = try await presentationHeight.apply(to: runtime, fitContent: fitContent,
+                width: Float(availableSize.width), height: Float(availableSize.height))
+            await setHeightReadback(fitContent && available)
+            return available
+        }
+    }
+
+    private func setHeightReadback(_ enabled: Bool) {
+        fitsContentHeight = enabled
+        needsLayoutReadback = true
+    }
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
     private let valuePolicy: JourneyReleaseValuePolicy
@@ -3643,7 +3660,7 @@ actor ExperienceInteractiveScreen {
     private func markLayoutReadbackPending(_ pending: Bool) { needsLayoutReadback = pending }
 
     private func refreshLayoutBounds() async throws {
-        guard needsLayoutReadback else { return }
+        guard needsLayoutReadback || fitsContentHeight else { return }
         let size = try await runtime.layoutSize()
         layoutBounds.update(size: size)
         try await videoPlayback?.resizeViewport(bounds: artboardBounds)

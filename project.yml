@@ -223,6 +223,7 @@ targets:
           # The full suite runs in the mandatory NuxieExperienceInputTests target.
           - Experiences/ExperienceTextInputSemanticsTests.swift
           - Experiences/ExperienceHardwareInputTests.swift
+          - Experiences/ExperienceFitContentPresentationTests.swift
       - path: Examples/Adapters/NuxieProviderCheckoutRoute.swift
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
         type: folder
@@ -502,6 +503,7 @@ targets:
           - Experiences/ExperienceLayerNavigationTests.swift
           - Experiences/ExperienceTextInputSemanticsTests.swift
           - Experiences/ExperienceHardwareInputTests.swift
+          - Experiences/ExperienceFitContentPresentationTests.swift
           - Experiences/ExperienceTextInputTypographyTests.swift
           - Experiences/SignedSemanticJourneyTests.swift
           - Experiences/ExperienceSharedValuesTests.swift

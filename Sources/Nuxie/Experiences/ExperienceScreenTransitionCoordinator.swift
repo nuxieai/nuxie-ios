@@ -244,6 +244,18 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         navigationController.view.setNeedsLayout()
         navigationController.view.layoutIfNeeded()
         entryController.setContentHidden(contentHidden)
+        let initialPresentation = (hostViewController as? ExperienceViewController)?.presentationShellContract?.layer
+            ?? .init(kind: .fullscreen)
+        var availableSize = hostViewController.view.bounds.size
+        if initialPresentation.fitsContent, let scene = UIApplication.shared.activeWindowScene {
+            availableSize = try await ExperienceLayerPresentationConfigurator.availableSheetSize(in: scene, above: nil)
+            guard lifecycle == .installing, !Task.isCancelled else { throw CancellationError() }
+            hostViewController.view.frame.size = availableSize
+            hostViewController.view.layoutIfNeeded()
+        }
+        try await entryController.configurePresentationHeight(initialPresentation,
+            target: hostViewController, availableSize: availableSize)
+        (hostViewController as? ExperienceViewController)?.resolveInitialContentHeight()
         await entryController.enter(reduceMotion: reduceMotionEnabled)
     }
 
@@ -620,6 +632,23 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     ) async throws -> Bool {
         let sourceLayer = navigationController
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
+        if spec.kind == .modal {
+            var available = hostViewController?.view.window?.bounds.size
+                ?? hostViewController?.view.bounds.size ?? targetController.view.bounds.size
+            if spec.presentation.fitsContent,
+               let scene = hostViewController?.view.window?.windowScene ?? UIApplication.shared.activeWindowScene {
+                available = try await ExperienceLayerPresentationConfigurator.availableSheetSize(
+                    in: scene, above: sourceLayer ?? hostViewController)
+                guard lifecycle == .installed, !Task.isCancelled else { throw CancellationError() }
+                targetController.view.frame.size = available
+                targetController.view.layoutIfNeeded()
+            }
+            try await targetController.configurePresentationHeight(spec.presentation,
+                target: targetController, availableSize: available)
+        } else if let sourceLayer {
+            try await targetController.configurePresentationHeight(.init(kind: .fullscreen),
+                target: sourceLayer, availableSize: sourceLayer.view.bounds.size)
+        }
         if case .custom(let transitionId) = spec.kind,
            let sourceController,
            sourceController !== targetController,
@@ -974,7 +1003,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let layer = UINavigationController(rootViewController: controller)
         layer.setNavigationBarHidden(true, animated: false)
         let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation)
+        layer.preferredContentSize = controller.preferredContentSize
         configurator.configure(layer)
+        controller.setHeightPresentationTarget(layer)
         layer.presentationController?.delegate = self
         controller.setContentHidden(contentHidden)
         navigationLayers.append(layer)
