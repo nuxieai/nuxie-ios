@@ -1,0 +1,36 @@
+{
+  "oracle": "Typed from authored source: 16 + 120 + 16 = 152; supplied Fixed height 700. Never derived from emitted records.",
+  "widths": [
+    300,
+    500
+  ],
+  "fixedHeight": 700,
+  "sheetHugHeight": 152,
+  "unboundHeightForEitherMode": 700,
+  "independentPlayer": {
+    "width": 500,
+    "height": 700
+  },
+  "upstreamEdgeObservations": {
+    "fill-child": 32,
+    "background": 152
+  },
+  "orders": [
+    [
+      0,
+      2,
+      0
+    ],
+    [
+      2,
+      0,
+      2
+    ]
+  ],
+  "screenVisits": [
+    "sheet",
+    "fill-child",
+    "background",
+    "sheet"
+  ]
+}

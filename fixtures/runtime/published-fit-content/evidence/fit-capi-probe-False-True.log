@@ -1,0 +1,25 @@
+runtime=bc0a7e7e5d96f328d675ed39142c7549711a8e39
+sheet mode=2 width=300 height=152 other=700
+sheet mode=0 width=300 height=700 other=700
+sheet mode=2 width=300 height=152 other=700
+sheet mode=2 width=500 height=152 other=700
+sheet mode=0 width=500 height=700 other=700
+sheet mode=2 width=500 height=152 other=700
+fill-child mode=2 width=300 height=32 other=700
+fill-child mode=0 width=300 height=700 other=700
+fill-child mode=2 width=300 height=32 other=700
+fill-child mode=2 width=500 height=32 other=700
+fill-child mode=0 width=500 height=700 other=700
+fill-child mode=2 width=500 height=32 other=700
+background mode=2 width=300 height=152 other=700
+background mode=0 width=300 height=700 other=700
+background mode=2 width=300 height=152 other=700
+background mode=2 width=500 height=152 other=700
+background mode=0 width=500 height=700 other=700
+background mode=2 width=500 height=152 other=700
+sheet mode=2 width=300 height=152 other=700
+sheet mode=0 width=300 height=700 other=700
+sheet mode=2 width=300 height=152 other=700
+sheet mode=2 width=500 height=152 other=700
+sheet mode=0 width=500 height=700 other=700
+sheet mode=2 width=500 height=152 other=700

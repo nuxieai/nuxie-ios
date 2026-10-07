@@ -1,0 +1,11 @@
+[
+  "/Users/levi/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc",
+  "--edition=2024",
+  "/Users/levi/dev/nuxie-codex/codex-fit-content-compiler-notes/fit-probe.rs",
+  "-L",
+  "dependency=/Users/levi/.codex/worktrees/9e3d/nuxie-dev/tools/nuxie-editor/target-opt1/debug/deps",
+  "--extern",
+  "nux_capi=/Users/levi/.codex/worktrees/9e3d/nuxie-dev/tools/nuxie-editor/target-opt1/debug/deps/libnux_capi.rlib",
+  "-o",
+  "/Users/levi/dev/nuxie-codex/codex-fit-content-compiler-notes/fit-capi-probe"
+]

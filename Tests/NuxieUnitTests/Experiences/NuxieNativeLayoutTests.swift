@@ -124,6 +124,57 @@ final class NuxieNativeLayoutTests: XCTestCase {
         }
     }
 
+    func testCompilerPublishedHeightMatrixUsesSourceOracle() async throws {
+        struct Oracle: Decodable {
+            struct Independent: Decodable { let width: Float; let height: Float }
+            let widths: [Float]
+            let fixedHeight: Float
+            let sheetHugHeight: Float
+            let unboundHeightForEitherMode: Float
+            let independentPlayer: Independent
+            let upstreamEdgeObservations: [String: Float]
+            let orders: [[Int]]
+            let screenVisits: [String]
+        }
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/published-fit-content")
+        let oracle = try JSONDecoder().decode(Oracle.self, from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
+        for control in [false, true] {
+            let prepared = try await NuxieNativePreparedFile.prepare(bytes: Data(contentsOf: directory.appendingPathComponent(
+                "published/\(control ? "no-binding" : "screen").riv")), importMode: .portable)
+            let group = try await prepared.makeSessionGroup()
+            for order in oracle.orders {
+                for name in oracle.screenVisits {
+                    let first = try await group.openSession(artboardName: name, player: .defaultScene,
+                        pixelWidth: 500, pixelHeight: 700, bindDefaultViewModel: true)
+                    let second = try await group.openSession(artboardName: name, player: .defaultScene,
+                        pixelWidth: 500, pixelHeight: 700, bindDefaultViewModel: true)
+                    do {
+                        let height = ExperiencePresentationHeight()
+                        // A separate presentation instance must stay Fixed through every primary edit.
+                        _ = try await ExperiencePresentationHeight().apply(to: second, fitContent: false,
+                            width: oracle.independentPlayer.width, height: oracle.independentPlayer.height)
+                        _ = try await second.step(elapsedSeconds: 0)
+                        for width in oracle.widths {
+                            for mode in order {
+                                _ = try await height.apply(to: first, fitContent: mode == 2, width: width, height: oracle.fixedHeight)
+                                _ = try await first.step(elapsedSeconds: 0)
+                                _ = try await second.step(elapsedSeconds: 0)
+                                let expected = control ? oracle.unboundHeightForEitherMode : mode == 0 ? oracle.fixedHeight :
+                                    (name == "sheet" ? oracle.sheetHugHeight : try XCTUnwrap(oracle.upstreamEdgeObservations[name]))
+                                let size = try await first.layoutSize(), other = try await second.layoutSize()
+                                XCTAssertEqual(size, CGSize(width: CGFloat(width), height: CGFloat(expected)), "\(name), mode \(mode)")
+                                XCTAssertEqual(other, CGSize(width: CGFloat(oracle.independentPlayer.width), height: CGFloat(oracle.independentPlayer.height)))
+                            }
+                        }
+                        try await first.close(); try await second.close()
+                    } catch { try? await first.close(); try? await second.close(); throw error }
+                }
+            }
+        }
+    }
+
     private func prepareHeightFile(control: Bool) async throws -> NuxieNativePreparedFile {
         try await prepareHeightFile(name: control ? "root-height-no-binding" : "root-height-binding")
     }
