@@ -817,6 +817,19 @@ final class ExperienceScreenViewController: UIViewController {
         return values
     }
 
+    func laidOutSize() async throws -> CGSize {
+        guard !isShuttingDown, runtimeFailure == nil,
+              let interactiveScreen, let presentationLoop else { throw CancellationError() }
+        return try await withCheckedThrowingContinuation { continuation in
+            presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+                let size = try await interactiveScreen.laidOutSize()
+                return .work(requestsFrame: false) { continuation.resume(returning: size) }
+            }, completion: { result in
+                if case .failure(let error) = result { continuation.resume(throwing: error) }
+            })
+        }
+    }
+
     /// Reads the captured field through the same serial lane as input and presentation.
     func readPresentedFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> String {
         guard !isShuttingDown, runtimeFailure == nil,

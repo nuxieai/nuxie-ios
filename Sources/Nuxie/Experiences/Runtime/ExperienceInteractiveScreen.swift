@@ -3640,6 +3640,11 @@ actor ExperienceInteractiveScreen {
         }
     }
 
+    func laidOutSize() async throws -> CGSize {
+        let runtime = runtime
+        return try await operationGate.withLock { try await runtime.layoutSize() }
+    }
+
     private func markLayoutReadbackPending(_ pending: Bool) { needsLayoutReadback = pending }
 
     private func refreshLayoutBounds() async throws {

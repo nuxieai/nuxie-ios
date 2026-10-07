@@ -22,6 +22,7 @@ struct ExperienceScreenTransitionSpec: Equatable {
     }
 
     let kind: Kind
+    let presentation: ExperienceLayerPresentation
 
     var isAnimated: Bool {
         switch kind {
@@ -42,8 +43,9 @@ struct ExperienceScreenTransitionSpec: Equatable {
 
     static let none = ExperienceScreenTransitionSpec(kind: .none)
 
-    init(kind: Kind) {
+    init(kind: Kind, presentation: ExperienceLayerPresentation = .modalDefault) {
         self.kind = kind
+        self.presentation = presentation
     }
 
     init(raw: Any?) {

@@ -73,6 +73,7 @@ let package = Package(
             resources: [
                 .process("PrivacyInfo.xcprivacy"),
                 .process("Resources/timezone-bundle.json"),
+                .process("Resources/presentation-looks.json"),
                 .process("Resources/LICENSE-unicode.txt")
             ],
             swiftSettings: [
