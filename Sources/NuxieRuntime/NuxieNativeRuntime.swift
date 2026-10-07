@@ -741,6 +741,40 @@ package actor NuxieNativeSessionGroup {
         }
     }
 
+    /// Retain the existing child only if it still occupies the snapshot's slot.
+    package func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64) async throws -> NuxieNativeViewModelReference {
+        guard index >= 0 else {
+            throw NuxieNativeRuntimeError.invalidNativeValue("list index must be nonnegative")
+        }
+        let context = context
+        let executor = executor
+        return try await executor.call {
+            let owner = try context.resolve(owner)
+            var pointer: OpaquePointer?
+            try requireOK(withStringView(path) {
+                nux_view_model_instance_list_item_acquire(try owner.owned.require(), $0, index, &pointer)
+            }, operation: "acquire existing list child")
+            guard let pointer else { throw NuxieNativeRuntimeError.missingHandle("list child") }
+            let child = NuxieNativeViewModelHandle(executor: executor, handle: pointer)
+            do {
+                let reference = try child.reference()
+                guard reference.rawValue == expectedIdentity else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("list child changed since snapshot")
+                }
+                if context.sharedViewModels[reference.rawValue] != nil {
+                    try child.close()
+                } else {
+                    context.sharedViewModels[reference.rawValue] = child
+                }
+                return reference
+            } catch {
+                try? child.close()
+                throw error
+            }
+        }
+    }
+
     package func snapshot(_ reference: NuxieNativeViewModelReference) async throws
         -> NuxieNativeViewModelSnapshot {
         let context = context
