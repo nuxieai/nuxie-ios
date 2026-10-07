@@ -15,7 +15,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     #if canImport(UIKit)
     @MainActor
     func testReservedFrameEventKeepsOnlyItsSiblingSource() async throws {
-        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let recorder = LinkFrameRecorder()
         var counts: [Int] = []
         recorder.onBatchAsync = { sources in counts.append(sources?.drafts.count ?? -1) }
@@ -37,7 +37,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     @MainActor
     func testFrameHandsOffBatchBeforeOpeningLinksAndRejectsDuplicateControlKeys() async throws {
-        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let recorder = LinkFrameRecorder()
         let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
             screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
@@ -82,7 +82,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     @MainActor
     func testLaterFramesDoNotWaitForPendingExternalConfirmation() async throws {
-        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let recorder = LinkFrameRecorder()
         let gate = ExperienceInteractiveOperationGate()
         recorder.onBatchAsync = { sources in await gate.withLock { await sources?.frameLinks?.perform() } }
@@ -128,7 +128,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/events/runtime-event-sources.json")
         let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL))
-        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
             screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: nil)
         for vector in fixture.cases {
@@ -189,7 +189,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let suite = try JSONDecoder().decode(Suite.self,
             from: Data(contentsOf: root.appendingPathComponent("fixtures/events/runtime-frame-writes.json")))
-        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
             pixelWidth: 320, pixelHeight: 100)
         do {
@@ -232,7 +232,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     func testRootEventUsesSnapshotRootIdentity() async throws {
-        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload, pixelWidth: 320, pixelHeight: 100)
         defer { Task { try? await screen.close() } }
         let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: 71, instances: [.init(id: 71, schemaIndex: 0, valueRange: 0..<0)], values: [])
@@ -244,7 +244,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
-        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let payload = artifact.payload
         let screen = try await ExperienceInteractiveScreen.open(payload: payload,
             pixelWidth: 320, pixelHeight: 100)
@@ -287,7 +287,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     func testNativeNestedEventCanResolveWithoutHostAliases() async throws {
-        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
             pixelWidth: 320, pixelHeight: 100)
         defer { Task { try? await screen.close() } }
@@ -322,7 +322,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         let descriptorBytes = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
         try JourneyReleaseSchemaValidator.validate(try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any]))
-        return try await authenticatedFixtureArtifact(at: fixture,
+        return try await TestExperienceRuntimeFixture.artifact(at: fixture,
             profileBytes: signedReleaseEntryProfileBytes(
                 fixture: fixture,
                 host: "purchase.sdk-fixtures.nuxie.test"
@@ -332,7 +332,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     #if canImport(UIKit)
     @MainActor
     func testSignedPurchaseSelectionSurvivesScreenNavigation() async throws {
-        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: true)
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: true)
         let host = UIViewController()
         host.view.frame = CGRect(x: 0, y: 0, width: 320, height: 150)
         let delegate = PurchaseNavigationDelegate()
@@ -382,128 +382,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         await coordinator.tearDown()
     }
 
-    @MainActor
-    func testSharedLayerVectorsUseNativeNavigationStacksAndSeparateCopies() async throws {
-        struct Transition: Decodable {
-            let type: String
-            let transitionId: String?
-            var raw: [String: Any] {
-                var result: [String: Any] = ["type": type]
-                if let transitionId { result["transitionId"] = transitionId }
-                return result
-            }
-        }
-        struct Step: Decodable {
-            let transition: Transition?
-            let operation: String
-            let screen: String?
-            let count: Int?
-            let layers: [[String]]
-        }
-        struct Case: Decodable { let name: String; let root: String; let steps: [Step] }
-        struct Vector: Decodable { let cases: [Case] }
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf:
-            root.appendingPathComponent("fixtures/journeys/planes/presentation-layers.json")))
-        for item in vector.cases {
-            let (experience, artifact) = try await purchaseFixtureArtifact(navigation: true)
-            let host = UIViewController()
-            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
-            let previousKey = scene?.windows.first(where: \.isKeyWindow)
-            let window = scene.map(UIWindow.init(windowScene:)) ?? UIWindow()
-            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
-            window.rootViewController = host
-            window.makeKeyAndVisible()
-            let delegate = PurchaseNavigationDelegate()
-            var lifecycle: [String] = []
-            var reveal: XCTestExpectation?
-            let coordinator = ExperienceScreenTransitionCoordinator(
-                experience: experience, artifact: artifact, initialScreenID: item.root,
-                hostViewController: host, screenDelegate: delegate,
-                onPresentedScreenDismissed: { hidden, shown in
-                    lifecycle.append("hidden:\(hidden):revealing:\(shown ?? "")")
-                }, onScreenHidden: { hidden, _ in lifecycle.append("hidden:\(hidden)") },
-                onScreenActive: { screen in
-                    lifecycle.append("active:\(screen)")
-                    reveal?.fulfill()
-                    reveal = nil
-                }, onProductsResolved: { _ in }, onProductsUnavailable: { _ in },
-                onRuntimeFailure: { _, error in XCTFail("Layer runtime failure: \(error)") })
-            addTeardownBlock {
-                await coordinator.tearDown()
-                await MainActor.run { window.isHidden = true; previousKey?.makeKey() }
-            }
-            try await coordinator.install()
-            coordinator.setContentHidden(false)
-            _ = await coordinator.activateInitialScreen()
-            let base = try XCTUnwrap(host.children.first as? UINavigationController)
-            let original = try XCTUnwrap(base.topViewController)
-            var nativeLayers = [base]
-            var roots = [ObjectIdentifier(base): original]
-            for step in item.steps {
-                if step.operation == "close" {
-                    let closing = try XCTUnwrap(nativeLayers.popLast())
-                    let presentation = try XCTUnwrap(closing.presentationController)
-                    let shown = try XCTUnwrap(step.layers.last?.last)
-                    let hidden = try XCTUnwrap((closing.topViewController as? ExperienceScreenViewController)?.screenId)
-                    await withCheckedContinuation { continuation in
-                        closing.dismiss(animated: false) { continuation.resume() }
-                    }
-                    lifecycle.removeAll()
-                    let completed = expectation(description: "Reveal after closing layer")
-                    reveal = completed
-                    coordinator.presentationControllerDidDismiss(presentation)
-                    await fulfillment(of: [completed], timeout: 10)
-                    XCTAssertEqual(lifecycle, ["hidden:\(hidden):revealing:\(shown)", "active:\(shown)"])
-                } else {
-                    let completed = expectation(description: "\(item.name): \(step.operation)")
-                    let result: ExperienceScreenTransitionCoordinator.Completion = { result, _ in
-                        XCTAssertTrue(result.reachedTarget)
-                        completed.fulfill()
-                    }
-                    if step.operation == "back" {
-                        let target = try XCTUnwrap(coordinator.backTarget(steps: step.count ?? 1))
-                        XCTAssertTrue(coordinator.back(to: target, steps: step.count ?? 1,
-                            transition: step.transition?.raw, completion: result))
-                    } else {
-                        let target = try XCTUnwrap(step.screen)
-                        let type = step.operation == "replace" ? "none" : step.operation
-                        var transition: [String: Any] = ["type": type]
-                        if type == "custom" { transition["transitionId"] = "not-declared" }
-                        XCTAssertTrue(coordinator.navigate(to: target, transition: transition, completion: result))
-                    }
-                    await fulfillment(of: [completed], timeout: 10)
-                    if step.operation == "modal" {
-                        let presenter = try XCTUnwrap(nativeLayers.last?.topViewController)
-                        let candidates = [presenter.presentedViewController,
-                            nativeLayers.last?.presentedViewController, host.presentedViewController]
-                        let layer = try XCTUnwrap(candidates.compactMap { $0 as? UINavigationController }
-                            .first { candidate in !nativeLayers.contains(where: { $0 === candidate }) })
-                        nativeLayers.append(layer)
-                        roots[ObjectIdentifier(layer)] = layer.viewControllers.first
-                    }
-                }
-                XCTAssertEqual(nativeLayers.map { layer in
-                    layer.viewControllers.compactMap { ($0 as? ExperienceScreenViewController)?.screenId }
-                }, step.layers)
-                XCTAssertEqual(coordinator.layerScreenIds, step.layers)
-                XCTAssertTrue(base.viewControllers.first === original)
-                if ["back", "replace", "fade", "custom"].contains(step.operation),
-                   let layer = nativeLayers.last, step.layers.last?.count == 1,
-                   let root = roots[ObjectIdentifier(layer)],
-                   (root as? ExperienceScreenViewController)?.screenId == step.layers.last?.first {
-                    XCTAssertTrue(layer.topViewController === root)
-                }
-                if nativeLayers.count > 1, step.layers.last?.last == item.root {
-                    XCTAssertFalse(nativeLayers.last?.topViewController === original)
-                }
-            }
-            await coordinator.tearDown()
-            window.isHidden = true
-            previousKey?.makeKey()
-        }
-    }
     #endif
 
     func testSemanticFrameCaptureIsOnlyReturnedForPresentedScreen() async throws {
@@ -3854,7 +3732,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         at fixture: URL,
         profileBytes suppliedProfileBytes: Data? = nil
     ) async throws -> AuthenticatedRuntimePayload {
-        try await authenticatedFixtureArtifact(at: fixture, profileBytes: suppliedProfileBytes).1.payload
+        try await TestExperienceRuntimeFixture.artifact(at: fixture, profileBytes: suppliedProfileBytes).1.payload
     }
 
     private func exerciseExternalAssetFixture(named name: String) async throws {
