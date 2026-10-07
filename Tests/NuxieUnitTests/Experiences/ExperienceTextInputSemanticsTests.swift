@@ -203,14 +203,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 _ = try await apply([.next])
                 XCTAssertEqual(screen.riveFocusState.hasFocus, true)
                 let empty = try await apply(clear)
-                XCTAssertEqual(empty.text, "")
+                XCTAssertTrue(empty.text.isEmpty, "Clearing the field must remove its text")
                 var result: [String: String]
                 if secure {
                     let field = try await apply([.text("private-test")])
                     let obscured = field.node.stateFlags & NuxieNativeSemanticNode.obscured != 0
                     XCTAssertTrue(obscured)
                     XCTAssertFalse(field.node.value.contains("private-test"))
-                    XCTAssertEqual(field.text, "private-test")
+                    XCTAssertTrue(field.text == "private-test", "Secure field must retain the typed text")
                     func pixels() async throws -> Data {
                         let texture = try XCTUnwrap(lastDrawable?.texture)
                         let rowBytes = ((texture.width * 4 + 255) / 256) * 256
@@ -239,9 +239,9 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                     let sameLength = try await pixels()
                     _ = try await apply(clear + [.text("tiny")])
                     let shorter = try await pixels()
-                    XCTAssertEqual(first, sameLength, "Secure drawing conceals which same-length text was typed")
-                    XCTAssertNotEqual(first, shorter, "Typing must change the secure drawing")
-                    result = ["obscured": String(obscured), "semanticValue": field.node.value,
+                    XCTAssertTrue(first == sameLength, "Secure drawing conceals which same-length text was typed")
+                    XCTAssertTrue(first != shorter, "Typing must change the secure drawing")
+                    result = ["obscured": String(obscured), "semanticValueEmpty": String(field.node.value.isEmpty),
                         "sameLengthPixelsMatch": String(first == sameLength), "shorterPixelsDiffer": String(first != shorter)]
                 } else {
                     let marked = try await apply([.text("に")])
@@ -274,13 +274,13 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         secureNative.insertText("private-test")
         bridge.flushTextChange(for: secureNative)
         XCTAssertTrue(secureNative.isSecureTextEntry)
-        XCTAssertEqual(kept, "private-test")
+        XCTAssertTrue(kept == "private-test", "Native secure editor must retain the typed text")
         secureNative.resignFirstResponder()
         let secureRive = try await experiment(secure: true)
         let observations = ["composition": ["native": compositionNative, "rive": rive["composition"] ?? "missing"],
             "wordReplacement": ["native": correctionNative, "rive": rive["wordReplacement"] ?? "missing"],
             "secure": ["native": String(secureNative.isSecureTextEntry), "rive": secureRive["obscured"] ?? "missing",
-                "riveSemanticValue": secureRive["semanticValue"] ?? "missing",
+                "riveSemanticValueEmpty": secureRive["semanticValueEmpty"] ?? "missing",
                 "sameLengthPixelsMatch": secureRive["sameLengthPixelsMatch"] ?? "missing",
                 "shorterPixelsDiffer": secureRive["shorterPixelsDiffer"] ?? "missing"]]
         let data = try JSONSerialization.data(withJSONObject: observations, options: [.sortedKeys])
@@ -322,7 +322,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             let selection = try XCTUnwrap(field.selectedTextRange)
             XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: selection.start), start)
             XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: selection.end), end)
-            XCTAssertEqual(field.text, "Alpha beta")
+            XCTAssertTrue(field.text == "Alpha beta", "Secure text must survive viewport relayout")
         }
     }
 
@@ -359,7 +359,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
             field.insertText(original)
             bridge.flushTextChange(for: field)
-            XCTAssertEqual(source, original)
+            XCTAssertTrue(source == original, "Secure source must retain the original text")
             let position = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: caret))
             field.selectedTextRange = field.textRange(from: position, to: position)
             undo.removeAllActions()
@@ -367,17 +367,17 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             field.deleteBackward()
             undo.endUndoGrouping()
             bridge.flushTextChange(for: field)
-            XCTAssertEqual(field.text, expected)
-            XCTAssertEqual(source, expected)
+            XCTAssertTrue(field.text == expected, "Secure field must reflect deletion")
+            XCTAssertTrue(source == expected, "Secure source must reflect deletion")
             XCTAssertTrue(undo.canUndo)
             undo.undo()
             bridge.flushTextChange(for: field)
-            XCTAssertEqual(field.text, original, "Undo must restore the complete character")
-            XCTAssertEqual(source, original)
+            XCTAssertTrue(field.text == original, "Undo must restore the complete character")
+            XCTAssertTrue(source == original, "Secure source must retain the original text")
             XCTAssertTrue(undo.canRedo)
             undo.redo()
             bridge.flushTextChange(for: field)
-            XCTAssertEqual(source, expected)
+            XCTAssertTrue(source == expected, "Secure source must reflect deletion")
         }
         field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
         field.insertText("A😀BC")
@@ -385,11 +385,11 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         field.selectedTextRange = field.textRange(from: start, to: field.endOfDocument)
         field.deleteBackward()
         bridge.flushTextChange(for: field)
-        XCTAssertEqual(source, "A😀", "An explicit selection must not expand into the preceding emoji")
+        XCTAssertTrue(source == "A😀", "An explicit selection must not expand into the preceding emoji")
         field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.beginningOfDocument)
         field.deleteBackward()
         bridge.flushTextChange(for: field)
-        XCTAssertEqual(source, "A😀", "Backspace at the beginning must be a no-op")
+        XCTAssertTrue(source == "A😀", "Backspace at the beginning must be a no-op")
     }
 
     func testMultilineAccessibilityBoundsFollowScaledAndRotatedViewport() throws {
