@@ -1,0 +1,7 @@
+.hello-panel { height: 258px; padding: 25px; border-radius: 100px 100px 24px 24px; background-color: var(--terra); display: flex; flex-direction: column; justify-content: space-between; }
+.hello-top { display: flex; flex-direction: row; justify-content: space-between; margin-top: 19px; }
+.hello-middle { display: flex; flex-direction: column; gap: 5px; }
+.hello-bottom { display: flex; flex-direction: row; align-items: center; gap: 5px; height: 28px; }
+.sound-bar { width: 4px; height: 10px; border-radius: 2px; background-color: var(--white); }
+.tall { height: 26px; }
+.medium { height: 18px; }

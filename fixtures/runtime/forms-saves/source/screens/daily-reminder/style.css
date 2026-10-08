@@ -1,0 +1,5 @@
+.screen { gap: 20px; }
+.time-panel { background-color: var(--soft); border-radius: 26px; padding: 32px 20px; display: flex; flex-direction: column; align-items: center; gap: 13px; }
+.time-pick { width: 100px; height: 50px; border-radius: 25px; border-width: 1px; border-style: solid; border-color: var(--line); background-color: var(--paper); display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 7px; }
+.time-dot { width: 7px; height: 7px; border-radius: 4px; background-color: var(--terra); }
+.wrap { justify-content: center; }

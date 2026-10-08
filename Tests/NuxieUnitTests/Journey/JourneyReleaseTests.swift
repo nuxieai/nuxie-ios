@@ -8,6 +8,41 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testPublishedF5AuthenticatesExactResponsePolicy() throws {
+        let directory = PublishedRunValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("profile-entry.json")))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        // Qualify these fixture bytes on the locally staged runtime without moving its release pin.
+        let supported = JourneyReleaseSupportedRuntime(
+            currentSdkVersion: "0.1.0",
+            supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+            supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+            sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+            timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+            timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+            supportedCapabilities: ["system-fonts"])
+        let release = try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(entry.envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+        XCTAssertEqual(release.exactDescriptorBytes, bytes)
+        let oracle = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: directory.appendingPathComponent("expectations.json"))) as? [String: Any])
+        let expected = try XCTUnwrap(oracle["release"] as? [String: Any])
+        for name in ["state", "responses", "ruleGroups"] {
+            let actualBytes = try JSONSerialization.data(withJSONObject: XCTUnwrap(root[name]), options: [.sortedKeys])
+            let expectedBytes = try JSONSerialization.data(withJSONObject: XCTUnwrap(expected[name]), options: [.sortedKeys])
+            XCTAssertEqual(actualBytes, expectedBytes, name)
+        }
+    }
+
     func testPublishedF4AuthenticatesExactVersionThreePolicy() async throws {
         try await verifyPublishedF4(disagreeingRow: false)
     }

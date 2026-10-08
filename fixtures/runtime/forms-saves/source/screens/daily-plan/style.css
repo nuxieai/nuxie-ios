@@ -1,0 +1,5 @@
+.plan-meta { display: flex; flex-direction: column; gap: 6px; }
+.screen { gap: 18px; }
+.plan-content { display: flex; flex-direction: column; flex: 1; overflow-y: scroll; gap: 16px; }
+.panel { flex-shrink: 0; }
+.panel { gap: 17px; padding: 22px; }
