@@ -7,6 +7,34 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
+    func testNativeFocusTapDoesNotConsumeALaterScenePointer() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        await recorder.holdNextQueuedWork()
+        loop.enqueue(ExperienceRuntimePresentationQueuedWork { .work(requestsFrame: false) })
+        let blocked = await recorder.waitForOperation(named: "queued")
+        XCTAssertTrue(blocked)
+        let source = NSObject()
+        loop.runtimeSurfaceViewDidReceivePointerEvents([
+            .init(source: ExperienceRuntimePointerSourceID(source), kind: .down,
+                location: CGPoint(x: 30, y: 30), timestampSeconds: 7),
+        ])
+        let native = loop.takeNativeEditingTap(at: CGPoint(x: 10, y: 10)).flatMap { $0 }
+        XCTAssertEqual(native.map(\.kind), [.down, .up])
+        XCTAssertEqual(native.map(\.pointerID), [0, 0])
+        await recorder.releaseQueuedWork()
+        let stepped = await recorder.waitForOperation(named: "step")
+        XCTAssertTrue(stepped)
+        let pointers = await recorder.steps().flatMap(\.pointers)
+        XCTAssertEqual(pointers.map(\.pointerID), [1])
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testFocusQueueKeepsInputOrderAcrossStepLimits() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let recorder = PresentationSessionRecorder(device: device)
