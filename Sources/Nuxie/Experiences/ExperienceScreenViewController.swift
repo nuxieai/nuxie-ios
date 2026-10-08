@@ -143,7 +143,7 @@ final class ExperienceScreenViewController: UIViewController {
     private var requiresSceneSemantics: Bool {
         artifact.payload.requiredCapabilities.contains("experience-accessibility") ||
             artifact.renderPlan.textInputs.contains {
-                $0.screenId == screenId && $0.editable && $0.editableValueName != nil
+                $0.screenId == screenId && $0.editable
             }
     }
     private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
@@ -990,18 +990,6 @@ final class ExperienceScreenViewController: UIViewController {
                 }, completion: { result in
                     if case .failure(let error) = result { completion(.failure(error)) }
                 })
-            },
-            textWriter: { inputID, text, completion in
-                loop.enqueue(
-                    ExperienceRuntimePresentationQueuedWork {
-                        let didWrite = try await interactiveScreen.setText(
-                            inputID: inputID,
-                            value: text
-                        )
-                        return .work(requestsFrame: didWrite)
-                    },
-                    completion: completion
-                )
             }
         )
     }
