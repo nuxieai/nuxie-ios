@@ -876,6 +876,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         )
         let color = UIColor(nuxieARGB: style.color)
         let textColor: UIColor = .clear
+        let markedTextStyle: [NSAttributedString.Key: Any] = [
+            .foregroundColor: textColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .underlineColor: color,
+        ]
         let alignment = Self.textAlignment(style.textAlign)
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
@@ -892,6 +897,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             field.textAlignment = alignment
             field.textColor = textColor
             field.tintColor = color
+            field.markedTextStyle = markedTextStyle
             var attributes = field.defaultTextAttributes
             attributes[.font] = font
             attributes[.foregroundColor] = textColor
@@ -908,6 +914,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             textView.textAlignment = alignment
             textView.textColor = textColor
             textView.tintColor = color
+            textView.markedTextStyle = markedTextStyle
             textView.typingAttributes[.kern] = CGFloat(style.letterSpacing)
             textView.typingAttributes[.paragraphStyle] = paragraph
             if hostPlaceholder, let placeholder = textView.placeholderLabel.text {
