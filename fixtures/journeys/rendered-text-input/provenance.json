@@ -1,7 +1,7 @@
 {
   "contract": "published-native-text-input-response",
   "publisherSourceCommit": "912d65ed1ad26913b8e6406ddced780e5f30bd17",
-  "descriptorSha256": "17033be169a36872363147dcc52d46ea679ce2db064c778619b7ba24bb63ac65",
+  "descriptorSha256": "1caf62ebfbf14e9afe25e2826bf6fde00109526dee00583f293abb08e11b8dce",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "qualification": "F3 native read and admission qualified; migrated signed editing, navigation and response qualification pending native write contract",
   "descriptorRefresh": {

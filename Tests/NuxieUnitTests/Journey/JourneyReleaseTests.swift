@@ -7,6 +7,51 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testVersionThreeRequiresValuePolicySections() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        root["state"] = ["days": ["type": "number"], "goals": ["type": "list", "items": ["title": ["type": "string"]]]]
+        root["responses"] = [String: Any]()
+        root["ruleGroups"] = [Any]()
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        for key in ["state", "responses", "ruleGroups"] {
+            var missing = root
+            missing.removeValue(forKey: key)
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(missing), key)
+        }
+        root["state"] = ["days": ["type": "number", "rules": []]]
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+    }
+
+    func testVersionThreeResponsePolicyRecordsAreStrict() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        let rule: [String: Any] = ["model": "Responses:feedback", "property": "stars", "kind": 1,
+            "mode": 0, "number_bound": 1, "text": "", "values": [], "value_count": 0,
+            "picked_property": "", "bound_flags": 0, "minimum": 0, "maximum": 0,
+            "code": "min", "message": "At least one"]
+        let member: [String: Any] = ["property": "stars", "errors_path": "errors/stars",
+            "item_model": "ResponseError", "code_property": "rule", "message_property": "message"]
+        root["state"] = [String: Any]()
+        root["responses"] = ["feedback": ["title": "Feedback", "model": "Responses:feedback",
+            "fields": [["key": "stars", "label": "Stars", "type": "number", "rules": [rule]]]]]
+        root["ruleGroups"] = [["model": "Responses:feedback", "valid": "valid", "member_count": 1, "members": [member]]]
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        var invalid = root
+        invalid["ruleGroups"] = []
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(invalid))
+        for (key, value) in [("mode", 1), ("value_count", 1), ("minimum", -1), ("maximum", 4_294_967_296)] {
+            var wrong = rule
+            wrong[key] = value
+            invalid = root
+            invalid["responses"] = ["feedback": ["title": "Feedback", "model": "Responses:feedback",
+                "fields": [["key": "stars", "label": "Stars", "type": "number", "rules": [wrong]]]]]
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(invalid), key)
+        }
+    }
+
     func testRejectsRetiredReleaseWireVersion() throws {
         let fixture = try golden()
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))

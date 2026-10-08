@@ -1539,7 +1539,7 @@ actor ExperienceInteractivePreparation {
         )
         let preparedFile: NuxieNativePreparedFile
         do {
-            preparedFile = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, importMode: importMode)
+            preparedFile = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, importMode: importMode, valuePolicy: payload.valuePolicy.native)
             systemFontCache.didImport(binding.systemFonts)
         } catch {
             systemFontCache.didFailImport(binding.systemFonts)

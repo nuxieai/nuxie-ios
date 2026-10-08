@@ -5,7 +5,7 @@
   "sourceSnapshotSha256": "6bb039f9b2bc490f1d666fa95911c350e62da3994e4112045e17c4d7b0978f85",
   "scriptSourceSha256": "9163301d05fb80588746ce90165d636dd80ba4bdb35bc67cf6d9e8b411ef7390",
   "publishSnapshotSha256": "3f862c0bc369dedf8255a6f8f1bf7ed30b85cb9b30330159b87569ba8799529f",
-  "descriptorSha256": "edc3b15fb1785b3507d7e38b08fea9376f9b73960db4b3b9bd8d3678a7947827",
+  "descriptorSha256": "71cf16bd1e49a99e8b5f6c26d98cb98596f140a9cbf421165c79d66748bed7ea",
   "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate.",
   "descriptorRefresh": {
     "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
