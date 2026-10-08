@@ -556,6 +556,7 @@ package actor NuxieNativePreparedFile {
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let bytes: Data
     private let importMode: NuxieNativeImportMode
+    private let valuePolicy: NuxieNativeValuePolicy
     private let preparedArtboards: [NuxieNativeArtboardInfo]
     private let preparedCatalog: NuxieNativeViewModelCatalog
     private var fileImportCount = 1
@@ -565,19 +566,22 @@ package actor NuxieNativePreparedFile {
         executor: NuxieRuntimePinnedThreadExecutor,
         bytes: Data,
         importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy,
         preparedArtboards: [NuxieNativeArtboardInfo],
         preparedCatalog: NuxieNativeViewModelCatalog
     ) {
         self.executor = executor
         self.bytes = bytes
         self.importMode = importMode
+        self.valuePolicy = valuePolicy
         self.preparedArtboards = preparedArtboards
         self.preparedCatalog = preparedCatalog
     }
 
     package static func prepare(
         bytes: Data,
-        importMode: NuxieNativeImportMode = .portable
+        importMode: NuxieNativeImportMode = .portable,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) async throws -> NuxieNativePreparedFile {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
@@ -593,7 +597,8 @@ package actor NuxieNativePreparedFile {
                         executor: executor,
                         renderer: renderer,
                         bytes: bytes,
-                        importMode: importMode
+                        importMode: importMode,
+                        valuePolicy: valuePolicy
                     )
                 } catch {
                     try? renderer.close()
@@ -615,6 +620,7 @@ package actor NuxieNativePreparedFile {
                 executor: executor,
                 bytes: bytes,
                 importMode: importMode,
+                valuePolicy: valuePolicy,
                 preparedArtboards: metadata.0,
                 preparedCatalog: metadata.1
             )
@@ -634,6 +640,7 @@ package actor NuxieNativePreparedFile {
         let executor = self.executor
         let bytes = self.bytes
         let importMode = self.importMode
+        let valuePolicy = self.valuePolicy
         fileImportCount += 1
         let state = try await executor.call {
             try NuxieNativeRuntimeState(
@@ -644,7 +651,8 @@ package actor NuxieNativePreparedFile {
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
                 bindDefaultViewModel: bindDefaultViewModel,
-                importMode: importMode
+                importMode: importMode,
+                valuePolicy: valuePolicy
             )
         }
         openedSessionCount += 1
@@ -656,7 +664,7 @@ package actor NuxieNativePreparedFile {
     }
 
     package nonisolated func hasSameBytes(as other: NuxieNativePreparedFile) -> Bool {
-        bytes == other.bytes
+        bytes == other.bytes && valuePolicy == other.valuePolicy
     }
 
     package func viewModelCatalog() -> NuxieNativeViewModelCatalog { preparedCatalog }
@@ -665,9 +673,10 @@ package actor NuxieNativePreparedFile {
         let executor = executor
         let bytes = bytes
         let importMode = importMode
+        let valuePolicy = valuePolicy
         let context = try await executor.call {
             try NuxieNativeFileContext(executor: executor, bytes: bytes,
-                importMode: importMode, pixelWidth: 1, pixelHeight: 1)
+                importMode: importMode, valuePolicy: valuePolicy, pixelWidth: 1, pixelHeight: 1)
         }
         fileImportCount += 1
         return NuxieNativeSessionGroup(preparedFile: self, executor: executor, context: context)
@@ -802,7 +811,7 @@ private final class NuxieNativeFileContext: @unchecked Sendable {
     private var pixelHeight: UInt32
 
     init(executor: NuxieRuntimePinnedThreadExecutor, bytes: Data,
-        importMode: NuxieNativeImportMode, pixelWidth: UInt32, pixelHeight: UInt32) throws {
+        importMode: NuxieNativeImportMode, valuePolicy: NuxieNativeValuePolicy, pixelWidth: UInt32, pixelHeight: UInt32) throws {
         self.executor = executor
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -810,7 +819,7 @@ private final class NuxieNativeFileContext: @unchecked Sendable {
             pixelWidth: pixelWidth, pixelHeight: pixelHeight)
         do {
             file = try NuxieNativeFileHandle(executor: executor, renderer: renderer,
-                bytes: bytes, importMode: importMode)
+                bytes: bytes, importMode: importMode, valuePolicy: valuePolicy)
         } catch {
             try? renderer.close()
             throw error
@@ -1292,7 +1301,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         pixelWidth: UInt32,
         pixelHeight: UInt32,
         bindDefaultViewModel: Bool,
-        importMode: NuxieNativeImportMode
+        importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) throws {
         sharedContext = nil
         self.pixelWidth = pixelWidth
@@ -1308,7 +1318,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 executor: executor,
                 renderer: renderer,
                 bytes: bytes,
-                importMode: importMode
+                importMode: importMode,
+                valuePolicy: valuePolicy
             )
         } catch {
             try? renderer.close()
@@ -2078,15 +2089,99 @@ private enum NuxieNativeAppleAssetImporter {
     }
 }
 
+/// Owns all strings and nested arrays for one synchronous install call.
+private final class NuxieNativeInstallStorage {
+    private var releases: [() -> Void] = []
+    deinit { for release in releases.reversed() { release() } }
+
+    func array<T>(_ values: [T]) -> UnsafePointer<T>? {
+        guard !values.isEmpty else { return nil }
+        let pointer = UnsafeMutablePointer<T>.allocate(capacity: values.count)
+        pointer.initialize(from: values, count: values.count)
+        releases.append { pointer.deinitialize(count: values.count); pointer.deallocate() }
+        return UnsafePointer(pointer)
+    }
+
+    func string(_ value: String) -> NuxStringView {
+        let bytes = value.utf8.map { CChar(bitPattern: $0) }
+        return NuxStringView(data: array(bytes), len: bytes.count)
+    }
+}
+
+func withNuxieNativeValueMarkers<T>(_ entries: [NuxieNativeValueMarker],
+    _ body: (UnsafePointer<NuxValueMarker>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { NuxValueMarker(model: storage.string($0.model),
+        value: storage.string($0.value), marker: storage.string($0.marker)) }
+    return try body(storage.array(values), values.count)
+}
+
+func withNuxieNativeValueRules<T>(_ entries: [NuxieNativeValueRule],
+    _ body: (UnsafePointer<NuxValueRule>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { entry in
+        NuxValueRule(model: storage.string(entry.model), property: storage.string(entry.property),
+            kind: entry.kind, mode: entry.mode, number_bound: entry.numberBound,
+            text: storage.string(entry.text), values: storage.array(entry.values.map(storage.string)),
+            value_count: entry.values.count, picked_property: storage.string(entry.pickedProperty),
+            bound_flags: entry.boundFlags, minimum: entry.minimum, maximum: entry.maximum,
+            code: storage.string(entry.code), message: storage.string(entry.message))
+    }
+    return try body(storage.array(values), values.count)
+}
+
+func withNuxieNativeRuleGroups<T>(_ entries: [NuxieNativeRuleGroup],
+    _ body: (UnsafePointer<NuxRuleGroup>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { entry in
+        let members = entry.members.map { member in
+            NuxRuleGroupMember(property: storage.string(member.property),
+                errors_path: storage.string(member.errorsPath), item_model: storage.string(member.itemModel),
+                code_property: storage.string(member.codeProperty), message_property: storage.string(member.messageProperty))
+        }
+        return NuxRuleGroup(model: storage.string(entry.model), valid: storage.string(entry.valid),
+            members: storage.array(members), member_count: members.count)
+    }
+    return try body(storage.array(values), values.count)
+}
+
 private final class NuxieNativeFileHandle: @unchecked Sendable {
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let owned: NuxieNativeOwnedHandle
+
+    func installValueMarkers(_ entries: [NuxieNativeValueMarker]) throws {
+        try withNuxieNativeValueMarkers(entries) { entries, count in
+            try requireOK(nux_file_set_value_markers(try owned.require(), entries, count), operation: "install value markers")
+        }
+    }
+
+    func installValueRules(_ entries: [NuxieNativeValueRule]) throws {
+        try withNuxieNativeValueRules(entries) { entries, count in
+            var result: OpaquePointer?
+            let status = nux_file_set_value_rules_with_result(try owned.require(), entries, count, &result)
+            if result != nil {
+                try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
+            } else {
+                try requireOK(status, operation: "install value rules")
+            }
+        }
+    }
+
+    func installRuleGroups(_ entries: [NuxieNativeRuleGroup]) throws {
+        try withNuxieNativeRuleGroups(entries) { entries, count in
+            try requireOK(nux_file_set_rule_groups(try owned.require(), entries, count), operation: "install rule groups")
+        }
+    }
 
     init(
         executor: NuxieRuntimePinnedThreadExecutor,
         renderer: NuxieNativeRendererHandle,
         bytes: Data,
-        importMode: NuxieNativeImportMode
+        importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) throws {
         let renderer = try renderer.require()
         var file: OpaquePointer?
@@ -2153,6 +2248,14 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
             executor: executor,
             free: nux_file_free
         )
+        do {
+            try installValueMarkers(valuePolicy.markers(in: viewModelCatalog()))
+            try installValueRules(valuePolicy.rules)
+            try installRuleGroups(valuePolicy.groups)
+        } catch {
+            try? owned.close()
+            throw error
+        }
     }
 
     func assets() throws -> [NuxieNativeFileAssetDescriptor] {

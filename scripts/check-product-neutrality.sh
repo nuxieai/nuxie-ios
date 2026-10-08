@@ -19,6 +19,7 @@ if git grep -nE "$prohibited" -- \
   ':!fixtures/runtime/run-values/provenance.json' \
   ':!fixtures/runtime/published-input/NOTES.md' \
   ':!fixtures/runtime/published-input/provenance.json' \
+  ':!fixtures/runtime/published-two-fields/provenance.json' \
   ':!fixtures/runtime/forms-saves/goals/NOTES.md' \
   ':!fixtures/runtime/forms-saves/goals/provenance.json'
 then

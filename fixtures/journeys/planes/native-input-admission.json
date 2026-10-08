@@ -2,8 +2,8 @@
   "schemaVersion": "nuxie.journey-release.v3",
   "signatureDomain": "nuxie.journey-release.v3\u0000",
   "retiredVersions": [
-    "nuxie.journey-release.v1",
-    "nuxie.journey-release.v2"
+    "nuxie.journey-release.v3",
+    "nuxie.journey-release.v3"
   ],
   "removedFields": [
     "textObjectKey",

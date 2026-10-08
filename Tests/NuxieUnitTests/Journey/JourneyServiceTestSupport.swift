@@ -962,7 +962,7 @@ extension JourneyTestCase {
             outputs: originalLeg.outputs,
             completionOutputs: completionOutputs ?? originalLeg.completionOutputs
         )
-        let descriptor = JourneyReleaseDescriptor(
+        let descriptor = JourneyReleaseDescriptor(state: originalDescriptor.state, responses: originalDescriptor.responses, ruleGroups: originalDescriptor.ruleGroups,
             schemaVersion: originalDescriptor.schemaVersion,
             identity: originalDescriptor.identity,
             metadata: originalDescriptor.metadata,
@@ -1028,7 +1028,7 @@ extension JourneyTestCase {
         ])
         render["assets"] = .array(assets)
         if let videoElements { render["videoElements"] = .array(videoElements) }
-        let descriptor = JourneyReleaseDescriptor(
+        let descriptor = JourneyReleaseDescriptor(state: originalDescriptor.state, responses: originalDescriptor.responses, ruleGroups: originalDescriptor.ruleGroups,
             schemaVersion: originalDescriptor.schemaVersion,
             identity: originalDescriptor.identity,
             metadata: originalDescriptor.metadata,
@@ -1101,7 +1101,7 @@ extension JourneyTestCase {
             outputs: originalLeg.outputs,
             completionOutputs: originalLeg.completionOutputs
         )
-        let descriptor = JourneyReleaseDescriptor(
+        let descriptor = JourneyReleaseDescriptor(state: originalDescriptor.state, responses: originalDescriptor.responses, ruleGroups: originalDescriptor.ruleGroups,
             schemaVersion: originalDescriptor.schemaVersion,
             identity: originalDescriptor.identity,
             metadata: originalDescriptor.metadata,

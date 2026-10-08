@@ -299,7 +299,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 outputs: [],
                 completionOutputs: [:]
             )
-            let descriptor = JourneyReleaseDescriptor(
+            let descriptor = JourneyReleaseDescriptor(state: [:], responses: [:], ruleGroups: [],
                 schemaVersion: JourneyReleaseDescriptor.wireSchemaVersion,
                 identity: identity,
                 metadata: [:],
