@@ -1,0 +1,5 @@
+.countdown { background-color: var(--soft); border-radius: 26px; padding: 26px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.stepper { display: flex; flex-direction: row; align-items: center; justify-content: space-between; width: 100%; gap: 10px; }
+.step { width: 46px; height: 46px; border-radius: 23px; background-color: var(--cream); display: flex; align-items: center; justify-content: center; }
+.count { min-width: 160px; text-align: center; }
+.wrap { justify-content: center; }

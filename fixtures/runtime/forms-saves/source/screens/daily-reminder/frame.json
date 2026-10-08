@@ -1,0 +1,1 @@
+{"$schema":"https://nuxie.com/schema/frame/1.json","size":{"device":"iphone-16"},"state":{"time":{"type":"enum","values":["07:00","08:00","12:00","18:00","20:00"],"default":"08:00"}},"emits":{"enable":{},"skip":{},"back":{}}}
