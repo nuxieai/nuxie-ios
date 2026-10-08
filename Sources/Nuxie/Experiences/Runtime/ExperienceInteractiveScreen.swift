@@ -196,6 +196,7 @@ struct ExperienceInteractiveEffect: Equatable, Sendable {
     let sequence: UInt64
     let correlationID: UInt64
     let kind: ExperienceInteractiveEffectKind
+    var responseSave: ExperienceResponseSaveRequest? = nil
 }
 
 /// Serializes an async operation through its complete projection phase. An
@@ -1671,6 +1672,7 @@ actor ExperienceInteractiveScreen {
     private var needsLayoutReadback = false
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
+    private let valuePolicy: JourneyReleaseValuePolicy
     private let controlActionIds: Set<String>
     private let declaredEventNames: Set<String>
     private let textInputs: [String: NativeExperienceTextInput]
@@ -1703,6 +1705,7 @@ actor ExperienceInteractiveScreen {
         videoPlayback: ExperienceVideoPlayback?,
         fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
+        valuePolicy: JourneyReleaseValuePolicy,
         controlActionIds: Set<String>,
         declaredEventNames: Set<String>,
         textInputs: [String: NativeExperienceTextInput],
@@ -1723,6 +1726,7 @@ actor ExperienceInteractiveScreen {
         self.videoPlayback = videoPlayback
         self.fontScope = fontScope
         self.layoutBounds = ExperienceLayoutBounds(artboardBounds)
+        self.valuePolicy = valuePolicy
         self.controlActionIds = controlActionIds
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
@@ -1908,6 +1912,7 @@ actor ExperienceInteractiveScreen {
                 width: manifestScreen.width,
                 height: manifestScreen.height
             ),
+            valuePolicy: payload.valuePolicy,
             controlActionIds: payload.definition
                 .flatMap { $0.controlsByScreen[screenID] }
                 .map { Set($0.keys) } ?? [],
@@ -2009,7 +2014,17 @@ actor ExperienceInteractiveScreen {
             keepGoing: result.keepGoing,
             pointerHits: result.pointerHits.map(Self.pointerHit),
             focusState: result.focusState,
-            effects: effects
+            effects: effects.map { effect in
+                var captured = effect
+                do {
+                    captured.responseSave = try ExperienceResponseSaveRequest.capture(effect.kind,
+                        snapshot: eventSnapshot, catalog: viewModelCatalog, policy: valuePolicy)
+                } catch {
+                    // Never include a sheet or arbitrary event properties in diagnostic output.
+                    LogWarning("ExperienceInteractiveScreen: rejected native response save")
+                }
+                return captured
+            }
         )
     }
 

@@ -43,6 +43,78 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testPublishedF5AwaitSaveCapturesFrameBeforeContinuation() async throws {
+        let directory = PublishedRunValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("profile-entry.json")))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        // Qualify these fixture bytes on the locally staged runtime without moving its release pin.
+        let supported = JourneyReleaseSupportedRuntime(
+            currentSdkVersion: "0.1.0",
+            supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+            supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+            sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+            timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+            timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+            supportedCapabilities: ["system-fonts"])
+        let release = try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(entry.envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("f5-save-\(UUID())")
+        addTeardownBlock { StubURLProtocol.reset(); try? FileManager.default.removeItem(at: cache) }
+        StubURLProtocol.register(matcher: { $0.url?.host == "f5-save.nuxie.test" }) { request in
+            let url = try XCTUnwrap(request.url)
+            let data = try Data(contentsOf: directory.appendingPathComponent(String(url.path.dropFirst())))
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Length": String(data.count),
+                    "Content-Type": url.pathExtension == "otf" ? "font/otf" : "application/vnd.nuxie.scene"])), data)
+        }
+        let store = JourneyReleaseAcquisitionStore(cacheDirectory: cache,
+            urlSession: TestURLSessionProvider.createTestSession())
+        let presentation = try await store.preparePresentation(release: release,
+            delivery: .init(renderBaseUrl: "https://f5-save.nuxie.test/", assetBaseUrl: "https://f5-save.nuxie.test/"),
+            productResolver: { _ in [] })
+        let artifact = try await presentation.artifactLoader(presentation.experience, nil, "scr_screens_sfeedback")
+        let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let screen = try await prepared.openScreen(screenID: "scr_screens_sfeedback", runValues: run,
+            pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await screen.close() }
+        let rootReference = try await screen.rootViewModel()
+        _ = try await screen.mutateState([
+            .setNumber(rootReference, path: "experience/responses:feedback/stars", value: 4),
+        ])
+        _ = try await screen.step(elapsedSeconds: 0)
+        var save: ExperienceResponseSaveRequest?
+        var emittedSent = false
+        // Exercise the published listener. No synthetic save event or host-side confirmation.
+        search: for y in stride(from: Float(1), to: Float(screen.artboardBounds.height), by: 8) {
+            for x in stride(from: Float(1), to: Float(screen.artboardBounds.width), by: 8) {
+                let down = try await screen.step(pointers: [.init(kind: .down, x: x, y: y)], elapsedSeconds: 0)
+                let up = try await screen.step(pointers: [.init(kind: .up, x: x, y: y)], elapsedSeconds: 0)
+                for effect in down.effects + up.effects {
+                    if case .reportedEvent(let event) = effect.kind, event.name == "sent" { emittedSent = true }
+                    if let captured = effect.responseSave, captured.awaitTrigger != nil {
+                        save = captured
+                        break search
+                    }
+                }
+            }
+        }
+        let request = try XCTUnwrap(save, "Published Send must request an awaited save")
+        XCTAssertEqual(request.form, "feedback")
+        XCTAssertEqual(request.answers, ["stars": .number(4)])
+        XCTAssertFalse(emittedSent, "The publisher holds its emit until confirmation")
+    }
+
     func testPublishedF4AuthenticatesExactVersionThreePolicy() async throws {
         try await verifyPublishedF4(disagreeingRow: false)
     }
