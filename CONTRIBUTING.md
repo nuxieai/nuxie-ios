@@ -282,7 +282,7 @@ If you have questions about contributing:
 
 ## License
 
-By contributing to Nuxie iOS SDK, you agree that your contributions will be licensed under the Apache License 2.0.
+By contributing to Nuxie iOS SDK, you agree that your contributions will be licensed under the MIT License.
 
 ## Acknowledgments
 
