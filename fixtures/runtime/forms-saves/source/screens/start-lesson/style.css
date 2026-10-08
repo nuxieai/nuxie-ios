@@ -1,0 +1,3 @@
+.lesson-card { background-color: var(--terra); border-radius: 26px; padding: 26px; display: flex; flex-direction: column; gap: 22px; }
+.lesson-copy { display: flex; flex-direction: column; gap: 10px; }
+.screen { gap: 22px; }

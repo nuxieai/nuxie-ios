@@ -1,0 +1,463 @@
+{
+  "release": {
+    "state": {
+      "goals": {
+        "type": "list",
+        "items": {
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {
+      "onboarding": {
+        "title": "Onboarding answers",
+        "model": "Responses:onboarding",
+        "fields": [
+          {
+            "key": "trip_days",
+            "label": "How long is your trip?",
+            "type": "number",
+            "rules": [
+              {
+                "model": "Responses:onboarding",
+                "property": "trip_days",
+                "kind": 10,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "required",
+                "message": "Enter an answer."
+              },
+              {
+                "model": "Responses:onboarding",
+                "property": "trip_days",
+                "kind": 1,
+                "mode": 0,
+                "number_bound": 1,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "min",
+                "message": "Enter a larger number."
+              },
+              {
+                "model": "Responses:onboarding",
+                "property": "trip_days",
+                "kind": 2,
+                "mode": 1,
+                "number_bound": 365,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "max",
+                "message": "Enter a smaller number."
+              }
+            ]
+          },
+          {
+            "key": "italian_level",
+            "label": "How much Italian do you know?",
+            "type": "enum",
+            "values": [
+              "new",
+              "basics",
+              "conversational"
+            ],
+            "rules": [
+              {
+                "model": "Responses:onboarding",
+                "property": "italian_level",
+                "kind": 5,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [
+                  "new",
+                  "basics",
+                  "conversational"
+                ],
+                "value_count": 3,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "values",
+                "message": "Choose one of the available options."
+              },
+              {
+                "model": "Responses:onboarding",
+                "property": "italian_level",
+                "kind": 10,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "required",
+                "message": "Enter an answer."
+              }
+            ]
+          },
+          {
+            "key": "reminder_time",
+            "label": "When should we remind you?",
+            "type": "enum",
+            "values": [
+              "07:00",
+              "08:00",
+              "12:00",
+              "18:00",
+              "20:00"
+            ],
+            "rules": [
+              {
+                "model": "Responses:onboarding",
+                "property": "reminder_time",
+                "kind": 5,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [
+                  "07:00",
+                  "08:00",
+                  "12:00",
+                  "18:00",
+                  "20:00"
+                ],
+                "value_count": 5,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "values",
+                "message": "Choose one of the available options."
+              }
+            ]
+          },
+          {
+            "key": "wants_reminder",
+            "label": "Remind you every day?",
+            "type": "boolean",
+            "rules": []
+          }
+        ]
+      },
+      "feedback": {
+        "title": "Feedback",
+        "model": "Responses:feedback",
+        "fields": [
+          {
+            "key": "stars",
+            "label": "Stars",
+            "type": "number",
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "stars",
+                "kind": 10,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "required",
+                "message": "Enter an answer."
+              },
+              {
+                "model": "Responses:feedback",
+                "property": "stars",
+                "kind": 1,
+                "mode": 0,
+                "number_bound": 1,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "min",
+                "message": "Enter a larger number."
+              },
+              {
+                "model": "Responses:feedback",
+                "property": "stars",
+                "kind": 2,
+                "mode": 1,
+                "number_bound": 5,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "max",
+                "message": "Enter a smaller number."
+              }
+            ]
+          },
+          {
+            "key": "comment",
+            "label": "Comment",
+            "type": "string",
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "comment",
+                "kind": 8,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 2,
+                "minimum": 0,
+                "maximum": 500,
+                "code": "maxLength",
+                "message": "Enter fewer characters."
+              }
+            ]
+          },
+          {
+            "key": "email",
+            "label": "Email",
+            "type": "string",
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "email",
+                "kind": 9,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "[a-zA-Z0-9\\.\\!\\#\\$\\%\\&'\\*\\+\\/\\=\\?\\^_\\`\\{\\|\\}\\~\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?)*",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "format",
+                "message": "Enter an email address."
+              }
+            ]
+          },
+          {
+            "key": "interests",
+            "label": "What interests you?",
+            "type": "enum",
+            "multiple": true,
+            "values": [
+              "sleep",
+              "focus",
+              "calm"
+            ],
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "interests",
+                "kind": 7,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "picked",
+                "bound_flags": 1,
+                "minimum": 1,
+                "maximum": 0,
+                "code": "minItems",
+                "message": "Choose more options."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "ruleGroups": [
+      {
+        "model": "Responses:onboarding",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "trip_days",
+            "errors_path": "errors/trip_days",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "italian_level",
+            "errors_path": "errors/italian_level",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "reminder_time",
+            "errors_path": "errors/reminder_time",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "wants_reminder",
+            "errors_path": "errors/wants_reminder",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 4
+      },
+      {
+        "model": "Responses:feedback",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "stars",
+            "errors_path": "errors/stars",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "comment",
+            "errors_path": "errors/comment",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "email",
+            "errors_path": "errors/email",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "interests",
+            "errors_path": "errors/interests",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 4
+      }
+    ],
+    "schemaVersion": "nuxie.journey-release.v3"
+  },
+  "excluded": [
+    {
+      "feature": "rating component payload declaration",
+      "milestone": 10
+    },
+    {
+      "feature": "rating payload delivery and $event.stars, including across awaited saves",
+      "milestone": 11
+    },
+    {
+      "feature": "remove(goal)",
+      "milestone": 11
+    },
+    {
+      "feature": "script save completion callback",
+      "milestone": 9,
+      "reason": "Excluded by the approved callback-free M9 cut and F5 ruling; script calls nuxie.responses.save(\"feedback\") without a callback."
+    }
+  ],
+  "sourceExpectations": {
+    "onboardingStartingAnswers": {},
+    "feedbackStartingAnswers": {},
+    "saveEvent": "$nuxie.response.save",
+    "saveFormProperty": "form",
+    "scriptHostCommand": {
+      "name": "$nuxie.response.save",
+      "payload": {
+        "form": "feedback"
+      }
+    }
+  },
+  "nativeInitialValues": {
+    "responses:onboarding/isset:trip_days": false,
+    "responses:onboarding/isset:italian_level": false,
+    "responses:onboarding/isset:reminder_time": false,
+    "responses:onboarding/isset:wants_reminder": false,
+    "responses:onboarding/valid": false,
+    "responses:onboarding/saving": false,
+    "responses:onboarding/saved": false,
+    "responses:onboarding/saveError": "",
+    "responses:feedback/isset:stars": false,
+    "responses:feedback/valid": false,
+    "responses:feedback/saving": false,
+    "responses:feedback/saved": false,
+    "responses:feedback/saveError": "",
+    "responses:feedback/comment": "",
+    "responses:feedback/email": "",
+    "responses:feedback/stars": 0,
+    "responses:onboarding/trip_days": 0,
+    "responses:onboarding/wants_reminder": false
+  },
+  "entryEvent": "$app_installed",
+  "markers": [
+    {
+      "model": "Responses:onboarding",
+      "property": "trip_days",
+      "marker": "isset:trip_days",
+      "present": false
+    },
+    {
+      "model": "Responses:onboarding",
+      "property": "italian_level",
+      "marker": "isset:italian_level",
+      "present": false
+    },
+    {
+      "model": "Responses:onboarding",
+      "property": "reminder_time",
+      "marker": "isset:reminder_time",
+      "present": false
+    },
+    {
+      "model": "Responses:onboarding",
+      "property": "wants_reminder",
+      "marker": "isset:wants_reminder",
+      "present": false
+    },
+    {
+      "model": "Responses:feedback",
+      "property": "stars",
+      "marker": "isset:stars",
+      "present": false
+    }
+  ],
+  "requiredScripts": [
+    "scripts/save-feedback.luau"
+  ]
+}

@@ -1,0 +1,265 @@
+{
+  "$schema": "https://nuxie.com/schema/experience/1.json",
+  "state": {
+    "goals": {
+      "type": "list",
+      "items": {
+        "title": {
+          "type": "string"
+        }
+      },
+      "default": [
+        {
+          "title": "Read"
+        },
+        {
+          "title": "Walk"
+        }
+      ]
+    }
+  },
+  "entry": {
+    "trigger": {
+      "type": "event",
+      "eventName": "$app_installed"
+    },
+    "frequency": {
+      "type": "one_time"
+    },
+    "exitWhenAny": [],
+    "steps": [
+      {
+        "type": "navigate",
+        "screen": "screens/welcome"
+      }
+    ]
+  },
+  "journey": [
+    {
+      "screen": "screens/welcome",
+      "on": "begin",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/departure",
+          "transition": {
+            "type": "push"
+          }
+        }
+      ]
+    },
+    {
+      "screen": "screens/departure",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/italian-level",
+          "transition": {
+            "type": "push"
+          }
+        }
+      ]
+    },
+    {
+      "screen": "screens/departure",
+      "on": "back",
+      "steps": [
+        {
+          "type": "back"
+        }
+      ]
+    },
+    {
+      "screen": "screens/italian-level",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/daily-plan",
+          "transition": {
+            "type": "push"
+          }
+        }
+      ]
+    },
+    {
+      "screen": "screens/italian-level",
+      "on": "back",
+      "steps": [
+        {
+          "type": "back"
+        }
+      ]
+    },
+    {
+      "screen": "screens/daily-plan",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/daily-reminder",
+          "transition": {
+            "type": "push"
+          }
+        }
+      ]
+    },
+    {
+      "screen": "screens/daily-plan",
+      "on": "back",
+      "steps": [
+        {
+          "type": "back"
+        }
+      ]
+    },
+    {
+      "screen": "screens/daily-reminder",
+      "on": "enable",
+      "steps": [
+        {
+          "type": "request_notifications"
+        },
+        {
+          "type": "navigate",
+          "screen": "screens/start-lesson",
+          "transition": {
+            "type": "push"
+          }
+        }
+      ]
+    },
+    {
+      "screen": "screens/daily-reminder",
+      "on": "skip",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/start-lesson",
+          "transition": {
+            "type": "push"
+          }
+        }
+      ]
+    },
+    {
+      "screen": "screens/daily-reminder",
+      "on": "back",
+      "steps": [
+        {
+          "type": "back"
+        }
+      ]
+    },
+    {
+      "screen": "screens/start-lesson",
+      "on": "back",
+      "steps": [
+        {
+          "type": "back"
+        }
+      ]
+    },
+    {
+      "screen": "screens/start-lesson",
+      "on": "start",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/feedback"
+        }
+      ]
+    },
+    {
+      "screen": "screens/feedback",
+      "on": "sent",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/goals"
+        }
+      ]
+    }
+  ],
+  "responses": {
+    "onboarding": {
+      "title": "Onboarding answers",
+      "fields": [
+        {
+          "key": "trip_days",
+          "label": "How long is your trip?",
+          "type": "number",
+          "required": true,
+          "min": 1,
+          "max": 365
+        },
+        {
+          "key": "italian_level",
+          "label": "How much Italian do you know?",
+          "type": "enum",
+          "values": [
+            "new",
+            "basics",
+            "conversational"
+          ],
+          "required": true
+        },
+        {
+          "key": "reminder_time",
+          "label": "When should we remind you?",
+          "type": "enum",
+          "values": [
+            "07:00",
+            "08:00",
+            "12:00",
+            "18:00",
+            "20:00"
+          ]
+        },
+        {
+          "key": "wants_reminder",
+          "label": "Remind you every day?",
+          "type": "boolean"
+        }
+      ]
+    },
+    "feedback": {
+      "title": "Feedback",
+      "fields": [
+        {
+          "key": "stars",
+          "label": "Stars",
+          "type": "number",
+          "required": true,
+          "min": 1,
+          "max": 5
+        },
+        {
+          "key": "comment",
+          "label": "Comment",
+          "type": "string",
+          "maxLength": 500
+        },
+        {
+          "key": "email",
+          "label": "Email",
+          "type": "string",
+          "format": "email"
+        },
+        {
+          "key": "interests",
+          "label": "What interests you?",
+          "type": "enum",
+          "multiple": true,
+          "values": [
+            "sleep",
+            "focus",
+            "calm"
+          ],
+          "minItems": 1
+        }
+      ]
+    }
+  }
+}
