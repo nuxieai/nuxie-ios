@@ -350,7 +350,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             routes: screenless ? [] : [.init(host: .init(kind: .screen, screenId: screenID), eventName: "table_link", entryStepId: journey ? "link" : "done")],
             screens: screenless ? [] : leg.screens, policy: leg.policy, offers: screenless ? [] : leg.offers, facts: leg.facts,
             inputs: leg.inputs, outputs: leg.outputs, completionOutputs: leg.completionOutputs)
-        let descriptor = JourneyReleaseDescriptor(schemaVersion: d.schemaVersion, identity: d.identity, metadata: d.metadata,
+        let descriptor = JourneyReleaseDescriptor(state: d.state, responses: d.responses, ruleGroups: d.ruleGroups,schemaVersion: d.schemaVersion, identity: d.identity, metadata: d.metadata,
             presentation: d.presentation, leg: nextLeg, products: d.products, placements: d.placements,
             viewModelValues: d.viewModelValues, screenBehaviors: screenless ? [] : d.screenBehaviors, render: screenless ? nil : d.render,
             requirements: screenless ? nil : d.requirements, provenance: d.provenance)

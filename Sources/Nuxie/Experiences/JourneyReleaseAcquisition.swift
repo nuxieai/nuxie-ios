@@ -693,6 +693,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
     }
 
     private struct RuntimeReleaseAuthority {
+        let valuePolicy: JourneyReleaseValuePolicy
         let requiredCapabilities: Set<String>
         let authenticatedKeyID: String
         let identity: JourneyReleaseIdentity
@@ -813,6 +814,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             requiredCapabilities = []
         }
         return RuntimeReleaseAuthority(
+            valuePolicy: release.descriptor.valuePolicy,
             requiredCapabilities: requiredCapabilities,
             authenticatedKeyID: release.authenticatedKeyID,
             identity: release.descriptor.identity,
@@ -1005,6 +1007,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 initialScreenID: screen.id
             )
             return (screen.id, AuthenticatedRuntimePayload(
+                valuePolicy: authority.valuePolicy,
                 authenticatedKeyID: authority.authenticatedKeyID,
                 requiredCapabilities: authority.requiredCapabilities,
                 renderPlan: renderPlan,
