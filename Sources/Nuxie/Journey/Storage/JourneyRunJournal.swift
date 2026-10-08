@@ -416,6 +416,7 @@ struct JourneyRunJournal {
                 experienceId: run.reference.experienceId, experienceVersionId: run.reference.versionId,
                 formName: formName, sequence: lane.sequence, answers: answers)
             if queued { lane.pending = sheet; lane.retry = nil }
+            lane.display = .saving(sequence: sheet.sequence)
             forms[formName] = lane
             saves.journeys[run.journeyId] = forms
             state.responseSaves = saves
@@ -442,7 +443,37 @@ struct JourneyRunJournal {
                   var forms = saves.journeys[sheet.journeyId],
                   var lane = forms[sheet.formName] else { throw JourneyResponseSaveError.invalidReceipt }
             lane.sequence = max(lane.sequence, storedSequence)
+            if lane.display?.sequence == sheet.sequence {
+                lane.display?.finish(.init(code: .saved, sequence: storedSequence))
+            }
             if let pending = lane.pending, pending.sequence <= sheet.sequence { lane.pending = nil; lane.retry = nil }
+            forms[sheet.formName] = lane
+            saves.journeys[sheet.journeyId] = forms
+            state.responseSaves = saves
+        }
+    }
+
+    func responseSaveDisplays(journeyId: String) async throws -> ExactJSONObject<JourneyResponseSaveDisplay> {
+        try await read { state in
+            var displays: ExactJSONObject<JourneyResponseSaveDisplay> = [:]
+            for (form, lane) in state.responseSaves?.journeys[journeyId] ?? [:] {
+                if let display = lane.display { displays[form] = display }
+            }
+            return displays
+        }
+    }
+
+    func recordWaitingResponseSaveReply(_ sheet: JourneyResponseSave, reply: JourneyResponseSaveReply) async throws {
+        if reply.confirmed {
+            guard let sequence = reply.sequence else { throw JourneyResponseSaveError.invalidReceipt }
+            try await confirmResponseSave(sheet, storedSequence: sequence)
+            return
+        }
+        guard sheet.distinctId.utf16.elementsEqual(distinctId.utf16) else { throw JourneyResponseSaveError.wrongOwner }
+        try await update { state in
+            guard var saves = state.responseSaves, var forms = saves.journeys[sheet.journeyId],
+                  var lane = forms[sheet.formName] else { throw JourneyResponseSaveError.invalidReceipt }
+            if lane.display?.sequence == sheet.sequence { lane.display?.finish(reply) }
             forms[sheet.formName] = lane
             saves.journeys[sheet.journeyId] = forms
             state.responseSaves = saves
@@ -518,6 +549,7 @@ struct JourneyRunJournal {
             if stopped {
                 lane.pending = nil
                 lane.retry = nil
+                if lane.display?.sequence == sheet.sequence { lane.display?.finish(reply) }
             } else {
                 retry.nextAttemptAt = now.addingTimeInterval(min(300, 5 * pow(2, Double(min(6, retry.attempts - 1)))))
                 lane.retry = retry

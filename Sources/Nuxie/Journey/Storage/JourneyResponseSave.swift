@@ -31,6 +31,25 @@ struct JourneyResponseSaveLane: Codable, Sendable {
     var sequence: Int64 = 0
     var pending: JourneyResponseSave?
     var retry: JourneyResponseSaveRetry?
+    var display: JourneyResponseSaveDisplay?
+}
+
+/// Durable UI metadata only. Answer values remain in the native run instance.
+struct JourneyResponseSaveDisplay: Codable, Sendable, Equatable {
+    let sequence: Int64
+    var saving: Bool
+    var saved: Bool
+    var saveError: String
+
+    static func saving(sequence: Int64) -> Self {
+        .init(sequence: sequence, saving: true, saved: false, saveError: "")
+    }
+
+    mutating func finish(_ reply: JourneyResponseSaveReply) {
+        saving = false
+        saved = reply.confirmed
+        saveError = reply.confirmed ? "" : reply.code.rawValue
+    }
 }
 
 struct JourneyResponseSaveState: Codable, Sendable {
