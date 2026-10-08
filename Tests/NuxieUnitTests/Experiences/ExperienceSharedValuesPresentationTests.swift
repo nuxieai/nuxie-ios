@@ -115,14 +115,166 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         }
     }
 
-    private func withPresentation(fixture: Fixture,
+    func testPublishedF5WaitedFailureThenRetryControlsItsJourney() async throws {
+        let fixture = try await signedFixture(kind: .publishedForms)
+        let first = expectation(description: "first awaited save sent")
+        let second = expectation(description: "second awaited save sent")
+        let transport = FormSaveTestTransport(started: [first, second])
+        try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
+            let controller = try await waitForScreen("scr_screens_sfeedback", presentations: presentations)
+            let surface = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
+            XCTAssertTrue(controller.applyValue(path: VmPathRef(path: "experience/responses:feedback/stars"),
+                value: 4, screenId: controller.screenId, instanceId: "vmi_runtime_scr_screens_sfeedback"))
+            func field(_ name: String) async throws -> ExperienceInteractiveViewModelValue? {
+                let snapshot = try await controller.runtimeSnapshot()
+                guard case .referencedInstance(let shared) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "experience"
+                })?.value, case .referencedInstance(let form) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == shared && $0.name == "responses:feedback"
+                })?.value else { throw CocoaError(.coderInvalidValue) }
+                return snapshot.values.first { $0.ownerInstanceID == form && $0.name == name }?.value
+            }
+            let interactive = try XCTUnwrap(Mirror(reflecting: controller).children.first {
+                $0.label == "interactiveScreen"
+            }?.value as? ExperienceInteractiveScreen)
+            let transform = try XCTUnwrap(ExperienceLayoutTransform(
+                artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
+            // Measured on these published bytes by the isolated native listener proof.
+            let point = transform.viewportPoint(fromArtboard: CGPoint(x: 121, y: 1))
+            let pointer = NSObject()
+            let observer = try XCTUnwrap(surface.runtimeObserver)
+            @MainActor func send() {
+                let now = ProcessInfo.processInfo.systemUptime
+                observer.runtimeSurfaceViewDidReceivePointerEvents([
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .down,
+                        location: point, timestampSeconds: now),
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .up,
+                        location: point, timestampSeconds: now + 0.01),
+                ])
+            }
+            for _ in 0..<200 {
+                if try await field("valid") == .bool(true) { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            send()
+            await fulfillment(of: [first], timeout: 5)
+            let sentFirst = await transport.requests()
+            XCTAssertEqual(sentFirst.map(\.sequence), [1])
+            XCTAssertEqual(sentFirst.first?.answers, ["stars": .number(4)])
+            let saving = try await field("saving")
+            XCTAssertEqual(saving, .bool(true))
+            XCTAssertFalse(events.routedEvents.contains { $0.name == "sent" })
+            await transport.release(sequence: 1, code: .saveUnavailable)
+            for _ in 0..<200 {
+                if try await field("saveError") == .bytes(Data("save_unavailable".utf8)) { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let error = try await field("saveError")
+            let stopped = try await field("saving")
+            XCTAssertEqual(error, .bytes(Data("save_unavailable".utf8)))
+            XCTAssertEqual(stopped, .bool(false))
+            XCTAssertFalse(events.routedEvents.contains { $0.name == "sent" })
+            send()
+            await fulfillment(of: [second], timeout: 5)
+            let retrySaving = try await field("saving")
+            let retryError = try await field("saveError")
+            XCTAssertEqual(retrySaving, .bool(true))
+            XCTAssertEqual(retryError, .bytes(Data()))
+            await transport.release(sequence: 2, code: .saved)
+            for _ in 0..<200 {
+                if events.routedEvents.contains(where: { $0.name == JourneyEvents.journeyCompleted }) { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let completion = events.routedEvents.first { $0.name == JourneyEvents.journeyCompleted }
+            XCTAssertEqual(completion?.properties["outcome"] as? String, "done", "Save confirmation must complete normally")
+            XCTAssertEqual(events.routedEvents.filter { $0.name == "sent" }.count, 1)
+            XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }.count, 1)
+            let requests = await transport.requests()
+            XCTAssertEqual(requests.map(\.sequence), [1, 2])
+        }
+    }
+
+    func testPublishedF5BackgroundSaveAllowsCompletionBeforeReply() async throws {
+        let fixture = try await signedFixture(kind: .publishedForms, formsScreen: "departure", formsEvent: "continue")
+        let sent = expectation(description: "background save sent")
+        let transport = FormSaveTestTransport(started: [sent])
+        try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
+            let screen = try await waitForScreen("scr_screens_sdeparture", presentations: presentations)
+            try await tapPublishedDepartureContinue(screen)
+            await fulfillment(of: [sent], timeout: 5)
+            for _ in 0..<200 {
+                if events.routedEvents.contains(where: { $0.name == JourneyEvents.journeyCompleted }) { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let requests = await transport.requests()
+            XCTAssertEqual(requests.count, 1)
+            XCTAssertEqual(requests.first?.formName, "onboarding")
+            XCTAssertEqual(requests.first?.answers, ["trip_days": .number(30)])
+            XCTAssertEqual(events.routedEvents.filter { $0.name == "continue" }.count, 1)
+            XCTAssertEqual(events.routedEvents.first { $0.name == JourneyEvents.journeyCompleted }?
+                .properties["outcome"] as? String, "done")
+            await transport.release(sequence: 1, code: .saved)
+        }
+    }
+
+    func testUnacceptedPublishedSaveDoesNotRouteItsFollowingEmit() async throws {
+        let fixture = try await signedFixture(kind: .publishedForms, formsScreen: "departure", formsEvent: "continue")
+        try await withPresentation(fixture: fixture) { presentations, _, events in
+            let screen = try await waitForScreen("scr_screens_sdeparture", presentations: presentations)
+            try await tapPublishedDepartureContinue(screen, publishSynchronously: true)
+            XCTAssertFalse(events.routedEvents.contains { $0.name == "continue" })
+            XCTAssertFalse(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
+        }
+    }
+
+    private func tapPublishedDepartureContinue(_ screen: ExperienceScreenViewController, publishSynchronously: Bool = false) async throws {
+        let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
+        let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
+            $0.label == "interactiveScreen"
+        }?.value as? ExperienceInteractiveScreen)
+        let root = try await interactive.rootViewModel()
+        _ = try await interactive.mutateState([.setNumber(root, path: "state/days", value: 30)])
+        _ = try await interactive.step(elapsedSeconds: 0)
+        // The source places Continue last in the column. Inspect its hit without releasing a click.
+        let x = Float(surface.bounds.midX)
+        var hit: CGPoint?
+        for y in stride(from: Float(surface.bounds.maxY - 1), through: 1, by: -4) {
+            let down = try await interactive.step(pointers: [.init(kind: .down, x: x, y: y)], elapsedSeconds: 0)
+            let exit = try await interactive.step(pointers: [.init(kind: .exit, x: x, y: y)], elapsedSeconds: 0)
+            XCTAssertTrue((down.effects + exit.effects).allSatisfy { $0.responseSave == nil })
+            if down.pointerHits.contains(where: { $0 != .none }) {
+                hit = CGPoint(x: CGFloat(x), y: CGFloat(y - 4))
+                break
+            }
+        }
+        let point = try XCTUnwrap(hit, "Published Continue must have a native hit")
+        if publishSynchronously {
+            let down = try await interactive.step(pointers: [.init(kind: .down, x: Float(point.x), y: Float(point.y))], elapsedSeconds: 0)
+            let up = try await interactive.step(pointers: [.init(kind: .up, x: Float(point.x), y: Float(point.y))], elapsedSeconds: 0)
+            let effects = down.effects + up.effects
+            XCTAssertEqual(effects.compactMap(\.responseSave).count, 1)
+            await screen.deliverStep(effects: effects)
+            return
+        }
+        let pointer = NSObject()
+        let observer = try XCTUnwrap(surface.runtimeObserver)
+        let now = ProcessInfo.processInfo.systemUptime
+        observer.runtimeSurfaceViewDidReceivePointerEvents([
+            .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .down, location: point, timestampSeconds: now),
+            .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .up, location: point, timestampSeconds: now + 0.01),
+        ])
+    }
+
+    private func withPresentation(fixture: Fixture, transport: FormSaveTestTransport? = nil,
         body: (ExperiencePresentationService, JourneyService, MockEventLog) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("shared-values-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { StubURLProtocol.reset(); try? FileManager.default.removeItem(at: directory) }
         StubURLProtocol.register(matcher: { $0.url?.host == "shared-values.nuxie.test" }) { request in
-            (try XCTUnwrap(HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil,
-                headerFields: ["Content-Type": "application/vnd.nuxie.scene", "Content-Length": String(fixture.scene.count)])), fixture.scene)
+            let url = try XCTUnwrap(request.url)
+            let data = try fixture.assetDirectory.map { try Data(contentsOf: $0.appendingPathComponent(String(url.path.dropFirst()))) } ?? fixture.scene
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": url.pathExtension == "otf" ? "font/otf" : "application/vnd.nuxie.scene", "Content-Length": String(data.count)])), data)
         }
         let identity = MockIdentityService()
         identity.setDistinctId("shared-owner")
@@ -142,6 +294,8 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let presentations = ExperiencePresentationService(experiences: experiences, eventLog: events, identity: identity)
         let journeys = JourneyService(identity: identity, events: events, dateProvider: SystemDateProvider(),
             sleepProvider: SystemSleepProvider(), journalDirectory: directory, storageScope: .init(authority: fixture.authority),
+            responseSaveDelivery: transport.map { JourneyResponseSaveDelivery(directory: directory,
+                transport: $0, clock: SystemDateProvider(), sleeper: SystemSleepProvider()) },
             featureAccess: { _ in nil }, dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
             presenter: presentations, pinnedReleaseAuthenticator: { entry, reference in
                 try JourneyReleaseVerifier().authenticateJourney(envelopeBytes: JSONEncoder().encode(entry.envelope),
@@ -158,8 +312,10 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 authority: fixture.authority, admissionGeneration: 1, distinctId: "shared-owner")
             await journeys.onAppBecameActive()
             try await body(presentations, journeys, events)
+            await transport?.finish()
             await journeys.shutdown()
         } catch {
+            await transport?.finish()
             await journeys.shutdown()
             throw error
         }
@@ -183,28 +339,34 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
 
     private struct Fixture: Sendable {
         let scene: Data
+        let assetDirectory: URL?
         let snapshot: JourneyProfileCatalog.Snapshot
         let authority: ProfileDeliveryAuthority
         let keys: [JourneyPackageAuthorizationKey]
         let supported: JourneyReleaseSupportedRuntime
     }
 
-    private enum FixtureKind { case sharedValues, publishedRunValues }
+    private enum FixtureKind { case sharedValues, publishedRunValues, publishedForms }
 
-    private func signedFixture(kind: FixtureKind = .sharedValues) async throws -> Fixture {
+    private func signedFixture(kind: FixtureKind = .sharedValues, formsScreen: String = "feedback", formsEvent: String = "sent") async throws -> Fixture {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let base = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/font-converter/profile.json"))) as? [String: Any])
         var profile = base
         var entry = try XCTUnwrap(XCTUnwrap(base["releases"] as? [[String: Any]]).first)
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         var descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))) as? [String: Any])
-        let directory = kind == .sharedValues ? SharedValuesFixture.directory : PublishedRunValuesFixture.directory
+        let directory = kind == .sharedValues ? SharedValuesFixture.directory : kind == .publishedForms
+            ? SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves") : PublishedRunValuesFixture.directory
+        let forms = kind == .publishedForms ? try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: directory.appendingPathComponent("release.json"))) as? [String: Any]) : nil
         let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
         let provenance = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("provenance.json"))) as? [String: Any])
         let names: [String]
         if kind == .sharedValues { names = ["first", "long", "short"] }
-        else { names = try PublishedRunValuesFixture.expectations().screens }
-        let entryScreen = try XCTUnwrap(names.first)
+        else if let forms {
+            names = try XCTUnwrap(XCTUnwrap(forms["leg"] as? [String: Any])["screens"] as? [[String: Any]]).map { try XCTUnwrap($0["id"] as? String) }
+        } else { names = try PublishedRunValuesFixture.expectations().screens }
+        let entryScreen = kind == .publishedForms ? "scr_screens_s\(formsScreen)" : try XCTUnwrap(names.first)
         let capabilities = ["nux", "system-fonts"]
         var leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
         leg["entryCondition"] = ["type": "app_foregrounded"]
@@ -226,6 +388,15 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
             ]
             leg["routes"] = [["eventName": "continue", "host": ["kind": "screen", "screenId": "tap"], "entryStepId": "read-new-value"]]
         }
+        if let forms {
+            leg["screens"] = try XCTUnwrap(forms["leg"] as? [String: Any])["screens"]
+            leg["steps"] = [
+                ["kind": "action", "id": "present", "action": ["type": "navigate", "screenId": entryScreen], "outlets": [:]],
+                ["kind": "complete", "id": "done", "outcome": "done"]
+            ]
+            leg["routes"] = [["eventName": formsEvent, "host": ["kind": "screen", "screenId": entryScreen], "entryStepId": "done"]]
+            for name in ["state", "responses", "ruleGroups"] { descriptor[name] = forms[name] }
+        }
         descriptor["leg"] = leg
         descriptor["viewModelValues"] = []
         descriptor["screenBehaviors"] = names.sorted().map { ["screenId": $0, "controls": []] as [String: Any] }
@@ -233,7 +404,8 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         descriptor["render"] = ["renderer": "nux", "nux": ["key": "renders/sha256/\(hash).nux", "sha256": hash, "sizeBytes": scene.count, "contentType": "application/vnd.nuxie.scene"],
             "assets": (try XCTUnwrap(provenance["fonts"] as? [[String: Any]])).map { $0.merging(["kind": "font"]) { _, new in new } },
             "screens": names.map { ["id": $0, "artboardId": $0, "artboardName": $0, "width": 393, "height": 852] as [String: Any] }, "transitions": [], "textInputs": []]
-        var requirements = try XCTUnwrap(descriptor["requirements"] as? [String: Any])
+        if let forms { descriptor["render"] = forms["render"] }
+        var requirements = try XCTUnwrap((forms ?? descriptor)["requirements"] as? [String: Any])
         requirements["requiredCapabilities"] = capabilities
         descriptor["requirements"] = requirements
         let bytes = try JSONSerialization.data(withJSONObject: descriptor, options: .sortedKeys)
@@ -264,8 +436,28 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let catalog = JourneyProfileCatalog(authorizationKeys: [.init(keyID: "TEST_ONLY_DEV_KEYPAIR", ed25519PublicKeyBytes: key.publicKey.rawRepresentation)],
             supportedRuntime: supported, highWaterStore: InMemoryJourneyReleaseHighWaterStore())
         // The caller awaits authentication before installing this profile.
-        return Fixture(scene: scene, snapshot: try await catalog.prepare(decoded, authority: authority).snapshot,
+        return Fixture(scene: scene, assetDirectory: kind == .publishedForms ? directory : nil, snapshot: try await catalog.prepare(decoded, authority: authority).snapshot,
             authority: authority, keys: [.init(keyID: "TEST_ONLY_DEV_KEYPAIR", ed25519PublicKeyBytes: key.publicKey.rawRepresentation)], supported: supported)
+    }
+}
+private actor FormSaveTestTransport: JourneyResponseSaveTransport {
+    let started: [XCTestExpectation]
+    private var sheets: [JourneyResponseSave] = []
+    private var pending: [Int64: CheckedContinuation<JourneyResponseSaveReply, Never>] = [:]
+    init(started: [XCTestExpectation]) { self.started = started }
+    func requests() -> [JourneyResponseSave] { sheets }
+    func sendResponseSave(_ sheet: JourneyResponseSave) async throws -> JourneyResponseSaveReply {
+        sheets.append(sheet)
+        if sheets.count <= started.count { started[sheets.count - 1].fulfill() }
+        return await withCheckedContinuation { pending[sheet.sequence] = $0 }
+    }
+    func release(sequence: Int64, code: JourneyResponseSaveReply.Code) {
+        pending.removeValue(forKey: sequence)?.resume(returning: .init(code: code, sequence: code == .saved ? sequence : nil))
+    }
+    func finish() {
+        let waits = pending.values
+        pending = [:]
+        for wait in waits { wait.resume(returning: .noAnswer) }
     }
 }
 #endif

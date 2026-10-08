@@ -99,6 +99,12 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
+        didRequestResponseSave save: ExperienceFrameSave,
+        run: ScreenEmissionRun
+    ) async -> Bool
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
         didEmitScreenEmissionBatch batch: ScreenEmissionBatch,
         frameSources: ExperienceEmissionSources?
     ) async -> Bool
@@ -211,6 +217,15 @@ extension ExperienceRuntimeDelegate {
         _ controller: ExperienceViewController,
         didFailToResolveProductsFor screenId: String
     ) async {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didRequestResponseSave save: ExperienceFrameSave,
+        run: ScreenEmissionRun
+    ) async -> Bool {
+        LogWarning("ExperienceViewController: response save has no Journey consumer")
+        return false
+    }
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -2128,6 +2143,16 @@ extension ExperienceViewController {
             return .rejected
         }
 
+        var savesAccepted = true
+        for save in eventSource?.saves ?? [] {
+            let accepted = await runtimeDelegate?.experienceViewController(self,
+                didRequestResponseSave: save, run: run) ?? false
+            savesAccepted = savesAccepted && accepted
+        }
+        guard savesAccepted else { return .rejected }
+        if eventSource?.saves.isEmpty == false, case .effects(_, let drafts) = input, drafts.isEmpty {
+            return .published
+        }
         let result: Result<ScreenEmissionBatch, ScreenEmissionDispatchError>
         switch input {
         case .control(let screenId, let invocation, let additionalDrafts):

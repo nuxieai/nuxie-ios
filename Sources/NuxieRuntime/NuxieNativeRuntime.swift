@@ -1150,6 +1150,20 @@ package actor NuxieNativeRuntime {
         readback: NuxieNativeFrameReadback? = nil,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> NuxieNativeRendererOutcome {
+        try await renderFrame(layoutScaleFactor: layoutScaleFactor, drawable: drawable,
+            clearColor: clearColor, readback: readback, completion: completion).outcome
+    }
+
+    /// The shared file's writes cannot invalidate the frame between presentation and capture.
+    package func renderFrame(
+        layoutScaleFactor: Float,
+        drawable: NuxieNativeDrawableState,
+        clearColor: UInt32 = 0,
+        readback: NuxieNativeFrameReadback? = nil,
+        capturesSemantics: Bool = false,
+        nativeInputs: [String] = [],
+        completion: (@Sendable () -> Void)? = nil
+    ) async throws -> (outcome: NuxieNativeRendererOutcome, semantics: NuxieNativeSemanticCapture?) {
         let state: NuxieNativeRuntimeState
         do {
             state = try requireState()
@@ -1161,12 +1175,13 @@ package actor NuxieNativeRuntime {
             completion?()
             throw error
         }
+        let executor = self.executor
         return try await executor.call {
             do { try state.prepareRenderer() } catch {
                 completion?()
                 throw error
             }
-            return try state.renderer.render(
+            let outcome = try state.renderer.render(
                 player: state.player,
                 layoutScaleFactor: layoutScaleFactor,
                 drawable: drawable,
@@ -1174,6 +1189,9 @@ package actor NuxieNativeRuntime {
                 readback: readback,
                 completion: completion
             )
+            let semantics = capturesSemantics && outcome.disposition == .presented
+                ? try state.captureSemantics(executor: executor, textRuns: [], nativeInputs: nativeInputs) : nil
+            return (outcome, semantics)
         }
     }
 
