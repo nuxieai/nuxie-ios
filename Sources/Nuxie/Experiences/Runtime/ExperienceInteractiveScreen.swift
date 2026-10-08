@@ -3656,19 +3656,16 @@ actor ExperienceInteractiveScreen {
             state = isOccluded ? .occluded : .timeout
         }
         let runtime = runtime
-        let textRuns: [String] = []
         let nativeInputs = Array(Set(textInputs.values.filter(\.editable).map(\.textInputName))).sorted()
         return try await operationGate.withLock { [self] in
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
             let ready = try await videoPlayback?.isReadyForPresentation() ?? true
-            let outcome = try await runtime.render(layoutScaleFactor: layoutScaleFactor, drawable: ready ? state : .timeout, clearColor: clearColor, readback: readback, completion: completion)
-            let semantics: NuxieNativeSemanticCapture?
-            if capturesSemantics, outcome.disposition == .presented {
-                semantics = try await runtime.captureSemantics(textRuns: textRuns, nativeInputs: nativeInputs)
-            } else {
-                semantics = nil
-            }
+            let frame = try await runtime.renderFrame(layoutScaleFactor: layoutScaleFactor,
+                drawable: ready ? state : .timeout, clearColor: clearColor, readback: readback,
+                capturesSemantics: capturesSemantics, nativeInputs: nativeInputs, completion: completion)
+            let outcome = frame.outcome
+            let semantics = frame.semantics
             let captions: [ExperienceInteractiveVideoCaption]?
             if capturesCaptions, outcome.disposition == .presented {
                 captions = try await videoPlayback?.captions() ?? []

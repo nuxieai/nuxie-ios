@@ -9,6 +9,7 @@ actor ExperienceRunValues {
     private let restoredSnapshot: ExperienceRunSnapshot?
     #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
     private let saveDisplayGate = ExperienceInteractiveOperationGate()
+    private var saveDisplayObservers: [UUID: @MainActor @Sendable () -> Void] = [:]
     private var appliedSaveDisplays: ExactJSONObject<JourneyResponseSaveDisplay> = [:]
     #endif
 
@@ -50,6 +51,19 @@ actor ExperienceRunValues {
         #endif
     }
 
+    func observeSaveDisplays(id: UUID, observer: @escaping @MainActor @Sendable () -> Void) {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        guard !retired else { return }
+        saveDisplayObservers[id] = observer
+        #endif
+    }
+
+    func removeSaveDisplayObserver(id: UUID) {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        saveDisplayObservers[id] = nil
+        #endif
+    }
+
     func applyResponseSaveDisplays(
         _ displays: ExactJSONObject<JourneyResponseSaveDisplay>,
         policy: JourneyReleaseValuePolicy
@@ -71,6 +85,7 @@ actor ExperienceRunValues {
         guard !retired, let native = try await nativeTask?.value, !retired else {
             throw CancellationError()
         }
+        var changed = false
         for (form, display) in displays {
             guard policy.responses[form] != nil else {
                 throw ExperienceInteractiveScreenError.stateContract("Response form is unavailable")
@@ -89,6 +104,10 @@ actor ExperienceRunValues {
             ])
             guard !retired else { throw CancellationError() }
             appliedSaveDisplays[form] = display
+            changed = true
+        }
+        if changed {
+            for observer in saveDisplayObservers.values { await observer() }
         }
         #else
         throw JourneyResponseSaveError.wrongOwner
@@ -98,6 +117,7 @@ actor ExperienceRunValues {
     func retire() async {
         retired = true
         #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        saveDisplayObservers = [:]
         let task = nativeTask
         nativeTask = nil
         preparation = nil

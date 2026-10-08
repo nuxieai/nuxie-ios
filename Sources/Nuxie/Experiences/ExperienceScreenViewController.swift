@@ -135,6 +135,7 @@ final class ExperienceScreenViewController: UIViewController {
     private let experience: Experience
     private let artifact: LoadedExperienceArtifact
     private let screen: NativeExperienceScreen
+    private let saveDisplayObserverID = UUID()
     private let runValues: ExperienceRunValues
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
@@ -427,6 +428,12 @@ final class ExperienceScreenViewController: UIViewController {
             videoDecoderPool: videoDecoderPool
         )
         interactiveScreen = interactive
+        await runValues.observeSaveDisplays(id: saveDisplayObserverID) { [weak self] in
+            guard let self, !self.isShuttingDown else { return }
+            _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
+                .work(requestsFrame: true) {}
+            })
+        }
 
         let includesTextInputSnapshot = artifact.renderPlan.textInputs.contains {
             $0.screenId == screenId && $0.editable
@@ -530,6 +537,7 @@ final class ExperienceScreenViewController: UIViewController {
         let task = Task<Void, Never> { @MainActor [weak self] in
             guard let self else { return }
             self.isShuttingDown = true
+            await self.runValues.removeSaveDisplayObserver(id: self.saveDisplayObserverID)
             let loop = self.presentationLoop
             self.presentationLoop = nil
             self.interactiveScreen = nil
@@ -1081,6 +1089,23 @@ final class ExperienceScreenViewController: UIViewController {
         var links: [ExperienceRendererOpenLinkRequest] = []
         for effect in effects {
             guard !isShuttingDown, runtimeFailure == nil else { return }
+            if let request = effect.responseSave {
+                frameSources.saves.append(ExperienceFrameSave(request: request, screenID: screenId,
+                    onConfirmed: { [weak self] in
+                        guard let self, let originatingRun,
+                              self.delegate?.screenEmissionRun(for: self) == originatingRun,
+                              !self.isShuttingDown, self.runtimeFailure == nil,
+                              let interactive = self.interactiveScreen,
+                              let path = request.awaitTrigger else { return }
+                        _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
+                            let step = try await interactive.confirmResponseSave(trigger: path)
+                            return .work(requestsFrame: true) { [weak self] in
+                                await self?.deliverStep(effects: step.effects)
+                            }
+                        })
+                    }))
+                continue
+            }
             guard let projected = await route(effect) else { continue }
             switch projected {
             case .link(let request):
@@ -1100,7 +1125,7 @@ final class ExperienceScreenViewController: UIViewController {
                 assembler.appendDraft(draft, source: draftSource)
             }
         }
-        let emission: ExperienceRuntimeScreenEmission?
+        var emission: ExperienceRuntimeScreenEmission?
         switch assembler.assembled() {
         case .failure:
             LogWarning(
@@ -1109,6 +1134,10 @@ final class ExperienceScreenViewController: UIViewController {
             emission = nil
         case .success(let assembled):
             emission = assembled
+        }
+        if emission == nil && !frameSources.saves.isEmpty {
+            emission = .effects(source: ScreenEmissionSource(screenId: screenId,
+                actionId: "runtime-save", componentId: nil, instanceId: nil), drafts: [])
         }
         let frameLinks = ExperienceFrameLinks {
             for link in links { await openLink?(link) }
