@@ -75,6 +75,51 @@ final class ExperienceValuePolicyTests: XCTestCase {
         XCTAssertEqual(saved, ["saving": .bool(false), "saved": .bool(true), "saveError": .bytes(Data())])
     }
 
+    func testSaveEventCapturesItsCommittedNativeSheet() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
+        let file = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")), valuePolicy: release.valuePolicy.native)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        _ = try await native.sessions.mutate([
+            .setNumber(instance: native.reference, path: "responses:feedback/stars", value: 4),
+        ])
+        let snapshot = try await native.sessions.snapshot(native.reference)
+        let fields: [ExperienceInteractiveField] = [
+            .init(key: "form", value: .bytes(Data("feedback".utf8))),
+            .init(key: "awaitTrigger", value: .bytes(Data("state/save:one:click:0".utf8))),
+        ]
+        let event = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128,
+            name: "$nuxie.response.save", url: "", target: "", delay: 0, properties: fields)
+        let captured = try XCTUnwrap(ExperienceResponseSaveRequest.capture(.reportedEvent(event),
+            snapshot: snapshot, catalog: native.catalog, policy: release.valuePolicy))
+        _ = try await native.sessions.mutate([
+            .setNumber(instance: native.reference, path: "responses:feedback/stars", value: 5),
+        ])
+        XCTAssertEqual(captured.form, "feedback")
+        XCTAssertEqual(captured.awaitTrigger, "state/save:one:click:0")
+        XCTAssertEqual(captured.answers, ["stars": .number(4)])
+        let script = try XCTUnwrap(ExperienceResponseSaveRequest.capture(
+            .hostCommand(name: "$nuxie.response.save", payload: .object([fields[0]])),
+            snapshot: snapshot, catalog: native.catalog, policy: release.valuePolicy))
+        XCTAssertNil(try ExperienceResponseSaveRequest.capture(
+            .hostCommand(name: "ordinary", payload: .object([fields[0]])),
+            snapshot: snapshot, catalog: native.catalog, policy: release.valuePolicy))
+        XCTAssertNil(script.awaitTrigger)
+        XCTAssertEqual(script.answers, captured.answers)
+        for invalid in [[fields[0], fields[0]], [.init(key: "form", value: .number(1))],
+                        [.init(key: "form", value: .string("missing"))],
+                        [fields[0], .init(key: "awaitTrigger", value: .string(""))]] {
+            XCTAssertThrowsError(try ExperienceResponseSaveRequest.capture(
+                .hostCommand(name: "$nuxie.response.save", payload: .object(invalid)),
+                snapshot: snapshot, catalog: native.catalog, policy: release.valuePolicy))
+        }
+    }
+
     func testPublishedF5ReadsLiveAnswersWithoutFilteringMarkingFailures() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,

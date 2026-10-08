@@ -5,13 +5,14 @@ import NuxieRuntime
 /// Reads one sheet from the native run at save time. Marking errors never filter answers.
 enum ExperienceResponseSheet {
     static func read(form: String, declaration: JourneyReleaseValuePolicy.Form,
-        snapshot: NuxieNativeViewModelSnapshot, catalog: NuxieNativeViewModelCatalog
+        snapshot: NuxieNativeViewModelSnapshot, catalog: NuxieNativeViewModelCatalog,
+        experienceRoot: UInt64? = nil
     ) throws -> ExactJSONObject<JourneyReleaseJSONValue> {
         let values = Dictionary(grouping: snapshot.values, by: \.ownerInstanceID)
         func value(_ owner: UInt64, _ name: String) -> NuxieNativeViewModelValue? {
             values[owner]?.first { $0.name == name }?.value
         }
-        guard case .referencedInstance(let owner) = value(snapshot.rootInstanceID, "responses:" + form),
+        guard case .referencedInstance(let owner) = value(experienceRoot ?? snapshot.rootInstanceID, "responses:" + form),
               let instance = snapshot.instances.first(where: { $0.id == owner }),
               catalog.schemas.contains(where: { $0.index == instance.schemaIndex && $0.name == declaration.model }) else {
             throw invalid
