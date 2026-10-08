@@ -392,11 +392,12 @@ struct JourneyRunJournal {
         run: JourneyRun,
         formName: String,
         answers: ExactJSONObject<JourneyReleaseJSONValue>,
-        queued: Bool
+        queued: Bool,
+        admission: JourneyCommitAdmission? = nil
     ) async throws -> JourneyResponseSave {
         let distinctId = distinctId
         let namespace = saveNamespace
-        return try await update { state in
+        let reserve: @Sendable (inout Snapshot) throws -> JourneyResponseSave = { state in
             var saves = state.responseSaves ?? .init(namespace: namespace, distinctId: distinctId)
             guard saves.namespace == namespace,
                   saves.distinctId.utf16.elementsEqual(distinctId.utf16) else {
@@ -422,6 +423,11 @@ struct JourneyRunJournal {
             state.responseSaves = saves
             return sheet
         }
+        if let admission {
+            guard let sheet = try await updateIfCurrent(admission, reserve) else { throw CancellationError() }
+            return sheet
+        }
+        return try await update(reserve)
     }
 
     func pendingResponseSaves() async throws -> [JourneyResponseSave] {
