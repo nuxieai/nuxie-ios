@@ -3507,24 +3507,6 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    func setSemanticText(captureID: UUID, inputID: String, nodeID: UInt32? = nil, value: String) async throws -> Bool {
-        guard let input = textInputs[inputID] else {
-            throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
-        }
-        guard input.editable else {
-            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
-        }
-        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-        let runtime = runtime
-        return try await operationGate.withLock {
-            guard let nodeID else {
-                throw ExperienceInteractiveScreenError.stateContract("Native input requires a presented occurrence")
-            }
-            return try await runtime.setFieldString(captureID: captureID,
-                nodeID: nodeID, name: input.textInputName, value: Data(limited.utf8))
-        }
-    }
-
     func setSemanticInputContentOffset(captureID: UUID, inputID: String, nodeID: UInt32, offset: CGPoint) async throws {
         guard let input = textInputs[inputID], input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
