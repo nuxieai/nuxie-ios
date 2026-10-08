@@ -25,6 +25,19 @@ actor ExperienceRunValues {
         #endif
     }
 
+    func responseAnswers(form: String, policy: JourneyReleaseValuePolicy) async throws -> ExactJSONObject<JourneyReleaseJSONValue> {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        guard !retired, let declaration = policy.responses[form], let native = try await nativeTask?.value else {
+            throw ExperienceInteractiveScreenError.stateContract("Response form is unavailable")
+        }
+        let snapshot = try await native.sessions.snapshot(native.reference)
+        guard !retired else { throw CancellationError() }
+        return try ExperienceResponseSheet.read(form: form, declaration: declaration, snapshot: snapshot, catalog: native.catalog)
+        #else
+        throw JourneyResponseSaveError.wrongOwner
+        #endif
+    }
+
     var isPrepared: Bool {
         #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
         nativeTask != nil
