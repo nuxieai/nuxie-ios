@@ -7,6 +7,10 @@ import NuxieRuntime
 actor ExperienceRunValues {
     private var retired = false
     private let restoredSnapshot: ExperienceRunSnapshot?
+    #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    private let saveDisplayGate = ExperienceInteractiveOperationGate()
+    private var appliedSaveDisplays: ExactJSONObject<JourneyResponseSaveDisplay> = [:]
+    #endif
 
     init(snapshot: ExperienceRunSnapshot? = nil) { restoredSnapshot = snapshot }
 
@@ -43,6 +47,51 @@ actor ExperienceRunValues {
         nativeTask != nil
         #else
         false
+        #endif
+    }
+
+    func applyResponseSaveDisplays(
+        _ displays: ExactJSONObject<JourneyResponseSaveDisplay>,
+        policy: JourneyReleaseValuePolicy
+    ) async throws {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        try await saveDisplayGate.withLock {
+            try await self.writeResponseSaveDisplays(displays, policy: policy)
+        }
+        #else
+        throw JourneyResponseSaveError.wrongOwner
+        #endif
+    }
+
+    private func writeResponseSaveDisplays(
+        _ displays: ExactJSONObject<JourneyResponseSaveDisplay>,
+        policy: JourneyReleaseValuePolicy
+    ) async throws {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        guard !retired, let native = try await nativeTask?.value, !retired else {
+            throw CancellationError()
+        }
+        for (form, display) in displays {
+            guard policy.responses[form] != nil else {
+                throw ExperienceInteractiveScreenError.stateContract("Response form is unavailable")
+            }
+            if let applied = appliedSaveDisplays[form] {
+                guard display.sequence >= applied.sequence else { continue }
+                // A delayed journal read cannot return a completed attempt to Saving.
+                if display.sequence == applied.sequence && (!applied.saving || display == applied) { continue }
+            }
+            guard !retired else { throw CancellationError() }
+            let path = "responses:\(form)/"
+            _ = try await native.sessions.mutate([
+                .setBool(instance: native.reference, path: path + "saving", value: display.saving),
+                .setBool(instance: native.reference, path: path + "saved", value: display.saved),
+                .setString(instance: native.reference, path: path + "saveError", value: Data(display.saveError.utf8)),
+            ])
+            guard !retired else { throw CancellationError() }
+            appliedSaveDisplays[form] = display
+        }
+        #else
+        throw JourneyResponseSaveError.wrongOwner
         #endif
     }
 

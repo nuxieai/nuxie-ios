@@ -41,6 +41,40 @@ final class ExperienceValuePolicyTests: XCTestCase {
         }
     }
 
+    func testPublishedF5SaveDisplayKeepsNewestAttempt() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
+        let file = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")), valuePolicy: release.valuePolicy.native)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        let failure = JourneyResponseSaveDisplay(sequence: 2, saving: false, saved: false, saveError: "save_unavailable")
+        try await run.applyResponseSaveDisplays(["feedback": .saving(sequence: 1)], policy: release.valuePolicy)
+        try await run.applyResponseSaveDisplays(["feedback": failure], policy: release.valuePolicy)
+        try await run.applyResponseSaveDisplays(["feedback": .init(sequence: 1, saving: false, saved: true, saveError: "")], policy: release.valuePolicy)
+        try await run.applyResponseSaveDisplays(["feedback": .saving(sequence: 2)], policy: release.valuePolicy)
+        func status() async throws -> [String: NuxieNativeViewModelValue] {
+            let snapshot = try await native.sessions.snapshot(native.reference)
+            guard case .referencedInstance(let id) = snapshot.values.first(where: {
+                $0.ownerInstanceID == native.reference.rawValue && $0.name == "responses:feedback"
+            })?.value else { throw CocoaError(.coderInvalidValue) }
+            return Dictionary(uniqueKeysWithValues: snapshot.values.filter {
+                $0.ownerInstanceID == id && ["saving", "saved", "saveError"].contains($0.name)
+            }.map { ($0.name, $0.value) })
+        }
+        let failed = try await status()
+        XCTAssertEqual(failed, ["saving": .bool(false), "saved": .bool(false), "saveError": .bytes(Data("save_unavailable".utf8))])
+        try await run.applyResponseSaveDisplays(["feedback": .saving(sequence: 3)], policy: release.valuePolicy)
+        let pending = try await status()
+        XCTAssertEqual(pending, ["saving": .bool(true), "saved": .bool(false), "saveError": .bytes(Data())])
+        try await run.applyResponseSaveDisplays(["feedback": .init(sequence: 3, saving: false, saved: true, saveError: "")], policy: release.valuePolicy)
+        let saved = try await status()
+        XCTAssertEqual(saved, ["saving": .bool(false), "saved": .bool(true), "saveError": .bytes(Data())])
+    }
+
     func testPublishedF5ReadsLiveAnswersWithoutFilteringMarkingFailures() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
