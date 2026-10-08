@@ -113,6 +113,24 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertEqual(request.form, "feedback")
         XCTAssertEqual(request.answers, ["stars": .number(4)])
         XCTAssertFalse(emittedSent, "The publisher holds its emit until confirmation")
+        func sentCount(_ effects: [ExperienceInteractiveEffect]) -> Int {
+            effects.filter { effect in
+                if case .reportedEvent(let event) = effect.kind { return event.name == "sent" }
+                return false
+            }.count
+        }
+        for _ in 0..<3 {
+            let idle = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(sentCount(idle.effects), 0)
+        }
+        let confirmed = try await screen.confirmResponseSave(trigger: XCTUnwrap(request.awaitTrigger))
+        var sent = sentCount(confirmed.effects)
+        for _ in 0..<3 {
+            let next = try await screen.step(elapsedSeconds: 0)
+            sent += sentCount(next.effects)
+        }
+        XCTAssertEqual(sent, 1, "Only the confirmed listener continues")
+
     }
 
     func testPublishedF4AuthenticatesExactVersionThreePolicy() async throws {
