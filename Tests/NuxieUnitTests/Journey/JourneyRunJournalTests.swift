@@ -92,6 +92,40 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertEqual(oldPark.wakeAt, date(200))
     }
 
+    func testRevokedSaveAdmissionCannotConsumeSequenceOrQueue() async throws {
+        for identityChange in [false, true] {
+            for queued in [false, true] {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+                let candidate = arm()
+                let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+                    executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+                    entryStepId: "step", at: date(100))
+                let run = try XCTUnwrap(admitted)
+                let identity = MockIdentityService()
+                identity.setDistinctId("anon")
+                let token = try XCTUnwrap(identity.performWithCurrentIdentityFence("anon", { _ in () }))
+                let fence = JourneyProfileFence()
+                let admission = JourneyCommitAdmission(identity: identity, identityFenceToken: token.token,
+                    executionFence: fence, executionFenceToken: fence.token())
+                if identityChange { identity.setDistinctId("signed-in") } else { _ = fence.advance() }
+                do {
+                    _ = try await journal.reserveResponseSave(run: run, formName: "feedback",
+                        answers: [:], queued: queued, admission: admission)
+                    XCTFail("Revoked save intake must not commit")
+                } catch is CancellationError { }
+                let pending = try await journal.pendingResponseSaves()
+                let display = try await journal.responseSaveDisplays(journeyId: run.journeyId)
+                XCTAssertTrue(pending.isEmpty)
+                XCTAssertTrue(display.isEmpty)
+                let next = try await journal.reserveResponseSave(run: run, formName: "feedback",
+                    answers: [:], queued: queued)
+                XCTAssertEqual(next.sequence, 1)
+            }
+        }
+    }
+
     func testResponseSaveSequenceAndNewestSheetSurviveRunCompletionAndRestart() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

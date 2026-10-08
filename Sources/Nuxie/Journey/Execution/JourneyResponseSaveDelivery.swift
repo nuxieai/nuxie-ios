@@ -46,22 +46,24 @@ actor JourneyResponseSaveDelivery {
     }
 
     func enqueue(journal: JourneyRunJournal, run: JourneyRun, formName: String,
-                 answers: ExactJSONObject<JourneyReleaseJSONValue>) async throws -> JourneyResponseSave {
+                 answers: ExactJSONObject<JourneyReleaseJSONValue>,
+                 admission: JourneyCommitAdmission? = nil) async throws -> JourneyResponseSave {
         guard active, journal.responseSaveNamespace == scope?.conversionNamespace else {
             throw JourneyResponseSaveError.wrongOwner
         }
-        let sheet = try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: true)
+        let sheet = try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: true, admission: admission)
         journals[journal.distinctId] = journal
         wake()
         return sheet
     }
 
     func reserveWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
-                        answers: ExactJSONObject<JourneyReleaseJSONValue>) async throws -> JourneyResponseSave {
+                        answers: ExactJSONObject<JourneyReleaseJSONValue>,
+                 admission: JourneyCommitAdmission? = nil) async throws -> JourneyResponseSave {
         guard active, journal.responseSaveNamespace == scope?.conversionNamespace else {
             throw JourneyResponseSaveError.wrongOwner
         }
-        return try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: false)
+        return try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: false, admission: admission)
     }
 
     func sendWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
