@@ -2235,6 +2235,13 @@ private extension JourneyService {
                     LogWarning("JourneyService: failed to persist control transition: \(error)")
                     return
                 }
+                if command.experimentExposure != nil {
+                    do {
+                        _ = try await experimentExposures.flushPending(in: journal)
+                    } catch {
+                        LogWarning("JourneyService: selector exposure remains pending: \(error)")
+                    }
+                }
 
             case .park(let command):
                 do {
@@ -2324,20 +2331,10 @@ private extension JourneyService {
                             continue
                         }
                     }
-                    do {
-                        guard let admission = journalCommitAdmission(
-                            journal: journal,
-                            executionFenceToken: executionFenceToken
-                        ), try await coordinator.bindExperimentExposures(
-                            to: screenId,
-                            admission: admission
-                        ) else { return }
-                    } catch {
-                        LogWarning(
-                            "JourneyService: failed to bind experiment exposure to presentation: \(error)"
-                        )
-                        return
-                    }
+                    guard journalCommitAdmission(
+                        journal: journal,
+                        executionFenceToken: executionFenceToken
+                    ) != nil else { return }
                     switch await presenter.navigateJourneyPresentation(
                         owner: .init(
                             journeyId: run.journeyId,
@@ -2347,20 +2344,11 @@ private extension JourneyService {
                         transition: action["transition"]
                     ) {
                     case .navigated:
-                        // The runtime's visible-screen callback owns exposure.
-                        // A navigation request completing is not itself proof
-                        // that the selected variant reached the surface.
                         return
                     case .alreadyActive:
                         // A no-op navigation does not reactivate the renderer's
                         // current screen, so synthesize the lifecycle input the
                         // control graph would receive after a real transition.
-                        await markExperimentExposuresShown(
-                            forRunId: run.id,
-                            screenId: screenId,
-                            journal: journal,
-                            executionFenceToken: executionFenceToken
-                        )
                         _ = await handlePresentationScreenChanged(
                             screenId,
                             presentedRun: run,
@@ -2493,15 +2481,6 @@ private extension JourneyService {
                                     executionFenceToken: executionFenceToken
                                 )
                             }
-                        },
-                        onPresentationRevealed: { [weak self] screenId in
-                            guard let self else { return }
-                            await self.markExperimentExposuresShown(
-                                forRunId: presentedRun.id,
-                                screenId: screenId,
-                                journal: journal,
-                                executionFenceToken: executionFenceToken
-                            )
                         },
                         onOutcome: { [weak self] outcome, activeScreenId in
                             guard let self else { return false }
@@ -2875,25 +2854,6 @@ private extension JourneyService {
             journal: journal,
             dismissPresentation: dismissPresentationOnCompletion,
             executionFenceToken: executionFenceToken
-        )
-    }
-
-    private func markExperimentExposuresShown(
-        forRunId runId: String,
-        screenId: String,
-        journal: JourneyRunJournal,
-        executionFenceToken: JourneyProfileFenceToken
-    ) async {
-        guard let admission = journalCommitAdmission(
-            journal: journal,
-            executionFenceToken: executionFenceToken
-        ) else { return }
-        await experimentExposures.markShown(
-            forRunId: runId,
-            screenId: screenId,
-            in: journal,
-            at: dateProvider.now(),
-            admission: admission
         )
     }
 

@@ -36,19 +36,18 @@ struct JourneyRun {
     struct ExperimentExposure: Codable, Equatable, Sendable {
         enum Kind: String, Codable, Sendable {
             case assigned
+            case override
+            case fixed
             case fallback
         }
 
         let experimentId: String
+        let stepId: String
         let variantId: String
         let isHoldout: Bool
         let kind: Kind
         let eventId: String
         let selectedAt: Date
-        /// The authenticated screen activation that first made this selected
-        /// path visible. An unrelated later screen cannot expose it.
-        var presentationScreenId: String?
-        var shownAt: Date?
         var queued: Bool
     }
 
@@ -619,51 +618,6 @@ struct JourneyRunJournal {
         return true
     }
 
-    @discardableResult
-    func bindExperimentExposures(
-        _ id: String,
-        to screenId: String,
-        admission: JourneyCommitAdmission
-    ) async throws -> Bool {
-        try await updateIfCurrent(admission) { state in
-            guard var run = state.runs[id], run.startedQueued,
-                  run.completion == nil else {
-                throw JourneyJournalError.invalidState
-            }
-            for index in run.experimentExposures.indices
-            where !run.experimentExposures[index].queued
-                && run.experimentExposures[index].shownAt == nil
-                && run.experimentExposures[index].presentationScreenId == nil {
-                run.experimentExposures[index].presentationScreenId = screenId
-            }
-            state.runs[id] = run
-            return true
-        } ?? false
-    }
-
-    @discardableResult
-    func markExperimentExposuresShown(
-        _ id: String,
-        screenId: String,
-        at: Date,
-        admission: JourneyCommitAdmission
-    ) async throws -> Bool {
-        try await updateIfCurrent(admission) { state in
-            guard var run = state.runs[id], run.startedQueued,
-                  run.completion == nil else {
-                throw JourneyJournalError.invalidState
-            }
-            for index in run.experimentExposures.indices
-            where !run.experimentExposures[index].queued
-                && run.experimentExposures[index].presentationScreenId == screenId
-                && run.experimentExposures[index].shownAt == nil {
-                run.experimentExposures[index].shownAt = at
-            }
-            state.runs[id] = run
-            return true
-        } ?? false
-    }
-
     func markExperimentExposureQueued(
         _ id: String,
         eventId: String
@@ -672,7 +626,7 @@ struct JourneyRunJournal {
             guard var run = state.runs[id],
                   let index = run.experimentExposures.firstIndex(where: {
                       $0.eventId == eventId
-                  }), run.experimentExposures[index].shownAt != nil else {
+                  }) else {
                 throw JourneyJournalError.invalidState
             }
             run.experimentExposures[index].queued = true

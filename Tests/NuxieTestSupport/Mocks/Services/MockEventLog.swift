@@ -297,6 +297,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 properties: request.properties,
                 eventId: request.eventId,
                 distinctId: request.distinctId,
+                occurredAt: request.occurredAt ?? Date(),
                 admission: nil,
                 journeyOrigin: request.journeyOrigin
             )
@@ -313,6 +314,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
                 properties: request.properties,
                 eventId: request.eventId,
                 distinctId: request.distinctId,
+                occurredAt: request.occurredAt ?? Date(),
                 admission: admission,
                 journeyOrigin: request.journeyOrigin
             )
