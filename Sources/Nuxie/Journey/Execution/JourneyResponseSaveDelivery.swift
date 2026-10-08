@@ -6,6 +6,7 @@ actor JourneyResponseSaveDelivery {
     private let clock: any DateProviderProtocol
     private let sleeper: any SleepProviderProtocol
     private var scope: JourneyStorageScope?
+    private var displayObserver: (@Sendable (JourneyRunJournal, String) async -> Void)?
     private var journals: ExactJSONObject<JourneyRunJournal> = [:]
     private var receiptBackoffs: ExactJSONObject<RetryBackoff> = [:]
     private struct RetryBackoff {
@@ -33,6 +34,10 @@ actor JourneyResponseSaveDelivery {
         self.sleeper = sleeper
     }
 
+    func setDisplayObserver(_ observer: @escaping @Sendable (JourneyRunJournal, String) async -> Void) {
+        displayObserver = observer
+    }
+
     func activate(scope: JourneyStorageScope) {
         guard self.scope == nil || self.scope == scope else { return }
         self.scope = scope
@@ -51,12 +56,25 @@ actor JourneyResponseSaveDelivery {
         return sheet
     }
 
-    func sendWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
-                     answers: ExactJSONObject<JourneyReleaseJSONValue>) async throws -> JourneyResponseSaveReply {
+    func reserveWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
+                        answers: ExactJSONObject<JourneyReleaseJSONValue>) async throws -> JourneyResponseSave {
         guard active, journal.responseSaveNamespace == scope?.conversionNamespace else {
             throw JourneyResponseSaveError.wrongOwner
         }
-        let sheet = try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: false)
+        return try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: false)
+    }
+
+    func sendWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
+                     answers: ExactJSONObject<JourneyReleaseJSONValue>) async throws -> JourneyResponseSaveReply {
+        let sheet = try await reserveWaiting(journal: journal, run: run, formName: formName, answers: answers)
+        return try await sendWaiting(sheet: sheet, journal: journal)
+    }
+
+    func sendWaiting(sheet: JourneyResponseSave, journal: JourneyRunJournal) async throws -> JourneyResponseSaveReply {
+        guard journal.responseSaveNamespace == scope?.conversionNamespace,
+              sheet.distinctId.utf16.elementsEqual(journal.distinctId.utf16) else {
+            throw JourneyResponseSaveError.wrongOwner
+        }
         try Task.checkCancellation()
         guard active else { throw CancellationError() }
         let reply: JourneyResponseSaveReply
@@ -65,11 +83,13 @@ actor JourneyResponseSaveDelivery {
         catch { try Task.checkCancellation(); reply = .noAnswer }
         try Task.checkCancellation()
         try await journal.recordWaitingResponseSaveReply(sheet, reply: reply)
+        await displayObserver?(journal, sheet.journeyId)
         return reply
     }
 
     func shutdown() async {
         active = false
+        displayObserver = nil
         let task = worker?.task
         worker = nil
         sleeping?.cancel()
@@ -205,6 +225,9 @@ actor JourneyResponseSaveDelivery {
                             break deliveryPass
                         }
                         receiptBackoffs[journal.distinctId] = nil
+                        if stopped || reply.confirmed {
+                            await displayObserver?(journal, attempt.sheet.journeyId)
+                        }
                         if stopped {
                             LogWarning("Response save stopped: code=\(reply.code.rawValue), journey=\(attempt.sheet.journeyId), form=\(attempt.sheet.formName), owner=\(attempt.sheet.distinctId)")
                         }

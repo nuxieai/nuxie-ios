@@ -1897,18 +1897,30 @@ actor ExperienceInteractiveScreen {
         )
     }
 
+    func confirmResponseSave(trigger: String) async throws -> ExperienceInteractiveStepResult {
+        guard !trigger.isEmpty else {
+            throw ExperienceInteractiveScreenError.stateContract("Missing response save continuation")
+        }
+        return try await step(elapsedSeconds: 0, confirmedResponseSaveTrigger: trigger)
+    }
+
     func step(
         inputs: [ExperienceInteractiveInput] = [],
         pointers: [ExperienceInteractivePointerEvent] = [],
         focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64 = 0,
-        capturesTextLayout: Bool = false
+        capturesTextLayout: Bool = false,
+        confirmedResponseSaveTrigger: String? = nil
     ) async throws -> ExperienceInteractiveStepResult {
         let nativeInputs = inputs.map(Self.nativeInput)
         let nativePointers = pointers.map(Self.nativePointer)
         let runtime = runtime
         return try await operationGate.withLock { [self] in
+            if let trigger = confirmedResponseSaveTrigger {
+                let root = try await runtime.rootViewModelReference()
+                _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
+            }
             var result = try await runtime.step(
                 inputs: nativeInputs,
                 pointers: nativePointers,
