@@ -3,267 +3,81 @@
   "contract": "Activity start/stop gates authored time independently of surface ownership. Paused but visible multi-window Activities continue rendering. Resuming starts with zero elapsed time; queued frames and input from a previous visible interval are discarded.",
   "initialVisible": false,
   "steps": [
-    {
-      "action": "attach"
-    },
-    {
-      "action": "frame",
-      "nanos": 1000000000,
-      "elapsed": null
-    },
-    {
-      "action": "visible",
-      "value": true
-    },
-    {
-      "action": "frame",
-      "nanos": 2000000000,
-      "elapsed": 0
-    },
-    {
-      "action": "frame",
-      "nanos": 2016000000,
-      "elapsed": 0.016
-    },
-    {
-      "action": "visible",
-      "value": false
-    },
-    {
-      "action": "frame",
-      "nanos": 60000000000,
-      "elapsed": null
-    },
-    {
-      "action": "visible",
-      "value": true
-    },
-    {
-      "action": "frame",
-      "nanos": 100000000000,
-      "elapsed": 0
-    },
-    {
-      "action": "visible",
-      "value": true
-    },
-    {
-      "action": "frame",
-      "nanos": 100020000000,
-      "elapsed": 0.02
-    },
-    {
-      "action": "detach"
-    },
-    {
-      "action": "frame",
-      "nanos": 200000000000,
-      "elapsed": null
-    },
-    {
-      "action": "attach"
-    },
-    {
-      "action": "frame",
-      "nanos": 201000000000,
-      "elapsed": 0
-    },
-    {
-      "action": "frame",
-      "nanos": 201010000000,
-      "elapsed": 0.01
-    },
-    {
-      "action": "release"
-    },
-    {
-      "action": "visible",
-      "value": false
-    },
-    {
-      "action": "visible",
-      "value": true
-    },
-    {
-      "action": "frame",
-      "nanos": 300000000000,
-      "elapsed": null
-    }
+    { "action": "attach" },
+    { "action": "frame", "nanos": 1000000000, "elapsed": null },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 2000000000, "elapsed": 0 },
+    { "action": "frame", "nanos": 2016000000, "elapsed": 0.016 },
+    { "action": "visible", "value": false },
+    { "action": "frame", "nanos": 60000000000, "elapsed": null },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 100000000000, "elapsed": 0 },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 100020000000, "elapsed": 0.02 },
+    { "action": "detach" },
+    { "action": "frame", "nanos": 200000000000, "elapsed": null },
+    { "action": "attach" },
+    { "action": "frame", "nanos": 201000000000, "elapsed": 0 },
+    { "action": "frame", "nanos": 201010000000, "elapsed": 0.01 },
+    { "action": "release" },
+    { "action": "visible", "value": false },
+    { "action": "visible", "value": true },
+    { "action": "frame", "nanos": 300000000000, "elapsed": null }
   ],
   "pointerCases": [
     {
       "name": "unconsumed down is discarded",
       "steps": [
-        {
-          "action": "down"
-        },
-        {
-          "action": "reset"
-        },
-        {
-          "action": "take",
-          "expected": []
-        }
+        { "action": "down" }, { "action": "reset" },
+        { "action": "take", "expected": [] }
       ]
     },
     {
       "name": "delivered down is cancelled despite repeated hide",
       "steps": [
-        {
-          "action": "down"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "down"
-          ]
-        },
-        {
-          "action": "move"
-        },
-        {
-          "action": "reset"
-        },
-        {
-          "action": "reset"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "exit"
-          ]
-        },
-        {
-          "action": "take",
-          "expected": []
-        }
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "move" }, { "action": "reset" }, { "action": "reset" },
+        { "action": "take", "expected": ["exit"] },
+        { "action": "take", "expected": [] }
       ]
     },
     {
       "name": "released pointer needs no cancellation",
       "steps": [
-        {
-          "action": "down"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "down"
-          ]
-        },
-        {
-          "action": "up"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "up"
-          ]
-        },
-        {
-          "action": "reset"
-        },
-        {
-          "action": "take",
-          "expected": []
-        }
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "up" }, { "action": "take", "expected": ["up"] },
+        { "action": "reset" }, { "action": "take", "expected": [] }
       ]
     },
     {
       "name": "cancel precedes a new gesture with the same pointer id",
       "steps": [
-        {
-          "action": "down"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "down"
-          ]
-        },
-        {
-          "action": "reset"
-        },
-        {
-          "action": "down"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "exit",
-            "down"
-          ]
-        },
-        {
-          "action": "reset"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "exit"
-          ]
-        }
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "reset" }, { "action": "down" },
+        { "action": "take", "expected": ["exit", "down"] },
+        { "action": "reset" }, { "action": "take", "expected": ["exit"] }
       ]
     },
     {
       "name": "hidden interval rejects stale move and release before a new down",
       "steps": [
-        {
-          "action": "down"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "down"
-          ]
-        },
-        {
-          "action": "reset"
-        },
-        {
-          "action": "move"
-        },
-        {
-          "action": "up"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "exit"
-          ]
-        },
-        {
-          "action": "down"
-        },
-        {
-          "action": "up"
-        },
-        {
-          "action": "take",
-          "expected": [
-            "down",
-            "up"
-          ]
-        }
+        { "action": "down" }, { "action": "take", "expected": ["down"] },
+        { "action": "reset" }, { "action": "move" }, { "action": "up" },
+        { "action": "take", "expected": ["exit"] },
+        { "action": "down" }, { "action": "up" },
+        { "action": "take", "expected": ["down", "up"] }
       ]
     },
     {
       "name": "orphan move and release cannot start a touch gesture",
       "steps": [
-        {
-          "action": "move"
-        },
-        {
-          "action": "up"
-        },
-        {
-          "action": "take",
-          "expected": []
-        }
+        { "action": "move" }, { "action": "up" },
+        { "action": "take", "expected": [] }
       ]
     }
   ],
   "frameBackpressure": {
+    "settlement": "An accepted native field write advances a zero-delta step before the next display frame.",
     "firstFrameNanos": 1000000000,
     "busyFrameCount": 100,
     "busyTickNanos": 1000000,
@@ -278,7 +92,6 @@
       0,
       0,
       0.101
-    ],
-    "settlement": "An accepted native field write advances a zero-delta step before the next display frame."
+    ]
   }
 }
