@@ -78,6 +78,7 @@ struct JourneyPresentationRequest: Sendable {
             -> JourneyScreenDismissalResult
     let onProductsUnavailable:
         @MainActor @Sendable (String) async -> JourneyProductFailureResult
+    let onResponseSave: (@Sendable (ExperienceFrameSave) async -> Bool)?
     let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) async -> Void
     let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
@@ -114,6 +115,7 @@ struct JourneyPresentationRequest: Sendable {
             @escaping @MainActor @Sendable (String) async -> JourneyProductFailureResult = {
                 _ in .rejected
             },
+        onResponseSave: (@Sendable (ExperienceFrameSave) async -> Bool)? = nil,
         onLinkOpened: @escaping @Sendable (ExperienceRendererOpenLinkRequest) async -> Void = { _ in },
         onEmissionBatch:
             @escaping @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool,
@@ -141,6 +143,7 @@ struct JourneyPresentationRequest: Sendable {
         self.onScreenChanged = onScreenChanged
         self.onScreenDismissed = onScreenDismissed
         self.onProductsUnavailable = onProductsUnavailable
+        self.onResponseSave = onResponseSave
         self.onLinkOpened = onLinkOpened
         self.onEmissionBatch = onEmissionBatch
         self.onPermissionEvent = onPermissionEvent
@@ -259,6 +262,7 @@ final class JourneyRuntimeDelegate {
         ExperiencePresentationTraceContext?
     private let presentationTraceToken: ExperiencePresentationTraceToken?
     private let openLinkHandler: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)?
+    private let onResponseSave: (@Sendable (ExperienceFrameSave) async -> Bool)?
     private let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) async -> Void
     private let onEmissionBatch:
         @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
@@ -315,6 +319,7 @@ final class JourneyRuntimeDelegate {
         onScreenDismissed = request.onScreenDismissed
         onProductsUnavailable = request.onProductsUnavailable
         onPresentationRevealed = request.onPresentationRevealed
+        onResponseSave = request.onResponseSave
         onLinkOpened = request.onLinkOpened
         onEmissionBatch = request.onEmissionBatch
         onPermissionEvent = request.onPermissionEvent
@@ -438,6 +443,17 @@ final class JourneyRuntimeDelegate {
                 )
             }
         }
+    }
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        didRequestResponseSave save: ExperienceFrameSave,
+        run: ScreenEmissionRun
+    ) async -> Bool {
+        guard !resolved, run.journeyId == journeyId,
+              save.screenID == activeScreenId, run.presentationEpoch == presentationEpoch,
+              let onResponseSave else { return false }
+        return await onResponseSave(save)
     }
 
     func experienceViewController(
