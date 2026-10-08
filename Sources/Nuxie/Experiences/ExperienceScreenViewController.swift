@@ -138,6 +138,8 @@ final class ExperienceScreenViewController: UIViewController {
     private let runValues: ExperienceRunValues
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
+    private var nativeEditingTarget: ExperienceTextInputOverlayBridge.InputTarget?
+    private var nativeEditingOwnerID: UInt64?
     private let videoCaptionOverlay = ExperienceVideoCaptionOverlay()
     private let videoDecoderPool: ExperienceVideoDecoderPool?
     private var requiresSceneSemantics: Bool {
@@ -921,17 +923,82 @@ final class ExperienceScreenViewController: UIViewController {
             && ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView)
     }
 
+    /// Runs only inside the presentation loop's serialized interaction work.
+    private func performNativeEditing(
+        screen: ExperienceInteractiveScreen, loop: ExperienceRuntimePresentationLoop,
+        captureID: UUID?, target: ExperienceTextInputOverlayBridge.InputTarget,
+        point: CGPoint?, text: String? = nil, ending: Bool = false, ownerID: UInt64? = nil
+    ) async throws {
+        func apply(_ step: ExperienceInteractiveStepResult) async {
+            if let state = step.focusState { riveFocusState = state }
+            await deliverStep(effects: step.effects)
+        }
+        if ending {
+            if nativeEditingTarget == target && nativeEditingOwnerID == ownerID {
+                nativeEditingTarget = nil
+                await apply(try await screen.step(focusInputs: [.clear], elapsedSeconds: 0))
+            }
+            return
+        }
+        guard let captureID, let nodeID = target.nodeID else { throw CancellationError() }
+        // Validate the exact presented occurrence before any tap or text input.
+        let source = try await screen.readSemanticText(captureID: captureID, inputID: target.inputID, nodeID: nodeID)
+        if text == nil || nativeEditingTarget != target || nativeEditingOwnerID != source.ownerInstanceID || !riveFocusState.hasFocus || !riveFocusState.expectsKeyboardInput {
+            guard let point else { throw CancellationError() }
+            nativeEditingTarget = nil
+            for pointers in loop.takeNativeEditingTap(at: point) {
+                guard semanticInputIsEligible else { throw CancellationError() }
+                await apply(try await screen.step(pointers: pointers, elapsedSeconds: 0))
+            }
+            guard riveFocusState.hasFocus && riveFocusState.expectsKeyboardInput else { throw CancellationError() }
+            nativeEditingTarget = target
+            nativeEditingOwnerID = source.ownerInstanceID
+        }
+        if let text {
+            let input = artifact.renderPlan.textInputs.first { $0.inputId == target.inputID }
+            let text = ExperienceTextInputLimit.apply(text, maximum: input?.maxLength)
+            var inputs = ExperienceFocusInputQueue()
+            inputs.append(.key(code: 65, modifiers: 8, pressed: true, repeated: false))
+            inputs.append(.key(code: 65, modifiers: 8, pressed: false, repeated: false))
+            if text.isEmpty {
+                inputs.append(.key(code: 259, modifiers: 0, pressed: true, repeated: false))
+                inputs.append(.key(code: 259, modifiers: 0, pressed: false, repeated: false))
+            } else { inputs.append(.text(text)) }
+            while !inputs.isEmpty {
+                guard semanticInputIsEligible else { throw CancellationError() }
+                await apply(try await screen.step(focusInputs: inputs.takeBatch(), elapsedSeconds: 0))
+            }
+        }
+    }
+
     private func bindTextInputs(
         to interactiveScreen: ExperienceInteractiveScreen,
         loop: ExperienceRuntimePresentationLoop
     ) {
+        nativeEditingTarget = nil
+        textInputOverlayBridge.onNativeEditing = { [weak self] captureID, target, point, editing, ownerID, completion in
+            loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork { [weak self] in
+                guard let self else { throw CancellationError() }
+                do {
+                    try await self.performNativeEditing(screen: interactiveScreen, loop: loop,
+                        captureID: captureID, target: target, point: point, ending: !editing, ownerID: ownerID)
+                    return .work(requestsFrame: true) { completion(.accepted) }
+                } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .handleMismatch {
+                    return .work(requestsFrame: true) { completion(.staleCapture) }
+                }
+            }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { result in
+                if case .failure = result { completion(.rejected) }
+            })
+        }
         let semanticWriter: ExperienceTextInputOverlayBridge.SemanticTextWriter? = requiresSceneSemantics
             ? { [weak self] captureID, target, text, completion in
-                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                let point = self?.textInputOverlayBridge.editingPoint(for: target)
+                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork { [weak self] in
+                    guard let self else { throw CancellationError() }
                     do {
-                        let changed = try await interactiveScreen.setSemanticText(
-                            captureID: captureID, inputID: target.inputID, nodeID: target.nodeID, value: text)
-                        return .work(requestsFrame: changed) { completion(.accepted) }
+                        try await self.performNativeEditing(screen: interactiveScreen, loop: loop,
+                            captureID: captureID, target: target, point: point, text: text)
+                        return .work(requestsFrame: true) { completion(.accepted) }
                     } catch NuxieNativeRuntimeError.callFailed(let diagnostic)
                         where diagnostic.status == .handleMismatch {
                         return .work(requestsFrame: true) { completion(.staleCapture) }

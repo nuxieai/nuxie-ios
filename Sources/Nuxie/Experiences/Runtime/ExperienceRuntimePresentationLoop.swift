@@ -776,6 +776,19 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }, completion: completion)
     }
 
+    /// Called within serialized native editing work. Use the same pointer queue
+    /// as scene touches so a native editor does not bypass accepted pointers.
+    func takeNativeEditingTap(at point: CGPoint) -> [[ExperienceInteractivePointerEvent]] {
+        var batches: [[ExperienceInteractivePointerEvent]] = []
+        while !pendingPointers.isEmpty { batches.append(pendingPointers.takeBatch()) }
+        pendingPointers.enqueue([
+            .init(kind: .down, x: Float(point.x), y: Float(point.y), pointerID: 0),
+            .init(kind: .up, x: Float(point.x), y: Float(point.y), pointerID: 0),
+        ])
+        while !pendingPointers.isEmpty { batches.append(pendingPointers.takeBatch()) }
+        return batches
+    }
+
     @discardableResult
     func enqueueFocus(_ input: NuxieNativeFocusInput) -> Bool {
         guard shouldPresent, terminalError == nil else { return false }

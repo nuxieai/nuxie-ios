@@ -114,42 +114,109 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             "Seed from the delivered TextInput locator, not the table's empty value")
     }
 
-    func testPublishedInputFieldSetterSettlesItsNativeBinding() async throws {
-        let directory = PublishedInputFixture.directory
-        let bytes = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
-        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
-        let font = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
-        let runtime = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "input",
-            player: .defaultScene, pixelWidth: 393, pixelHeight: 852, bindDefaultViewModel: true,
-            importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
-                externalAssets: Dictionary(uniqueKeysWithValues: assets.filter { $0.kind == .font }.map { ($0.ordinal, font.bytes) })))
-        addTeardownBlock { try await runtime.close() }
-        let locator = "scr_screens_sinput::v2 editable value"
-        try await runtime.enableSemantics()
-        func present() async throws -> NuxieNativeSemanticCapture {
-            let layer = CAMetalLayer()
-            layer.device = try await runtime.metalDevice().value
-            layer.pixelFormat = .bgra8Unorm
-            layer.drawableSize = CGSize(width: 393, height: 852)
-            let drawable = try XCTUnwrap(layer.nextDrawable())
-            _ = try await runtime.render(layoutScaleFactor: 1,
-                drawable: .available(NuxieNativeDrawable(drawable)), clearColor: 0xFFFFFFFF)
-            return try await runtime.captureSemantics(nativeInputs: [locator])
+    func testNativeBeginEditingFocusesPublishedInput() async throws {
+        let directory = PublishedInputFixture.directory.deletingLastPathComponent().appendingPathComponent("typing-probes")
+        let input = NativeExperienceTextInput(inputId: "name", screenId: "input", artboardId: "input",
+            viewNodeId: "scr_screens_sinput::v2", renderedNodeId: "scr_screens_sinput::v2",
+            textInputName: "scr_screens_sinput::v2 editable value", value: "", placeholder: nil, editable: true,
+            geometry: .init(xPath: "x", yPath: "y", widthPath: "w", heightPath: "h", rotationPath: "r", scaleXPath: "sx", scaleYPath: "sy"),
+            style: .init(fontFamily: "System", fontWeight: "400", fontStyle: "normal", fontSize: 16,
+                lineHeight: -1, letterSpacing: 0, color: 0xFF111827,
+                fontAssetUniqueName: "font-system-400-normal-6cda3de3-0", textAlign: "left"),
+            keyboardType: nil, secureTextEntry: false, multiline: false, maxLength: nil, responseFieldKey: nil)
+        let payload = try SharedValuesFixture.payload(directory: PublishedInputFixture.directory, screens: ["input"],
+            scene: Data(contentsOf: directory.appendingPathComponent("f3-field-in-flow.riv")), textInputs: [input])
+        let probe = InputStepProbe()
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe,
+            fixtureName: "f3-field-in-flow", directory: directory)
+        var latestCapture: NuxieNativeSemanticCapture?
+        controller.onSemanticCapture = { latestCapture = $0 }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        try await controller.mountInteractiveScreen()
+        await controller.enter(reduceMotion: true)
+        await controller.activate(reduceMotion: true)
+        func settle() async throws {
+            controller.advance(delta: 0.016)
+            let deadline = Date().addingTimeInterval(5)
+            while !controller.hasCompletedLatestFrame, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            if let failure = probe.failure { throw failure }
+            XCTAssertTrue(controller.hasCompletedLatestFrame)
         }
-        _ = try await runtime.step(elapsedSeconds: 0)
-        let capture = try await present()
-        let field = try XCTUnwrap(capture.nativeInputs[locator]?.first)
-        let changed = try await runtime.setFieldString(captureID: capture.id,
-            nodeID: field.nodeID, name: locator, value: Data("Grace".utf8))
-        XCTAssertTrue(changed, "The occurrence-checked setter must accept the edit")
-        _ = try await runtime.step(elapsedSeconds: 0)
-        let fresh = try await present()
-        let actual = try await runtime.readFieldString(captureID: fresh.id,
-            nodeID: field.nodeID, name: locator)
-        XCTAssertEqual(actual, Data("Grace".utf8), "Normal settlement must retain the native field edit")
-        let snapshot = try await runtime.snapshot()
-        XCTAssertEqual(snapshot.values.first { $0.name == "name" }?.value, .bytes(Data("Grace".utf8)),
-            "The field setter must settle through the Experience binding")
+        func findField(_ view: UIView) -> UITextField? {
+            (view as? UITextField) ?? view.subviews.lazy.compactMap { findField($0) }.first
+        }
+        do {
+            try await settle()
+            let field = try XCTUnwrap(findField(controller.view))
+            XCTAssertEqual(field.text, "Ada")
+            XCTAssertTrue(field.becomeFirstResponder())
+            try await settle()
+            XCTAssertTrue(controller.riveFocusState.hasFocus, "Native begin editing must focus Rive")
+            XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
+            let focusedSnapshot = try await controller.runtimeSnapshot()
+            XCTAssertEqual(focusedSnapshot.values.first { $0.name == "focused" }?.value, .number(1))
+            XCTAssertEqual(focusedSnapshot.values.first { $0.name == "typed" }?.value, .number(0))
+            var callbacks: [String] = []
+            field.addAction(UIAction { _ in
+                callbacks.append("text=\(field.text ?? ""), marked=\(field.markedTextRange != nil)")
+            }, for: .editingChanged)
+            func verify(_ expected: String) async throws {
+                try await settle()
+                let snapshot = try await controller.runtimeSnapshot()
+                XCTAssertEqual(snapshot.values.first { $0.name == "name" }?.value, .bytes(Data(expected.utf8)))
+                let capture = try XCTUnwrap(latestCapture)
+                let occurrence = try XCTUnwrap(capture.nativeInputs[input.textInputName]?.first)
+                let actual = try await controller.readPresentedFieldString(captureID: capture.id,
+                    nodeID: occurrence.nodeID, name: input.textInputName)
+                XCTAssertEqual(actual, expected)
+                XCTAssertEqual(field.text, expected)
+            }
+            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+            field.insertText("Grace")
+            try await verify("Grace")
+            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+            field.insertText("")
+            try await verify("")
+            field.insertText("👍🏽")
+            try await verify("👍🏽")
+            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+            field.setMarkedText("ぐれ", selectedRange: NSRange(location: 2, length: 0))
+            field.sendActions(for: .editingChanged)
+            try await verify("ぐれ")
+            XCTContext.runActivity(named: "A0 native composition decorations, nonsecure") { activity in
+                let image = UIGraphicsImageRenderer(bounds: field.bounds).image { _ in
+                    field.drawHierarchy(in: field.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
+            field.insertText("グレース")
+            field.sendActions(for: .editingChanged)
+            try await verify("グレース")
+            _ = field.delegate?.textFieldShouldReturn?(field)
+            try await settle()
+            XCTAssertFalse(controller.riveFocusState.hasFocus, "Done must clear Rive focus")
+            XCTAssertFalse(field.isFirstResponder)
+            let blurredSnapshot = try await controller.runtimeSnapshot()
+            XCTAssertEqual(blurredSnapshot.values.first { $0.name == "blurred" }?.value, .number(1))
+            // Programmatic changes and autofill need the same focus guard.
+            field.text = "Grace"
+            field.sendActions(for: .editingChanged)
+            try await verify("Grace")
+            XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
+            XCTContext.runActivity(named: "Native nonsecure callbacks: " + callbacks.joined(separator: "; ")) { _ in }
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+        await controller.shutdownInteractiveScreen()
     }
 
     func testPublishedInputReplacementPreservesNativeCompositionAndCorrection() async throws {

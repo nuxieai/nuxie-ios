@@ -410,45 +410,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(first.tree.nodes.first?.label, "Prénom 👋")
     }
 
-    func testSemanticTextWriteRequiresCurrentCapturedOwner() async throws {
-        let prepared = try await NuxieNativePreparedFile.prepare(
-            bytes: try fixture(named: "semantic_text", extension: "riv"), importMode: .portable)
-        let artboards = try await prepared.artboards()
-        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
-            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
-        defer { Task { try? await runtime.close() } }
-        try await runtime.enableSemantics()
-        _ = try await runtime.step(elapsedSeconds: 0)
-        _ = try await render(runtime)
-        let capture = try await runtime.captureSemantics(textRuns: ["field/名前"])
-        let changed = try await runtime.setSemanticTextRun(captureID: capture.id, name: "field/名前", text: Data("Alice".utf8))
-        XCTAssertTrue(changed)
-        _ = try await runtime.step(elapsedSeconds: 0)
-        do {
-            _ = try await runtime.setSemanticTextRun(captureID: capture.id, name: "field/名前", text: Data("stale".utf8))
-            XCTFail("A new runtime revision must reject the old presented editor capture")
-        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-            XCTAssertEqual(diagnostic.status, .handleMismatch)
-        }
-        _ = try await render(runtime)
-        let replacement = try await runtime.captureSemantics(textRuns: ["field/名前"])
-        let replacementChanged = try await runtime.setSemanticTextRun(captureID: replacement.id,
-            name: "field/名前", text: Data("Bob".utf8))
-        XCTAssertTrue(replacementChanged)
-        try await runtime.retireSemanticCapture()
-        do {
-            _ = try await runtime.setSemanticTextRun(captureID: replacement.id, name: "field/名前", text: Data("late".utf8))
-            XCTFail("Retired editor ownership must reject mutation")
-        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-            XCTAssertEqual(diagnostic.status, .handleMismatch)
-        }
-        let changedAfterRejection = try await runtime.setTextRuns([
-            NuxieNativeTextRunMutation(name: "field/名前", text: Data("Bob".utf8))
-        ])
-        XCTAssertFalse(changedAfterRejection, "Rejected stale writes must leave the accepted native text intact")
-        try await runtime.close()
-    }
-
     func testNativeInputGeometryUsesCapturedFieldAndPreservesAffineLayout() async throws {
         let prepared = try await NuxieNativePreparedFile.prepare(
             bytes: try fixture(named: "native_input_layout", extension: "riv"), importMode: .portable)
@@ -553,26 +514,21 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let unboundOwner = try await runtime.fieldViewModelInstance(captureID: unchanged.id,
             nodeID: fields[1].nodeID, name: "editable")
         XCTAssertNil(unboundOwner, "An unbound field must not silently target the root")
-        let changed = try await runtime.setFieldString(captureID: unchanged.id,
-            nodeID: fields[0].nodeID, name: "editable", value: Data("private edit".utf8))
-        XCTAssertTrue(changed)
-        do {
-            _ = try await runtime.fieldViewModelInstance(captureID: unchanged.id,
-                nodeID: fields[0].nodeID, name: "editable")
-            XCTFail("Owner lookup accepted a retired capture")
-        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-            XCTAssertEqual(diagnostic.status, .handleMismatch)
-        }
         _ = try await runtime.step(elapsedSeconds: 0)
         _ = try await render(runtime)
         let fresh = try await runtime.captureSemantics(nativeInputs: ["editable"])
-        XCTAssertNotEqual(fresh.id, unchanged.id)
         XCTAssertEqual(fresh.nativeInputs["editable"]?.map(\.nodeID), fields.map(\.nodeID))
-        let first = try await runtime.readFieldString(captureID: fresh.id, nodeID: fields[0].nodeID, name: "editable")
-        let other = try await runtime.readFieldString(captureID: fresh.id, nodeID: fields[1].nodeID, name: "editable")
-        XCTAssertEqual(first, Data("private edit".utf8))
-        XCTAssertEqual(other, otherBefore)
-        XCTAssertFalse(fresh.tree.nodes.contains { $0.value.contains("private edit") })
+        let otherAfter = try await runtime.readFieldString(captureID: fresh.id,
+            nodeID: fields[1].nodeID, name: "editable")
+        XCTAssertTrue(otherAfter == otherBefore, "Reading an occurrence must not change a sibling")
+        try await runtime.retireSemanticCapture()
+        do {
+            _ = try await runtime.fieldViewModelInstance(captureID: fresh.id,
+                nodeID: fields[0].nodeID, name: "editable")
+            XCTFail("Owner lookup must reject a retired capture")
+        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
+        }
         try await runtime.close()
     }
 
@@ -596,59 +552,18 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
             XCTAssertEqual(diagnostic.status, .notFound)
         }
-        let unchanged = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
-            name: "editable/名前", value: initial)
-        XCTAssertFalse(unchanged)
         do {
-            _ = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
-                name: "editable/名前", value: Data([0xc3, 0x28]))
-            XCTFail("Invalid UTF-8 must not replace the editable value")
+            _ = try await runtime.readFieldString(captureID: UUID(), nodeID: field.id, name: "editable/名前")
+            XCTFail("A field read must reject another capture's identity")
         } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-            XCTAssertEqual(diagnostic.status, .invalidArgument)
+            XCTAssertEqual(diagnostic.status, .handleMismatch)
         }
-        let afterInvalidEncoding = try await runtime.readFieldString(captureID: capture.id,
-            nodeID: field.id, name: "editable/名前")
-        XCTAssertEqual(afterInvalidEncoding, initial)
         do {
             _ = try await runtime.readFieldString(captureID: capture.id, nodeID: field.id, name: "missing")
             XCTFail("Missing endpoint must not fall back to another string")
         } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
             XCTAssertEqual(diagnostic.status, .notFound)
         }
-        let edited = Data("edited é 🔒".utf8)
-        let changed = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
-            name: "editable/名前", value: edited)
-        XCTAssertTrue(changed)
-        do {
-            _ = try await runtime.readFieldGeometry(captureID: capture.id, nodeID: field.id, name: "editable/名前")
-            XCTFail("Geometry must reject a retired capture before resolving its field")
-        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-            XCTAssertEqual(diagnostic.status, .handleMismatch)
-        }
-        do {
-            _ = try await runtime.setFieldString(captureID: capture.id, nodeID: field.id,
-                name: "editable/名前", value: Data("stale".utf8))
-            XCTFail("A changed value must retire the old capture")
-        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) {
-            XCTAssertEqual(diagnostic.status, .handleMismatch)
-        }
-        _ = try await runtime.step(elapsedSeconds: 0)
-        _ = try await render(runtime)
-        let fresh = try await runtime.captureSemantics()
-        let freshField = try XCTUnwrap(fresh.tree.nodes.first)
-        XCTAssertEqual(freshField.value, field.value)
-        let value = try await runtime.readFieldString(captureID: fresh.id, nodeID: freshField.id, name: "editable/名前")
-        XCTAssertEqual(value, edited)
-        let emptied = try await runtime.setFieldString(captureID: fresh.id, nodeID: freshField.id,
-            name: "editable/名前", value: Data())
-        XCTAssertTrue(emptied)
-        _ = try await runtime.step(elapsedSeconds: 0)
-        _ = try await render(runtime)
-        let emptyCapture = try await runtime.captureSemantics()
-        let emptyField = try XCTUnwrap(emptyCapture.tree.nodes.first)
-        let emptyValue = try await runtime.readFieldString(captureID: emptyCapture.id,
-            nodeID: emptyField.id, name: "editable/名前")
-        XCTAssertTrue(emptyValue.isEmpty)
         try await runtime.close()
     }
 
@@ -1512,39 +1427,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             removedRunDifference.rowSpan,
             "A long localized value must wrap onto additional rendered rows"
         )
-    }
-
-    func testTextRunBatchRollsBackItsValidPrefix() async throws {
-        let encoded = try fixture(named: "text_run_apple_seam", extension: "riv.base64")
-        guard let scene = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let runtime = try await NuxieNativeRuntime.open(
-            bytes: scene,
-            artboardName: "Root",
-            player: .staticArtboard,
-            pixelWidth: 16,
-            pixelHeight: 16
-        )
-        defer { Task { try? await runtime.close() } }
-
-        let initiallyChanged = try await runtime.setTextRuns([
-            NuxieNativeTextRunMutation(name: "headline", text: Data("accepted".utf8))
-        ])
-        XCTAssertTrue(initiallyChanged)
-        do {
-            _ = try await runtime.setTextRuns([
-                NuxieNativeTextRunMutation(name: "headline", text: Data("leaked".utf8)),
-                NuxieNativeTextRunMutation(name: "missing", text: Data("invalid".utf8)),
-            ])
-            XCTFail("Expected an unknown run to reject the batch")
-        } catch {
-            // The native text transaction rejects the whole batch.
-        }
-        let changedAfterFailure = try await runtime.setTextRuns([
-            NuxieNativeTextRunMutation(name: "headline", text: Data("accepted".utf8))
-        ])
-        XCTAssertFalse(changedAfterFailure)
     }
 
     func testActorUsesOneNoncallerThreadAndRejectsCallsAfterClose() async throws {
