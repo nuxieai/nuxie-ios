@@ -6,6 +6,9 @@ import OSLog
 import XCTest
 @testable import Nuxie
 @testable import NuxieRuntime
+#if NUXIE_HOSTED_INPUT_TESTS
+@testable import NuxieTestSupport
+#endif
 
 @MainActor
 final class ExperienceTextInputSemanticsTests: XCTestCase {
@@ -217,6 +220,137 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             throw error
         }
         await controller.shutdownInteractiveScreen()
+    }
+
+    func testNativeEditingSecondPublishedFieldKeepsFirstValue() async throws {
+        let directory = PublishedInputFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("published-two-fields")
+        let payload = try await authenticatedTwoFieldPayload(directory)
+        XCTAssertEqual(payload.renderPlan.textInputs.count, 2)
+        let probe = InputStepProbe()
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe,
+            fixtureName: "screen", directory: directory)
+        var capture: NuxieNativeSemanticCapture?
+        controller.onSemanticCapture = { capture = $0 }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        try await controller.mountInteractiveScreen()
+        await controller.enter(reduceMotion: true)
+        await controller.activate(reduceMotion: true)
+        func settle(awaitingKeyboardFocus: Bool = false) async throws {
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                controller.advance(delta: 0.016)
+                while !controller.hasDeliveredLatestSemanticFrame, Date() < deadline {
+                    try await Task.sleep(nanoseconds: 1_000_000)
+                }
+                if let failure = probe.failure { throw failure }
+                if !awaitingKeyboardFocus || (controller.riveFocusState.hasFocus && controller.riveFocusState.expectsKeyboardInput) { break }
+                // Blur can retire the preceding capture. Drive the next normal frame
+                // so field 2 can focus from a newly presented occurrence.
+            } while Date() < deadline
+            XCTAssertTrue(controller.hasDeliveredLatestSemanticFrame)
+        }
+        func fields(in view: UIView) -> [UITextField] {
+            if let field = view as? UITextField { return [field] }
+            return view.subviews.flatMap { fields(in: $0) }
+        }
+        do {
+            try await settle()
+            let editors = fields(in: controller.view)
+            XCTAssertEqual(editors.count, 2)
+            let first = try XCTUnwrap(editors.first { $0.text == "Ada" })
+            let second = try XCTUnwrap(editors.first { $0.text == "Hopper" })
+            XCTAssertGreaterThan(second.convert(second.bounds, to: window).midY,
+                first.convert(first.bounds, to: window).midY)
+            XCTAssertTrue(first.becomeFirstResponder())
+            try await settle()
+            XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
+            // Native begin editing sends the real Rive pointer tap at field 2's geometry.
+            XCTAssertTrue(second.becomeFirstResponder())
+            try await settle(awaitingKeyboardFocus: true)
+            XCTAssertTrue(controller.riveFocusState.hasFocus)
+            XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
+            XCTAssertFalse(first.isFirstResponder)
+            XCTAssertTrue(second.isFirstResponder)
+            second.selectedTextRange = second.textRange(from: second.beginningOfDocument, to: second.endOfDocument)
+            second.insertText("Grace")
+            try await settle()
+            let snapshot = try await controller.runtimeSnapshot()
+            XCTAssertEqual(snapshot.values.first { $0.name == "name" }?.value, .bytes(Data("Ada".utf8)))
+            XCTAssertEqual(snapshot.values.first { $0.name == "surname" }?.value, .bytes(Data("Grace".utf8)))
+            XCTAssertEqual(first.text, "Ada")
+            XCTAssertEqual(second.text, "Grace")
+            let current = try XCTUnwrap(capture)
+            var fieldValues: [String] = []
+            for input in payload.renderPlan.textInputs {
+                let occurrence = try XCTUnwrap(current.nativeInputs[input.textInputName]?.first)
+                fieldValues.append(try await controller.readPresentedFieldString(captureID: current.id,
+                    nodeID: occurrence.nodeID, name: input.textInputName))
+            }
+            XCTAssertEqual(fieldValues.sorted(), ["Ada", "Grace"])
+            let middle = try XCTUnwrap(second.position(from: second.beginningOfDocument, offset: 2))
+            second.selectedTextRange = second.textRange(from: middle, to: middle)
+            XCTAssertEqual(second.offset(from: second.beginningOfDocument, to: try XCTUnwrap(second.selectedTextRange).start), 2)
+            // Let UIKit paint its updated selection before retaining the combined image.
+            try await Task.sleep(nanoseconds: 100_000_000)
+            XCTContext.runActivity(named: "Two nonsecure fields, native middle caret over Rive text") { activity in
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
+            second.selectAll(nil)
+            try await Task.sleep(nanoseconds: 100_000_000)
+            XCTContext.runActivity(named: "Two nonsecure fields, native selection over Rive text") { activity in
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
+            _ = second.delegate?.textFieldShouldReturn?(second)
+            try await settle()
+            XCTAssertFalse(controller.riveFocusState.hasFocus)
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+        await controller.shutdownInteractiveScreen()
+    }
+
+    private func authenticatedTwoFieldPayload(_ directory: URL) async throws -> AuthenticatedRuntimePayload {
+        StubURLProtocol.reset()
+        defer { StubURLProtocol.reset() }
+        let profile = try JourneyPlaneProfile.decode(Data(contentsOf: directory.appendingPathComponent("profile.json")))
+        let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
+        StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
+            let url = try XCTUnwrap(request.url)
+            let bytes = try Data(contentsOf: directory.appendingPathComponent(String(url.path.dropFirst())))
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/vnd.nuxie.scene", "Content-Length": String(bytes.count)])), bytes)
+        }
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("two-fields-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        let store = JourneyReleaseAcquisitionStore(cacheDirectory: cache,
+            urlSession: TestURLSessionProvider.createTestSession())
+        let catalog = JourneyProfileCatalog(authorizationKeys: try JourneyTrustRoots.keys(for: .development),
+            supportedRuntime: JourneyReleaseRuntime.current, highWaterStore: InMemoryJourneyReleaseHighWaterStore())
+        let entry = try XCTUnwrap(profile.releases.first)
+        let authenticated = try await catalog.prepare(profile,
+            authority: ProfileDeliveryAuthority(appId: entry.locator.appId, environment: entry.locator.environment)).snapshot
+        let release = try XCTUnwrap(authenticated.releasesByDigest.values.first)
+        let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
+        let presentation = try await store.preparePresentation(release: release, delivery: profile.delivery,
+            pinnedArtifacts: nil, productResolver: { _ in [] })
+        return try await presentation.artifactLoader(presentation.experience, nil, screenID).payload
     }
 
     func testPublishedInputReplacementPreservesNativeCompositionAndCorrection() async throws {

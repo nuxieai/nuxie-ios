@@ -358,6 +358,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         var pendingNativeFocus = false
         var nativeFocusInFlight = false
         var nativeFocusCaptureID: UUID?
+        var nativeFocusRenderRevision: UInt64?
         var nativeFocusPoint: CGPoint?
         var textWriteInFlight = false
         var offsetWriteInFlight = false
@@ -646,6 +647,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             if ownerChanged {
                 binding.nativeFocusInFlight = false
                 binding.nativeFocusCaptureID = nil
+                binding.nativeFocusRenderRevision = nil
                 binding.pendingNativeFocus = self.activeEditingControl === binding.control.view
             }
             if !binding.sourceReady || ownerChanged {
@@ -973,6 +975,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         if let binding = binding(for: control), onNativeEditing != nil {
             binding.pendingNativeFocus = true
             binding.nativeFocusCaptureID = nil
+            binding.nativeFocusRenderRevision = nil
             binding.nativeFocusPoint = editingPoint(for: binding.target)
             drainNativeFocus(binding)
         }
@@ -983,9 +986,13 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         guard binding.pendingNativeFocus, !binding.nativeFocusInFlight,
               activeEditingControl === binding.control.view,
               let onNativeEditing, let captureID = binding.readCaptureID,
-              binding.nativeFocusCaptureID != captureID else { return }
+              binding.nativeFocusCaptureID != captureID ||
+                binding.nativeFocusRenderRevision != binding.readRenderRevision else { return }
         binding.nativeFocusInFlight = true
+        // Unchanged semantic trees retain their capture ID across rendered frames.
+        // A fresh revision can make a previously stale focus attempt eligible.
         binding.nativeFocusCaptureID = captureID
+        binding.nativeFocusRenderRevision = binding.readRenderRevision
         let currentGeneration = generation
         let ownerID = binding.ownerInstanceID
         onNativeEditing(captureID, binding.target, binding.nativeFocusPoint, true, ownerID) { [weak self] outcome in

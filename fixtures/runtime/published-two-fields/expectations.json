@@ -1,0 +1,14 @@
+{
+  "startingValues": {
+    "name": "Ada",
+    "surname": "Hopper"
+  },
+  "replacement": {
+    "targetAuthoredId": "surname",
+    "text": "Grace",
+    "after": {
+      "name": "Ada",
+      "surname": "Grace"
+    }
+  }
+}
