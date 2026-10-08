@@ -467,16 +467,6 @@ package enum NuxieNativeViewModelMutation: Equatable, Sendable {
     case listClear(instance: NuxieNativeViewModelReference, path: String)
 }
 
-package struct NuxieNativeTextRunMutation: Equatable, Sendable {
-    package let name: String
-    package let text: Data
-
-    package init(name: String, text: Data) {
-        self.name = name
-        self.text = text
-    }
-}
-
 package struct NuxieNativeMetalDevice: @unchecked Sendable {
     package let value: any MTLDevice
 }
@@ -1038,17 +1028,6 @@ package actor NuxieNativeRuntime {
         }
     }
 
-    package func setTextRuns(_ mutations: [NuxieNativeTextRunMutation]) async throws -> Bool {
-        let state = try requireState()
-        return try await executor.call { try state.artboard.setTextRuns(mutations) }
-    }
-
-    /// Validate the captured editor owner and mutate on the same pinned executor turn.
-    package func setSemanticTextRun(captureID: UUID, name: String, text: Data) async throws -> Bool {
-        let state = try requireState()
-        return try await executor.call { try state.setSemanticTextRun(captureID: captureID, name: name, text: text) }
-    }
-
     /// Execution-only access to a non-rendering value in the captured field occurrence.
     package func readFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> Data {
         let state = try requireState()
@@ -1088,12 +1067,6 @@ package actor NuxieNativeRuntime {
         return try await executor.call {
             try state.readFieldGeometry(captureID: captureID, nodeID: nodeID, name: name)
         }
-    }
-
-    /// Returns whether the property changed, not whether reverse conversion accepted it.
-    package func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) async throws -> Bool {
-        let state = try requireState()
-        return try await executor.call { try state.setFieldString(captureID: captureID, nodeID: nodeID, name: name, value: value) }
     }
 
     package func setFieldContentOffset(captureID: UUID, nodeID: UInt32, name: String, x: Float, y: Float) async throws {
@@ -1628,29 +1601,6 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
     }
 
-    func setSemanticTextRun(captureID: UUID, name: String, text: Data) throws -> Bool {
-        guard let capture = semanticCapture, capture.id == captureID else {
-            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "write semantic text")
-        }
-        let player = try self.player.require()
-        let snapshot = try capture.handle.require()
-        try requireOK(nux_player_validate_semantic_snapshot(player, snapshot), operation: "validate semantic text capture")
-        guard let field = capture.fields[name],
-              field.stateFlags & (NuxieNativeSemanticNode.disabled | NuxieNativeSemanticNode.hidden
-                | NuxieNativeSemanticNode.readOnly) == 0 else {
-            throw nativeFailure(status: NUX_STATUS_NOT_FOUND.rawValue, operation: "resolve editable semantic field")
-        }
-        var currentID: UInt32 = 0
-        let status = withStringView(name) { nux_player_semantic_node_for_text_run(player, snapshot, $0, &currentID) }
-        try requireOK(status, operation: "validate semantic text owner")
-        guard currentID == field.id else {
-            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "validate semantic text owner")
-        }
-        let changed = try artboard.setTextRuns([NuxieNativeTextRunMutation(name: name, text: text)])
-        if changed { try retireSemanticCapture() }
-        return changed
-    }
-
     func retireSemanticCapture() throws {
         let previous = semanticCapture
         semanticCapture = nil
@@ -1750,25 +1700,6 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             layout: layout,
             firstBaseline: raw.has_first_baseline == 1 ? CGFloat(raw.first_baseline) : nil,
             obscured: raw.obscured == 1, multiline: raw.multiline == 1)
-    }
-
-    func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) throws -> Bool {
-        let previous = try readFieldString(captureID: captureID, nodeID: nodeID, name: name)
-        guard let capture = semanticCapture, capture.id == captureID else {
-            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "write field value")
-        }
-        let player = try self.player.require()
-        let snapshot = try capture.handle.require()
-        let status = withStringView(name) { key in
-            value.withUnsafeBytes { buffer in
-                nux_player_field_string_set(player, snapshot, nodeID, key,
-                    NuxStringView(data: buffer.bindMemory(to: CChar.self).baseAddress, len: value.count))
-            }
-        }
-        try requireOK(status, operation: "write field value")
-        let changed = previous != value
-        if changed { try retireSemanticCapture() }
-        return changed
     }
 
     func setFieldContentOffset(captureID: UUID, nodeID: UInt32, name: String, x: Float, y: Float) throws {
@@ -2535,33 +2466,6 @@ private final class NuxieNativeArtboardHandle: @unchecked Sendable {
             ),
             operation: "bind view model"
         )
-    }
-
-    func setTextRuns(_ mutations: [NuxieNativeTextRunMutation]) throws -> Bool {
-        let storage = NuxieNativeBorrowedStorage()
-        let native = mutations.map { mutation in
-            NuxTextRunMutation(
-                name: storage.stringView(mutation.name),
-                text: storage.byteView(mutation.text)
-            )
-        }
-        return try native.withUnsafeBufferPointer { buffer in
-            var batch = NuxTextRunMutationBatch()
-            batch.struct_size = UInt32(MemoryLayout<NuxTextRunMutationBatch>.size)
-            batch.mutations = buffer.baseAddress
-            batch.mutation_count = buffer.count
-            var changed: UInt32 = 0
-            try requireOK(
-                nux_artboard_instance_set_text_runs(try owned.require(), &batch, &changed),
-                operation: "set text runs"
-            )
-            guard changed == 0 || changed == 1 else {
-                throw NuxieNativeRuntimeError.invalidNativeValue(
-                    "non-canonical text mutation result"
-                )
-            }
-            return changed == 1
-        }
     }
 
     func close() throws { try owned.close() }

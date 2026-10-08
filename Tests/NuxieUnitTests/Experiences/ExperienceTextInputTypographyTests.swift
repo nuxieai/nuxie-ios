@@ -363,10 +363,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                         .number(fixed ? 24 : item.lineHeight))
                 }
             }
-            _ = try await runtime.setTextRuns(expected.geometry.map { .init(name: $0.runName, text: Data()) })
-            let blank = try await runtime.step(elapsedSeconds: 0, textRunNames: expected.geometry.map(\.runName))
-            guard case .captured(let geometry) = blank.textGeometry else { return XCTFail("Blank text-run geometry must remain available") }
-            XCTAssertTrue(geometry.values.allSatisfy { $0.firstBaseline == nil })
+
         }
     }
 

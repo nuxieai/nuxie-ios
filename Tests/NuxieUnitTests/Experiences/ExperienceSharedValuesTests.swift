@@ -409,8 +409,8 @@ enum SharedValuesFixture {
             .appendingPathComponent("fixtures/runtime/shared-values")
     }
 
-    static func payload(directory: URL = SharedValuesFixture.directory, screens: [String] = ["first", "long", "short"]) throws -> AuthenticatedRuntimePayload {
-        let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
+    static func payload(directory: URL = SharedValuesFixture.directory, screens: [String] = ["first", "long", "short"], scene suppliedScene: Data? = nil, textInputs: [NativeExperienceTextInput] = []) throws -> AuthenticatedRuntimePayload {
+        let scene = try suppliedScene ?? Data(contentsOf: directory.appendingPathComponent("screen.riv"))
         struct Provenance: Decodable {
             struct Font: Decodable {
                 let authoredAssetId: UInt64
@@ -430,7 +430,7 @@ enum SharedValuesFixture {
                 entry: .init(screenId: try XCTUnwrap(screens.first)),
                 screens: screens.map { .init(screenId: $0, artboardId: $0, artboardName: $0,
                     width: 393, height: 852, exit: nil) },
-                transitions: [], textInputs: [], images: [], fonts: [],
+                transitions: [], textInputs: textInputs, images: [], fonts: [],
                 systemFonts: provenance.fonts.map { .init(authoredAssetId: $0.authoredAssetId,
                     assetUniqueName: $0.assetUniqueName, weight: $0.weight, style: $0.style) }),
             journey: JourneyDocument(screens: screens.map {
