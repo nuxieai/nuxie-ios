@@ -110,7 +110,7 @@ const refresh = (value, fixturePath) => {
   }
   for (const [key, child] of Object.entries(value)) {
     if (child === 'nuxie.journey-plane-profile.v1') value[key] = 'nuxie.journey-plane-profile.v2';
-    else if (child === 'nuxie.journey-release.v1' || child === 'nuxie.journey-release.v2') value[key] = 'nuxie.journey-release.v3';
+    else if (key === 'schemaVersion' && (child === 'nuxie.journey-release.v1' || child === 'nuxie.journey-release.v2')) value[key] = 'nuxie.journey-release.v3';
     else refresh(child, fixturePath);
   }
 };
