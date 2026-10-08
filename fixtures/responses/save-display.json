@@ -1,0 +1,13 @@
+{
+  "steps": [
+    {"action":"queue","sequence":1,"saving":true,"saved":false,"saveError":"","pending":[1]},
+    {"action":"retry","sequence":1,"code":"no_answer","saving":true,"saved":false,"saveError":"","pending":[1]},
+    {"action":"wait","sequence":2,"saving":true,"saved":false,"saveError":"","pending":[1]},
+    {"action":"fail_wait","sequence":2,"code":"save_unavailable","saving":false,"saved":false,"saveError":"save_unavailable","pending":[1]},
+    {"action":"confirm","sequence":1,"saving":false,"saved":false,"saveError":"save_unavailable","pending":[]},
+    {"action":"queue","sequence":3,"saving":true,"saved":false,"saveError":"","pending":[3]},
+    {"action":"confirm","sequence":3,"saving":false,"saved":true,"saveError":"","pending":[]},
+    {"action":"queue","sequence":4,"saving":true,"saved":false,"saveError":"","pending":[4]},
+    {"action":"stop","sequence":4,"code":"customer_deleted","saving":false,"saved":false,"saveError":"customer_deleted","pending":[]}
+  ]
+}
