@@ -3932,7 +3932,8 @@ enum StoreProductViewModelProjection {
         let productIdentities = Set(values.filter {
             $0.path.split(separator: "/").last == "placementId" && $0.value.value is String
         }.map(identity))
-        var linkedIDs = Set(values.filter { productIdentities.contains(identity($0)) }.compactMap(\.instanceId))
+        let productIDs = Set(values.filter { productIdentities.contains(identity($0)) }.compactMap(\.instanceId))
+        var linkedIDs = productIDs
         func containsProduct(_ value: Any) -> Bool {
             if let fields = value as? [String: Any] {
                 if fields["placementId"] is String { return true }
@@ -3960,7 +3961,39 @@ enum StoreProductViewModelProjection {
                 }
             }
         }
-        return values.enumerated().compactMap { selected.contains($0.offset) ? $0.element : nil }
+        // Null slots are internal placeholders, not signed starting values. Keep
+        // their positions so product hydration cannot shift a native plain row.
+        func productValue(_ value: Any) -> Any? {
+            if let rows = value as? [Any] {
+                guard rows.contains(where: containsProduct) else { return nil }
+                return rows.map { productValue($0) ?? NSNull() }
+            }
+            guard let fields = value as? [String: Any], containsProduct(fields) else { return nil }
+            if fields["placementId"] is String { return fields }
+            if let id = (fields["vmInstanceId"] ?? fields["instanceId"]) as? String,
+               productIDs.contains(id) { return fields }
+            var result: [String: Any] = [:]
+            for (key, child) in fields {
+                if ["vmInstanceId", "instanceId", "viewModelId", "viewModelName", "instanceName"].contains(key) {
+                    result[key] = child
+                } else if let child = productValue(child) {
+                    result[key] = child
+                }
+            }
+            return result
+        }
+        return values.enumerated().compactMap { index, row in
+            guard selected.contains(index) else { return nil }
+            if productIdentities.contains(identity(row)) { return row }
+            let leaf = row.path.split(separator: "/").last.map(String.init) ?? ""
+            if linkedGroups.contains(identity(row)),
+               ["vmInstanceId", "instanceId", "viewModelId", "viewModelName", "instanceName"].contains(leaf) {
+                return row
+            }
+            guard let value = productValue(row.value.value) else { return nil }
+            return JourneyViewModelValue(viewModelName: row.viewModelName, instanceId: row.instanceId,
+                instanceName: row.instanceName, path: row.path, value: AnyCodable(value))
+        }
     }
 
     static func apply(
@@ -4332,6 +4365,7 @@ private enum ExperienceInteractiveInitialState {
                     throw stateValue(value.path)
                 }
                 for row in rows {
+                    if case .null = row { continue }
                     let referenced = try referencedInstance(
                         row,
                         expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4445,12 +4479,26 @@ private enum ExperienceInteractiveInitialState {
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }
-                finalMutations[owner, default: []].append(.listClear(
-                    instance: reference,
-                    path: value.path
-                ))
+                let current = try await runtime.snapshot(reference)
+                let nativeIDs: [UInt64]
+                if case .list(let ids) = current.values.first(where: {
+                    $0.ownerInstanceID == reference.rawValue && $0.name == value.path
+                })?.value {
+                    nativeIDs = ids
+                } else {
+                    nativeIDs = []
+                }
                 var productRows: [ExperienceInteractiveViewModelReference] = []
+                for (index, id) in nativeIDs.enumerated() {
+                    let retained = try await runtime.acquireListItem(owner: reference, path: value.path,
+                        index: index, expectedIdentity: id)
+                    guard let item = ExperienceInteractiveViewModelReference(rawValue: retained.rawValue) else {
+                        throw stateValue(value.path)
+                    }
+                    productRows.append(item)
+                }
                 for (index, row) in rows.enumerated() {
+                    if case .null = row { continue }
                     let referenced = try referencedInstance(
                         row,
                         expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4466,13 +4514,17 @@ private enum ExperienceInteractiveInitialState {
                     ) else {
                         throw ExperienceInteractiveScreenError.stateContract(value.path)
                     }
-                    productRows.append(productChild)
-                    finalMutations[owner, default: []].append(.listInsert(
-                        instance: reference,
-                        path: value.path,
-                        index: index,
-                        value: child
-                    ))
+                    if index < productRows.count {
+                        productRows[index] = productChild
+                        finalMutations[owner, default: []].append(.listSet(
+                            instance: reference, path: value.path, index: index, value: child))
+                    } else {
+                        // Never synthesize or replay a missing non-product slot.
+                        guard index == productRows.count else { throw stateValue(value.path) }
+                        productRows.append(productChild)
+                        finalMutations[owner, default: []].append(.listInsert(
+                            instance: reference, path: value.path, index: index, value: child))
+                    }
                     detachedMutations[referenced.selection, default: []]
                         += try scalarMutations(
                         referenced.values,

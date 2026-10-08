@@ -1158,6 +1158,25 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             ["selected/vmInstanceId", "selected/viewModelId", "products", "placementId", "price"])
     }
 
+    func testProductProjectionKeepsOnlyProductSlotsAndReferenceMetadata() throws {
+        let projected = StoreProductViewModelProjection.productRows(in: [
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/vmInstanceId", value: AnyCodable("monthly")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/viewModelId", value: AnyCodable("Product")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/unrelated", value: AnyCodable(999)),
+            .init(viewModelName: "Root", instanceId: "root", path: "items", value: AnyCodable([
+                ["instanceId": "note", "values": ["count": 999]],
+                ["instanceId": "monthly", "values": ["price": "$0"]],
+            ])),
+            .init(viewModelName: "Product", instanceId: "monthly", path: "placementId", value: AnyCodable("monthly")),
+        ])
+        XCTAssertFalse(projected.contains { $0.path == "selected/unrelated" })
+        let rows = try XCTUnwrap(projected.first { $0.path == "items" }?.value.value as? [Any])
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows[0] is NSNull, "Plain slot carries no signed values")
+        let product = try XCTUnwrap(rows[1] as? [String: Any])
+        XCTAssertEqual((product["values"] as? [String: String])?["price"], "$0")
+    }
+
     func testStoreKitProductsReplaceSignedCatalogValuesBeforeRuntimeOpen() throws {
         let values = [
             JourneyViewModelValue(
@@ -1440,6 +1459,54 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             let expected = try XCTUnwrap(authored.values.first { $0.ownerInstanceID == authored.rootInstanceID && $0.name == name })
             XCTAssertEqual(String(describing: actual.value), String(describing: expected.value))
         }
+    }
+
+    func testProductHydrationPreservesNativePlainListRows() async throws {
+        // Extend the exact native list fixture with product strings. The second
+        // authored row starts at 1; its signed value deliberately disagrees.
+        var scene = try exactComponentListFixture()
+        func replace(_ old: [UInt8], _ new: [UInt8]) throws {
+            let range = try XCTUnwrap(scene.range(of: Data(old)))
+            scene.replaceSubrange(range, with: new)
+        }
+        func stringProperty(_ name: String) -> [UInt8] {
+            [0xbb, 0x03, 0xad, 0x04, UInt8(name.utf8.count)] + Array(name.utf8) + [0]
+        }
+        func stringValue(_ index: UInt8, _ value: String) -> [UInt8] {
+            [0xb1, 0x03, 0xaa, 0x04, index, 0xb1, 0x04, UInt8(value.utf8.count)] + Array(value.utf8) + [0]
+        }
+        let property: [UInt8] = [0xaf, 0x03, 0xad, 0x04, 5] + Array("value".utf8) + [0]
+        try replace(property, property + stringProperty("placementId") + stringProperty("price"))
+        let first: [UInt8] = [0xba, 0x03, 0xbf, 0x04, 0, 0, 0x80, 0x3f, 0xaa, 0x04, 0, 0]
+        try replace(first, first + stringValue(1, "paywall:monthly") + stringValue(2, "$0"))
+        try replace([0xba, 0x03, 0xbf, 0x04, 0, 0, 0, 0x40, 0xaa, 0x04, 0, 0], first)
+        let payload = try await statePayload(defaultViewModelName: "Doc", values: [
+            .init(viewModelName: "Doc", instanceId: "root-sdk-id", path: "items", value: AnyCodable([
+                ["vmInstanceId": "monthly", "viewModelId": "ItemVM", "values":
+                    ["placementId": "paywall:monthly", "price": "$0"]],
+                ["vmInstanceId": "note", "viewModelId": "ItemVM", "values": ["value": 999]],
+            ])),
+        ], scene: scene, artboardName: "Main")
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let screen = try await preparation.openScreen(products: [StoreProduct(
+            productId: "monthly", placementId: "paywall:monthly", name: "Monthly", price: "$9.99",
+            period: .month, periodCount: 1, periodLabel: "month", renewalPrice: "$9.99",
+            renewalPeriod: "month", productType: .autoRenewable)],
+            player: .staticArtboard, pixelWidth: 16, pixelHeight: 16)
+        defer { Task { try? await screen.close() } }
+        let snapshot = try await screen.snapshot()
+        let root = try await screen.rootViewModel()
+        guard case .list(let ids) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "items"
+        })?.value else { return XCTFail("Native list is absent") }
+        XCTAssertEqual(ids.count, 6, "Product hydration preserves the authored list")
+        guard ids.count >= 2 else { return }
+        func value(_ index: Int, _ name: String) -> ExperienceInteractiveViewModelValue? {
+            snapshot.values.first { $0.ownerInstanceID == ids[index] && $0.name == name }?.value
+        }
+        XCTAssertEqual(value(1, "value"), .number(1), "Plain row keeps its file value")
+        XCTAssertEqual(value(0, "placementId"), .bytes(Data("paywall:monthly".utf8)))
+        XCTAssertEqual(value(0, "price"), .bytes(Data("$9.99".utf8)))
     }
 
     func testFactoryKeepsAuthoredListDespiteSignedDefaults() async throws {
