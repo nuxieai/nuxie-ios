@@ -3927,6 +3927,42 @@ enum StoreProductViewModelProjection {
         let parentPath: String
     }
 
+    /// The signed table is only a product catalog. Authored state stays in the native file.
+    static func productRows(in values: [JourneyViewModelValue]) -> [JourneyViewModelValue] {
+        let productIdentities = Set(values.filter {
+            $0.path.split(separator: "/").last == "placementId" && $0.value.value is String
+        }.map(identity))
+        var linkedIDs = Set(values.filter { productIdentities.contains(identity($0)) }.compactMap(\.instanceId))
+        func containsProduct(_ value: Any) -> Bool {
+            if let fields = value as? [String: Any] {
+                if fields["placementId"] is String { return true }
+                if let id = (fields["vmInstanceId"] ?? fields["instanceId"]) as? String, linkedIDs.contains(id) { return true }
+                return fields.values.contains(where: containsProduct)
+            }
+            return (value as? [Any])?.contains(where: containsProduct) ?? false
+        }
+        var selected = Set<Int>()
+        var linkedGroups = Set<Identity>()
+        var previousCount = -1
+        while selected.count != previousCount {
+            previousCount = selected.count
+            for value in values where value.path.contains("/") {
+                if ["vmInstanceId", "instanceId"].contains(value.path.split(separator: "/").last.map(String.init) ?? ""),
+                   let id = value.value.value as? String, linkedIDs.contains(id) {
+                    linkedGroups.insert(identity(value))
+                }
+            }
+            for (index, value) in values.enumerated() {
+                if productIdentities.contains(identity(value)) || linkedGroups.contains(identity(value))
+                    || containsProduct(value.value.value) {
+                    selected.insert(index)
+                    if let id = value.instanceId { linkedIDs.insert(id) }
+                }
+            }
+        }
+        return values.enumerated().compactMap { selected.contains($0.offset) ? $0.element : nil }
+    }
+
     static func apply(
         _ products: [StoreProduct],
         to values: [JourneyViewModelValue]
@@ -4191,7 +4227,7 @@ private enum ExperienceInteractiveInitialState {
         let sourceValues = try ExperienceInteractiveStateCompiler.signedValues(
             StoreProductViewModelProjection.apply(
                 products,
-                to: journey.viewModelValues ?? []
+                to: StoreProductViewModelProjection.productRows(in: journey.viewModelValues ?? [])
             )
         )
         let listIndexPathsBySchema = Dictionary(grouping: catalog.properties.filter {
@@ -4319,14 +4355,9 @@ private enum ExperienceInteractiveInitialState {
         var nativeReferences: [Selection: NuxieNativeViewModelReference] = [.root: nativeRoot]
         for selection in requestOrder where selection != .root {
             guard let request = requests[selection] else { continue }
-            let authoredIndex = try authoredInstanceIndex(
-                request.instanceName,
-                schema: request.schema,
-                catalog: catalog
-            )
             let reference = try await runtime.makeViewModel(
                 schemaIndex: request.schema.index,
-                authoredInstanceIndex: authoredIndex
+                authoredInstanceIndex: nil
             )
             nativeReferences[selection] = reference
             let identity: ExperienceInteractiveViewModelIdentity
@@ -4567,23 +4598,6 @@ private enum ExperienceInteractiveInitialState {
         }
         requests[request.selection] = request
         order.append(request.selection)
-    }
-
-    private static func authoredInstanceIndex(
-        _ instanceName: String?,
-        schema: NuxieNativeViewModelCatalog.Schema,
-        catalog: NuxieNativeViewModelCatalog
-    ) throws -> Int? {
-        guard let instanceName else { return nil }
-        let matches = catalog.authoredInstances.filter {
-            $0.schemaIndex == schema.index && $0.name == instanceName
-        }
-        guard matches.count == 1 else {
-            throw ExperienceInteractiveScreenError.stateContract(
-                "authored instance '\(instanceName)' does not resolve exactly once"
-            )
-        }
-        return matches[0].index
     }
 
     private static func schemaHintsByRemoteID(

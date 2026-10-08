@@ -1,11 +1,87 @@
 import CryptoKit
 import Foundation
+@testable import NuxieRuntime
 import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
+
+    func testPublishedF4AuthenticatesExactVersionThreePolicy() async throws {
+        try await verifyPublishedF4(disagreeingRow: false)
+    }
+
+    func testSignedNonProductDefaultsCannotOverrideNativeFile() async throws {
+        try await verifyPublishedF4(disagreeingRow: true)
+    }
+
+    private func verifyPublishedF4(disagreeingRow: Bool) async throws {
+        let directory = PublishedRunValuesFixture.directory
+        var bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("profile-entry.json")))
+        if disagreeingRow {
+            var changed = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            changed["viewModelValues"] = [["viewModelName": "Experience", "instanceId": "vmi_experience",
+                "instanceName": "Experience", "path": "trip_days", "value": 999]]
+            bytes = try JSONSerialization.data(withJSONObject: changed, options: [.sortedKeys])
+        }
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        // Qualify these fixture bytes on the locally staged runtime without moving its release pin.
+        let supported = JourneyReleaseSupportedRuntime(
+            currentSdkVersion: "0.1.0",
+            supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+            supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+            sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+            timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+            timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+            supportedCapabilities: ["system-fonts"])
+        let release = try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(disagreeingRow ? sign(bytes) : entry.envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+        XCTAssertEqual(release.exactDescriptorBytes, bytes)
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("f4-release-\(UUID())")
+        defer { StubURLProtocol.reset(); try? FileManager.default.removeItem(at: cache) }
+        StubURLProtocol.register(matcher: { $0.url?.host == "f4.nuxie.test" }) { request in
+            let url = try XCTUnwrap(request.url)
+            let data = try Data(contentsOf: directory.appendingPathComponent(String(url.path.dropFirst())))
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/vnd.nuxie.scene", "Content-Length": String(data.count)])), data)
+        }
+        let store = JourneyReleaseAcquisitionStore(cacheDirectory: cache,
+            urlSession: TestURLSessionProvider.createTestSession())
+        let presentation = try await store.preparePresentation(release: release,
+            delivery: .init(renderBaseUrl: "https://f4.nuxie.test/", assetBaseUrl: "https://f4.nuxie.test/"),
+            productResolver: { _ in [] })
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        for declared in release.descriptor.leg.screens {
+            let artifact = try await presentation.artifactLoader(presentation.experience, nil, declared.id)
+            XCTAssertEqual(artifact.payload.valuePolicy.state.mapValues(\.type),
+                ["trip_days": "number", "level": "number"])
+            let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+            try await prepared.prepareRunValues(run)
+            let values = try await run.journeyValues()
+            XCTAssertEqual(values["trip_days"], .number(23))
+            XCTAssertEqual(values["level"], .number(1))
+            let screen = try await prepared.openScreen(screenID: declared.id, runValues: run,
+                pixelWidth: 393, pixelHeight: 852)
+            _ = try await screen.step(elapsedSeconds: 0)
+            try await screen.close()
+        }
+        XCTAssertEqual(release.descriptor.state.mapValues(\.type), ["trip_days": "number", "level": "number"])
+        XCTAssertTrue(release.descriptor.responses.isEmpty)
+        XCTAssertTrue(release.descriptor.ruleGroups.isEmpty)
+        XCTAssertEqual(release.descriptor.leg.screens.count, 2)
+        XCTAssertTrue(release.descriptor.leg.routes.contains { $0.eventName == "continue" })
+    }
 
     func testVersionThreeRequiresValuePolicySections() throws {
         let fixture = try golden()
