@@ -1000,6 +1000,11 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try viewModel.snapshot() }
     }
 
+    package func snapshot(_ reference: NuxieNativeViewModelReference) async throws -> NuxieNativeViewModelSnapshot {
+        let state = try requireState()
+        return try await executor.call { try state.snapshot(reference) }
+    }
+
     package func rootViewModelReference() async throws -> NuxieNativeViewModelReference {
         let state = try requireState()
         return try await executor.call { try state.rootViewModelReference() }
@@ -1015,6 +1020,17 @@ package actor NuxieNativeRuntime {
                 schemaIndex: schemaIndex,
                 authoredInstanceIndex: authoredInstanceIndex
             )
+        }
+    }
+
+    /// Retain a native list child without recreating its authored state.
+    package func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64) async throws -> NuxieNativeViewModelReference {
+        let state = try requireState()
+        let executor = self.executor
+        return try await executor.call {
+            try state.acquireListItem(owner: owner, path: path, index: index,
+                expectedIdentity: expectedIdentity, executor: executor)
         }
     }
 
@@ -1782,6 +1798,45 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         retainedViewModels[reference.rawValue] = handle
         return reference
+    }
+
+    func snapshot(_ reference: NuxieNativeViewModelReference) throws -> NuxieNativeViewModelSnapshot {
+        if reference == (try rootViewModelReference()), let viewModel { return try viewModel.snapshot() }
+        guard let handle = retainedViewModels[reference.rawValue] ?? sharedContext?.sharedViewModels[reference.rawValue] else {
+            throw NuxieNativeRuntimeError.missingHandle("view model")
+        }
+        return try handle.snapshot()
+    }
+
+    func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64, executor: NuxieRuntimePinnedThreadExecutor) throws
+        -> NuxieNativeViewModelReference {
+        let root = try self.rootViewModelReference()
+        guard index >= 0, let handle = owner == root ? self.viewModel
+            : (self.retainedViewModels[owner.rawValue] ?? self.sharedContext?.sharedViewModels[owner.rawValue]) else {
+            throw NuxieNativeRuntimeError.missingHandle("list owner")
+        }
+        var pointer: OpaquePointer?
+        try requireOK(withStringView(path) {
+            nux_view_model_instance_list_item_acquire(try handle.owned.require(), $0, index, &pointer)
+        }, operation: "acquire product list child")
+        guard let pointer else { throw NuxieNativeRuntimeError.missingHandle("list child") }
+        let child = NuxieNativeViewModelHandle(executor: executor, handle: pointer)
+        do {
+            let reference = try child.reference()
+            guard reference.rawValue == expectedIdentity else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("list child changed since snapshot")
+            }
+            if self.retainedViewModels[reference.rawValue] != nil {
+                try child.close()
+            } else {
+                self.retainedViewModels[reference.rawValue] = child
+            }
+            return reference
+        } catch {
+            try? child.close()
+            throw error
+        }
     }
 
     func releaseViewModels(
