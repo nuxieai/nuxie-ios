@@ -62,11 +62,9 @@ actor JourneyResponseSaveDelivery {
         let reply: JourneyResponseSaveReply
         do { reply = try await transport.sendResponseSave(sheet) }
         catch is CancellationError { throw CancellationError() }
-        catch { try Task.checkCancellation(); return .noAnswer }
+        catch { try Task.checkCancellation(); reply = .noAnswer }
         try Task.checkCancellation()
-        if reply.confirmed, let sequence = reply.sequence {
-            try await journal.confirmResponseSave(sheet, storedSequence: sequence)
-        }
+        try await journal.recordWaitingResponseSaveReply(sheet, reply: reply)
         return reply
     }
 

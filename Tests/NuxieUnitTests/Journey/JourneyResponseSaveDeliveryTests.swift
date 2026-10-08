@@ -6,6 +6,59 @@ import XCTest
 #endif
 
 final class JourneyResponseSaveDeliveryTests: XCTestCase {
+    func testLatestSaveAttemptOwnsPersistedDisplayAcrossRestarts() async throws {
+        struct Vector: Decodable {
+            struct Step: Decodable {
+                let action: String
+                let sequence: Int64
+                let code: String?
+                let saving: Bool
+                let saved: Bool
+                let saveError: String
+                let pending: [Int64]
+            }
+            let steps: [Step]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let vectors = try ExactJSONCodec.decode(Vector.self,
+            from: Data(contentsOf: root.appendingPathComponent("fixtures/responses/save-display.json")))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        var sheets: [Int64: JourneyResponseSave] = [:]
+        var newest: Int64 = 0
+        for step in vectors.steps {
+            switch step.action {
+            case "queue", "wait":
+                let sheet = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: step.action == "queue")
+                XCTAssertEqual(sheet.sequence, step.sequence)
+                sheets[sheet.sequence] = sheet
+                newest = sheet.sequence
+            case "retry", "stop":
+                _ = try await journal.recordResponseSaveReply(try XCTUnwrap(sheets[step.sequence]),
+                    reply: .init(code: try XCTUnwrap(JourneyResponseSaveReply.Code(rawValue: step.code ?? "")), sequence: nil),
+                    at: Date(timeIntervalSince1970: 1000))
+            case "fail_wait":
+                try await journal.recordWaitingResponseSaveReply(try XCTUnwrap(sheets[step.sequence]),
+                    reply: .init(code: try XCTUnwrap(JourneyResponseSaveReply.Code(rawValue: step.code ?? "")), sequence: nil))
+            case "confirm":
+                try await journal.confirmResponseSave(try XCTUnwrap(sheets[step.sequence]), storedSequence: step.sequence)
+            default: XCTFail("Unknown shared save-display action")
+            }
+            journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+            let states = try await journal.responseSaveDisplays(journeyId: run.journeyId)
+            let state = try XCTUnwrap(states["feedback"])
+            XCTAssertEqual(state.sequence, newest)
+            XCTAssertEqual(state.saving, step.saving)
+            XCTAssertEqual(state.saved, step.saved)
+            XCTAssertEqual(state.saveError, step.saveError)
+            let pending = try await journal.pendingResponseSaves()
+            XCTAssertEqual(pending.map(\.sequence), step.pending)
+        }
+    }
+
     private struct Vectors: Decodable {
         struct Reply: Decodable {
             let bodyText: String
