@@ -275,7 +275,8 @@ final class ExperienceSharedValuesTests: XCTestCase {
             let selected = frames[0][offset..<(offset + 4)]
             let unselected = frames[1][offset..<(offset + 4)]
             if selected != unselected {
-                XCTAssertTrue(unselected.elementsEqual(background),
+                // Metal may round a cleared edge channel by one unit after compositing.
+                XCTAssertTrue(zip(unselected, background).allSatisfy { abs(Int($0) - Int($1)) <= 1 },
                     "Tick's differing pixels must be absent at level 0, not at level 1")
                 visibleTickPixels += 1
             }

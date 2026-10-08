@@ -20,11 +20,39 @@
     "noTickValue": 0,
     "tickText": "Tick"
   },
-  "qualification": "C8 first cut proves connected values, not platform pixels. Component copies may draw about one pixel high until UNIV-3966. Platform proof of the tick on the first drawn frame waits for republishing after that fix. Source text includes Days as a binding fallback, Continue, and Tick.",
+  "qualification": "Release v3 cut from the existing tap/level source. Platform first-frame rendering remains a platform check.",
   "notYetIncluded": [
     "device screen and device values schema file (C5)",
     "empty screen and tips_seen (C6, C7)",
-    "release.json (C10)",
     "Journey branches"
+  ],
+  "release": {
+    "schemaVersion": "nuxie.journey-release.v3",
+    "state": {
+      "trip_days": {
+        "type": "number"
+      },
+      "level": {
+        "type": "number"
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "markers": [
+    {
+      "model": "Experience",
+      "property": "trip_days",
+      "marker": "isset:trip_days",
+      "value": 23,
+      "present": true
+    },
+    {
+      "model": "Experience",
+      "property": "level",
+      "marker": "isset:level",
+      "value": 1,
+      "present": true
+    }
   ]
 }

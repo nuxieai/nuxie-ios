@@ -1,27 +1,53 @@
 {
-  "superprojectCommit": "97d23aae674d8035ffda773cefdf936f85a1ea46",
-  "publisherSourceCommit": "97d23aae674d8035ffda773cefdf936f85a1ea46",
-  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
-  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
-  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
+  "sourceCommit": "944535ae6795a2f82fd8703c518e01a2d298d1ae",
+  "compilerBaseCommit": "2480f23d85",
   "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "sha256": "e25f18da6205712aee0efb6e779094cb9bd133a662cfae8184b6535ab1ff2e08",
-  "sizeBytes": 5353,
-  "publisherWasmSha256": "2f3e64c33ad2858af55a3cb7822bba02c0384ff5688c3ccf849aed4cc99e629f",
-  "authorityWasmSha256": "1511d8dcb9e6a88222c3711d925716cbd4768e60df12517b2f2dc7fb65997353",
-  "qualification": "First cut. Real publisher; C8 first-advanced-frame semantic values and C9 real pointer/shared values/native continue event pass. Platform pixels and released-Experience admission remain separate. Non-visibility focus/semantic-listener additions are documented in NOTES.md.",
+  "worktree": "/Users/levi/dev/nuxie-codex/codex-data-plan",
+  "target": "/Users/levi/dev/nuxie-codex/codex-data-plan/tools/nuxie-editor/target",
+  "publisherWasm": {
+    "sha256": "ce04aea8076a12bf26864155b5dcef1f38ef1ec40d5817cf497a9e874e2e9b26",
+    "sizeBytes": 17465702
+  },
+  "authorityWasm": {
+    "sha256": "1ff58b667c5931d8a9d756bfb4a78915dd6fd66eef839d98f6d215a72bd931bc",
+    "sizeBytes": 23469939
+  },
+  "fonts": [
+    {
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "authoredAssetId": 0,
+      "family": "System",
+      "kind": "font",
+      "location": "system",
+      "required": true,
+      "style": "normal",
+      "weight": "400"
+    }
+  ],
   "files": {
     "NOTES.md": {
-      "sha256": "94efac5560740d5d90792d51a3515a461b2f9de5aca9fd7cc9c2f795b07410f7",
-      "sizeBytes": 8058
+      "sha256": "36015fdcf3377c361ae0fa38af43b5510da613b410efb81987db2357f0e462cb",
+      "sizeBytes": 5054
     },
     "expectations.json": {
-      "sha256": "cccc1749bf5852e7b8b3339a18da0cec3face0b2f0f96f6db497318bd525ece5",
-      "sizeBytes": 829
+      "sha256": "ceee05702b6422ddb6349ab9a0203f01e0e4169569b0dd9634c7bc3e21fc18e5",
+      "sizeBytes": 1174
+    },
+    "profile-entry.json": {
+      "sha256": "19cc8957ec129ce69fba31a18dbb0acef65e4d6b4f56996a0a184cef1c0f7213",
+      "sizeBytes": 10325
+    },
+    "release.json": {
+      "sha256": "cbb75aea742c09141af2ccf29ac70769af3e4c93c47051dc7837d93b14ba89e6",
+      "sizeBytes": 7095
+    },
+    "renders/sha256/2d53be065779eee7f29f164dfb4f8f24f48c0799fa5cd4e7aa0811205d507b1f.nux": {
+      "sha256": "2d53be065779eee7f29f164dfb4f8f24f48c0799fa5cd4e7aa0811205d507b1f",
+      "sizeBytes": 6541
     },
     "screen.riv": {
-      "sha256": "e25f18da6205712aee0efb6e779094cb9bd133a662cfae8184b6535ab1ff2e08",
-      "sizeBytes": 5353
+      "sha256": "2d53be065779eee7f29f164dfb4f8f24f48c0799fa5cd4e7aa0811205d507b1f",
+      "sizeBytes": 6541
     },
     "source/components/answer-card/frame.json": {
       "sha256": "b74869099b375140a2b450ae8513d16513568910925a2cec6f77c27af85bc021",
@@ -32,8 +58,8 @@
       "sizeBytes": 112
     },
     "source/experience.json": {
-      "sha256": "fe1c7b3ed7b72f89117c89207a8d3b310bc771aef986123ae159167452a3741b",
-      "sizeBytes": 527
+      "sha256": "ad6498f52625c223ee148cdb60068fb3fce7b91eade8c1f4eaafdb12dba42cfc",
+      "sizeBytes": 661
     },
     "source/screens/level/frame.json": {
       "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
@@ -51,16 +77,5 @@
       "sha256": "5a4e501675a339bb167fb3451af44280dec2a9575c72419bb0bbecc32a4b4347",
       "sizeBytes": 218
     }
-  },
-  "fonts": [
-    {
-      "location": "system",
-      "family": "System",
-      "weight": "400",
-      "style": "normal",
-      "authoredAssetId": 0,
-      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
-      "required": true
-    }
-  ]
+  }
 }
