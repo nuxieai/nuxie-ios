@@ -41,6 +41,51 @@ final class ExperienceValuePolicyTests: XCTestCase {
         }
     }
 
+    func testPublishedF5ReadsLiveAnswersWithoutFilteringMarkingFailures() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
+        let file = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")), valuePolicy: release.valuePolicy.native)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        let oracle = try JSONDecoder().decode([String: ExactJSONObject<JourneyReleaseJSONValue>].self,
+            from: Data(contentsOf: directory.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("events/response-native-sheets.json")))
+        let initial = try await native.sessions.snapshot(native.reference)
+        guard case .referencedInstance(let feedbackID) = initial.values.first(where: {
+            $0.ownerInstanceID == initial.rootInstanceID && $0.name == "responses:feedback"
+        })?.value, case .list(let ids) = initial.values.first(where: {
+            $0.ownerInstanceID == feedbackID && $0.name == "interests"
+        })?.value else { return XCTFail("Published response list is absent") }
+        let focus = try await native.sessions.acquireListItem(owner: native.reference,
+            path: "responses:feedback/interests", index: 1, expectedIdentity: ids[1])
+        let empty = try await run.responseAnswers(form: "feedback", policy: release.valuePolicy)
+        XCTAssertEqual(empty, oracle["initial"])
+        _ = try await native.sessions.mutate([
+            .setNumber(instance: native.reference, path: "responses:feedback/stars", value: 0),
+            .setString(instance: native.reference, path: "responses:feedback/email", value: Data("invalid".utf8)),
+            .setString(instance: native.reference, path: "responses:feedback/comment", value: Data("hello".utf8)),
+            .setBool(instance: native.reference, path: "responses:onboarding/wants_reminder", value: false),
+            .setEnumeration(instance: native.reference, path: "responses:onboarding/italian_level", value: 1),
+            .setBool(instance: focus, path: "picked", value: true),
+        ])
+        let answers = try await run.responseAnswers(form: "feedback", policy: release.valuePolicy)
+        XCTAssertEqual(answers, oracle["feedback"])
+        let onboarding = try await run.responseAnswers(form: "onboarding", policy: release.valuePolicy)
+        XCTAssertEqual(onboarding, oracle["onboarding"])
+        _ = try await native.sessions.mutate([
+            .setBool(instance: native.reference, path: "responses:feedback/isset:stars", value: false),
+            .setBool(instance: focus, path: "picked", value: false),
+            .setString(instance: native.reference, path: "responses:feedback/email", value: Data()),
+            .setString(instance: native.reference, path: "responses:feedback/comment", value: Data()),
+        ])
+        let cleared = try await run.responseAnswers(form: "feedback", policy: release.valuePolicy)
+        XCTAssertEqual(cleared, oracle["cleared"])
+    }
+
     func testBadPolicyFailsPreparationBeforeASessionExists() async throws {
         let bytes = try Data(contentsOf: SharedValuesFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("run-values/screen.riv"))
