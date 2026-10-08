@@ -114,6 +114,44 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             "Seed from the delivered TextInput locator, not the table's empty value")
     }
 
+    func testPublishedInputFieldSetterSettlesItsNativeBinding() async throws {
+        let directory = PublishedInputFixture.directory
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+        let font = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
+        let runtime = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "input",
+            player: .defaultScene, pixelWidth: 393, pixelHeight: 852, bindDefaultViewModel: true,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                externalAssets: Dictionary(uniqueKeysWithValues: assets.filter { $0.kind == .font }.map { ($0.ordinal, font.bytes) })))
+        addTeardownBlock { try await runtime.close() }
+        let locator = "scr_screens_sinput::v2 editable value"
+        try await runtime.enableSemantics()
+        func present() async throws -> NuxieNativeSemanticCapture {
+            let layer = CAMetalLayer()
+            layer.device = try await runtime.metalDevice().value
+            layer.pixelFormat = .bgra8Unorm
+            layer.drawableSize = CGSize(width: 393, height: 852)
+            let drawable = try XCTUnwrap(layer.nextDrawable())
+            _ = try await runtime.render(layoutScaleFactor: 1,
+                drawable: .available(NuxieNativeDrawable(drawable)), clearColor: 0xFFFFFFFF)
+            return try await runtime.captureSemantics(nativeInputs: [locator])
+        }
+        _ = try await runtime.step(elapsedSeconds: 0)
+        let capture = try await present()
+        let field = try XCTUnwrap(capture.nativeInputs[locator]?.first)
+        let changed = try await runtime.setFieldString(captureID: capture.id,
+            nodeID: field.nodeID, name: locator, value: Data("Grace".utf8))
+        XCTAssertTrue(changed, "The occurrence-checked setter must accept the edit")
+        _ = try await runtime.step(elapsedSeconds: 0)
+        let fresh = try await present()
+        let actual = try await runtime.readFieldString(captureID: fresh.id,
+            nodeID: field.nodeID, name: locator)
+        XCTAssertEqual(actual, Data("Grace".utf8), "Normal settlement must retain the native field edit")
+        let snapshot = try await runtime.snapshot()
+        XCTAssertEqual(snapshot.values.first { $0.name == "name" }?.value, .bytes(Data("Grace".utf8)),
+            "The field setter must settle through the Experience binding")
+    }
+
     func testPublishedInputReplacementPreservesNativeCompositionAndCorrection() async throws {
         let expected = try PublishedInputFixture.expectations()
         let preparation = try await ExperienceInteractivePreparation.prepare(payload:
@@ -188,11 +226,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         controller.view.addSubview(surface)
         let bridge = ExperienceTextInputOverlayBridge()
         var kept = ""
-        bridge.bind(screenID: "screen", renderPlan: makePlan(native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(),
             surfaceView: surface, artboardBounds: surface.bounds,
             semanticTextWriter: { _, _, text, done in kept = text; done(.accepted) },
-            semanticTextReader: { _, _, done in done(.success(.init(text: kept))) },
-            textWriter: { _, _, _ in XCTFail("Native field bypassed captured ownership") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: kept))) })
         defer { bridge.clear() }
         presentField(on: bridge)
         let native = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1] as? UITextField)
@@ -336,11 +373,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         print("TYPING_EDITING " + String(decoding: editingData, as: UTF8.self))
         window.makeKeyAndVisible()
         bridge.clear()
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
             surfaceView: surface, artboardBounds: surface.bounds,
             semanticTextWriter: { _, _, text, done in kept = text; done(.accepted) },
-            semanticTextReader: { _, _, done in done(.success(.init(text: kept))) },
-            textWriter: { _, _, _ in XCTFail("Secure editor bypassed ownership") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: kept))) })
         presentField(on: bridge)
         let secureNative = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: true))[1] as? UITextField)
         XCTAssertTrue(secureNative.becomeFirstResponder())
@@ -377,11 +413,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let surface = UIView(frame: window.bounds)
         controller.view.addSubview(surface)
         var source = ""
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
             surfaceView: surface, artboardBounds: surface.bounds,
             semanticTextWriter: { _, _, text, done in source = text; done(.accepted) },
-            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
-            textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) })
         defer { bridge.clear(); window.isHidden = true }
         presentField(on: bridge)
         let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: true))[1] as? UITextField)
@@ -411,11 +446,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let surface = UIView(frame: window.bounds)
         controller.view.addSubview(surface)
         var source = ""
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
             surfaceView: surface, artboardBounds: surface.bounds,
             semanticTextWriter: { _, _, text, done in source = text; done(.accepted) },
-            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
-            textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) })
         defer { bridge.clear(); window.isHidden = true }
         presentField(on: bridge)
         let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: true))[1] as? UITextField)
@@ -476,7 +510,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         window.makeKeyAndVisible()
         let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
         controller.view.addSubview(surface)
-        bridge.bind(screenID: "screen", renderPlan: makePlan(multiline: true),
+        bindCapturedFixture(bridge, screenID: "screen", renderPlan: makePlan(multiline: true),
             surfaceView: surface, artboardBounds: surface.bounds) { _, _, done in done(.success(())) }
         defer { bridge.clear(); window.isHidden = true }
         presentField(on: bridge)
@@ -536,14 +570,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             var pendingRead: (() -> Void)?
             var events: [ExperienceTextInputEvent] = []
             bridge.onEditingEvent = { _, event in events.append(event) }
-            bridge.bind(screenID: "screen", renderPlan: makePlan(secure: secure, native: true),
+            bridge.bind(screenID: "screen", renderPlan: makePlan(secure: secure),
                 surfaceView: view, artboardBounds: view.bounds,
                 semanticTextWriter: { _, _, text, done in source = text; done(.accepted) },
                 semanticTextReader: { _, _, done in
                     let snapshot = source
                     if deferRead { pendingRead = { done(.success(.init(text: snapshot))) } }
                     else { done(.success(.init(text: snapshot))) }
-                }, textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+                })
             defer { bridge.clear() }
             presentField(on: bridge)
             let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: secure))[1] as? UITextField)
@@ -565,12 +599,11 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var source = "saved"
         var textCompletion: (@MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)?
         var offsets: [(UUID, CGPoint, @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
-        bridge.bind(screenID: "screen", renderPlan: makePlan(native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(),
             surfaceView: surface, artboardBounds: surface.bounds,
             semanticTextWriter: { _, _, text, done in source = text; textCompletion = done },
             semanticContentOffsetWriter: { id, _, offset, done in offsets.append((id, offset, done)) },
-            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
-            textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) })
         defer { bridge.clear() }
         presentField(on: bridge)
         let first = try nativeCapture(ids: [1], secure: false)
@@ -612,11 +645,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 var source = ""
                 var writes: [String] = []
                 bridge.bind(screenID: "screen",
-                    renderPlan: makePlan(secure: secure, multiline: multiline, native: true),
+                    renderPlan: makePlan(secure: secure, multiline: multiline),
                     surfaceView: surface, artboardBounds: surface.bounds,
                     semanticTextWriter: { _, _, text, done in writes.append(text); done(.accepted) },
-                    semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
-                    textWriter: { _, _, _ in XCTFail("Native input used legacy write") })
+                    semanticTextReader: { _, _, done in done(.success(.init(text: source))) })
                 presentField(on: bridge)
                 let control = try XCTUnwrap(bridge.applySemantics(
                     try nativeCapture(ids: [1], secure: secure))[1])
@@ -678,7 +710,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             XCTAssertEqual(input.inputId, "input", "Occurrence identity must not change authored action routing")
             commits.append(value)
         }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
             surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { _, target, value, done in
                 guard let node = target.nodeID else { return XCTFail("Missing occurrence") }
@@ -688,7 +720,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             }, semanticTextReader: { _, target, done in
                 guard let node = target.nodeID, let value = values[node] else { return XCTFail("Unknown occurrence") }
                 done(.success(.init(text: value, ownerInstanceID: UInt64(node))))
-            }, textWriter: { _, _, _ in XCTFail("Native field used legacy text-run writer") })
+            })
         presentField(on: bridge)
         let controls = bridge.applySemantics(try nativeCapture(ids: [1, 2]))
         let first = try XCTUnwrap(controls[1] as? UITextField)
@@ -723,11 +755,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var pending: (@MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)?
         var events: [ExperienceTextInputEvent] = []
         bridge.onEditingEvent = { _, event in events.append(event) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(),
             surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { _, _, _, done in pending = done },
-            semanticTextReader: { _, _, done in done(.success(source)) },
-            textWriter: { _, _, _ in XCTFail("Native field used legacy write") })
+            semanticTextReader: { _, _, done in done(.success(source)) })
         presentField(on: bridge)
         let controls = bridge.applySemantics(try nativeCapture(ids: [1], secure: false))
         let field = try XCTUnwrap(controls[1] as? UITextField)
@@ -751,11 +782,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var source = "original"
         var commits: [String] = []
         bridge.onAcceptedTextChange = { _, value in commits.append(value) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
             surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { _, _, _, done in pending = done },
-            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
-            textWriter: { _, _, _ in XCTFail("Legacy write") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) })
         presentField(on: bridge)
         let first = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1]))[1] as? UITextField)
         first.text = "pending secret"
@@ -777,11 +807,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         var source = "initial"
         var pending: (@MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)?
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false),
             surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { _, _, _, done in pending = done },
-            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
-            textWriter: { _, _, _ in XCTFail("Legacy write") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) })
         presentField(on: bridge)
         let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1] as? UITextField)
         source = "updated externally"
@@ -804,11 +833,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var writes = 0
         var commits: [String] = []
         bridge.onAcceptedTextChange = { _, value in commits.append(value) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
             surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { _, _, value, done in source = value; writes += 1; pending = done },
-            semanticTextReader: { _, _, done in done(.success(.init(text: source))) },
-            textWriter: { _, _, _ in XCTFail("Legacy write") })
+            semanticTextReader: { _, _, done in done(.success(.init(text: source))) })
         presentField(on: bridge)
         let first = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1]))[1] as? UITextField)
         first.text = "accepted in runtime"
@@ -827,11 +855,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
     func testSecureNativeGeometryCannotPopulateAnOrdinaryControl() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false),
             surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { _, _, _, _ in XCTFail("Mismatched field wrote a value") },
-            semanticTextReader: { _, _, _ in XCTFail("Mismatched field read a secure value") },
-            textWriter: { _, _, _ in XCTFail("Legacy write") })
+            semanticTextReader: { _, _, _ in XCTFail("Mismatched field read a secure value") })
         presentField(on: bridge)
         XCTAssertTrue(bridge.applySemantics(try nativeCapture(ids: [1])).isEmpty)
         XCTAssertTrue(view.subviews.isEmpty)
@@ -843,11 +870,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         var source = "first"
         var reads = 0
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true, native: true),
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true),
             surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { _, _, _, _ in XCTFail("Source refresh is not a user edit") },
-            semanticTextReader: { _, _, done in reads += 1; done(.success(.init(text: source))) },
-            textWriter: { _, _, _ in XCTFail("Legacy write") })
+            semanticTextReader: { _, _, done in reads += 1; done(.success(.init(text: source))) })
         presentField(on: bridge)
         let captureID = UUID()
         let firstCapture = try nativeCapture(ids: [1], captureID: captureID)
@@ -882,14 +908,6 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             fieldsByTextRun: [:], nativeInputs: ["editable": occurrences])
     }
 
-
-
-
-
-
-
-
-
     func testAuthoredInputActionChoosesOneEventAndUsesAcceptedValue() throws {
         for selectedEvent in [ExperienceTextInputEventKind.editingEnded, .returnPressed] {
             var input = makePlan().textInputs[0]
@@ -918,9 +936,8 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var events: [ExperienceTextInputEvent] = []
         bridge.onAcceptedTextChange = { _, text in values.append(text) }
         bridge.onEditingEvent = { _, event in events.append(event) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(multiline: true), surfaceView: view, artboardBounds: view.bounds,
-            semanticTextWriter: { _, _, _, done in done(.accepted) },
-            textWriter: { _, _, _ in XCTFail("Expected semantic writer") })
+        bindCapturedFixture(bridge, screenID: "screen", renderPlan: makePlan(multiline: true), surfaceView: view, artboardBounds: view.bounds,
+            semanticTextWriter: { _, _, _, done in done(.accepted) })
         let textView = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextView }.first)
         presentField(on: bridge)
         _ = bridge.applySemantics(try capture(flags: 0))
@@ -941,9 +958,8 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var events: [ExperienceTextInputEvent] = []
         bridge.onAcceptedTextChange = { _, text in values.append(text) }
         bridge.onEditingEvent = { _, event in events.append(event) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(), surfaceView: view, artboardBounds: view.bounds,
-            semanticTextWriter: { _, _, _, done in done(.accepted) },
-            textWriter: { _, _, _ in XCTFail("Expected semantic writer") })
+        bindCapturedFixture(bridge, screenID: "screen", renderPlan: makePlan(), surfaceView: view, artboardBounds: view.bounds,
+            semanticTextWriter: { _, _, _, done in done(.accepted) })
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
         presentField(on: bridge)
         _ = bridge.applySemantics(try capture(flags: 0))
@@ -967,7 +983,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var writes: [String] = []
         var commits: [String] = []
         bridge.onAcceptedTextChange = { _, text in commits.append(text) }
-        bridge.bind(screenID: "screen", renderPlan: plan, surfaceView: view, artboardBounds: view.bounds) { _, text, done in
+        bindCapturedFixture(bridge, screenID: "screen", renderPlan: plan, surfaceView: view, artboardBounds: view.bounds) { _, text, done in
             writes.append(text); done(.success(()))
         }
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
@@ -983,7 +999,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         field.sendActions(for: .editingChanged)
         bridge.flushTextChange(for: field)
         XCTAssertEqual(field.text, "saved")
-        XCTAssertEqual(writes, ["saved"])
+        XCTAssertTrue(writes.isEmpty, "Initial native text is read, not rewritten")
         XCTAssertTrue(commits.isEmpty)
         _ = bridge.applySemantics(try capture(flags: 0))
         XCTAssertTrue(field.isEnabled)
@@ -1009,7 +1025,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         for (secure, multiline) in [(false, false), (true, false), (false, true)] {
             let bridge = ExperienceTextInputOverlayBridge()
             let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-            bridge.bind(screenID: "screen", renderPlan: makePlan(secure: secure, multiline: multiline),
+            bindCapturedFixture(bridge, screenID: "screen", renderPlan: makePlan(secure: secure, multiline: multiline),
                 surfaceView: view, artboardBounds: view.bounds) { _, _, done in done(.success(())) }
             presentField(on: bridge)
             let obscured = secure ? NuxieNativeSemanticNode.obscured : 0
@@ -1023,7 +1039,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             XCTAssertEqual(control.accessibilityUserInputLabels, ["Your name"])
             XCTAssertEqual(control.accessibilityValue, nativeValue, "State must not replace native or secure text values")
             if let field = control as? UITextField {
-                XCTAssertEqual(field.text, "saved")
+                XCTAssertTrue(field.text == "saved", "Native control must retain its source value")
                 XCTAssertFalse(bridge.textField(field, shouldChangeCharactersIn: NSRange(location: 0, length: 0), replacementString: "blocked"))
             } else {
                 let textView = try XCTUnwrap(control as? UITextView)
@@ -1043,18 +1059,15 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         var pending: [(UUID, String, @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
         var commits: [String] = []
         bridge.onAcceptedTextChange = { _, text in commits.append(text) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(), surfaceView: view, artboardBounds: view.bounds,
+        bindCapturedFixture(bridge, screenID: "screen", renderPlan: makePlan(), surfaceView: view, artboardBounds: view.bounds,
             semanticTextWriter: { id, _, text, done in
                 pending.append((id, text, done))
-            },
-            textWriter: { _, _, _ in XCTFail("Semantic editor used unrestricted writer") })
+            })
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
         presentField(on: bridge)
         XCTAssertTrue(pending.isEmpty)
         _ = bridge.applySemantics(try capture(flags: 0))
-        XCTAssertEqual(pending.count, 1)
-        XCTAssertEqual(pending[0].1, "saved")
-        pending.removeFirst().2(.accepted)
+        XCTAssertTrue(pending.isEmpty, "Initial native text is read, not rewritten")
         XCTAssertFalse(field.isHidden)
         XCTAssertTrue(field.isEnabled)
         field.text = "A"
@@ -1094,60 +1107,15 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         bridge.clear()
     }
 
-    func testWithdrawalRejectsLateEditsAndReconcilesAnEscapedNativeWrite() throws {
-        for hideOverlay in [true, false] {
-            let bridge = ExperienceTextInputOverlayBridge()
-            let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-            var pending: [(String, @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
-            var commits: [String] = []
-            var nativeText = "saved"
-            bridge.onAcceptedTextChange = { _, text in commits.append(text) }
-            bridge.bind(screenID: "screen", renderPlan: makePlan(), surfaceView: view,
-                artboardBounds: view.bounds,
-                semanticTextWriter: { _, _, text, done in pending.append((text, done)) },
-                textWriter: { _, _, _ in XCTFail("Semantic editor bypassed captured ownership") })
-            presentField(on: bridge)
-            _ = bridge.applySemantics(try capture(flags: 0))
-            try XCTUnwrap(pending.first).1(.accepted)
-            pending.removeAll()
-            let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
-            field.text = "Alice"
-            bridge.flushTextChange(for: field)
-            let escaped = try XCTUnwrap(pending.first)
-            pending.removeAll()
-            if hideOverlay { bridge.setHidden(true) }
-            else { view.isUserInteractionEnabled = false }
-            // Native execution may finish after the outgoing screen loses interaction.
-            nativeText = escaped.0
-            escaped.1(.accepted)
-            field.text = "late callback"
-            bridge.flushTextChange(for: field)
-            XCTAssertEqual(field.text, "saved")
-            XCTAssertTrue(commits.isEmpty)
-            XCTAssertTrue(pending.isEmpty)
-            view.isUserInteractionEnabled = true
-            bridge.setHidden(false)
-            _ = bridge.applySemantics(try capture(flags: 0))
-            let reconciliation = try XCTUnwrap(pending.first)
-            XCTAssertEqual(reconciliation.0, "saved")
-            nativeText = reconciliation.0
-            reconciliation.1(.accepted)
-            XCTAssertEqual(nativeText, "saved")
-            XCTAssertTrue(commits.isEmpty)
-            bridge.clear()
-        }
-    }
-
-    func testSecureSemanticWriterReceivesNoPasswordButAcceptedResponseDoes() throws {
+    func testSecureNativeWriterReceivesTextWithoutExposingItToAccessibility() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
         var writes: [String] = []
         var commits: [String] = []
         bridge.onAcceptedTextChange = { _, text in commits.append(text) }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: true), surfaceView: view,
+        bindCapturedFixture(bridge, screenID: "screen", renderPlan: makePlan(secure: true), surfaceView: view,
             artboardBounds: view.bounds,
-            semanticTextWriter: { _, _, text, done in writes.append(text); done(.accepted) },
-            textWriter: { _, _, _ in XCTFail("Semantic editor used unrestricted writer") })
+            semanticTextWriter: { _, _, text, done in writes.append(text); done(.accepted) })
         presentField(on: bridge)
         _ = bridge.applySemantics(try capture(flags: NuxieNativeSemanticNode.obscured))
         let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
@@ -1155,8 +1123,8 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         field.text = "secret"
         field.sendActions(for: .editingChanged)
         bridge.flushTextChange(for: field)
-        XCTAssertEqual(writes, ["", ""])
-        XCTAssertEqual(commits, ["secret"])
+        XCTAssertTrue(writes == ["secret"], "The captured native writer must receive the secure edit")
+        XCTAssertTrue(commits == ["secret"], "The accepted callback must carry the secure edit")
         // UIKit may expose a masked value. Preserve its native secure semantics
         // without copying plaintext into the accessibility projection.
         let nativeSecureField = UITextField()
@@ -1169,96 +1137,25 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
     }
 
     #if NUXIE_HOSTED_INPUT_TESTS
-    func testUIKitEditReachesNativeTextInputBeforeResponseCommit() async throws {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "native_input_layout", withExtension: "riv"))
-        let prepared = try await NuxieNativePreparedFile.prepare(bytes: Data(contentsOf: url), importMode: .portable)
-        let artboards = try await prepared.artboards()
-        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
-            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
-        defer { Task { try? await runtime.close() } }
-        try await runtime.enableSemantics()
-        _ = try await runtime.step(elapsedSeconds: 0)
-        let layer = CAMetalLayer()
-        layer.device = try await runtime.metalDevice().value
-        layer.pixelFormat = .bgra8Unorm
-        layer.drawableSize = CGSize(width: 64, height: 64)
-        let drawable = try XCTUnwrap(layer.nextDrawable())
-        let outcome = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(drawable)))
-        XCTAssertEqual(outcome.disposition, .presented)
-        let capture = try await runtime.captureSemantics(nativeInputs: ["editable"])
-        let node = try XCTUnwrap(capture.nativeInputs["editable"]?.first)
-        let initial = try await runtime.readFieldString(captureID: capture.id, nodeID: node.nodeID, name: "editable")
-        let bridge = ExperienceTextInputOverlayBridge()
-        let view = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
-        let initialized = expectation(description: "Native source initialized the UIKit editor")
-        let committed = expectation(description: "Response follows the native write")
-        var accepted = false
-        bridge.onAcceptedTextChange = { _, value in
-            XCTAssertTrue(accepted)
-            XCTAssertEqual(value, "native edit")
-            committed.fulfill()
-        }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(native: true), surfaceView: view,
-            artboardBounds: view.bounds,
-            semanticTextWriter: { id, target, value, done in
-                Task { @MainActor in
-                    do {
-                        let changed = try await runtime.setFieldString(captureID: id,
-                            nodeID: XCTUnwrap(target.nodeID), name: "editable", value: Data(value.utf8))
-                        XCTAssertTrue(changed)
-                        accepted = true
-                        done(.accepted)
-                    } catch { XCTFail("Native input write failed: \(error)"); done(.rejected) }
-                }
-            }, semanticTextReader: { id, target, done in
-                Task { @MainActor in
-                    do {
-                        let data = try await runtime.readFieldString(captureID: id,
-                            nodeID: XCTUnwrap(target.nodeID), name: "editable")
-                        done(.success(.init(text: try XCTUnwrap(String(data: data, encoding: .utf8)))))
-                        initialized.fulfill()
-                    } catch { XCTFail("Native input read failed: \(error)"); done(.failure(error)) }
-                }
-            }, textWriter: { _, _, _ in XCTFail("Native editor used legacy text-run write") })
-        presentField(on: bridge)
-        let controls = bridge.applySemantics(capture)
-        await fulfillment(of: [initialized], timeout: 5)
-        let field = try XCTUnwrap(controls[node.nodeID] as? UITextField)
-        XCTAssertEqual(field.text, String(data: initial, encoding: .utf8))
-        field.text = "native edit"
-        field.sendActions(for: .editingChanged)
-        bridge.flushTextChange(for: field)
-        await fulfillment(of: [committed], timeout: 5)
-        _ = try await runtime.step(elapsedSeconds: 0)
-        let next = try XCTUnwrap(layer.nextDrawable())
-        _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(next)))
-        let refreshed = try await runtime.captureSemantics(nativeInputs: ["editable"])
-        let value = try await runtime.readFieldString(captureID: refreshed.id, nodeID: node.nodeID, name: "editable")
-        XCTAssertEqual(value, Data("native edit".utf8))
-        bridge.clear()
-        try await runtime.close()
-    }
-
     func testMarkedTextDoesNotCommitResponseUntilConfirmed() throws {
-        for native in [false, true] {
+        do {
             for multiline in [false, true] {
                 let bridge = ExperienceTextInputOverlayBridge()
                 let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
                 var commits: [String] = []
                 bridge.onAcceptedTextChange = { _, text in commits.append(text) }
-                bridge.bind(screenID: "screen", renderPlan: makePlan(multiline: multiline, native: native),
+                bridge.bind(screenID: "screen", renderPlan: makePlan(multiline: multiline),
                     surfaceView: view, artboardBounds: view.bounds,
                     semanticTextWriter: { _, _, _, done in done(.accepted) },
-                    semanticTextReader: { _, _, done in done(.success(.init(text: "saved"))) },
-                    textWriter: { _, _, _ in XCTFail("Semantic editor bypassed captured ownership") })
+                    semanticTextReader: { _, _, done in done(.success(.init(text: "saved"))) })
                 presentField(on: bridge)
-                _ = bridge.applySemantics(try native ? nativeCapture(ids: [1], secure: false) : capture(flags: 0))
+                _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false))
                 let editor = try XCTUnwrap(view.subviews.first as? (UIView & UITextInput))
                 editor.selectedTextRange = editor.textRange(from: editor.endOfDocument, to: editor.endOfDocument)
                 editor.setMarkedText("ㅎ", selectedRange: NSRange(location: 1, length: 0))
                 XCTAssertNotNil(editor.markedTextRange)
                 bridge.flushTextChange(for: editor)
-                if native { _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false)) }
+                _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false))
                 XCTAssertTrue(commits.isEmpty, "An unfinished IME composition is not a response")
                 editor.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0))
                 editor.unmarkText()
@@ -1271,84 +1168,35 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
     }
     #endif
 
-    #if NUXIE_HOSTED_INPUT_TESTS
-    func testUIKitEditReachesCapturedNativeOwnerBeforeResponseCommit() async throws {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "semantic_text", withExtension: "riv"))
-        let prepared = try await NuxieNativePreparedFile.prepare(bytes: Data(contentsOf: url), importMode: .portable)
-        let artboards = try await prepared.artboards()
-        let runtime = try await prepared.openSession(artboardName: XCTUnwrap(artboards.first).name,
-            player: .defaultScene, pixelWidth: 64, pixelHeight: 64)
-        defer { Task { try? await runtime.close() } }
-        try await runtime.enableSemantics()
-        _ = try await runtime.step(elapsedSeconds: 0)
-        let layer = CAMetalLayer()
-        layer.device = try await runtime.metalDevice().value
-        layer.pixelFormat = .bgra8Unorm
-        layer.drawableSize = CGSize(width: 64, height: 64)
-        let drawable = try XCTUnwrap(layer.nextDrawable(), "Hosted native qualification requires a drawable")
-        let outcome = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(drawable)))
-        XCTAssertEqual(outcome.disposition, .presented)
-        let capture = try await runtime.captureSemantics(textRuns: ["field/名前"])
-        let bridge = ExperienceTextInputOverlayBridge()
-        let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        let initialWrite = expectation(description: "Initial value admitted by captured native owner")
-        let response = expectation(description: "Response committed after native write")
-        var accepted: [String] = []
-        var staleRetries = 0
-        bridge.onAcceptedTextChange = { _, text in
-            XCTAssertEqual(accepted.last, text)
-            XCTAssertEqual(text, "Alice")
-            response.fulfill()
-        }
-        bridge.bind(screenID: "screen", renderPlan: makePlan(textRunName: "field/名前"),
-            surfaceView: view, artboardBounds: view.bounds,
-            semanticTextWriter: { id, _, text, done in
-                Task { @MainActor in
-                    do {
-                        _ = try await runtime.setSemanticTextRun(captureID: id, name: "field/名前", text: Data(text.utf8))
-                        accepted.append(text)
-                        done(.accepted)
-                        if text == "saved" { initialWrite.fulfill() }
-                    } catch NuxieNativeRuntimeError.callFailed(let diagnostic)
-                        where diagnostic.status == .handleMismatch {
-                        staleRetries += 1
-                        done(.staleCapture)
-                        // Drive the new frame requested by the production presentation FIFO.
-                        do {
-                            _ = try await runtime.step(elapsedSeconds: 0)
-                            let nextDrawable = try XCTUnwrap(layer.nextDrawable())
-                            let next = try await runtime.render(layoutScaleFactor: 1, drawable: .available(NuxieNativeDrawable(nextDrawable)))
-                            XCTAssertEqual(next.disposition, .presented)
-                            let replacement = try await runtime.captureSemantics(textRuns: ["field/名前"])
-                            _ = bridge.applySemantics(replacement)
-                        } catch {
-                            XCTFail("Replacement native presentation failed: \(error)")
+    /// Supply a presented native occurrence and a backing value for isolated UIKit tests.
+    private func bindCapturedFixture(
+        _ bridge: ExperienceTextInputOverlayBridge, screenID: String,
+        renderPlan: NativeExperienceRenderPlan, surfaceView: UIView, artboardBounds: CGRect,
+        semanticTextWriter: ExperienceTextInputOverlayBridge.SemanticTextWriter? = nil,
+        textWriter: @escaping (_ inputID: String, _ text: String, _ completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void) -> Void = { _, _, _ in XCTFail("Fixture requires its captured writer") }
+    ) {
+        var value = renderPlan.textInputs[0].value
+        bridge.bind(screenID: screenID, renderPlan: renderPlan, surfaceView: surfaceView,
+            artboardBounds: artboardBounds,
+            semanticTextWriter: { captureID, target, text, done in
+                if let semanticTextWriter {
+                    semanticTextWriter(captureID, target, text) { outcome in
+                        if case .accepted = outcome { value = text }
+                        done(outcome)
+                    }
+                } else {
+                    textWriter(target.inputID, text) { result in
+                        switch result {
+                        case .success: value = text; done(.accepted)
+                        case .failure: done(.rejected)
                         }
-                    } catch {
-                        XCTFail("Captured native write failed: \(error)")
-                        done(.rejected)
                     }
                 }
-            }, textWriter: { _, _, _ in XCTFail("Semantic editor bypassed captured ownership") })
-        presentField(on: bridge, textRunName: "field/名前")
-        _ = bridge.applySemantics(capture)
-        await fulfillment(of: [initialWrite], timeout: 3)
-        let field = try XCTUnwrap(view.subviews.compactMap { $0 as? UITextField }.first)
-        field.text = "Alice"
-        field.sendActions(for: .editingChanged)
-        bridge.flushTextChange(for: field)
-        XCTAssertEqual(accepted, ["saved"], "Native executor has not accepted the queued edit synchronously")
-        await fulfillment(of: [response], timeout: 3)
-        XCTAssertEqual(accepted, ["saved", "Alice"])
-        XCTAssertEqual(staleRetries, 1)
-        let changed = try await runtime.setTextRuns([
-            NuxieNativeTextRunMutation(name: "field/名前", text: Data("Alice".utf8))
-        ])
-        XCTAssertFalse(changed, "The response value must already be present in the actual native text run")
-        bridge.clear()
-        try await runtime.close()
+            }, semanticTextReader: { _, _, done in done(.success(.init(text: value))) })
+        let flags = renderPlan.textInputs[0].secureTextEntry == true ? NuxieNativeSemanticNode.obscured : 0
+        do { _ = bridge.applySemantics(try capture(flags: flags)) }
+        catch { XCTFail("Native fixture capture must be valid") }
     }
-    #endif
 
     /// These tests isolate semantic ownership; geometry is an explicit frame fixture.
     private func presentField(on bridge: ExperienceTextInputOverlayBridge, textRunName: String = "run") {
@@ -1359,17 +1207,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 firstBaseline: nil)])))
     }
 
-    private func makePlan(secure: Bool? = nil, textRunName: String = "run", multiline: Bool? = nil,
-                          native: Bool = false) -> NativeExperienceRenderPlan {
-        var input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
-            viewNodeId: "v", renderedNodeId: "r", textObjectKey: "text", textRunObjectKey: "run",
-            textName: "text", textRunName: textRunName, value: "saved", placeholder: "Name", editable: true,
+    private func makePlan(secure: Bool? = nil, textInputName: String = "editable", multiline: Bool? = nil) -> NativeExperienceRenderPlan {
+        let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
+            viewNodeId: "v", renderedNodeId: "r", textInputName: textInputName, value: "saved", placeholder: "Name", editable: true,
             geometry: .init(xPath: "x", yPath: "y", widthPath: "w", heightPath: "h", rotationPath: "r",
                 scaleXPath: "sx", scaleYPath: "sy"),
             style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: 16,
                 lineHeight: 20, letterSpacing: 0, color: 0xFF123456, fontAssetUniqueName: "", textAlign: nil),
             keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "name")
-        input.editableValueName = native ? "editable" : nil
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),
             screens: [], transitions: [], textInputs: [input], images: [], fonts: [])
@@ -1381,7 +1226,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             role: NuxieNativeSemanticRole.textField.rawValue, stateFlags: flags, traitFlags: 0,
             headingLevel: 0, actions: 0, bounds: .zero, label: "Your name", value: "", hint: "Enter name")
         return NuxieNativeSemanticCapture(id: UUID(), tree: try NuxieNativeSemanticTree(
-            renderRevision: 1, treeVersion: 1, nodes: [node]), fieldsByTextRun: ["run": node])
+            renderRevision: 1, treeVersion: 1, nodes: [node]), fieldsByTextRun: [:], nativeInputs: ["editable": [.init(nodeID: 1, geometry: .init(
+                renderRevision: 1, worldTransform: .identity, textBounds: .zero,
+                layout: .init(transform: .identity, bounds: CGRect(x: 0, y: 0, width: 100, height: 40)),
+                firstBaseline: nil, obscured: flags & NuxieNativeSemanticNode.obscured != 0, multiline: false))]])
     }
 }
 #endif

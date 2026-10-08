@@ -126,12 +126,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     UITextFieldDelegate,
     UITextViewDelegate
 {
-    typealias TextWriter = (
-        _ inputID: String,
-        _ text: String,
-        _ completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
-    ) -> Void
-
     struct InputTarget: Hashable, Sendable {
         let inputID: String
         var nodeID: UInt32? = nil
@@ -343,7 +337,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     private weak var surfaceView: UIView?
     private var artboardBounds: CGRect = .zero
-    private var textWriter: TextWriter?
     private var semanticTextWriter: SemanticTextWriter?
     private var semanticContentOffsetWriter: SemanticContentOffsetWriter?
     private var semanticTextReader: SemanticTextReader?
@@ -351,7 +344,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var metricsSnapshot: ExperienceInteractiveViewModelSnapshot?
     private var semanticDrafts: [InputTarget: ExperienceSemanticTextDraft] = [:]
     private var bindingsByTarget: [InputTarget: Binding] = [:]
-    private var runtimeGeometryByRun: [String: NuxieNativeTextRunGeometry] = [:]
     private var invalidGeometryIDs = Set<InputTarget>()
     private var lastAppliedPlacements: [InputTarget: ExperienceTextInputPlacement] = [:]
     private var baselineCorrections: [InputTarget: (metrics: ExperienceTextInputMetrics, offset: CGFloat)] = [:]
@@ -398,8 +390,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         artboardBounds: CGRect,
         semanticTextWriter: SemanticTextWriter? = nil,
         semanticContentOffsetWriter: SemanticContentOffsetWriter? = nil,
-        semanticTextReader: SemanticTextReader? = nil,
-        textWriter: @escaping TextWriter
+        semanticTextReader: SemanticTextReader? = nil
     ) {
         if activeBuildID != renderPlan.identity.buildId {
             textValuesByTarget.removeAll()
@@ -409,7 +400,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         clear()
         self.surfaceView = surfaceView
         self.artboardBounds = artboardBounds
-        self.textWriter = textWriter
         self.semanticTextWriter = semanticTextWriter
         self.semanticContentOffsetWriter = semanticContentOffsetWriter
         self.semanticTextReader = semanticTextReader
@@ -426,24 +416,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         }
         let counts = Dictionary(grouping: declared, by: \.inputId).mapValues(\.count)
         for input in declared where counts[input.inputId] == 1 {
-            if input.editableValueName != nil {
-                if semanticTextWriter != nil, semanticTextReader != nil { nativeInputs.append(input) }
-                continue
-            }
-            let target = InputTarget(inputID: input.inputId)
-            let control = makeControl(for: input)
-            control.view.accessibilityIdentifier = "nuxie-text-input-\(input.inputId)"
-            control.view.isAccessibilityElement = true
-            control.text = textValuesByTarget[target] ?? input.value
-            notifiedTextByTarget[target] = notifiedTextByTarget[target] ?? control.text
-            surfaceView.addSubview(control.view)
-            let binding = Binding(target: target, input: input, control: control)
-            bindingsByTarget[target] = binding
-            if semanticTextWriter != nil {
-                semanticDrafts[target] = ExperienceSemanticTextDraft(text: control.text, needsInitialWrite: true)
-            } else {
-                write(control.text, for: binding)
-            }
+            if semanticTextWriter != nil, semanticTextReader != nil { nativeInputs.append(input) }
         }
         installDismissTapRecognizer(on: surfaceView)
         layout()
@@ -451,7 +424,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func invalidateLayout() {
         metricsSnapshot = nil
-        runtimeGeometryByRun.removeAll()
         metricsByTarget.removeAll()
         lastAppliedMetrics.removeAll()
         invalidMetricIDs = Set(bindingsByTarget.keys)
@@ -461,11 +433,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     func update(frame: ExperienceInteractiveTextFrame) {
         guard let snapshot = frame.snapshot else { invalidateLayout(); return }
         metricsSnapshot = snapshot
-        if case .captured(let captured) = frame.geometry {
-            runtimeGeometryByRun = captured
-        } else {
-            runtimeGeometryByRun.removeAll()
-        }
         let resolver = ExperienceTextInputMetricsResolver(snapshot: snapshot)
         metricsByTarget = bindingsByTarget.compactMapValues {
             resolver.metrics(xPath: $0.input.geometry.xPath,
@@ -476,13 +443,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         layout()
     }
 
-    /// Exact runtime text-run association keeps each real editor in the scene tree once.
+    /// Captured native occurrences keep each real editor in the scene tree once.
     func applySemantics(_ capture: NuxieNativeSemanticCapture) -> [UInt32: UIView] {
         reconcileNativeInputs(capture)
         let nodes = Dictionary(uniqueKeysWithValues: capture.tree.nodes.map { ($0.id, $0) })
         let fields = bindingsByTarget.compactMapValues { binding in
-            if let nodeID = binding.target.nodeID { return nodes[nodeID] }
-            return capture.fieldsByTextRun[binding.input.textRunName]
+            return binding.target.nodeID.flatMap { nodes[$0] }
         }
         let counts = Dictionary(grouping: Array(fields.values), by: \.id).mapValues(\.count)
         let unique = fields.filter { counts[$0.value.id] == 1 }
@@ -527,7 +493,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         guard let surfaceView else { return }
         var presented = Set<InputTarget>()
         for input in nativeInputs {
-            guard let name = input.editableValueName else { continue }
+            let name = input.textInputName
             for occurrence in capture.nativeInputs[name] ?? [] {
                 // Never copy a secure value into an ordinary UIKit control.
                 guard occurrence.geometry.obscured == (input.secureTextEntry == true) else { continue }
@@ -577,6 +543,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         lastAppliedPlacements.removeValue(forKey: target)
         baselineCorrections.removeValue(forKey: target)
         failedInputIDs.remove(target)
+        retired?.control.view.isHidden = true
+        switch retired?.control {
+        case .field(let field): field.isEnabled = false
+        case .textView(let view): view.isEditable = false
+        case nil: break
+        }
         retired?.control.view.resignFirstResponder()
         retired?.control.view.removeFromSuperview()
     }
@@ -675,7 +647,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         semanticTextReader = nil
         nativeInputs.removeAll()
         metricsSnapshot = nil
-        runtimeGeometryByRun.removeAll()
         metricsByTarget.removeAll()
         invalidMetricIDs.removeAll()
         invalidGeometryIDs.removeAll()
@@ -689,7 +660,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         dismissTapRecognizer = nil
         activeEditingControl = nil
         applyKeyboardShift(0, animationDuration: 0)
-        textWriter = nil
         surfaceView = nil
     }
 
@@ -724,13 +694,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             return
         }
         let placements = bindingsByTarget.compactMapValues { binding in
-            if binding.target.nodeID != nil {
-                return binding.nativeGeometry.flatMap {
-                    ExperienceTextInputPlacement(nativeInput: $0, viewport: transform)
-                }
-            }
-            return runtimeGeometryByRun[binding.input.textRunName].flatMap {
-                ExperienceTextInputPlacement(geometry: $0, viewport: transform)
+            binding.nativeGeometry.flatMap {
+                ExperienceTextInputPlacement(nativeInput: $0, viewport: transform)
             }
         }
         invalidGeometryIDs = Set(bindingsByTarget.keys).subtracting(placements.keys)
@@ -761,7 +726,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         lastAppliedMetrics[inputID] = metrics
         applyStyle(binding.input.style, metrics: metrics, to: binding.control,
             secure: binding.input.secureTextEntry == true,
-            hostPlaceholder: binding.input.editableValueName != nil)
+            hostPlaceholder: true)
         UIView.performWithoutAnimation {
             placement.apply(to: binding.control.view)
             alignBaseline(binding, placement: placement, metrics: metrics)
@@ -809,7 +774,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             value.textContainerInset = .zero
             value.textContainer.lineFragmentPadding = 0
             value.keyboardType = Self.keyboardType(input.keyboardType)
-            if input.editableValueName != nil { value.placeholderLabel.text = input.placeholder }
+            value.placeholderLabel.text = input.placeholder
             return .textView(value)
         }
         let value = TextField(frame: .zero)
@@ -1024,8 +989,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             drainSemanticWrite(binding.target)
             return
         }
-        textValuesByTarget[binding.target] = text
-        write(text, for: binding)
     }
 
     private func notifyAcceptedTextChange(_ text: String, binding: Binding) {
@@ -1104,27 +1067,6 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             case .staleCapture: break // Retry only from a fresh presented capture.
             case .rejected: binding.lastOffset = offset // Legacy assets may lack a scroll container.
             }
-        }
-    }
-
-    private func write(_ text: String, for binding: Binding) {
-        guard let textWriter else { return }
-        let input = binding.input
-        let rendered = input.secureTextEntry == true ? "" : text
-        let currentGeneration = generation
-        textWriter(input.inputId, rendered) { [weak self] result in
-            guard let self, self.generation == currentGeneration,
-                  self.bindingsByTarget[binding.target] === binding else { return }
-            switch result {
-            case .success:
-                self.failedInputIDs.remove(binding.target)
-            case .failure(let error):
-                self.failedInputIDs.insert(binding.target)
-                LogWarning(
-                    "ExperienceTextInputOverlayBridge: failed to update '\(input.inputId)': \(error)"
-                )
-            }
-            self.layout()
         }
     }
 

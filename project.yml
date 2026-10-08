@@ -514,6 +514,8 @@ targets:
         type: folder
       - path: fixtures/journeys/rendered-semantic-roles
         type: folder
+      - path: fixtures/journeys/rendered-text-input
+        type: folder
     dependencies:
       - target: NuxieExperienceRuntimeHostApp
       - target: NuxieSDK

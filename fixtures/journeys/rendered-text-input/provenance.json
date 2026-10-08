@@ -1,11 +1,18 @@
 {
   "contract": "published-native-text-input-response",
   "publisherSourceCommit": "912d65ed1ad26913b8e6406ddced780e5f30bd17",
-  "descriptorSha256": "a645a8a8dd267ba8bb60bdcf7abd19a4057f2d6053526530dae1357791ba6dc0",
+  "descriptorSha256": "17033be169a36872363147dcc52d46ea679ce2db064c778619b7ba24bb63ac65",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Android API 36: real runtime glyph changes, presentation navigation and durable Journey responses. Additional platform qualification is tracked in the parent repository.",
+  "qualification": "F3 native read and admission qualified; migrated signed editing, navigation and response qualification pending native write contract",
   "descriptorRefresh": {
-    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
+    "reason": "Historical policy and offer refresh preserved the former render; nativeInputMigration replaces that render with F3",
     "previousDescriptorSha256": "cc69b172a5a38742e013e0bfe960d8f982f92537c3a2795e386d03a38ec46900"
-  }
+  },
+  "nativeInputMigration": {
+    "source": "fixtures/runtime/published-input/screen.riv",
+    "sourceCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65",
+    "sha256": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+    "reason": "Release v3 native TextInput hard cut; original Journey routes and response declarations retained"
+  },
+  "historicalQualification": "Android API 36: real runtime glyph changes, presentation navigation and durable Journey responses. Additional platform qualification is tracked in the parent repository."
 }

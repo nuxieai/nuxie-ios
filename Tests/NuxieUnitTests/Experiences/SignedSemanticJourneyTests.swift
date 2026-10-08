@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 @_spi(Testing) @_spi(Companion) @testable import Nuxie
 @testable import NuxieTestSupport
+@testable import NuxieRuntime
 
 /// Hosted UIKit activation, not a claim of VoiceOver traversal qualification.
 @MainActor
@@ -34,11 +35,16 @@ final class SignedSemanticJourneyTests: XCTestCase {
         try await exercise(.scriptFailure)
     }
 
-    func testSignedAuthoredRolesExposeOneSecureEditorAndPersistNativeActions() async throws {
+    func testSignedAuthoredRolesPersistNativeActions() async throws {
         try await exercise(.roles)
     }
 
+    func testSignedF3NativeEditorReadsAuthoredValueAndSystemFont() async throws {
+        try await exercise(.input)
+    }
+
     private enum Scenario: String {
+        case input = "rendered-text-input"
         case roles = "rendered-semantic-roles"
         case success = "rendered-semantic-screen-control"
         case scriptFailure = "rendered-semantic-screen-control-error"
@@ -90,11 +96,13 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let authority = ProfileDeliveryAuthority(appId: try XCTUnwrap(locator["appId"] as? String), environment: "test")
         let productionCatalog = JourneyProfileCatalog(authorizationKeys: keys,
             supportedRuntime: JourneyReleaseRuntime.current, highWaterStore: InMemoryJourneyReleaseHighWaterStore())
-        do {
-            _ = try await productionCatalog.prepare(profile, authority: authority)
-            XCTFail("Default admission must reject the unqualified semantic capability")
-        } catch {
-            XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .unsupportedCapabilities(["experience-accessibility"]))
+        if scenario != .input {
+            do {
+                _ = try await productionCatalog.prepare(profile, authority: authority)
+                XCTFail("Default admission must reject the unqualified semantic capability")
+            } catch {
+                XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .unsupportedCapabilities(["experience-accessibility"]))
+            }
         }
         var testing = NuxieTestingOverrides()
         testing.qualifyExperienceAccessibility = true
@@ -124,7 +132,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let descriptorDocument = try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any])
         let render = try XCTUnwrap(descriptorDocument["render"] as? [String: Any])
         let references = [try XCTUnwrap(render["nux"] as? [String: Any])]
-            + (render["assets"] as? [[String: Any]] ?? [])
+            + (render["assets"] as? [[String: Any]] ?? []).filter { $0["location"] as? String != "system" }
             + (descriptorDocument["screenBehaviors"] as? [[String: Any]] ?? []).compactMap {
                 ($0["script"] as? [String: Any])?["artifact"] as? [String: Any]
             }
@@ -193,8 +201,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 authority: authority, admissionGeneration: 1, distinctId: owner)
             await journeys.onAppBecameActive()
             if !screenless { try await waitUntil("Signed controls must reach the UIKit accessibility container") {
-                observer.revealed && (scenario == .roles
-                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == 10
+                observer.revealed && (scenario == .input
+                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).contains { $0 is UITextField }
+                    : scenario == .roles
+                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == 9
                     : self.button(in: presentations.currentExperienceViewController?.view) != nil)
             }
             }
@@ -231,6 +241,40 @@ final class SignedSemanticJourneyTests: XCTestCase {
                     default: XCTFail("Unknown retirement \(reason)")
                     }
                 })
+            } else if scenario == .input {
+                let fields = self.semanticElements(in: presentations.currentExperienceViewController?.view).compactMap { $0 as? UITextField }
+                let field = try XCTUnwrap(fields.first)
+                XCTAssertEqual(fields.count, 1)
+                XCTAssertEqual(field.text, "Ada", "F3 authored Experience default must seed the editor")
+                XCTAssertEqual(field.font?.fontDescriptor, UIFont.systemFont(ofSize: 16, weight: .regular).fontDescriptor)
+                XCTAssertFalse(field.isSecureTextEntry)
+                XCTAssertTrue(field.isEnabled)
+                func screen(in controller: UIViewController) -> ExperienceScreenViewController? {
+                    if let screen = controller as? ExperienceScreenViewController { return screen }
+                    return controller.children.lazy.compactMap { screen(in: $0) }.first
+                }
+                let source = try XCTUnwrap(screen(in: XCTUnwrap(presentations.currentExperienceViewController)))
+                var presented: NuxieNativeSemanticCapture?
+                source.onSemanticCapture = { presented = $0 }
+                XCTAssertTrue(field.becomeFirstResponder())
+                field.text = "Grace"
+                field.sendActions(for: .editingChanged)
+                let deadline = Date().addingTimeInterval(15)
+                var actual: String?
+                repeat {
+                    if let capture = presented,
+                       let node = capture.tree.nodes.first(where: { $0.role == NuxieNativeSemanticRole.textField.rawValue }) {
+                        actual = try await source.readPresentedFieldString(captureID: capture.id, nodeID: node.id,
+                            name: "scr_screens_sinput::v2 editable value")
+                    }
+                    if actual == "Grace" { break }
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                } while Date() < deadline
+                XCTAssertEqual(actual, "Grace", "The UIKit edit must reach the actual native TextInput")
+                XCTAssertTrue(field.resignFirstResponder())
+                let runs = try await journal.runs()
+                XCTAssertTrue(runs.first?.context.responses.isEmpty == true,
+                    "Accepted typing and blur must not save responses without an authored capture")
             } else if scenario == .roles {
                 try await assertAuthoredRoles(in: presentations.currentExperienceViewController?.view,
                     observer: observer, journal: journal)
@@ -266,7 +310,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 }
             }
             XCTAssertTrue(requests.paths.contains { $0.hasPrefix("renders/sha256/") })
-            if scenario != .roles {
+            if scenario != .roles && scenario != .input {
                 XCTAssertTrue(requests.paths.contains { $0.hasPrefix("screen-behavior/sha256/") })
             }
         } catch {
@@ -434,15 +478,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
                                      journal: JourneyRunJournal) async throws {
         let elements = semanticElements(in: view)
         XCTAssertEqual(elements.compactMap(\.accessibilityLabel).sorted(), [
-            "Annual plan", "Choose your plan", "Continue", "Password", "Plan option", "Plan option", "Seats", "Unavailable",
+            "Annual plan", "Choose your plan", "Continue", "Plan option", "Plan option", "Seats", "Unavailable",
             "Optional extras", "Choose the options that suit you.",
         ].sorted())
-        let field = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Password" } as? UITextField)
-        XCTAssertTrue(field.isSecureTextEntry)
-        XCTAssertEqual(field.attributedPlaceholder?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
-                       field.textColor)
-        XCTAssertEqual(field.text, "")
-        XCTAssertEqual(elements.filter { $0 is UITextField }.count, 1)
+        XCTAssertTrue(elements.allSatisfy { !($0 is UITextField) }, "The roles artifact has no native editor declaration")
         let selected = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Annual plan" })
         XCTAssertTrue(selected.accessibilityTraits.contains(.selected))
         XCTAssertEqual(selected.accessibilityValue, "1")
@@ -492,15 +531,6 @@ final class SignedSemanticJourneyTests: XCTestCase {
         try await waitUntil("The authored decrement must reach the Journey emission boundary") {
             observer.accepted.flatMap(\.emissions).filter { $0.name == "seat_decreased" }.count == 1
         }
-        XCTAssertTrue(field.becomeFirstResponder())
-        field.text = "typed-password"
-        field.sendActions(for: .editingChanged)
-        XCTAssertTrue(field.resignFirstResponder())
-        let runs = try await journal.runs()
-        XCTAssertTrue(runs.first?.context.responses.isEmpty == true)
-        XCTAssertNotEqual(field.accessibilityValue, "typed-password")
-        XCTAssertFalse(elements.contains { $0.accessibilityValue == "fixture-secret-never-publish" })
-        XCTAssertEqual(semanticElements(in: view).filter { $0.accessibilityLabel == "Password" }.count, 1)
         // Allow queued frames to expose late duplicates before checking the entire transaction sequence.
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(observer.accepted.map { $0.emissions.map(\.name) }, [

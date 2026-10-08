@@ -15,6 +15,71 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
     }
 
+    func testVersionThreeSignatureDomainHardCut() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        root["schemaVersion"] = "nuxie.journey-release.v3"
+        let bytes = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys, .withoutEscapingSlashes])
+        let current = try sign(bytes, domain: "nuxie.journey-release.v3\u{0}")
+        XCTAssertNoThrow(try authenticate(current, key: signingKey.publicKey.rawRepresentation, identity: fixture.identity))
+        let retired = try sign(bytes, domain: "nuxie.journey-release.v2\u{0}")
+        XCTAssertThrowsError(try authenticate(retired, key: signingKey.publicKey.rawRepresentation, identity: fixture.identity))
+    }
+
+    func testVersionThreeNativeInputHardCut() throws {
+        let fixture = try golden(entryKey: "renderedEntry", file: "text-input-navigation.json")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        root["schemaVersion"] = "nuxie.journey-release.v3"
+        var render = try XCTUnwrap(root["render"] as? [String: Any])
+        var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
+        let removed = ["textObjectKey", "textRunObjectKey", "textName", "textRunName", "editableValueName"]
+        for index in inputs.indices {
+            for field in removed { inputs[index].removeValue(forKey: field) }
+            inputs[index]["textInputName"] = "Email editable value"
+        }
+        render["textInputs"] = inputs
+        root["render"] = render
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        var retired = root
+        retired["schemaVersion"] = "nuxie.journey-release.v2"
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(retired))
+        for field in removed {
+            var invalidInputs = inputs
+            invalidInputs[0][field] = "retired"
+            render["textInputs"] = invalidInputs
+            root["render"] = render
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), field)
+        }
+        var missingInputs = inputs
+        missingInputs[0].removeValue(forKey: "textInputName")
+        render["textInputs"] = missingInputs
+        root["render"] = render
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+        var boundedInputs = inputs
+        boundedInputs[0]["textInputName"] = String(repeating: "x", count: 256)
+        render["textInputs"] = boundedInputs
+        root["render"] = render
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/native-input-admission.json")
+        let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
+            var candidateInputs = inputs
+            candidateInputs[0]["textInputName"] = item["value"]
+            render["textInputs"] = candidateInputs
+            root["render"] = render
+            let name = try XCTUnwrap(item["name"] as? String)
+            if item["valid"] as? Bool == true {
+                XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name)
+            }
+        }
+    }
+
     func testSharedNuxOnlySceneAdmission() throws {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/scene-admission.json")
@@ -217,12 +282,12 @@ final class JourneyReleaseTests: XCTestCase {
             (["actionEvent": "return"], true),
             (["declarativeActionId": "capture-duration"], true),
             (["actionEvent": "return", "declarativeActionId": "capture-duration"], true),
-            (["editableValueName": "duration-input"], true),
-            (["editableValueName": String(repeating: "a", count: 256)], true),
-            (["editableValueName": ""], false),
-            (["editableValueName": String(repeating: "a", count: 257)], false),
-            (["editableValueName": 1], false),
-            (["editableValueName": NSNull()], false),
+            (["textInputName": "duration-input"], true),
+            (["textInputName": String(repeating: "a", count: 256)], true),
+            (["textInputName": ""], false),
+            (["textInputName": String(repeating: "a", count: 257)], false),
+            (["textInputName": 1], false),
+            (["textInputName": NSNull()], false),
             (["actionEvent": "change"], false),
             (["actionEvent": 1], false),
             (["actionEvent": NSNull()], false),
@@ -265,7 +330,7 @@ final class JourneyReleaseTests: XCTestCase {
             var root = source
             var render = try XCTUnwrap(root["render"] as? [String: Any])
             var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
-            inputs[0]["editableValueName"] = "duration-input"
+            inputs[0]["textInputName"] = "duration-input"
             inputs[0]["secureTextEntry"] = secure
             render["textInputs"] = inputs
             render["assets"] = []
@@ -298,7 +363,7 @@ final class JourneyReleaseTests: XCTestCase {
             let screenID = try XCTUnwrap(inputs[0]["screenId"] as? String)
             let artifact = try await presentation.artifactLoader(presentation.experience, nil, screenID)
             let input = try XCTUnwrap(artifact.payload.renderPlan.textInputs.first)
-            XCTAssertEqual(input.editableValueName, "duration-input")
+            XCTAssertEqual(input.textInputName, "duration-input")
             XCTAssertEqual(input.secureTextEntry, secure)
             XCTAssertEqual(artifact.sceneBytes, scene)
         }
