@@ -1,0 +1,90 @@
+{
+  "screens": [
+    {
+      "id": "scr_screens_sinput",
+      "artboardId": "scr_screens_sinput",
+      "artboardName": "input",
+      "width": 393,
+      "height": 852
+    }
+  ],
+  "transitions": [],
+  "textInputs": [
+    {
+      "screenId": "scr_screens_sinput",
+      "artboardId": "scr_screens_sinput",
+      "viewNodeId": "scr_screens_sinput::v2",
+      "renderedNodeId": "scr_screens_sinput::v2",
+      "textInputName": "scr_screens_sinput::v2 editable value",
+      "value": "",
+      "editable": true,
+      "geometry": {
+        "xPath": "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c/x",
+        "yPath": "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c/y",
+        "widthPath": "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c/width",
+        "heightPath": "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c/height",
+        "rotationPath": "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c/rotation",
+        "scaleXPath": "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c/scaleX",
+        "scaleYPath": "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c/scaleY"
+      },
+      "style": {
+        "fontFamily": "System",
+        "fontWeight": "400",
+        "fontStyle": "normal",
+        "fontSize": 16,
+        "lineHeight": -1,
+        "letterSpacing": 0,
+        "color": 4279310375,
+        "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+        "textAlign": "left"
+      },
+      "id": "text-input/scr_screens_sinput/scr_screens_sinput::v2",
+      "secureTextEntry": false,
+      "multiline": false
+    },
+    {
+      "screenId": "scr_screens_sinput",
+      "artboardId": "scr_screens_sinput",
+      "viewNodeId": "scr_screens_sinput::v3",
+      "renderedNodeId": "scr_screens_sinput::v3",
+      "textInputName": "scr_screens_sinput::v3 editable value",
+      "value": "",
+      "editable": true,
+      "geometry": {
+        "xPath": "nuxieTextInputs/input_scr_screens_sinput_v3_7a56f41e/x",
+        "yPath": "nuxieTextInputs/input_scr_screens_sinput_v3_7a56f41e/y",
+        "widthPath": "nuxieTextInputs/input_scr_screens_sinput_v3_7a56f41e/width",
+        "heightPath": "nuxieTextInputs/input_scr_screens_sinput_v3_7a56f41e/height",
+        "rotationPath": "nuxieTextInputs/input_scr_screens_sinput_v3_7a56f41e/rotation",
+        "scaleXPath": "nuxieTextInputs/input_scr_screens_sinput_v3_7a56f41e/scaleX",
+        "scaleYPath": "nuxieTextInputs/input_scr_screens_sinput_v3_7a56f41e/scaleY"
+      },
+      "style": {
+        "fontFamily": "System",
+        "fontWeight": "400",
+        "fontStyle": "normal",
+        "fontSize": 16,
+        "lineHeight": -1,
+        "letterSpacing": 0,
+        "color": 4279310375,
+        "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+        "textAlign": "left"
+      },
+      "id": "text-input/scr_screens_sinput/scr_screens_sinput::v3",
+      "secureTextEntry": false,
+      "multiline": false
+    }
+  ],
+  "assets": [
+    {
+      "kind": "font",
+      "location": "system",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "required": true
+    }
+  ]
+}
