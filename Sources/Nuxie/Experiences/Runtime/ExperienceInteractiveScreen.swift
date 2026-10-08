@@ -1910,8 +1910,7 @@ actor ExperienceInteractiveScreen {
                 focusInputs: focusInputs,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
-                textRunNames: capturesTextLayout
-                    ? textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted() : []
+                textRunNames: []
             )
             try await refreshLayoutBounds()
             if let videoPlayback {
@@ -3487,60 +3486,24 @@ actor ExperienceInteractiveScreen {
         guard input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
-        if input.editableValueName != nil {
-            guard let ownerInstanceID else { return nil }
-            let stateCompiler = self.stateCompiler
-            return try await operationGate.withLock { [self] in
-                let current = try await runtime.fieldOwnerSnapshot(ownerInstanceID)
-                guard current.rootInstanceID == ownerInstanceID,
-                      let owner = current.instances.first(where: { $0.id == ownerInstanceID }),
-                      let reference = NuxieNativeViewModelReference(rawValue: ownerInstanceID) else {
-                    throw ExperienceInteractiveScreenError.stateContract("Native input owner is no longer present")
-                }
-                guard let paths = try stateCompiler.scriptedInputCommitPaths(
-                    nodeID: input.viewNodeId, rootSchemaIndex: owner.schemaIndex
-                ) else { return nil }
-                let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-                let result = try await runtime.mutateFieldOwner(ownerInstanceID, mutations: [
-                    .setString(instance: reference, path: paths.value, value: Data(limited.utf8)),
-                    .fireTrigger(instance: reference, path: paths.commit),
-                ])
-                return await projectMutation(result, ignoringPrefixCount: 0, correlationID: 0)
+        guard let ownerInstanceID else { return nil }
+        let stateCompiler = self.stateCompiler
+        return try await operationGate.withLock { [self] in
+            let current = try await runtime.fieldOwnerSnapshot(ownerInstanceID)
+            guard current.rootInstanceID == ownerInstanceID,
+                  let owner = current.instances.first(where: { $0.id == ownerInstanceID }),
+                  let reference = NuxieNativeViewModelReference(rawValue: ownerInstanceID) else {
+                throw ExperienceInteractiveScreenError.stateContract("Native input owner is no longer present")
             }
-        }
-        guard let root = rootViewModelReference,
-              let schema = schemaIndexByViewModel[root],
-              let paths = try stateCompiler.scriptedInputCommitPaths(
-                nodeID: input.viewNodeId, rootSchemaIndex: schema
-              ) else { return nil }
-        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-        return try await mutateState([
-            .setString(root, path: paths.value, value: Data(limited.utf8)),
-            .fireTrigger(root, path: paths.commit),
-        ])
-    }
-
-    /// Applies signed manifest text policy before mutating authored text runs.
-    @discardableResult
-    func setText(inputID: String, value: String) async throws -> Bool {
-        guard let input = textInputs[inputID] else {
-            throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
-        }
-        guard input.editable else {
-            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
-        }
-        guard input.editableValueName == nil else {
-            throw ExperienceInteractiveScreenError.stateContract("Native input requires captured occurrence ownership")
-        }
-        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-        let runtime = runtime
-        return try await operationGate.withLock {
-            try await runtime.setTextRuns([
-                NuxieNativeTextRunMutation(
-                    name: input.textRunName,
-                    text: Data(limited.utf8)
-                )
+            guard let paths = try stateCompiler.scriptedInputCommitPaths(
+                nodeID: input.viewNodeId, rootSchemaIndex: owner.schemaIndex
+            ) else { return nil }
+            let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
+            let result = try await runtime.mutateFieldOwner(ownerInstanceID, mutations: [
+                .setString(instance: reference, path: paths.value, value: Data(limited.utf8)),
+                .fireTrigger(instance: reference, path: paths.commit),
             ])
+            return await projectMutation(result, ignoringPrefixCount: 0, correlationID: 0)
         }
     }
 
@@ -3554,45 +3517,36 @@ actor ExperienceInteractiveScreen {
         let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
         let runtime = runtime
         return try await operationGate.withLock {
-            if let name = input.editableValueName {
-                guard let nodeID else {
-                    throw ExperienceInteractiveScreenError.stateContract("Native input requires a presented occurrence")
-                }
-                return try await runtime.setFieldString(captureID: captureID,
-                    nodeID: nodeID, name: name, value: Data(limited.utf8))
+            guard let nodeID else {
+                throw ExperienceInteractiveScreenError.stateContract("Native input requires a presented occurrence")
             }
-            guard nodeID == nil else {
-                throw ExperienceInteractiveScreenError.stateContract("Legacy input cannot target a native occurrence")
-            }
-            return try await runtime.setSemanticTextRun(captureID: captureID,
-                name: input.textRunName, text: Data(limited.utf8))
+            return try await runtime.setFieldString(captureID: captureID,
+                nodeID: nodeID, name: input.textInputName, value: Data(limited.utf8))
         }
     }
 
     func setSemanticInputContentOffset(captureID: UUID, inputID: String, nodeID: UInt32, offset: CGPoint) async throws {
-        guard let input = textInputs[inputID], input.editable,
-              let name = input.editableValueName else {
+        guard let input = textInputs[inputID], input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
         let runtime = runtime
         try await operationGate.withLock {
             try await runtime.setFieldContentOffset(captureID: captureID, nodeID: nodeID,
-                name: name, x: Float(offset.x), y: Float(offset.y))
+                name: input.textInputName, x: Float(offset.x), y: Float(offset.y))
         }
     }
 
     func readSemanticText(captureID: UUID, inputID: String, nodeID: UInt32) async throws -> ExperienceTextInputSource {
-        guard let input = textInputs[inputID], input.editable,
-              let name = input.editableValueName else {
+        guard let input = textInputs[inputID], input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
         let runtime = runtime
         return try await operationGate.withLock {
-            let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: name)
+            let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: input.textInputName)
             guard let text = String(data: bytes, encoding: .utf8) else {
                 throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
             }
-            let owner = try await runtime.fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: name)
+            let owner = try await runtime.fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: input.textInputName)
             return ExperienceTextInputSource(text: text, ownerInstanceID: owner)
         }
     }
@@ -3693,8 +3647,8 @@ actor ExperienceInteractiveScreen {
             state = isOccluded ? .occluded : .timeout
         }
         let runtime = runtime
-        let textRuns = textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted()
-        let nativeInputs = Array(Set(textInputs.values.filter(\.editable).compactMap(\.editableValueName))).sorted()
+        let textRuns: [String] = []
+        let nativeInputs = Array(Set(textInputs.values.filter(\.editable).map(\.textInputName))).sorted()
         return try await operationGate.withLock { [self] in
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame

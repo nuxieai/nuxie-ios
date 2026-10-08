@@ -338,10 +338,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let artboardId: String
         let viewNodeId: String
         let renderedNodeId: String
-        let textObjectKey: String
-        let textRunObjectKey: String
-        let textName: String
-        let textRunName: String
+        let textInputName: String
         let value: String
         let placeholder: String?
         let editable: Bool
@@ -355,7 +352,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let responseCapture: NativeExperienceTextInput.ResponseCapture?
         var actionEvent: ExperienceTextInputEventKind? = nil
         var declarativeActionId: String? = nil
-        var editableValueName: String? = nil
+
     }
 
     struct Asset: Decodable {
@@ -1767,10 +1764,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     artboardId: $0.artboardId,
                     viewNodeId: $0.viewNodeId,
                     renderedNodeId: $0.renderedNodeId,
-                    textObjectKey: $0.textObjectKey,
-                    textRunObjectKey: $0.textRunObjectKey,
-                    textName: $0.textName,
-                    textRunName: $0.textRunName,
+                    textInputName: $0.textInputName,
                     value: $0.value,
                     placeholder: $0.placeholder,
                     editable: $0.editable,
@@ -1801,8 +1795,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     responseFieldKey: $0.responseFieldKey,
                     responseCapture: $0.responseCapture,
                     actionEvent: $0.actionEvent,
-                    declarativeActionId: $0.declarativeActionId,
-                    editableValueName: $0.editableValueName
+                    declarativeActionId: $0.declarativeActionId
                 )
             },
             images: images,
