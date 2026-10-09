@@ -1277,7 +1277,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testProductHydrationPreservesNativePlainListRows() async throws {
         // Extend the exact native list fixture with product strings. The second
-        // authored row starts at 1; its signed value deliberately disagrees.
+        // authored row stays at 2, distinct from instance zero and its signed value.
         var scene = try exactComponentListFixture()
         func replace(_ old: [UInt8], _ new: [UInt8]) throws {
             let range = try XCTUnwrap(scene.range(of: Data(old)))
@@ -1293,7 +1293,6 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try replace(property, property + stringProperty("placementId") + stringProperty("price"))
         let first: [UInt8] = [0xba, 0x03, 0xbf, 0x04, 0, 0, 0x80, 0x3f, 0xaa, 0x04, 0, 0]
         try replace(first, first + stringValue(1, "paywall:monthly") + stringValue(2, "$0"))
-        try replace([0xba, 0x03, 0xbf, 0x04, 0, 0, 0, 0x40, 0xaa, 0x04, 0, 0], first)
         let payload = try await statePayload(defaultViewModelName: "Doc", values: [
             .init(viewModelName: "Doc", instanceId: "root-sdk-id", path: "items", value: AnyCodable([
                 ["vmInstanceId": "monthly", "viewModelId": "ItemVM", "values":
@@ -1318,7 +1317,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         func value(_ index: Int, _ name: String) -> ExperienceInteractiveViewModelValue? {
             snapshot.values.first { $0.ownerInstanceID == ids[index] && $0.name == name }?.value
         }
-        XCTAssertEqual(value(1, "value"), .number(1), "Plain row keeps its file value")
+        XCTAssertEqual(value(1, "value"), .number(2), "Plain row keeps its distinct file value")
         XCTAssertEqual(value(0, "placementId"), .bytes(Data("paywall:monthly".utf8)))
         XCTAssertEqual(value(0, "price"), .bytes(Data("$9.99".utf8)))
     }
