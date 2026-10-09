@@ -117,7 +117,16 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         try await restartTimedWait(failFirstPreparation: false, revokeRead: true)
     }
 
-    private func restartTimedWait(failFirstPreparation: Bool, wakeEvent: Bool = false, revokeRead: Bool = false) async throws {
+    func testNestedTimedWaitRestoresBeforeTheConditionAndSendsDeepLeaf() async throws {
+        try await restartTimedWait(failFirstPreparation: false, nested: true)
+    }
+
+    private func restartTimedWait(failFirstPreparation: Bool, wakeEvent: Bool = false, revokeRead: Bool = false, nested: Bool = false) async throws {
+        let valueKey = nested ? "profile/minutes" : "trip_days"
+        let written: Float = nested ? 20 : 30
+        let sceneBytes = try nested
+            ? Data(contentsOf: SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("nested-values/screen.riv"))
+            : SharedValuesFixture.payload().sceneBytes
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let initial = try await authenticatedRenderedSnapshot(fixture)
         var steps = try JSONDecoder().decode([Journey.Step].self, from: Data(#"""
@@ -129,6 +138,18 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
           {"kind":"complete","id":"short","outcome":"short"}
         ]
         """#.utf8))
+        if nested {
+            steps = try JSONDecoder().decode([Journey.Step].self, from: Data(#"""
+            [
+              {"kind":"action","id":"present","action":{"type":"navigate","screenId":"screen_welcome"},"outlets":{}},
+              {"kind":"action","id":"wait","action":{"type":"delay","durationMs":259200000},"outlets":{"next":"branch"}},
+              {"kind":"action","id":"branch","action":{"type":"condition","branches":[{"id":"long","condition":{"type":"Compare","op":">","left":{"type":"Response.Field","key":"profile/minutes"},"right":{"type":"Number","value":15}}}]},"outlets":{"long":"emit","default":"short"}},
+              {"kind":"action","id":"emit","action":{"type":"send_event","eventName":"nested_restored","payload":{"day":{"type":"Response.Field","key":"profile/settings/day"},"name":{"type":"Response.Field","key":"profile/name"}}},"outlets":{"next":"long"}},
+              {"kind":"complete","id":"long","outcome":"long"},
+              {"kind":"complete","id":"short","outcome":"short"}
+            ]
+            """#.utf8))
+        }
         if wakeEvent {
             steps[1] = try JSONDecoder().decode(Journey.Step.self, from: Data(#"""
             {"kind":"action","id":"wait","action":{"type":"wait_until","trigger":{"kind":"event","eventName":"unlock"},"condition":{"type":"Compare","op":"==","left":{"type":"Response.Field","key":"trip_days"},"right":{"type":"Number","value":30}},"maxTimeMs":259200000},"outlets":{"satisfied":"branch","timeout":"short"}}
@@ -151,10 +172,15 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
         let shown = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(shown)
-        let prepared = try await NuxieNativePreparedFile.prepare(bytes: SharedValuesFixture.payload().sceneBytes)
+        let prepared = try await NuxieNativePreparedFile.prepare(bytes: sceneBytes)
         let nativeResult = try await request.runValues.native(in: prepared)
         let native = try XCTUnwrap(nativeResult)
-        _ = try await native.sessions.mutate([.setNumber(instance: native.reference, path: "trip_days", value: 30)])
+        if nested {
+            let before = try await request.runValues.journeyValues()
+            XCTAssertEqual(before["profile/minutes"], .number(10))
+            _ = try await native.sessions.mutate([.setString(instance: native.reference, path: "profile/settings/day", value: Data("2026-10-10".utf8))])
+        }
+        _ = try await native.sessions.mutate([.setNumber(instance: native.reference, path: valueKey, value: written)])
         let accepted = await request.onEmissionBatch(presentationBatch(request: request,
             invocationId: "wait-continue", emissions: [.init(id: UUID().uuidString, sequence: 0,
                 occurredAt: "2026-08-29T12:00:00.120Z", name: "continue", payload: [:])]), nil)
@@ -167,7 +193,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         let waiting = try await journal.runs()
         let run = try XCTUnwrap(waiting.first)
         XCTAssertEqual(run.park?.wakeAt, clock.now().addingTimeInterval(259200))
-        XCTAssertEqual(run.nativeSnapshot?.journeyValues["trip_days"], .number(30))
+        XCTAssertEqual(run.nativeSnapshot?.journeyValues[valueKey], .number(Double(written)))
         XCTAssertTrue(run.context.responses.isEmpty)
         await service.onAppDidEnterBackground()
         await request.runValues.retire()
@@ -181,10 +207,10 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
             dateProvider: clock, sleepProvider: sleeper, presenter: noScreen, prepareNativeValues: { values, pinned, _, _ in
                 try await attempts.begin()
                 XCTAssertEqual(pinned.descriptorSHA256, release.descriptorSHA256)
-                let file = try await NuxieNativePreparedFile.prepare(bytes: SharedValuesFixture.payload().sceneBytes)
+                let file = try await NuxieNativePreparedFile.prepare(bytes: sceneBytes)
                 _ = try await values.native(in: file)
                 let restored = try await values.journeyValues()
-                XCTAssertEqual(restored["trip_days"], .number(30))
+                XCTAssertEqual(restored[valueKey], .number(Double(written)))
             }, readNativeValues: { values in
                 let result = try await values.journeyValues()
                 if revokeRead {
@@ -197,7 +223,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         if revokeRead {
             let retained = try await journal.runs()
             XCTAssertNotNil(retained.first?.park)
-            XCTAssertEqual(retained.first?.nativeSnapshot?.journeyValues["trip_days"], .number(30))
+            XCTAssertEqual(retained.first?.nativeSnapshot?.journeyValues[valueKey], .number(Double(written)))
             XCTAssertFalse(restartedEvents.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
             await restarted.shutdown()
             return
@@ -208,7 +234,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         if failFirstPreparation {
             let retained = try await journal.runs()
             XCTAssertNotNil(retained.first?.park)
-            XCTAssertEqual(retained.first?.nativeSnapshot?.journeyValues["trip_days"], .number(30))
+            XCTAssertEqual(retained.first?.nativeSnapshot?.journeyValues[valueKey], .number(Double(written)))
             XCTAssertFalse(restartedEvents.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
             for _ in 0..<100 where sleeper.pendingSleepCount == 0 { await Task.yield() }
             XCTAssertEqual(sleeper.pendingSleepDurations, [5])
@@ -222,6 +248,10 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         let completed = restartedEvents.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }
         XCTAssertEqual(completed.count, 1)
         XCTAssertEqual(completed.first?.properties["outcome"] as? String, "long")
+        if nested {
+            XCTAssertEqual(restartedEvents.routedEvents.first { $0.name == "nested_restored" }?.properties["day"] as? String, "2026-10-10")
+            XCTAssertEqual(restartedEvents.routedEvents.first { $0.name == "nested_restored" }?.properties["name"] as? String, "Ana")
+        }
         let newScreen = await MainActor.run { noScreen.request }
         XCTAssertNil(newScreen)
         await restarted.shutdown()
