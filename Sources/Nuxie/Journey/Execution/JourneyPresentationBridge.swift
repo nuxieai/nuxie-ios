@@ -176,6 +176,7 @@ struct JourneyPresentationPermissionEvent: Equatable, Sendable {
 enum JourneyPresentationActionResult: Equatable, Sendable {
     case navigate(screenId: String)
     case advanced(outlet: String)
+    case completed(outcome: String)
     case permissionResolved(
         outlet: String,
         event: JourneyPresentationPermissionEvent

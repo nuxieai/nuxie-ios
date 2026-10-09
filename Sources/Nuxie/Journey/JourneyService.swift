@@ -2955,6 +2955,9 @@ private extension JourneyService {
                                 executionFenceToken: executionFenceToken)
                             return
                         }
+                    case .completed(let outcome):
+                        pendingPresentationPurchasePlacements.removeValue(forKey: run.id)
+                        result = .complete(outcome)
                     case .advanced(let outlet):
                         pendingPresentationPurchasePlacements.removeValue(
                             forKey: run.id
