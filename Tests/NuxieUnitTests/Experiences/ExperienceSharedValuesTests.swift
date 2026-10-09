@@ -9,6 +9,9 @@ import UIKit
 @testable import NuxieRuntime
 
 final class ExperienceSharedValuesTests: XCTestCase {
+    // The published feedback screen declares the System font, which the SDK
+    // prepares only where UIKit provides it (macOS refuses with unavailableFace).
+    #if os(iOS)
     func testSaveCapturesItsStepBeforeAnotherScreenWritesOnTheSharedLane() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
@@ -61,6 +64,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let live = try await run.responseAnswers(form: "feedback", policy: release.valuePolicy)
         XCTAssertEqual(live, ["stars": .number(5)])
     }
+    #endif
 
     #if os(iOS)
     func testBothPublishedGoalsScreensShareRestoredRows() async throws {
