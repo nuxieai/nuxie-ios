@@ -8,6 +8,39 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testSignedFormQualifiedConditionAuthenticates() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        leg["entryStepId"] = "read-form"
+        leg["steps"] = try JSONSerialization.jsonObject(with: Data(#"""
+        [{"kind":"action","id":"read-form","action":{"type":"condition","branches":[{"id":"long","condition":{"type":"Compare","op":">","left":{"type":"Response.Field","form":"onboarding","key":"trip_days"},"right":{"type":"Number","value":14}}}]},"outlets":{"long":"done","default":"done"}},{"kind":"complete","id":"done","outcome":"continue"}]
+        """#.utf8))
+        leg["routes"] = []
+        root["leg"] = leg
+        let release = try authenticate(sign(JSONSerialization.data(withJSONObject: root)),
+            key: signingKey.publicKey.rawRepresentation, identity: fixture.identity)
+        XCTAssertEqual(release.descriptor.leg.entryStepId, "read-form")
+    }
+
+    func testFormSelectorRejectsMalformedNamesAndOtherFieldKinds() throws {
+        func validate(_ field: [String: Any]) throws {
+            try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(
+                ["type": "send_event", "eventName": "trip", "payload": ["days": field]],
+                path: "action", screenIDs: [], placementIDs: [])
+        }
+        XCTAssertNoThrow(try validate(["type": "Response.Field", "key": "trip_days", "form": "onboarding"]))
+        for form in [NSNull(), 12, "", "bad-form", "form\n", "é"] as [Any] {
+            XCTAssertThrowsError(try validate(["type": "Response.Field", "key": "trip_days", "form": form]))
+        }
+        for form in ["7_form", "true", String(repeating: "x", count: 257)] {
+            XCTAssertNoThrow(try validate(["type": "Response.Field", "key": "trip_days", "form": form]))
+        }
+        for type in ["Event.Field", "Customer.Field"] {
+            XCTAssertThrowsError(try validate(["type": type, "key": "trip_days", "form": "onboarding"]))
+        }
+    }
+
     func testPublishedF5AuthenticatesExactResponsePolicy() throws {
         let directory = PublishedRunValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))

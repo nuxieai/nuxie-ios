@@ -257,7 +257,8 @@ actor JourneyPresentationPublicationCoordinator {
             }
             context = ArmedJourney.Context(
                 event: controlEvent.properties,
-                responses: publication.context.responses
+                responses: publication.context.responses,
+                formAnswers: publication.context.formAnswers
             )
             do {
                 guard let admission = commitAdmission(

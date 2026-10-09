@@ -15,7 +15,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
     case array([JourneyValue])
     case object(ExactJSONObject<JourneyValue>)
     case eventField(String)
-    case responseField(String)
+    case responseField(String, form: String? = nil)
     case customerField(String)
 
     private enum CodingKeys: String, CodingKey {
@@ -24,6 +24,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case items
         case fields
         case key
+        case form
     }
 
     init(from decoder: Decoder) throws {
@@ -37,7 +38,7 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case "Array": self = .array(try container.decode([JourneyValue].self, forKey: .items))
         case "Object": self = .object(try container.decode(ExactJSONObject<JourneyValue>.self, forKey: .fields))
         case "Event.Field": self = .eventField(try container.decode(String.self, forKey: .key))
-        case "Response.Field": self = .responseField(try container.decode(String.self, forKey: .key))
+        case "Response.Field": self = .responseField(try container.decode(String.self, forKey: .key), form: try container.decodeIfPresent(String.self, forKey: .form))
         case "Customer.Field": self = .customerField(try container.decode(String.self, forKey: .key))
         default:
             throw DecodingError.dataCorruptedError(
@@ -70,9 +71,10 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case .eventField(let key):
             try container.encode("Event.Field", forKey: .type)
             try container.encode(key, forKey: .key)
-        case .responseField(let key):
+        case .responseField(let key, let form):
             try container.encode("Response.Field", forKey: .type)
             try container.encode(key, forKey: .key)
+            try container.encodeIfPresent(form, forKey: .form)
         case .customerField(let key):
             try container.encode("Customer.Field", forKey: .type)
             try container.encode(key, forKey: .key)
@@ -88,7 +90,8 @@ enum JourneyValue: Codable, Sendable, Equatable {
         case .array(let values): values.map(\.foundationValue)
         case .object(let values): values.mapValues(\.foundationValue).dictionary
         case .eventField(let key): ["type": "Event.Field", "key": key]
-        case .responseField(let key): ["type": "Response.Field", "key": key]
+        case .responseField(let key, let form):
+            ["type": "Response.Field", "key": key].merging(form.map { ["form": $0] } ?? [:]) { _, new in new }
         case .customerField(let key): ["type": "Customer.Field", "key": key]
         }
     }
