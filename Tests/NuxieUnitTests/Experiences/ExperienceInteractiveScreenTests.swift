@@ -472,7 +472,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         XCTAssertEqual(
             secondSnapshot.values.first(where: { $0.name == "Number" })?.value,
-            .number(23)
+            .number(0)
         )
         let metrics = await preparation.metrics()
         XCTAssertEqual(
@@ -1047,6 +1047,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         defer { Task { try? await screen.close() } }
 
+        let root = try await screen.rootViewModel()
+        _ = try await screen.mutateState([
+            .setString(root, path: "String", value: Data("signed-state".utf8)),
+        ])
         for _ in 0..<3 {
             _ = try await renderAndWait(screen)
             _ = try await screen.step(elapsedSeconds: 0)
