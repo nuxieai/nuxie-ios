@@ -1446,7 +1446,9 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                             id: outcomeEventId,
                             sequence: 1,
                             occurredAt: "2026-08-29T12:00:00.001Z",
-                            name: actionFixture.eventName,
+                            // Reserved system events are dropped from renderer batches.
+                            // Use an authored event so the injected capture failure is reached.
+                            name: "checkout_publication",
                             payload: ["placement_id": .string("golden:monthly")]
                         )]
                     )

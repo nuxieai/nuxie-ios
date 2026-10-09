@@ -769,10 +769,21 @@ private extension JourneyService {
             // Never replace an authored route's cursor while its effects or
             // renderer publication are suspended. Its release drains this result.
             let executionKey = RunExecutionKey(runID: candidate.id, owner: journal.distinctId, generation: token.generation)
-            if activeRunExecutions[executionKey, default: 0] > 0 || candidate.pendingPresentationPublication != nil {
+            if activeRunExecutions[executionKey, default: 0] > 0 {
                 if deferredCommerceOutcomes[executionKey] == nil { deferredCommerceOutcomes[executionKey] = event }
                 // EventLog retains the routed event until durable settlement.
                 return false
+            }
+            if candidate.pendingPresentationPublication != nil {
+                beginRunExecution(executionKey)
+                do {
+                    try await recoverPendingPresentationPublications(in: journal, runId: candidate.id)
+                } catch {
+                    endRunExecution(executionKey)
+                    return false
+                }
+                endRunExecution(executionKey)
+                return await resumePresentationActionOutcome(event: event, excludingRunId: excludingRunId)
             }
             let nextStepId = step.outlets?[route.outlet]
             if nextStepId == nil, let outcome = candidate.authoredCloseOutcome {
@@ -1046,10 +1057,10 @@ private extension JourneyService {
     }
 
     private func recoverPendingPresentationPublications(
-        in journal: JourneyRunJournal
+        in journal: JourneyRunJournal, runId: String? = nil
     ) async throws {
         for run in try await journal.runs()
-        where run.pendingPresentationPublication != nil {
+        where run.pendingPresentationPublication != nil && (runId == nil || run.id == runId) {
             let executionFenceToken = executionFence.token()
             if run.completion != nil {
                 guard await presentationPublications.recoverObservability(
