@@ -26,6 +26,12 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
             return true
         }
 
+        var queuedJobCount: Int {
+            condition.lock()
+            defer { condition.unlock() }
+            return jobs.count
+        }
+
         func run() {
             condition.lock()
             workerThread = pthread_self()
@@ -104,6 +110,8 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
     package func enqueue(_ operation: @escaping @Sendable () -> Void) {
         _ = worker.submit(operation)
     }
+
+    package var queuedJobCountForTesting: Int { worker.queuedJobCount }
 
     package func shutdown() {
         worker.stopAndWait()
