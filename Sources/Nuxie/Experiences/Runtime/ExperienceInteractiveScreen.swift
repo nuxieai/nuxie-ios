@@ -4377,7 +4377,7 @@ private enum ExperienceInteractiveInitialState {
                 order: &requestOrder
             )
             let property = try compiler.property(at: value.path, startingWith: schema.index)
-            if property.kind == .viewModel, !value.path.contains("/") {
+            if property.kind == .viewModel {
                 let referenced = try referencedInstance(
                     value.value,
                     expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4394,7 +4394,7 @@ private enum ExperienceInteractiveInitialState {
                     requests: &requests,
                     order: &requestOrder
                 )
-            } else if property.kind == .list, !value.path.contains("/") {
+            } else if property.kind == .list {
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }
@@ -4476,7 +4476,7 @@ private enum ExperienceInteractiveInitialState {
             }
             let property = try compiler.property(at: value.path, startingWith: schema.index)
             switch property.kind {
-            case .viewModel where !value.path.contains("/"):
+            case .viewModel:
                 let referenced = try referencedInstance(
                     value.value,
                     expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4509,15 +4509,14 @@ private enum ExperienceInteractiveInitialState {
                     schema: referenced.schema,
                     compiler: compiler
                 )
-            case .list where !value.path.contains("/"):
+            case .list:
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }
                 let current = try await runtime.snapshot(reference)
                 let nativeIDs: [UInt64]
-                if case .list(let ids) = current.values.first(where: {
-                    $0.ownerInstanceID == reference.rawValue && $0.name == value.path
-                })?.value {
+                if case .list(let ids) = try nativeValue(in: current, owner: reference.rawValue,
+                    path: value.path) {
                     nativeIDs = ids
                 } else {
                     nativeIDs = []
@@ -4780,6 +4779,26 @@ private enum ExperienceInteractiveInitialState {
         case .listIndex(let value): .setListIndex(instance: reference, path: path, value: value)
         case .image(let value): .setImage(instance: reference, path: path, value: value)
         }
+    }
+
+    private static func nativeValue(in snapshot: NuxieNativeViewModelSnapshot,
+        owner: UInt64, path: String) throws -> NuxieNativeViewModelValue? {
+        // Match catalog resolution: prefer an exact authored property name before
+        // following slash-separated references to the native list owner.
+        if let exact = snapshot.values.first(where: { $0.ownerInstanceID == owner && $0.name == path }) {
+            return exact.value
+        }
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        var currentOwner = owner
+        for (index, segment) in segments.enumerated() {
+            guard let entry = snapshot.values.first(where: {
+                $0.ownerInstanceID == currentOwner && $0.name == segment
+            }) else { throw stateValue(path) }
+            if index == segments.count - 1 { return entry.value }
+            guard case .referencedInstance(let child) = entry.value else { throw stateValue(path) }
+            currentOwner = child
+        }
+        return nil
     }
 
     private static func stateValue(_ path: String) -> ExperienceInteractiveScreenError {

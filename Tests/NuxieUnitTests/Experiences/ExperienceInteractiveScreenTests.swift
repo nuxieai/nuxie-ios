@@ -1280,6 +1280,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     func testProductHydrationPreservesNativePlainListRows() async throws {
+        try await verifyProductHydrationPreservesNativePlainListRows(nested: false)
+    }
+
+    func testProductHydrationPreservesNativePlainRowsAtSlashListPath() async throws {
+        try await verifyProductHydrationPreservesNativePlainListRows(nested: true)
+    }
+
+    private func verifyProductHydrationPreservesNativePlainListRows(nested: Bool) async throws {
         // Extend the exact native list fixture with product strings. The second
         // authored row stays at 2, distinct from instance zero and its signed value.
         var scene = try exactComponentListFixture()
@@ -1297,13 +1305,37 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         try replace(property, property + stringProperty("placementId") + stringProperty("price"))
         let first: [UInt8] = [0xba, 0x03, 0xbf, 0x04, 0, 0, 0x80, 0x3f, 0xaa, 0x04, 0, 0]
         try replace(first, first + stringValue(1, "paywall:monthly") + stringValue(2, "$0"))
-        let payload = try await statePayload(defaultViewModelName: "Doc", values: [
-            .init(viewModelName: "Doc", instanceId: "root-sdk-id", path: "items", value: AnyCodable([
-                ["vmInstanceId": "monthly", "viewModelId": "ItemVM", "values":
-                    ["placementId": "paywall:monthly", "price": "$0"]],
+        if nested {
+            // Wrap the authored list model in a root reference, matching paywall/products.
+            try replace([0xb2, 0x03, 0xad, 0x04, 5] + Array("items".utf8) + [0],
+                [0xb2, 0x03, 0xad, 0x04, 8] + Array("products".utf8) + [0])
+            let products: [UInt8] = [0xb2, 3, 0xad, 4, 8] + Array("products".utf8) + [0]
+            try replace(products, products + [0xb4, 3, 0xad, 4, 15]
+                + Array("selectedProduct".utf8) + [0xb5, 4, 0, 0])
+            let instance: [UInt8] = [0xb5, 3, 0xb6, 4, 1, 4, 8] + Array("Instance".utf8) + [0]
+            try replace(instance, instance + [0xbc, 3, 0xaa, 4, 1, 0xc1, 4, 0, 0])
+            let artboard: [UInt8] = [1, 0xc7, 4, 1, 0xc4, 1, 1]
+            let wrapper: [UInt8] = [0xb3, 3, 0xad, 4, 4] + Array("Root".utf8) + [0]
+                + [0xb4, 3, 0xad, 4, 7] + Array("paywall".utf8) + [0xb5, 4, 1, 0]
+                + [0xb5, 3, 0xb6, 4, 2, 4, 4] + Array("root".utf8) + [0]
+                + [0xbc, 3, 0xaa, 4, 0, 0xc1, 4, 0, 0]
+            try replace(artboard, wrapper + [1, 0xc7, 4, 2, 0xc4, 1, 1])
+        }
+        let model = nested ? "Root" : "Doc"
+        let payload = try await statePayload(defaultViewModelName: model, values: [
+            .init(viewModelName: model, instanceId: "root-sdk-id", path: nested ? "paywall/products" : "items", value: AnyCodable([
+                nested ? ["vmInstanceId": "monthly"] :
+                    ["vmInstanceId": "monthly", "viewModelId": "ItemVM", "values":
+                        ["placementId": "paywall:monthly", "price": "$0"]],
                 ["vmInstanceId": "note", "viewModelId": "ItemVM", "values": ["value": 999]],
             ])),
-        ], scene: scene, artboardName: "Main")
+        ] + (nested ? [
+            .init(viewModelName: "ItemVM", instanceId: "monthly", path: "placementId", value: AnyCodable("paywall:monthly")),
+            .init(viewModelName: "ItemVM", instanceId: "monthly", path: "price", value: AnyCodable("$0")),
+            .init(viewModelName: model, instanceId: "root-sdk-id",
+                path: "paywall/selectedProduct", value: AnyCodable(["vmInstanceId": "monthly"])),
+        ] : []),
+            scene: scene, artboardName: "Main")
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
         let screen = try await preparation.openScreen(products: [StoreProduct(
             productId: "monthly", placementId: "paywall:monthly", name: "Monthly", price: "$9.99",
@@ -1313,8 +1345,15 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
         let snapshot = try await screen.snapshot()
         let root = try await screen.rootViewModel()
+        let listOwner: UInt64
+        if nested {
+            guard case .referencedInstance(let id) = snapshot.values.first(where: {
+                $0.ownerInstanceID == root.rawValue && $0.name == "paywall"
+            })?.value else { return XCTFail("Native paywall is absent") }
+            listOwner = id
+        } else { listOwner = root.rawValue }
         guard case .list(let ids) = snapshot.values.first(where: {
-            $0.ownerInstanceID == root.rawValue && $0.name == "items"
+            $0.ownerInstanceID == listOwner && $0.name == (nested ? "products" : "items")
         })?.value else { return XCTFail("Native list is absent") }
         XCTAssertEqual(ids.count, 6, "Product hydration preserves the authored list")
         guard ids.count >= 2 else { return }
@@ -1324,6 +1363,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(value(1, "value"), .number(2), "Plain row keeps its distinct file value")
         XCTAssertEqual(value(0, "placementId"), .bytes(Data("paywall:monthly".utf8)))
         XCTAssertEqual(value(0, "price"), .bytes(Data("$9.99".utf8)))
+        if nested {
+            XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == listOwner && $0.name == "selectedProduct" }?.value,
+                .referencedInstance(ids[0]), "Selection and the product list must share the hydrated child")
+        }
     }
 
     func testFactoryKeepsAuthoredListDespiteSignedDefaults() async throws {
