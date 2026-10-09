@@ -265,7 +265,8 @@ private final class ExperienceRuntimeHostRootViewController: UIViewController {
             NSLayoutConstraint.activate([
                 child.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 child.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                child.view.topAnchor.constraint(equalTo: view.topAnchor),
+                child.view.topAnchor.constraint(equalTo: ProcessInfo.processInfo.arguments.contains("--nuxie-keyboard-qualification")
+                    ? view.safeAreaLayoutGuide.topAnchor : view.topAnchor),
                 child.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
             ])
             child.didMove(toParent: self)
