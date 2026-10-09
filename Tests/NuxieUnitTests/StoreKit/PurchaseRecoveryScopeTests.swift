@@ -552,6 +552,69 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
     }
 
+    func testOrdinaryRestoreRefreshesAlreadySyncedCurrentSubscription() async throws {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("restore-owner")
+        let scope = PurchaseStorageScope.testFixture
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "restore-test"))
+        let features = FeatureService(api: mocks.nuxieApi, identity: identity,
+            profile: mocks.profileService, dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(), cacheTTL: 300)
+        let evidence = StoredTransactionEvidence(scope: scope, transactionJws: "",
+            transactionId: "retained-subscription", originalTransactionId: "original-subscription",
+            productId: "store-product-1", distinctId: "restore-owner",
+            recordedAt: mocks.dateProvider.now(), isRevoked: false,
+            completionDeliveredAt: mocks.dateProvider.now(),
+            backendSyncedAt: mocks.dateProvider.now().addingTimeInterval(-600))
+        let store = ControlledTransactionEvidenceStore(entries: [evidence.transactionId: evidence], saveSucceeds: true)
+        let api = RestoreRefreshAPI()
+        let sink = RecoveryEventSink()
+        let adapter = MockNativeStoreKitPurchaseAdapter()
+        adapter.restoreResult = .restored
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(api: api, features: features, identity: identity,
+            settings: settings, eventSink: sink, transactionServiceProvider: { box.get() },
+            evidenceStore: store, purchaseStorageScope: scope, dateProvider: mocks.dateProvider,
+            unfinishedRecoveryTransactions: { [] }, currentEntitlementRecoveryTransactions: {
+                [StoreTransactionRecoveryItem(update: VerifiedStoreTransactionUpdate(
+                    transactionId: "retained-subscription", originalTransactionId: "original-subscription",
+                    productId: "store-product-1", appAccountToken: scope.appAccountToken(distinctId: "restore-owner"),
+                    isRevoked: false, isUpgraded: false, finish: {}), jwsRepresentation: "current-verified-jws")]
+            })
+        let service = TransactionService(productService: mocks.productService, transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(), dateProvider: mocks.dateProvider,
+            settings: settings, eventSink: sink, purchaseStorageScope: scope, identityService: identity,
+            nativePurchaseAdapter: adapter, featureService: features)
+        box.set(service)
+        addTeardownBlock { await observer.stopListening() }
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?[evidence.transactionId]?.backendSyncedAt)
+        // The previous backend grant is absent, but StoreKit still verifies ownership.
+        let before = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertNotEqual(before?.allowed, true)
+        _ = try await service.restore()
+        XCTAssertEqual(api.calls, 1)
+        let refreshed = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertEqual(refreshed?.allowed, true)
+        // Another ordinary restore also refreshes after the in-memory sync marker exists.
+        await features.clearCache()
+        _ = try await service.restore()
+        XCTAssertEqual(api.calls, 2)
+        let refreshedAgain = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertEqual(refreshedAgain?.allowed, true)
+        XCTAssertTrue(adapter.purchasedProducts.isEmpty)
+        XCTAssertEqual(adapter.restoreCallCount, 2)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.restoreCompleted }.count, 2)
+        identity.setDistinctId("another-owner")
+        await features.handleUserChange(from: "restore-owner", to: "another-owner")
+        _ = try await service.restore()
+        XCTAssertEqual(api.calls, 2, "Cached completion must not authorize another customer's receipt refresh")
+        let otherOwnerAccess = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertNotEqual(otherOwnerAccess?.allowed, true)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+    }
+
     func testPurchaseCompletionEventIdentityIsScopedAcrossAppEnvironmentAndStore() async {
         let mocks = MockFactory.shared
         let configuration = NuxieConfiguration(apiKey: "scope-test")
@@ -3011,5 +3074,17 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await observer.retryStoredEvidence()
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertTrue(api.recordedCustomers.isEmpty)
+    }
+}
+
+private final class RestoreRefreshAPI: PurchaseSynchronizing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var calls: Int { lock.withLock { count } }
+    func syncTransaction(transactionJwt: String, distinctId: String) async throws -> PurchaseResponse {
+        lock.withLock { count += 1 }
+        return PurchaseResponse(success: true, customerId: distinctId,
+            features: [PurchaseFeature(id: "feature-1", extId: "pro", type: .boolean,
+                allowed: true, balance: nil, unlimited: false)], error: nil)
     }
 }

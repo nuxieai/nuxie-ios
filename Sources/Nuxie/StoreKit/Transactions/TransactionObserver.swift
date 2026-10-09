@@ -824,6 +824,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             ?? active.resolvedAuthority
     }
 
+    @discardableResult
     func handleVerifiedTransaction(
         _ transaction: VerifiedStoreTransactionUpdate,
         jwsRepresentation transactionJwt: String,
@@ -831,7 +832,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         attributedDistinctId: String? = nil,
         resolvesPendingPurchase: Bool = true,
         allowsDurableCheckoutAuthority: Bool = true
-    ) async {
+    ) async -> PurchaseCommitResult {
         var resolvedSource = source
         if source == .transactionStream,
            resolvesPendingPurchase,
@@ -839,7 +840,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             .pendingPurchaseOwnership(productId: transaction.productId) {
             resolvedSource = .deferredUpdate
         }
-        _ = await commit(.verified(
+        return await commit(.verified(
             VerifiedPurchaseEvidence(
                 transactionJws: transactionJwt,
                 transactionId: transaction.transactionId,
@@ -1708,7 +1709,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         originalTransactionId: String?,
         updateLocalFeatures: Bool = true,
         isRevoked: Bool = false,
-        retainEvidenceAfterSync: Bool = false
+        retainEvidenceAfterSync: Bool = false,
+        refreshProviderState: Bool = false
     ) async -> Bool {
         guard !isStopped else { return false }
         guard !purchaseUsageClaims.contains(transactionId) else { return false }
@@ -1726,7 +1728,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             ? "\(baseDedupeKey):revoked"
             : baseDedupeKey
 
-        if syncedTransactionIds.contains(dedupeKey) {
+        if syncedTransactionIds.contains(dedupeKey), !refreshProviderState {
             LogDebug("TransactionObserver: Transaction already synced, finishing fast path")
             return await reconcileEvidenceAfterDeduplicatedSync(
                 transactionId: transactionId,
@@ -1907,14 +1909,28 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         LogInfo("TransactionObserver: Syncing current entitlements")
 
         await refreshOptimisticProjection()
-        await processCurrentEntitlements(distinctId: distinctId)
+        await processCurrentEntitlements(distinctId: distinctId, refreshProviderState: true)
 
         LogInfo("TransactionObserver: Finished syncing current entitlements")
     }
 
-    private func processCurrentEntitlements(distinctId: String) async {
+    private func processCurrentEntitlements(
+        distinctId: String,
+        refreshProviderState: Bool = false
+    ) async {
         for item in await currentEntitlementRecoveryTransactions() {
-            await handleVerifiedTransaction(
+            let retained = storedEvidence()[item.update.transactionId]
+            let previouslySynced = syncedTransactionIds.contains(item.update.transactionId)
+                || retained?.backendSyncedAt != nil
+            let ownsRefresh: Bool
+            if refreshProviderState, previouslySynced {
+                ownsRefresh = await currentEntitlementBelongsToCustomer(
+                    item.update, distinctId: distinctId, retained: retained
+                )
+            } else {
+                ownsRefresh = false
+            }
+            let result = await handleVerifiedTransaction(
                 item.update,
                 jwsRepresentation: item.jwsRepresentation,
                 source: .startupRecovery,
@@ -1927,6 +1943,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 resolvesPendingPurchase: true,
                 allowsDurableCheckoutAuthority: false
             )
+            if refreshProviderState, result.committed, ownsRefresh,
+               identityService.getDistinctId() == distinctId,
+               !item.update.isRevoked, !item.update.isUpgraded,
+               !item.jwsRepresentation.isEmpty {
+                // Explicit Restore refreshes provider authority while the commit above
+                // retains the original purchase's delivery and ownership decisions.
+                _ = await syncTransactionWithOptions(
+                    transactionJws: item.jwsRepresentation,
+                    transactionId: item.update.transactionId,
+                    productId: item.update.productId,
+                    originalTransactionId: item.update.originalTransactionId,
+                    refreshProviderState: true
+                )
+            } else if refreshProviderState {
+                _ = await result.syncTask?.value
+            }
         }
     }
 
@@ -1942,25 +1974,32 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         for item in items {
             let update = item.update
             guard !update.isRevoked && !update.isUpgraded else { continue }
-            if let evidence = retained[update.transactionId] {
-                guard evidence.distinctId == distinctId,
-                      !evidence.isRevoked else { continue }
-            } else if update.appAccountToken == purchaseStorageScope.appAccountToken(
-                distinctId: distinctId
-            ) {
-                // Fresh verified evidence can precede receipt reconciliation.
-            } else {
-                guard update.appAccountToken != nil else { continue }
-                let owner = await transactionServiceProvider().purchaseAccountOwner(
-                    appAccountToken: update.appAccountToken
-                )
-                guard owner.readableValue == distinctId else { continue }
-            }
+            guard await currentEntitlementBelongsToCustomer(
+                update, distinctId: distinctId, retained: retained[update.transactionId]
+            ) else { continue }
             products.insert(update.productId)
         }
         return identityService.performIfCurrentIdentityFenceToken(identity.token) {
             products
         } ?? []
+    }
+
+    private func currentEntitlementBelongsToCustomer(
+        _ update: VerifiedStoreTransactionUpdate,
+        distinctId: String,
+        retained: StoredTransactionEvidence?
+    ) async -> Bool {
+        if let retained {
+            return retained.distinctId == distinctId && !retained.isRevoked
+        }
+        if update.appAccountToken == purchaseStorageScope.appAccountToken(distinctId: distinctId) {
+            return true
+        }
+        guard update.appAccountToken != nil else { return false }
+        let owner = await transactionServiceProvider().purchaseAccountOwner(
+            appAccountToken: update.appAccountToken
+        )
+        return owner.readableValue == distinctId
     }
 
     func recordVerifiedPurchase(
