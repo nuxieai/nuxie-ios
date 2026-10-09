@@ -4,6 +4,19 @@ import Metal
 import NuxieRuntime
 import QuartzCore
 
+private func environmentMutations(reference: NuxieNativeViewModelReference,
+    reduceMotion: Bool?, safeArea: ExperienceSafeAreaInsets?) -> [NuxieNativeViewModelMutation] {
+    var mutations: [NuxieNativeViewModelMutation] = []
+    if let reduceMotion { mutations.append(.setBool(instance: reference, path: "reduceMotion", value: reduceMotion)) }
+    if let safeArea {
+        for (edge, value) in [("top", safeArea.top), ("bottom", safeArea.bottom),
+                              ("left", safeArea.left), ("right", safeArea.right)] {
+            mutations.append(.setNumber(instance: reference, path: "safeArea/" + edge, value: Float(value)))
+        }
+    }
+    return mutations
+}
+
 /// Product-owned player policy. The native wrapper receives only the resolved
 /// generic selector and never learns what a Nuxie screen means.
 enum ExperienceInteractivePlayerSelection: Equatable, Sendable {
@@ -1609,6 +1622,8 @@ actor ExperienceInteractivePreparation {
         player: ExperienceInteractivePlayerSelection = .defaultScene,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        initialReduceMotion: Bool? = nil,
+        initialSafeArea: ExperienceSafeAreaInsets? = nil,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
@@ -1639,6 +1654,8 @@ actor ExperienceInteractivePreparation {
                 player: resolvedPlayer,
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
+                initialReduceMotion: initialReduceMotion,
+                initialSafeArea: initialSafeArea,
                 videoDecoderPool: videoDecoderPool
             )
             systemFontCache.didImport(systemFontLeases)
@@ -1789,6 +1806,8 @@ actor ExperienceInteractiveScreen {
         player: ExperienceInteractivePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        initialReduceMotion: Bool?,
+        initialSafeArea: ExperienceSafeAreaInsets?,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
@@ -1848,6 +1867,12 @@ actor ExperienceInteractiveScreen {
                 runtime: runtime
             )
             environmentReference = try await runtime.bindGlobalViewModel(named: "env")
+            if let environmentReference {
+                // Entry transitions must see host values during the initialization advance.
+                let mutations = environmentMutations(reference: environmentReference,
+                    reduceMotion: initialReduceMotion, safeArea: initialSafeArea)
+                if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
+            }
             if let shared, let root = initialState.rootReference,
                let schemaIndex = initialState.schemaIndexByViewModel[root],
                initialState.catalog.properties.contains(where: {
@@ -1954,15 +1979,8 @@ actor ExperienceInteractiveScreen {
     func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil) async throws {
         guard let environmentReference else { return }
         let runtime = runtime
-        var mutations: [NuxieNativeViewModelMutation] = []
-        if let reduceMotion { mutations.append(.setBool(instance: environmentReference, path: "reduceMotion", value: reduceMotion)) }
-        if let safeArea {
-            for (edge, value) in [("top", safeArea.top), ("bottom", safeArea.bottom),
-                                  ("left", safeArea.left), ("right", safeArea.right)] {
-                mutations.append(.setNumber(instance: environmentReference, path: "safeArea/" + edge, value: Float(value)))
-            }
-        }
-        let batch = mutations
+        let batch = environmentMutations(reference: environmentReference,
+            reduceMotion: reduceMotion, safeArea: safeArea)
         guard !batch.isEmpty else { return }
         try await operationGate.withLock { _ = try await runtime.mutateViewModel(batch) }
     }
