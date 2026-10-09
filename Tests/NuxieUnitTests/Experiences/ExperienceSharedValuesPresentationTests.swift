@@ -21,7 +21,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
             let rect = transform.viewportRect(fromArtboard: CGRect(x: 20, y: 20, width: 160, height: 60))
             let observer = try XCTUnwrap(surface.runtimeObserver)
-            @MainActor func captureCount(_ expected: Int) async throws -> Data {
+            @MainActor func captureCount(_ expected: Int) async throws -> (frame: Data, label: Data) {
                 let device = try await interactive.metalDevice().value
                 let width = Int(surface.metalLayer.drawableSize.width)
                 let height = Int(surface.metalLayer.drawableSize.height)
@@ -53,7 +53,18 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 attachment.name = "F6-count-\(expected)"
                 attachment.lifetime = .keepAlways
                 self.add(attachment)
-                return pixels
+                // Published count bounds are x20/y120, width160/height40.
+                let labelBounds = transform.viewportRect(fromArtboard:
+                    CGRect(x: 20, y: 120, width: 160, height: 40))
+                    .applying(CGAffineTransform(scaleX: surface.runtimeDisplayScale, y: surface.runtimeDisplayScale))
+                    .integral.intersection(CGRect(x: 0, y: 0, width: width, height: height))
+                XCTAssertFalse(labelBounds.isEmpty, "The published count bounds must be visible")
+                var labelPixels = Data()
+                for row in Int(labelBounds.minY)..<Int(labelBounds.maxY) {
+                    let start = (row * width + Int(labelBounds.minX)) * 4
+                    labelPixels.append(pixels[start..<(start + Int(labelBounds.width) * 4)])
+                }
+                return (pixels, labelPixels)
             }
             func count() async throws -> Float? {
                 let snapshot = try await screen.runtimeSnapshot()
@@ -85,7 +96,8 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 XCTAssertEqual(actual, expected, "A real tap must execute the published Luau action")
                 try await Task.sleep(nanoseconds: 100_000_000)
                 let pixels = try await captureCount(Int(expected))
-                XCTAssertNotEqual(pixels, previousPixels, "The native count label redraws after the tap")
+                XCTAssertNotEqual(pixels.frame, previousPixels.frame, "The native count label redraws after the tap")
+                XCTAssertNotEqual(pixels.label, previousPixels.label, "The published count bounds redraw after the tap")
                 previousPixels = pixels
             }
         }
