@@ -1,0 +1,1 @@
+{"$schema":"https://nuxie.ai/schema/frame/1.json","isComponent":true,"size":{"width":100,"height":30},"props":{"title":{"type":"string","default":""}}}

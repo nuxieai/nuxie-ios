@@ -1,0 +1,73 @@
+{
+  "sourceCommit": "4f5e5461cb19ad50b08837d4a68aeb9582a66bff",
+  "compilerCommit": "fc1685cd86",
+  "qualificationBaseCommit": "4539c29a48",
+  "runtimeSourceCommit": "e1fad62dff1765e6b07e9182ebc6c7893deb8a75",
+  "runtimeStatus": "development facade; release pointer pending",
+  "publisherWasm": {
+    "sha256": "ca17140fc2e374e736e8e7ab2c680b90d824b2a71907cddf6b1b49e17a4bbacf",
+    "sizeBytes": 18608122
+  },
+  "authorityWasm": {
+    "sha256": "aef393be38e3ff71dd76fce2c1a4b44eef9fbc24ffa19be3320320b2d0dc491f",
+    "sizeBytes": 26269496
+  },
+  "scriptCompilerWasm": {
+    "sha256": "092bf480ff86f090a05416e1e2faef0114c8026e68f5884f3565278d397ebe87",
+    "sizeBytes": 1879890
+  },
+  "files": {
+    "NOTES.md": {
+      "sha256": "9479bc16780b7b13da01f6bf0dbec324f25b83030ded9361d2f17227ae94952f",
+      "sizeBytes": 1544
+    },
+    "expectations.json": {
+      "sha256": "0f0fe272030b723b691b74096c88ad6392701c798404052eab3e48bc0d5182b7",
+      "sizeBytes": 2499
+    },
+    "profile-entry.json": {
+      "sha256": "d198852afe6eb70025d7d44657518e2f626a787e74360ca6d09839535fe12b8b",
+      "sizeBytes": 11221
+    },
+    "release.json": {
+      "sha256": "da73c3f09cbabce27256bee24434caf94a7d2b92d00fd85fd07dcc0abf7476d7",
+      "sizeBytes": 7765
+    },
+    "renders/sha256/fe649f83d6532f1b12b01927d4cebadc38edb74f7b6bc7a7911eff3fbd8519a0.nux": {
+      "sha256": "fe649f83d6532f1b12b01927d4cebadc38edb74f7b6bc7a7911eff3fbd8519a0",
+      "sizeBytes": 6844
+    },
+    "screen.riv": {
+      "sha256": "fe649f83d6532f1b12b01927d4cebadc38edb74f7b6bc7a7911eff3fbd8519a0",
+      "sizeBytes": 6844
+    },
+    "source/.nuxie/canvas.json": {
+      "sha256": "f4735b41c3bfae5dda31a931442672fd7cbf69aed567f75bf56305cd1629b83c",
+      "sizeBytes": 53
+    },
+    "source/components/option-label/frame.json": {
+      "sha256": "050dbe21952308db3667af6f98833f36db7d9367735488790986aae0b0d3819c",
+      "sizeBytes": 152
+    },
+    "source/components/option-label/index.html": {
+      "sha256": "5b676baf74efaf10a9bde24a85c98d11a4ec998b2d8abc992e38f187b6054198",
+      "sizeBytes": 64
+    },
+    "source/experience.json": {
+      "sha256": "45de7397e63031db3b1a5ad4314ce0cfd45a5b401247fbb2f2503929df9dace4",
+      "sizeBytes": 811
+    },
+    "source/screens/first/frame.json": {
+      "sha256": "245a00af722d1a22a97880529edacaea5964bd640b9540599c6a2b16f46735c2",
+      "sizeBytes": 109
+    },
+    "source/screens/first/index.html": {
+      "sha256": "db802b5cca74a0fddad9d3c097a3e5c13dffab0dccccea88725b2246e079b347",
+      "sizeBytes": 317
+    },
+    "source/scripts/save.luau": {
+      "sha256": "f99b5361ebd57a9ec8f73811663993adf9c0cfb52e7acd6745d19886e6191318",
+      "sizeBytes": 534
+    }
+  }
+}
