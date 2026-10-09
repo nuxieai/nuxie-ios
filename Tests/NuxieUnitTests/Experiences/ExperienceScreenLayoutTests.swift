@@ -34,7 +34,7 @@ final class ExperienceScreenLayoutTests: XCTestCase {
     }
 
     @MainActor
-    func testControllerPublishesSafeAreaToRuntimeAtPhoneTabletAndEmptyViewSizes() async throws {
+    func testControllerDoesNotWriteDeviceValuesIntoLegacyScreenRoot() async throws {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/rendered-text-input")
@@ -65,8 +65,8 @@ final class ExperienceScreenLayoutTests: XCTestCase {
             view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
             controller.syncSafeAreaInsets(force: true)
             try await loop.advanceZeroDelta()
-            try await assertSafeArea(top: 0, bottom: 0, size: view.bounds.size)
-            view.testInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+            try await assertSafeArea(top: 59, bottom: 34, size: view.bounds.size)
+            view.testInsets = UIEdgeInsets(top: 20, left: 0, bottom: 10, right: 0)
             for size in [CGSize.zero, CGSize(width: 393, height: 852), CGSize(width: 820, height: 1180)] {
                 view.frame = CGRect(origin: .zero, size: size)
                 controller.syncSafeAreaInsets(force: true)

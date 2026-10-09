@@ -229,6 +229,58 @@ final class ExperienceSharedValuesTests: XCTestCase {
     }
 
     #if os(iOS)
+    func testPublishedDeviceGlobalReachesScreenAndCopyBeforeFirstDraw() async throws {
+        let expected = try PublishedRunValuesFixture.expectations()
+        let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,
+            screens: expected.screens)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes)
+        let catalog = await file.viewModelCatalog()
+        let envSchema = try XCTUnwrap(catalog.schemas.first { $0.name == "env" })
+        XCTAssertTrue(envSchema.isGlobal)
+        XCTAssertEqual(Set(catalog.properties.filter { $0.schemaIndex == envSchema.index }.map(\.name)),
+            Set(["reduceMotion", "safeArea"]))
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let first = try await preparation.openScreen(screenID: "device", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        let second = try await preparation.openScreen(screenID: "device", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await first.close(); try await second.close() }
+        let initialValue = try await first.environmentSnapshot()
+        let initial = try XCTUnwrap(initialValue)
+        let otherValue = try await second.environmentSnapshot()
+        let other = try XCTUnwrap(otherValue)
+        XCTAssertEqual(initial.rootInstanceID, other.rootInstanceID, "One run shares one env instance")
+        XCTAssertEqual(initial.values.first { $0.name == "reduceMotion" }?.value, .bool(false))
+        XCTAssertEqual(initial.values.first { $0.name == "top" }?.value, .number(0))
+        try await first.enableSemantics()
+        let before = try await renderCopyFrame(first, capturesSemantics: true)
+        try await first.updateEnvironment(reduceMotion: true,
+            safeArea: .init(top: 59, bottom: 0, left: 0, right: 0))
+        _ = try await first.step(elapsedSeconds: 0)
+        _ = try await second.step(elapsedSeconds: 0)
+        let after = try await renderCopyFrame(first, capturesSemantics: true)
+        // Static text in this published file has no semantic nodes. Inspect its actual ink.
+        let beforeBands = renderedInkBands(before.pixels)
+        let afterBands = renderedInkBands(after.pixels)
+        XCTAssertEqual(beforeBands.count, 2, "Device and 0 are drawn before env writes")
+        XCTAssertEqual(afterBands.count, 4, "Device, 59, Still and the input-free copy's Calm are drawn")
+        let firstBand = try XCTUnwrap(beforeBands.first)
+        let movedBand = try XCTUnwrap(afterBands.first)
+        XCTAssertEqual(movedBand.lowerBound - firstBand.lowerBound, 39)
+        let originalInk = before.pixels[(firstBand.lowerBound * 393 * 4)..<(firstBand.upperBound * 393 * 4)]
+        let movedInk = after.pixels[(movedBand.lowerBound * 393 * 4)..<(movedBand.upperBound * 393 * 4)]
+        XCTAssertEqual(originalInk.count, movedInk.count)
+        // Integer translation can round Metal's antialiased channels by two units.
+        XCTAssertTrue(zip(originalInk, movedInk).allSatisfy { abs(Int($0) - Int($1)) <= 2 },
+            "Device's unchanged ink moves by exactly the source's safe-area delta")
+        let secondPixels = try await renderCopyPixels(second)
+        XCTAssertEqual(secondPixels, after.pixels, "Both mounted screens draw the shared global")
+        try await second.updateEnvironment(reduceMotion: false, safeArea: .zero)
+        _ = try await first.step(elapsedSeconds: 0)
+        let restored = try await renderCopyPixels(first)
+        XCTAssertEqual(restored, before.pixels, "Live env updates restore the initial drawing on the other screen")
+    }
+
     func testPublishedCopyDrawsSelectedValueOnItsFirstFrame() async throws {
         let expected = try PublishedRunValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,
@@ -265,23 +317,11 @@ final class ExperienceSharedValuesTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        // The published source varies only Tick visibility with level; trip_days stays 23.
-        XCTAssertTrue(frames[0] == frames[2], "Independent selected copies have identical first drawn pixels")
-        XCTAssertTrue(frames[0] != frames[1], "Tick changes actual first-frame pixels when level changes")
-        // This source places its only two text items at the top; the bottom-right pixel is clear background.
-        let background = frames[1].suffix(4)
-        var visibleTickPixels = 0
-        for offset in stride(from: 0, to: frames[0].count, by: 4) {
-            let selected = frames[0][offset..<(offset + 4)]
-            let unselected = frames[1][offset..<(offset + 4)]
-            if selected != unselected {
-                // Metal may round a cleared edge channel by one unit after compositing.
-                XCTAssertTrue(zip(unselected, background).allSatisfy { abs(Int($0) - Int($1)) <= 1 },
-                    "Tick's differing pixels must be absent at level 0, not at level 1")
-                visibleTickPixels += 1
-            }
-        }
-        XCTAssertGreaterThan(visibleTickPixels, 0, "The selected first frame contains visible Tick ink")
+        XCTAssertEqual(frames[0], frames[2], "Independent selected copies have identical first drawn pixels")
+        // The republished source adds Next after the copy. Hiding Tick moves Next up.
+        XCTAssertEqual(renderedInkBands(frames[0]).count, 3, "23, Tick and Next are drawn on the first selected frame")
+        XCTAssertEqual(renderedInkBands(frames[1]).count, 2, "23 and Next remain when Tick is hidden")
+        XCTAssertNotEqual(frames[0], frames[1])
     }
 
     func testComponentCopyKeepsItsOwnCounter() async throws {
@@ -355,7 +395,29 @@ final class ExperienceSharedValuesTests: XCTestCase {
             previous = next
         }
     }
+    private func renderedInkBands(_ pixels: Data) -> [Range<Int>] {
+        let background = Array(pixels.suffix(4))
+        let rows = (0..<852).filter { y in
+            (0..<393).contains { x in
+                let offset = (y * 393 + x) * 4
+                return (0..<3).contains { abs(Int(pixels[offset + $0]) - Int(background[$0])) > 3 }
+            }
+        }
+        var bands: [Range<Int>] = []
+        for row in rows {
+            if let last = bands.last, last.upperBound == row {
+                bands[bands.count - 1] = last.lowerBound..<(row + 1)
+            } else { bands.append(row..<(row + 1)) }
+        }
+        return bands
+    }
+
     private func renderCopyPixels(_ screen: ExperienceInteractiveScreen) async throws -> Data {
+        try await renderCopyFrame(screen, capturesSemantics: false).pixels
+    }
+
+    private func renderCopyFrame(_ screen: ExperienceInteractiveScreen, capturesSemantics: Bool) async throws
+        -> (pixels: Data, semantics: NuxieNativeSemanticCapture?) {
         let device = try await screen.metalDevice().value
         let layer = CAMetalLayer()
         layer.device = device
@@ -367,13 +429,24 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let buffer = try XCTUnwrap(device.makeBuffer(length: stride * 852, options: .storageModeShared))
         let rendered = expectation(description: "Copy rendered")
         let frame = try await screen.renderFrame(layoutScaleFactor: 1, drawable: ExperienceInteractiveDrawable(drawable), clearColor: 0xFF11_2233,
-            capturesSemantics: false, readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride),
+            capturesSemantics: capturesSemantics, readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride),
             completion: { rendered.fulfill() })
         await fulfillment(of: [rendered], timeout: 2)
         var pixels = Data()
         for row in 0..<852 { pixels.append(buffer.contents().assumingMemoryBound(to: UInt8.self) + row * stride, count: 393 * 4) }
         XCTAssertEqual(frame.outcome.disposition, .presented)
-        return pixels
+        if capturesSemantics {
+            let tree = XCTAttachment(string: String(describing: frame.semantics?.tree.nodes))
+            tree.name = "F4 env semantic tree"; tree.lifetime = .keepAlways; add(tree)
+            let provider = try XCTUnwrap(CGDataProvider(data: pixels as CFData))
+            let image = try XCTUnwrap(CGImage(width: 393, height: 852, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: 393 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+            let attachment = XCTAttachment(image: UIImage(cgImage: image))
+            attachment.name = "F4 env rendered frame"; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        return (pixels, frame.semantics)
     }
     #endif
 

@@ -498,6 +498,10 @@ final class ExperienceScreenViewController: UIViewController {
         loop.setPresentationVisible(controllerIsVisible && !contentHidden)
 
         do {
+            let insets = experienceSafeAreaInsets(for: view)
+            try await interactive.updateEnvironment(
+                reduceMotion: lifecycleState.snapshot.reduceMotion, safeArea: insets)
+            lastPushedSafeAreaInsets = insets
             try await loop.start()
             configureTextInputCallbacks()
             bindTextInputs(to: interactive, loop: loop)
@@ -750,31 +754,16 @@ final class ExperienceScreenViewController: UIViewController {
 
     func syncSafeAreaInsets(force: Bool = false) {
         if force { lastPushedSafeAreaInsets = nil }
-        guard isViewLoaded,
-              !isShuttingDown,
-              runtimeFailure == nil,
-              let defaultViewModelName = journeyScreen?.defaultViewModelName else {
-            return
-        }
+        guard isViewLoaded, !isShuttingDown, runtimeFailure == nil,
+              let interactiveScreen, let presentationLoop else { return }
         let insets = experienceSafeAreaInsets(for: view)
         guard insets != lastPushedSafeAreaInsets else { return }
-        let identity = journeyScreen?.defaultInstanceId
-        let values: [(String, Double)] = [
-            ("safeArea/top", insets.top),
-            ("safeArea/bottom", insets.bottom),
-            ("safeArea/left", insets.left),
-            ("safeArea/right", insets.right),
-        ]
-        let command = ExperienceInteractiveStateCommand.snapshot(values.map {
-            ExperienceInteractiveStateCommand.Value(
-                viewModelName: defaultViewModelName,
-                instanceID: identity,
-                instanceName: nil,
-                path: $0.0,
-                value: .number($0.1)
-            )
-        })
-        if enqueueStateCommand(command, logFailure: false) {
+        if presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            try await interactiveScreen.updateEnvironment(safeArea: insets)
+            return .work(requestsFrame: true)
+        }, completion: { [weak self] result in
+            if case .failure(let error) = result { self?.handleTerminalFailure(error) }
+        }) {
             lastPushedSafeAreaInsets = insets
         }
     }
@@ -810,6 +799,7 @@ final class ExperienceScreenViewController: UIViewController {
     private func enqueueStateCommand(
         _ command: ExperienceInteractiveStateCommand,
         logFailure: Bool = true,
+        reduceMotion: Bool? = nil,
         requestsFrame: Bool = true,
         completion: (@MainActor @Sendable (Result<Void, Error>) -> Void)? = nil
     ) -> Bool {
@@ -819,6 +809,7 @@ final class ExperienceScreenViewController: UIViewController {
               let presentationLoop else { return false }
         return presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
+                try await interactiveScreen.updateEnvironment(reduceMotion: reduceMotion)
                 let result = try await interactiveScreen.applyStateCommand(command)
                 return .work(requestsFrame: requestsFrame) { [weak self] in
                     await self?.deliverStep(effects: result.effects)
@@ -1334,24 +1325,16 @@ final class ExperienceScreenViewController: UIViewController {
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
-        guard let defaultViewModelName = journeyScreen?.defaultViewModelName else {
-            // Screens without a root ViewModel have no native lifecycle fields
-            // to acknowledge. Their host lifecycle still owns semantic focus.
-            guard interactiveScreen != nil, !isShuttingDown,
-                  semanticFocusLifecycle.completeWrite(write, succeeded: true) else { return nil }
-            updatePresentationVisibility()
-            return write
-        }
         guard !lifecycleWritesUnavailable else { return nil }
-        let instanceID = journeyScreen?.defaultInstanceId
-        let command = snapshot.stateCommand(
-            viewModelName: defaultViewModelName,
-            instanceID: instanceID
-        )
+        // Rootless screens still receive the file's global device values.
+        let command = journeyScreen?.defaultViewModelName.map {
+            snapshot.stateCommand(viewModelName: $0, instanceID: journeyScreen?.defaultInstanceId)
+        } ?? .snapshot([])
         let result: Result<Void, Error> = await withCheckedContinuation { continuation in
             let accepted = enqueueStateCommand(
                 command,
                 logFailure: false,
+                reduceMotion: snapshot.reduceMotion,
                 requestsFrame: false,
                 completion: { continuation.resume(returning: $0) }
             )

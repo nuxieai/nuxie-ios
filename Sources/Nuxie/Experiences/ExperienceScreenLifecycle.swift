@@ -86,13 +86,6 @@ struct ExperienceScreenLifecycleSnapshot: Equatable, Sendable {
                 path: "screen/transition",
                 value: .string(transition)
             ),
-            .init(
-                viewModelName: viewModelName,
-                instanceID: instanceID,
-                instanceName: nil,
-                path: "env/reduceMotion",
-                value: .bool(reduceMotion)
-            ),
         ])
     }
 }

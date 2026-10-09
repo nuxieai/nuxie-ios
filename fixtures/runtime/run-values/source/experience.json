@@ -35,6 +35,16 @@
           "screen": "screens/level"
         }
       ]
+    },
+    {
+      "screen": "screens/level",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/device"
+        }
+      ]
     }
   ]
 }

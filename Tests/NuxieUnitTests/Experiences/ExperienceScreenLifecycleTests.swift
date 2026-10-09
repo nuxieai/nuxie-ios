@@ -90,13 +90,6 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
                     path: "screen/transition",
                     value: .string("transition.checkout_to_success")
                 ),
-                .init(
-                    viewModelName: "Root",
-                    instanceID: "root-id",
-                    instanceName: nil,
-                    path: "env/reduceMotion",
-                    value: .bool(true)
-                ),
             ])
         )
     }
