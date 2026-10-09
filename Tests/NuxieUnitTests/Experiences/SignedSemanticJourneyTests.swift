@@ -241,6 +241,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
                     }
                 })
             } else if scenario == .input {
+                try await waitUntil("The native editor must finish reading its authored value") {
+                    self.semanticElements(in: presentations.currentExperienceViewController?.view)
+                        .compactMap { $0 as? UITextField }.contains { $0.isEnabled && $0.text == "Ada" }
+                }
                 let fields = self.semanticElements(in: presentations.currentExperienceViewController?.view).compactMap { $0 as? UITextField }
                 let field = try XCTUnwrap(fields.first)
                 XCTAssertEqual(fields.count, 1)
@@ -263,8 +267,13 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 repeat {
                     if let capture = presented,
                        let node = capture.tree.nodes.first(where: { $0.role == NuxieNativeSemanticRole.textField.rawValue }) {
-                        actual = try await source.readPresentedFieldString(captureID: capture.id, nodeID: node.id,
-                            name: "scr_screens_sinput::v2 editable value")
+                        do {
+                            actual = try await source.readPresentedFieldString(captureID: capture.id, nodeID: node.id,
+                                name: "scr_screens_sinput::v2 editable value")
+                        } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .handleMismatch {
+                            // The live display may retire this occurrence before its queued read.
+                            // Wait for the next capture within the original deadline.
+                        }
                     }
                     if actual == "Grace" { break }
                     try await Task.sleep(nanoseconds: 20_000_000)
