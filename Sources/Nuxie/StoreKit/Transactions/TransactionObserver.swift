@@ -1765,7 +1765,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 dedupeKey: dedupeKey,
                 lifecycleGeneration: requestLifecycleGeneration,
                 updateLocalFeatures: updateLocalFeatures,
-                retainEvidenceAfterSync: retainEvidenceAfterSync
+                retainEvidenceAfterSync: retainEvidenceAfterSync,
+                emitSyncedEvent: !refreshProviderState
             )
         }
         transactionSyncOperations[dedupeKey] = TransactionSyncOperation(
@@ -1812,7 +1813,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         dedupeKey: String,
         lifecycleGeneration requestLifecycleGeneration: UInt64,
         updateLocalFeatures: Bool,
-        retainEvidenceAfterSync: Bool
+        retainEvidenceAfterSync: Bool,
+        emitSyncedEvent: Bool
     ) async -> Bool {
 
         do {
@@ -1869,7 +1871,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     }
                 }
 
-                if identityService.getDistinctId() == distinctId {
+                if emitSyncedEvent, identityService.getDistinctId() == distinctId {
                     var properties: [String: Any] = [
                         "transaction_id": transactionId,
                         "original_transaction_id": originalTransactionId ?? "",
@@ -1918,48 +1920,58 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         distinctId: String,
         refreshProviderState: Bool = false
     ) async {
-        for item in await currentEntitlementRecoveryTransactions() {
-            let retained = storedEvidence()[item.update.transactionId]
-            let previouslySynced = syncedTransactionIds.contains(item.update.transactionId)
-                || retained?.backendSyncedAt != nil
-            let ownsRefresh: Bool
-            if refreshProviderState, previouslySynced {
-                ownsRefresh = await currentEntitlementBelongsToCustomer(
-                    item.update, distinctId: distinctId, retained: retained
+        let items = await currentEntitlementRecoveryTransactions()
+        await withTaskGroup(of: Void.self) { group in
+            for item in items {
+                let retained = storedEvidence()[item.update.transactionId]
+                let previouslySynced = syncedTransactionIds.contains(item.update.transactionId)
+                    || retained?.backendSyncedAt != nil
+                let ownsRefresh: Bool
+                if refreshProviderState, previouslySynced {
+                    ownsRefresh = await currentEntitlementBelongsToCustomer(
+                        item.update, distinctId: distinctId, retained: retained
+                    )
+                } else {
+                    ownsRefresh = false
+                }
+                let result = await handleVerifiedTransaction(
+                    item.update,
+                    jwsRepresentation: item.jwsRepresentation,
+                    source: .startupRecovery,
+                    attributedDistinctId: distinctId,
+                    // A current-entitlement scan can race unfinished/updates for
+                    // the same deferred native purchase. Let the committer attach
+                    // and retire any exact pending marker so the scan cannot win
+                    // with a context-free terminal commit that suppresses Journey
+                    // advancement from the later producer.
+                    resolvesPendingPurchase: true,
+                    allowsDurableCheckoutAuthority: false
                 )
-            } else {
-                ownsRefresh = false
-            }
-            let result = await handleVerifiedTransaction(
-                item.update,
-                jwsRepresentation: item.jwsRepresentation,
-                source: .startupRecovery,
-                attributedDistinctId: distinctId,
-                // A current-entitlement scan can race unfinished/updates for
-                // the same deferred native purchase. Let the committer attach
-                // and retire any exact pending marker so the scan cannot win
-                // with a context-free terminal commit that suppresses Journey
-                // advancement from the later producer.
-                resolvesPendingPurchase: true,
-                allowsDurableCheckoutAuthority: false
-            )
-            if refreshProviderState, result.committed, ownsRefresh,
-               identityService.getDistinctId() == distinctId,
-               !item.update.isRevoked, !item.update.isUpgraded,
-               !item.jwsRepresentation.isEmpty {
-                // Explicit Restore refreshes provider authority while the commit above
-                // retains the original purchase's delivery and ownership decisions.
-                _ = await syncTransactionWithOptions(
-                    transactionJws: item.jwsRepresentation,
-                    transactionId: item.update.transactionId,
-                    productId: item.update.productId,
-                    originalTransactionId: item.update.originalTransactionId,
-                    refreshProviderState: true
-                )
-            } else if refreshProviderState {
-                _ = await result.syncTask?.value
+                if refreshProviderState, result.committed, ownsRefresh,
+                   identityService.getDistinctId() == distinctId,
+                   !item.update.isRevoked, !item.update.isUpgraded,
+                   !item.jwsRepresentation.isEmpty {
+                    // Explicit Restore refreshes provider authority while the commit above
+                    // retains the original purchase's delivery and ownership decisions.
+                    group.addTask { await self.refreshCurrentEntitlement(item, distinctId: distinctId) }
+                } else if refreshProviderState, let syncTask = result.syncTask {
+                    group.addTask { _ = await syncTask.value }
+                }
             }
         }
+    }
+
+    private func refreshCurrentEntitlement(_ item: StoreTransactionRecoveryItem, distinctId: String) async {
+        // A child can start after an identity change. Check the initiating owner
+        // on this actor immediately before creating the sync operation.
+        guard identityService.getDistinctId() == distinctId else { return }
+        _ = await syncTransactionWithOptions(
+            transactionJws: item.jwsRepresentation,
+            transactionId: item.update.transactionId,
+            productId: item.update.productId,
+            originalTransactionId: item.update.originalTransactionId,
+            refreshProviderState: true
+        )
     }
 
     func currentEntitledStoreProductIds() async -> Set<String> {
