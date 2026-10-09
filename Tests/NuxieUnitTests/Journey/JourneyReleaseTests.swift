@@ -237,7 +237,8 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertEqual(release.descriptor.state.mapValues(\.type), ["trip_days": "number", "level": "number"])
         XCTAssertTrue(release.descriptor.responses.isEmpty)
         XCTAssertTrue(release.descriptor.ruleGroups.isEmpty)
-        XCTAssertEqual(release.descriptor.leg.screens.count, 2)
+        XCTAssertEqual(Set(release.descriptor.leg.screens.map(\.id)),
+            ["scr_screens_stap", "scr_screens_slevel", "scr_screens_sdevice"])
         XCTAssertTrue(release.descriptor.leg.routes.contains { $0.eventName == "continue" })
     }
 
