@@ -1,0 +1,46 @@
+{
+  "$schema": "https://nuxie.ai/schema/experience/1.json",
+  "entry": {
+    "trigger": {
+      "type": "event",
+      "eventName": "$app_installed"
+    },
+    "frequency": {
+      "type": "one_time"
+    },
+    "exitWhenAny": [],
+    "steps": [
+      {
+        "type": "navigate",
+        "screen": "screens/first"
+      }
+    ]
+  },
+  "responses": {
+    "signup": {
+      "title": "Signup",
+      "fields": [
+        {
+          "key": "picks",
+          "label": "Picks",
+          "type": "enum",
+          "multiple": true,
+          "values": [
+            "a",
+            "b",
+            "c"
+          ],
+          "default": [
+            "a"
+          ],
+          "maxItems": 1
+        }
+      ]
+    }
+  },
+  "journey": [],
+  "platforms": [
+    "ios:apple_app_store",
+    "android:google_play"
+  ]
+}
