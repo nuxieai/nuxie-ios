@@ -26,6 +26,22 @@ done
 git -C "${temporary}/sdk" add fixtures/runtime
 "${temporary}/sdk/scripts/check-product-neutrality.sh" >/dev/null
 
+mkdir -p "${temporary}/sdk/fixtures/runtime/nested-values"
+printf '%s%s\n' "tools/nuxie-" "editor" \
+  >"${temporary}/sdk/fixtures/runtime/nested-values/README.md"
+git -C "${temporary}/sdk" add fixtures/runtime/nested-values/README.md
+"${temporary}/sdk/scripts/check-product-neutrality.sh" >/dev/null
+
+printf '%s%s\n' "final class EditorNative" "ArtifactFixture {}" \
+  >"${temporary}/sdk/fixtures/runtime/nested-values/support.swift"
+git -C "${temporary}/sdk" add fixtures/runtime/nested-values/support.swift
+if "${temporary}/sdk/scripts/check-product-neutrality.sh" >"${temporary}/nested-failure.log" 2>&1; then
+  echo "Product-neutrality guard exempted code beside nested fixture documentation" >&2
+  exit 1
+fi
+grep -F "fixtures/runtime/nested-values/support.swift" "${temporary}/nested-failure.log" >/dev/null
+git -C "${temporary}/sdk" rm -q -f fixtures/runtime/nested-values/support.swift
+
 printf '%s%s\n' "final class EditorNative" "ArtifactFixture {}" \
   >"${temporary}/sdk/fixtures/runtime/run-values/support.swift"
 git -C "${temporary}/sdk" add fixtures/runtime/run-values/support.swift
