@@ -1,0 +1,37 @@
+{
+  "screens": [
+    "tap"
+  ],
+  "requiredScripts": [
+    "scripts/increment.luau"
+  ],
+  "release": {
+    "schemaVersion": "nuxie.journey-release.v3",
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "tap": {
+    "screen": "scr_screens_stap",
+    "buttonLabel": "Increment",
+    "point": {
+      "x": 100,
+      "y": 50
+    },
+    "valuePath": "state/count",
+    "initial": 0,
+    "afterEachTap": [
+      1,
+      2,
+      3
+    ]
+  },
+  "negative": {
+    "replacementIncrement": 2,
+    "expectedFirstTap": 1
+  },
+  "qualification": "Published fixture for F.6; SDK device execution remains with Thread 4.",
+  "entryCondition": {
+    "type": "app_foregrounded"
+  }
+}
