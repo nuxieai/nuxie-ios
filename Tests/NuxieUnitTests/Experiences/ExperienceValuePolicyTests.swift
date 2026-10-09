@@ -67,6 +67,37 @@ final class ExperienceValuePolicyTests: XCTestCase {
         XCTAssertEqual(try member(cleared, ["responses:profile", "errors", "name"]), .list([]))
     }
 
+    func testNestedObjectDeclarationsKeepStrictShapes() throws {
+        let state = try JSONSerialization.jsonObject(with: Data(#"{"profile":{"type":"object","fields":{"name":{"type":"string"},"minutes":{"type":"number"},"topics":{"type":"enum","values":["Reading, writing","Travel"],"multiple":true},"settings":{"type":"object","fields":{"day":{"type":"date"}}}}}}"#.utf8))
+        func validate(_ value: Any) throws {
+            try JourneyReleaseValuePolicy.validate(["state": value, "responses": [:], "ruleGroups": []])
+        }
+        XCTAssertNoThrow(try validate(state))
+        let invalid = [
+            #"{"profile":{"type":"object"}}"#,
+            #"{"profile":{"type":"object","fields":{}}}"#,
+            #"{"profile":{"type":"list","items":{"x":{"type":"number"}},"fields":{"x":{"type":"number"}}}}"#,
+            #"{"profile":{"type":"object","items":{"x":{"type":"number"}},"fields":{"x":{"type":"number"}}}}"#,
+            #"{"profile":{"type":"number","fields":{"x":{"type":"number"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"name":{"type":"string","extra":true}}}}"#,
+            #"{"profile":{"type":"object","fields":{"name":{"type":"string","default":"Ana"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"isset:name":{"type":"boolean"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"enum","values":["a","a"]}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"number","multiple":true}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"list"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"date","fields":{}}}}}"#,
+        ]
+        for text in invalid {
+            XCTAssertThrowsError(try validate(JSONSerialization.jsonObject(with: Data(text.utf8))), text) {
+                XCTAssertEqual($0 as? JourneyReleaseAuthenticationError, .invalidDescriptor)
+            }
+        }
+        XCTAssertThrowsError(try JourneyReleaseValuePolicy.validate([
+            "state": [:], "responses": ["form": ["title": "Form", "model": "Responses:form",
+                "fields": [["key": "profile", "label": "Profile", "type": "object", "fields": ["x": ["type": "number"]], "rules": []]]]], "ruleGroups": []
+        ]))
+    }
+
     func testPublishedF5InstallsResponseRulesBeforeFirstMutation() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
