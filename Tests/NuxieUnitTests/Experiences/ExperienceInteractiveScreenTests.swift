@@ -1315,10 +1315,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             let instance: [UInt8] = [0xb5, 3, 0xb6, 4, 1, 4, 8] + Array("Instance".utf8) + [0]
             try replace(instance, instance + [0xbc, 3, 0xaa, 4, 1, 0xc1, 4, 0, 0])
             let artboard: [UInt8] = [1, 0xc7, 4, 1, 0xc4, 1, 1]
-            let wrapper: [UInt8] = [0xb3, 3, 0xad, 4, 4] + Array("Root".utf8) + [0]
-                + [0xb4, 3, 0xad, 4, 7] + Array("paywall".utf8) + [0xb5, 4, 1, 0]
-                + [0xb5, 3, 0xb6, 4, 2, 4, 4] + Array("root".utf8) + [0]
-                + [0xbc, 3, 0xaa, 4, 0, 0xc1, 4, 0, 0]
+            var wrapper: [UInt8] = [0xb3, 3, 0xad, 4, 4] + Array("Root".utf8) + [0]
+            wrapper += [0xb4, 3, 0xad, 4, 7] + Array("paywall".utf8) + [0xb5, 4, 1, 0]
+            wrapper += [0xb5, 3, 0xb6, 4, 2, 4, 4] + Array("root".utf8) + [0]
+            wrapper += [0xbc, 3, 0xaa, 4, 0, 0xc1, 4, 0, 0]
             try replace(artboard, wrapper + [1, 0xc7, 4, 2, 0xc4, 1, 1])
         }
         let model = nested ? "Root" : "Doc"
