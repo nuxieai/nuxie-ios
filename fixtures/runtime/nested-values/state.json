@@ -1,0 +1,38 @@
+{
+  "profile": {
+    "type": "object",
+    "fields": {
+      "name": {
+        "type": "string"
+      },
+      "minutes": {
+        "type": "number"
+      },
+      "empty": {
+        "type": "number"
+      },
+      "settings": {
+        "type": "object",
+        "fields": {
+          "minutes": {
+            "type": "number"
+          },
+          "day": {
+            "type": "date"
+          }
+        }
+      },
+      "topics": {
+        "type": "enum",
+        "values": [
+          "Reading, writing",
+          "Travel"
+        ],
+        "multiple": true
+      }
+    }
+  },
+  "top": {
+    "type": "number"
+  }
+}

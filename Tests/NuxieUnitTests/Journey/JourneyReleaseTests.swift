@@ -8,6 +8,19 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testSignedV3NestedObjectPolicyAuthenticatesExactMetadata() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        let url = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("nested-values/state.json")
+        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        root["state"] = state
+        XCTAssertEqual(root["schemaVersion"] as? String, "nuxie.journey-release.v3")
+        let release = try authenticate(sign(JSONSerialization.data(withJSONObject: root)),
+            key: signingKey.publicKey.rawRepresentation, identity: fixture.identity)
+        let carried = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(release.descriptor.state)) as? NSDictionary)
+        XCTAssertEqual(carried, state as NSDictionary)
+    }
+
     func testSignedFormQualifiedConditionAuthenticates() throws {
         let fixture = try golden()
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
