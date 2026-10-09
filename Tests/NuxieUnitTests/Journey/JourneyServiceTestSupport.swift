@@ -861,6 +861,7 @@ extension JourneyTestCase {
         events: MockEventLog,
         directory: URL,
         storageScope: JourneyStorageScope? = .testFixture,
+        responseSaveDelivery: JourneyResponseSaveDelivery? = nil,
         dateProvider: DateProviderProtocol = MockDateProvider(),
         sleepProvider: SleepProviderProtocol = MockSleepProvider(),
         featureAccess: @escaping JourneyService.FeatureAccessLookup = { _ in nil },
@@ -881,6 +882,7 @@ extension JourneyTestCase {
             sleepProvider: sleepProvider,
             journalDirectory: directory,
             storageScope: storageScope,
+            responseSaveDelivery: responseSaveDelivery,
             featureAccess: featureAccess,
             storeEntitlements: storeEntitlements,
             dispatcher: dispatcher ?? JourneyEffectDispatcher(
@@ -930,6 +932,7 @@ extension JourneyTestCase {
         factReferences: JourneyFactReferences? = nil,
         facts: JourneyFactTable? = nil,
         viewModelValues: [[String: JourneyReleaseJSONValue]]? = nil,
+        responses: [String: JourneyReleaseValuePolicy.Form]? = nil,
         armContext: ArmedJourney.Context? = nil
     ) -> JourneyProfileCatalog.Snapshot {
         let originalArm = snapshot.profile.armedLegs[0]
@@ -962,7 +965,7 @@ extension JourneyTestCase {
             outputs: originalLeg.outputs,
             completionOutputs: completionOutputs ?? originalLeg.completionOutputs
         )
-        let descriptor = JourneyReleaseDescriptor(state: originalDescriptor.state, responses: originalDescriptor.responses, ruleGroups: originalDescriptor.ruleGroups,
+        let descriptor = JourneyReleaseDescriptor(state: originalDescriptor.state, responses: responses ?? originalDescriptor.responses, ruleGroups: originalDescriptor.ruleGroups,
             schemaVersion: originalDescriptor.schemaVersion,
             identity: originalDescriptor.identity,
             metadata: originalDescriptor.metadata,

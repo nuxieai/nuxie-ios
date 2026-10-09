@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "completed_after_authored_close",
+      "terminalEvent": "$purchase_completed",
+      "outcome": "completed",
+      "reports": 1,
+      "commerceOperations": 1,
+      "authoredActions": 1
+    },
+    {
+      "name": "cancelled_after_authored_close",
+      "terminalEvent": "$purchase_cancelled",
+      "outcome": "author_closed",
+      "reports": 1,
+      "commerceOperations": 1,
+      "authoredActions": 1
+    },
+    {
+      "name": "failed_after_authored_close",
+      "terminalEvent": "$purchase_failed",
+      "outcome": "author_closed",
+      "reports": 1,
+      "commerceOperations": 1,
+      "authoredActions": 1
+    }
+  ],
+  "declinedFrameSave": {
+    "accepted": true,
+    "confirmed": true,
+    "commerceOperations": 1,
+    "form": "feedback",
+    "answers": {
+      "stars": 4
+    }
+  }
+}
