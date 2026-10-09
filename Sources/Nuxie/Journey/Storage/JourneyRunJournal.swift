@@ -963,6 +963,23 @@ struct JourneyRunJournal {
         }
     }
 
+    /// Settle an outcome with no authored outlet without advancing the visible run.
+    func settlePresentationEffect(
+        _ id: String, stepId: String, effectId: String,
+        admission: JourneyCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.startedQueued,
+                  run.completion == nil, run.park == nil,
+                  run.stepId == stepId, run.effectReceipts[stepId] == effectId else {
+                return false
+            }
+            run.effectReceipts.removeValue(forKey: stepId)
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
     /// Called once on process launch, before any leg executes. Expired waits
     /// remain parked so the executor can evaluate them against current facts.
     func recover(at: Date) async throws -> [JourneyRun] {

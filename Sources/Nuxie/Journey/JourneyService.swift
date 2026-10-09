@@ -770,9 +770,21 @@ private extension JourneyService {
                     runId: candidate.id,
                     action: action,
                     release: release
-                  ),
-                  let nextStepId = step.outlets?[route.outlet] else {
+                  ) else {
                 continue
+            }
+            guard let nextStepId = step.outlets?[route.outlet] else {
+                do {
+                    guard let admission = journalCommitAdmission(
+                        journal: journal, executionFenceToken: executionFenceToken
+                    ), try await journal.settlePresentationEffect(
+                        candidate.id, stepId: step.id, effectId: effectId, admission: admission
+                    ) else { continue }
+                    pendingPresentationPurchasePlacements.removeValue(forKey: candidate.id)
+                } catch {
+                    LogWarning("JourneyService: failed to settle presentation action outcome: \(error)")
+                }
+                return
             }
             do {
                 guard let admission = journalCommitAdmission(
