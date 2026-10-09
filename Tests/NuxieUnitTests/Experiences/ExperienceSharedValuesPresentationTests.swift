@@ -1,12 +1,126 @@
 #if canImport(UIKit) && NUXIE_HOSTED_INPUT_TESTS
 import CryptoKit
+import QuartzCore
 import UIKit
 import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
+@testable import NuxieRuntime
 
 @MainActor
 final class ExperienceSharedValuesPresentationTests: XCTestCase {
+    func testPublishedScriptTapIncrementsAndDrawsCount() async throws {
+        let fixture = try await publishedScriptTapFixture()
+        try await withPresentation(fixture: fixture) { presentations, _, _ in
+            let screen = try await waitForScreen("scr_screens_stap", presentations: presentations)
+            let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
+            let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
+                $0.label == "interactiveScreen"
+            }?.value as? ExperienceInteractiveScreen)
+            let transform = try XCTUnwrap(ExperienceLayoutTransform(
+                artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
+            let rect = transform.viewportRect(fromArtboard: CGRect(x: 20, y: 20, width: 160, height: 60))
+            let observer = try XCTUnwrap(surface.runtimeObserver)
+            @MainActor func captureCount(_ expected: Int) async throws -> Data {
+                let device = try await interactive.metalDevice().value
+                let width = Int(surface.metalLayer.drawableSize.width)
+                let height = Int(surface.metalLayer.drawableSize.height)
+                let layer = CAMetalLayer()
+                layer.device = device
+                layer.pixelFormat = .bgra8Unorm
+                layer.framebufferOnly = false
+                layer.drawableSize = CGSize(width: width, height: height)
+                let drawable = try XCTUnwrap(layer.nextDrawable())
+                let stride = (width * 4 + 255) & ~255
+                let buffer = try XCTUnwrap(device.makeBuffer(length: stride * height, options: .storageModeShared))
+                let rendered = self.expectation(description: "F6 count frame")
+                let frame = try await interactive.renderFrame(layoutScaleFactor: Float(surface.runtimeDisplayScale),
+                    drawable: ExperienceInteractiveDrawable(drawable), clearColor: 0xffffffff,
+                    capturesSemantics: false, readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride),
+                    completion: { rendered.fulfill() })
+                await self.fulfillment(of: [rendered], timeout: 5)
+                XCTAssertEqual(frame.outcome.disposition, .presented)
+                var pixels = Data()
+                for row in 0..<height {
+                    pixels.append(buffer.contents().assumingMemoryBound(to: UInt8.self) + row * stride, count: width * 4)
+                }
+                let provider = try XCTUnwrap(CGDataProvider(data: pixels as CFData))
+                let image = try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                    bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little),
+                    provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+                let attachment = XCTAttachment(image: UIImage(cgImage: image))
+                attachment.name = "F6-count-\(expected)"
+                attachment.lifetime = .keepAlways
+                self.add(attachment)
+                return pixels
+            }
+            func count() async throws -> Float? {
+                let snapshot = try await screen.runtimeSnapshot()
+                guard case .referencedInstance(let state) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "state"
+                })?.value, case .number(let count) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == state && $0.name == "count"
+                })?.value else { return nil }
+                return count
+            }
+            let initial = try await count()
+            XCTAssertEqual(initial, 0)
+            var previousPixels = try await captureCount(0)
+            for expected: Float in [1, 2, 3] {
+                let pointer = NSObject()
+                let now = ProcessInfo.processInfo.systemUptime
+                observer.runtimeSurfaceViewDidReceivePointerEvents([
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .down,
+                        location: CGPoint(x: rect.midX, y: rect.midY), timestampSeconds: now),
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .up,
+                        location: CGPoint(x: rect.midX, y: rect.midY), timestampSeconds: now + 0.01),
+                ])
+                var actual = try await count()
+                for _ in 0..<200 {
+                    if actual == expected { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                    actual = try await count()
+                }
+                XCTAssertEqual(actual, expected, "A real tap must execute the published Luau action")
+                try await Task.sleep(nanoseconds: 100_000_000)
+                let pixels = try await captureCount(Int(expected))
+                XCTAssertNotEqual(pixels, previousPixels, "The native count label redraws after the tap")
+                previousPixels = pixels
+            }
+        }
+    }
+
+    private func publishedScriptTapFixture() async throws -> Fixture {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("script-tap")
+        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf:
+            directory.appendingPathComponent("profile-entry.json"))) as? [String: Any])
+        let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
+        let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
+        let profile: [String: Any] = [
+            "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
+            "delivery": ["renderBaseUrl": "https://shared-values.nuxie.test/", "assetBaseUrl": "https://shared-values.nuxie.test/"],
+            "features": [], "facts": ["properties": [:], "memberships": [:], "assignments": [:]],
+            "releases": [entry],
+            "armedLegs": [["reference": ["experienceId": locator["experienceId"]!,
+                "versionId": locator["experienceVersionId"]!, "legId": locator["legId"]!,
+                "descriptorSha256": envelope["descriptorSha256"]!],
+                "binding": ["type": "new"], "entryCondition": ["type": "app_foregrounded"],
+                "context": ["event": [:], "responses": [:]]]],
+        ]
+        let keys = [JourneyPackageAuthorizationKey(keyID: "TEST_ONLY_DEV_KEYPAIR",
+            ed25519PublicKeyBytes: try XCTUnwrap(Data(base64Encoded: "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=")))]
+        let authority = ProfileDeliveryAuthority(appId: try XCTUnwrap(locator["appId"] as? String),
+            environment: try XCTUnwrap(locator["environment"] as? String))
+        let supported = JourneyReleaseRuntime.current
+        let catalog = JourneyProfileCatalog(authorizationKeys: keys, supportedRuntime: supported,
+            highWaterStore: InMemoryJourneyReleaseHighWaterStore())
+        let decoded = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: profile))
+        let snapshot = try await catalog.prepare(decoded, authority: authority).snapshot
+        return Fixture(scene: try Data(contentsOf: directory.appendingPathComponent("screen.riv")),
+            assetDirectory: directory, snapshot: snapshot, authority: authority, keys: keys, supported: supported)
+    }
+
     func testNextScreenFirstPresentationReadsRunWrite() async throws {
         let fixture = try await signedFixture()
         try await withPresentation(fixture: fixture) { presentations, journeys, _ in
