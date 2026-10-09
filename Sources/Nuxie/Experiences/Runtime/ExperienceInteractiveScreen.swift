@@ -1948,7 +1948,7 @@ actor ExperienceInteractiveScreen {
                 let root = try await runtime.rootViewModelReference()
                 _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
             }
-            var result = try await runtime.step(
+            let frame = try await runtime.stepWithSnapshot(
                 inputs: nativeInputs,
                 pointers: nativePointers,
                 focusInputs: focusInputs,
@@ -1956,6 +1956,8 @@ actor ExperienceInteractiveScreen {
                 correlationID: correlationID,
                 textRunNames: []
             )
+            var result = frame.result
+            let eventSnapshot = frame.snapshot
             try await refreshLayoutBounds()
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
@@ -1964,7 +1966,6 @@ actor ExperienceInteractiveScreen {
             // Discover generated state on newly materialized components
             // before projecting this frame's changes. Native effects have
             // committed: a recoverable topology failure must not discard them.
-            let eventSnapshot = try? await runtime.snapshot()
             if let eventSnapshot { try? await refreshTrackedTopology(snapshot: eventSnapshot) }
             await captureTextFrame(result, requested: capturesTextLayout, snapshot: eventSnapshot)
             return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
