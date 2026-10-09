@@ -76,6 +76,9 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    // Opening the published F5 feedback screen prepares its System font, which the
+    // SDK provides only where UIKit does (macOS refuses with unavailableFace).
+    #if canImport(UIKit)
     func testPublishedF5AwaitSaveCapturesFrameBeforeContinuation() async throws {
         let directory = PublishedRunValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
@@ -165,6 +168,7 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertEqual(sent, 1, "Only the confirmed listener continues")
 
     }
+    #endif
 
     func testPublishedF4AuthenticatesExactVersionThreePolicy() async throws {
         try await verifyPublishedF4(disagreeingRow: false)
@@ -224,6 +228,9 @@ final class JourneyReleaseTests: XCTestCase {
             let artifact = try await presentation.artifactLoader(presentation.experience, nil, declared.id)
             XCTAssertEqual(artifact.payload.valuePolicy.state.mapValues(\.type),
                 ["trip_days": "number", "level": "number"])
+            // Preparing F4's screens includes its System font, which the SDK provides
+            // only where UIKit does (macOS refuses with unavailableFace).
+            #if canImport(UIKit)
             let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
             try await prepared.prepareRunValues(run)
             let values = try await run.journeyValues()
@@ -233,6 +240,7 @@ final class JourneyReleaseTests: XCTestCase {
                 pixelWidth: 393, pixelHeight: 852)
             _ = try await screen.step(elapsedSeconds: 0)
             try await screen.close()
+            #endif
         }
         XCTAssertEqual(release.descriptor.state.mapValues(\.type), ["trip_days": "number", "level": "number"])
         XCTAssertTrue(release.descriptor.responses.isEmpty)
