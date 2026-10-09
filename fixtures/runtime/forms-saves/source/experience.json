@@ -53,6 +53,33 @@
       "on": "continue",
       "steps": [
         {
+          "type": "condition",
+          "branches": [
+            {
+              "id": "long",
+              "condition": "responses.onboarding.trip_days > 14",
+              "program": [
+                {
+                  "type": "send_event",
+                  "eventName": "long_trip",
+                  "payload": {
+                    "trip_days": "responses.onboarding.trip_days"
+                  }
+                }
+              ]
+            }
+          ],
+          "defaultProgram": [
+            {
+              "type": "send_event",
+              "eventName": "short_trip",
+              "payload": {
+                "trip_days": "responses.onboarding.trip_days"
+              }
+            }
+          ]
+        },
+        {
           "type": "navigate",
           "screen": "screens/italian-level",
           "transition": {

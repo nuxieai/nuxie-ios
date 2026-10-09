@@ -776,7 +776,15 @@ enum JourneyReleaseSchemaPrimitives {
         case "String": _ = try object(raw, required: ["type", "value"], path: path); try boundedString(raw["value"], minimum: 0, maximumUTF16: 65_535, path: "\(path).value")
         case "Array": _ = try object(raw, required: ["type", "items"], path: path); for (index, item) in try array(raw["items"], path: "\(path).items").enumerated() { try validateJourneyValue(item, path: "\(path).items[\(index)]") }
         case "Object": _ = try object(raw, required: ["type", "fields"], path: path); try validateJourneyValueRecord(raw["fields"], path: "\(path).fields")
-        case "Event.Field", "Response.Field", "Customer.Field": _ = try object(raw, required: ["type", "key"], path: path); try identifier(raw["key"], path: "\(path).key")
+        case "Response.Field":
+            _ = try object(raw, required: ["type", "key"], optional: ["form"], path: path)
+            try identifier(raw["key"], path: "\(path).key")
+            if let rawForm = raw["form"] {
+                guard let form = rawForm as? String, !form.isEmpty,
+                      form.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0)
+                          || (48...57).contains($0) || $0 == 95 }) else { try invalid("\(path).form") }
+            }
+        case "Event.Field", "Customer.Field": _ = try object(raw, required: ["type", "key"], path: path); try identifier(raw["key"], path: "\(path).key")
         default: try invalid("\(path).type")
         }
     }

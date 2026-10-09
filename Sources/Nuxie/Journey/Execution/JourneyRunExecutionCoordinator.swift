@@ -67,8 +67,11 @@ struct JourneyRunExecutionCoordinator {
         self.journal = journal
     }
 
-    mutating func useNativeValues(_ values: ExactJSONObject<JourneyReleaseJSONValue>) {
-        run.context = .init(event: run.context.event, responses: values)
+    mutating func useNativeValues(
+        _ values: ExactJSONObject<JourneyReleaseJSONValue>,
+        formAnswers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>> = [:]
+    ) {
+        run.context = .init(event: run.context.event, responses: values, formAnswers: formAnswers)
     }
 
     func command(at now: Date) -> Command {

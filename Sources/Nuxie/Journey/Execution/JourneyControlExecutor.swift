@@ -203,7 +203,7 @@ struct JourneyControlExecutor {
                 current.anchorAtMillis...current.wakeAtMillis ~= $0.occurredAtMillis
             } == true
             let responseMatches = acceptsResponse && signal.responsesChanged
-            let evaluated = eventMatches ? ArmedJourney.Context(event: signal.event!.properties, responses: context.responses) : context
+            let evaluated = eventMatches ? ArmedJourney.Context(event: signal.event!.properties, responses: context.responses, formAnswers: context.formAnswers) : context
             if (eventMatches || responseMatches), JourneyValues.evaluate(control.condition, context: evaluated, customer: customer) == true {
                 return advance(outlets, outlet: "satisfied", context: evaluated)
             }

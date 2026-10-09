@@ -459,5 +459,87 @@
   ],
   "requiredScripts": [
     "scripts/save-feedback.luau"
-  ]
+  ],
+  "journeyCondition": {
+    "host": {
+      "kind": "screen",
+      "screenId": "scr_screens_sdeparture"
+    },
+    "eventName": "continue",
+    "action": {
+      "type": "condition",
+      "branches": [
+        {
+          "id": "long",
+          "condition": {
+            "type": "Compare",
+            "op": ">",
+            "left": {
+              "type": "Response.Field",
+              "form": "onboarding",
+              "key": "trip_days"
+            },
+            "right": {
+              "type": "Number",
+              "value": 14
+            }
+          }
+        }
+      ]
+    },
+    "outletActions": {
+      "long": {
+        "type": "send_event",
+        "eventName": "long_trip",
+        "payload": {
+          "trip_days": {
+            "type": "Response.Field",
+            "form": "onboarding",
+            "key": "trip_days"
+          }
+        }
+      },
+      "default": {
+        "type": "send_event",
+        "eventName": "short_trip",
+        "payload": {
+          "trip_days": {
+            "type": "Response.Field",
+            "form": "onboarding",
+            "key": "trip_days"
+          }
+        }
+      }
+    },
+    "nextAction": {
+      "type": "navigate",
+      "screenId": "scr_screens_sitalian-level",
+      "transition": {
+        "type": "push"
+      }
+    },
+    "platformCases": [
+      {
+        "trip_days": 7,
+        "event": "short_trip",
+        "payload": {
+          "trip_days": 7
+        }
+      },
+      {
+        "trip_days": 14,
+        "event": "short_trip",
+        "payload": {
+          "trip_days": 14
+        }
+      },
+      {
+        "trip_days": 23,
+        "event": "long_trip",
+        "payload": {
+          "trip_days": 23
+        }
+      }
+    ]
+  }
 }
