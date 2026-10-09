@@ -1,0 +1,7 @@
+{
+  "cases": [
+    { "name": "purchase", "outcome": "completed", "reports": 1 },
+    { "name": "restore", "outcome": "completed", "reports": 1 },
+    { "name": "user_close", "outcome": "host_dismissed", "reports": 1 }
+  ]
+}

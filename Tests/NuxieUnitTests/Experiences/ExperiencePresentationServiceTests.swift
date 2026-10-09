@@ -1033,8 +1033,12 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         effectId: "effect-dismiss"
                     )
 
-                    expect(actionResult).to(equal(.handled))
-                    expect(controller.performDismissReasons).to(equal([.userDismissed]))
+                    expect(actionResult).to(equal(.completed(outcome: "completed")))
+                    expect(controller.performDismissReasons).to(beEmpty())
+                    expect(service.isExperiencePresented).to(beTrue())
+                    await service.finishJourneyPresentation(owner: .init(
+                        journeyId: "journey-owner", distinctId: "user-1"
+                    ))
                     await expect(service.isExperiencePresented).toEventually(beFalse())
                     expect(outcomes.outcomes).to(beEmpty())
                 }

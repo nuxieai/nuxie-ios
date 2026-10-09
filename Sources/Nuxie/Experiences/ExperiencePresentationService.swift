@@ -701,8 +701,13 @@ final class ExperiencePresentationService {
             )
 
         case .dismiss:
-            controller.performDismiss(reason: .userDismissed)
-            result = .handled
+            // The executor persists authored completion before tearing down the
+            // screen. A user-close callback must not replace that outcome.
+            if case .string(let reason)? = action["reason"], !reason.isEmpty {
+                result = .completed(outcome: reason)
+            } else {
+                result = .completed(outcome: "completed")
+            }
 
         default:
             return .failed
