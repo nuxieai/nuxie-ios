@@ -167,11 +167,13 @@ private actor StableSystemEventCaptureRetryQueue {
     private func attempt(
         _ request: StableSystemEventCaptureRequest
     ) async -> Bool {
-        guard await routedEvents.captureAndRouteSystemEvent(request) != nil else {
+        guard let captured = await routedEvents.captureAndRouteSystemEvent(request) else {
             return false
         }
-        // EventLog commits before enqueueing its route. Keep retry ownership
-        // until Journey has persisted the correlated transition.
+        // A retry can inherit the route worker's task-local context. Once this
+        // event's durable receipt is acknowledged, draining that worker again
+        // is unnecessary and would keep later commerce outcomes queued forever.
+        guard captured.localRoutePending else { return true }
         return await routedEvents.drainCommittedRouting()
     }
 
