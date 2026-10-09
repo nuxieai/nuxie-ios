@@ -79,6 +79,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     private var _stableCaptures: [String: DurableTriggerCapture] = [:]
     private var _stableCaptureBatchFailureIndex: Int?
     private var _routedCaptureFailuresRemaining = 0
+    private var _beforeBatchCapture: (@Sendable () async -> Void)?
+    public var beforeBatchCapture: (@Sendable () async -> Void)? {
+        get { lock.withLock { _beforeBatchCapture } }
+        set { lock.withLock { _beforeBatchCapture = newValue } }
+    }
 
     public var preparedTriggerBeforeSend:
         (@Sendable (NuxieEvent) -> NuxieEvent?)? {
@@ -370,6 +375,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             return nil
         }
         guard !items.isEmpty else { return [:] }
+        let beforeCapture = lock.withLock { _beforeBatchCapture }
+        await beforeCapture?()
         let subscriberAdmissions = captureCommittedAdmissions()
         var capturesByEventId = lock.withLock {
             Dictionary(uniqueKeysWithValues: items.compactMap { item in
@@ -852,6 +859,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _eventHandlers.removeAll()
             _preparedTriggerBeforeSend = nil
             _prepareEventPropertiesHandler = nil
+            _beforeBatchCapture = nil
             _drainHandler = nil
             _replayPendingRoutesHandler = nil
             _firstPendingStableRouteEventId = nil
