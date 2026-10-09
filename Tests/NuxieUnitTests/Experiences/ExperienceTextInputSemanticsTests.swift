@@ -166,19 +166,40 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             XCTAssertEqual(focusedSnapshot.values.first { $0.name == "focused" }?.value, .number(1))
             XCTAssertEqual(focusedSnapshot.values.first { $0.name == "typed" }?.value, .number(0))
             var callbacks: [String] = []
+            // UIKit's keyboard can replace a programmatic composition with its own
+            // empty intermediate text when a candidate cycle that began before the
+            // composition (here, the select-all) completes after it. Captured with the
+            // Japanese Romaji keyboard from -[_UIKeyboardStateManager
+            // assertIntermediateText:]. The observer marks such a replacement so the
+            // proof waits on the composition itself.
+            var heldComposition: String?
+            var compositionReplaced = false
             field.addAction(UIAction { _ in
                 callbacks.append("text=\(field.text ?? ""), marked=\(field.markedTextRange != nil)")
+                if let held = heldComposition, field.markedTextRange.flatMap({ field.text(in: $0) }) != held {
+                    compositionReplaced = true
+                }
             }, for: .editingChanged)
-            func verify(_ expected: String) async throws {
+            struct MirroredText {
+                let runtime: ExperienceInteractiveViewModelValue?
+                let presented: String
+                let native: String?
+            }
+            func mirror() async throws -> MirroredText {
                 try await settle()
                 let snapshot = try await controller.runtimeSnapshot()
-                XCTAssertEqual(snapshot.values.first { $0.name == "name" }?.value, .bytes(Data(expected.utf8)))
                 let capture = try XCTUnwrap(latestCapture)
                 let occurrence = try XCTUnwrap(capture.nativeInputs[input.textInputName]?.first)
-                let actual = try await controller.readPresentedFieldString(captureID: capture.id,
+                let presented = try await controller.readPresentedFieldString(captureID: capture.id,
                     nodeID: occurrence.nodeID, name: input.textInputName)
-                XCTAssertEqual(actual, expected)
-                XCTAssertEqual(field.text, expected)
+                return MirroredText(runtime: snapshot.values.first { $0.name == "name" }?.value,
+                    presented: presented, native: field.text)
+            }
+            func verify(_ expected: String) async throws {
+                let observed = try await mirror()
+                XCTAssertEqual(observed.runtime, .bytes(Data(expected.utf8)))
+                XCTAssertEqual(observed.presented, expected)
+                XCTAssertEqual(observed.native, expected)
             }
             field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
             field.insertText("Grace")
@@ -188,10 +209,30 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             try await verify("")
             field.insertText("👍🏽")
             try await verify("👍🏽")
-            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
-            field.setMarkedText("ぐれ", selectedRange: NSRange(location: 2, length: 0))
-            field.sendActions(for: .editingChanged)
-            try await verify("ぐれ")
+            // Accept the mirrored reads only while UIKit still holds the forwarded
+            // composition. Each replacement is recorded and the composition is set
+            // again; one that never holds, from the keyboard or the SDK, fails.
+            var composed: MirroredText?
+            var replacements = 0
+            while composed == nil, replacements < 4 {
+                compositionReplaced = false
+                field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+                field.setMarkedText("ぐれ", selectedRange: NSRange(location: 2, length: 0))
+                let marked = try XCTUnwrap(field.markedTextRange, "UIKit must establish the composition before it is forwarded")
+                XCTAssertEqual(field.text(in: marked), "ぐれ")
+                heldComposition = "ぐれ"
+                field.sendActions(for: .editingChanged)
+                let observed = try await mirror()
+                heldComposition = nil
+                if compositionReplaced { replacements += 1 } else { composed = observed }
+            }
+            XCTContext.runActivity(named: "Replacements of the held composition: \(replacements)") { _ in }
+            let observed = try XCTUnwrap(composed, "The native editor must keep the forwarded composition")
+            XCTAssertEqual(observed.runtime, .bytes(Data("ぐれ".utf8)))
+            XCTAssertEqual(observed.presented, "ぐれ")
+            XCTAssertEqual(observed.native, "ぐれ")
+            XCTAssertEqual(field.markedTextRange.flatMap { field.text(in: $0) }, "ぐれ",
+                "Mirroring the composition must leave it marked in the native editor")
             XCTContext.runActivity(named: "A0 native composition decorations, nonsecure") { activity in
                 let image = UIGraphicsImageRenderer(bounds: field.bounds).image { _ in
                     field.drawHierarchy(in: field.bounds, afterScreenUpdates: true)
