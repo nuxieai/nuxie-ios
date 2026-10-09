@@ -58,11 +58,12 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                     CGRect(x: 20, y: 120, width: 160, height: 40))
                     .applying(CGAffineTransform(scaleX: surface.runtimeDisplayScale, y: surface.runtimeDisplayScale))
                     .integral.intersection(CGRect(x: 0, y: 0, width: width, height: height))
-                XCTAssertFalse(labelBounds.isEmpty, "The published count bounds must be visible")
+                let visibleBounds = try XCTUnwrap(labelBounds.isNull || labelBounds.isEmpty ? nil : labelBounds,
+                    "The published count bounds must be visible")
                 var labelPixels = Data()
-                for row in Int(labelBounds.minY)..<Int(labelBounds.maxY) {
-                    let start = (row * width + Int(labelBounds.minX)) * 4
-                    labelPixels.append(pixels[start..<(start + Int(labelBounds.width) * 4)])
+                for row in Int(visibleBounds.minY)..<Int(visibleBounds.maxY) {
+                    let start = (row * width + Int(visibleBounds.minX)) * 4
+                    labelPixels.append(pixels[start..<(start + Int(visibleBounds.width) * 4)])
                 }
                 return (pixels, labelPixels)
             }
