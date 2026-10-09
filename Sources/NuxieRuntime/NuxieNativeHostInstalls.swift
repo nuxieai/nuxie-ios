@@ -110,6 +110,18 @@ package struct NuxieNativeValuePolicy: Sendable, Equatable {
         self.groups = groups
     }
 
+    package func groupsForInstallation(markers: [NuxieNativeValueMarker]) -> [NuxieNativeRuleGroup] {
+        var installed: [String: Set<String>] = [:]
+        for rule in rules { installed[rule.model, default: []].insert(rule.property) }
+        for marker in markers { installed[marker.model, default: []].insert(marker.value) }
+        // Native groups accept only ruled or marked members. Keep the declared table intact.
+        return groups.map { group in
+            NuxieNativeRuleGroup(model: group.model, valid: group.valid, members: group.members.filter {
+                installed[group.model]?.contains($0.property) == true
+            })
+        }
+    }
+
     package func markers(in catalog: NuxieNativeViewModelCatalog) throws -> [NuxieNativeValueMarker] {
         var result: [NuxieNativeValueMarker] = []
         for schema in catalog.schemas {
