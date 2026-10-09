@@ -282,6 +282,55 @@ final class ExperienceSharedValuesTests: XCTestCase {
     }
 
     #if os(iOS)
+    @MainActor
+    func testFirstEntryChoiceUsesHostReduceMotionBeforeAnyAdvance() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/env-entry")
+        let payload = try SharedValuesFixture.payload(directory: directory, screens: ["entry"])
+        let experience = Experience(id: "env-entry", versionId: "entry-version", buildId: "entry-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .fullScreenDefault,
+            behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
+        for reduceMotion in [true, false] {
+            let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+                sceneURL: directory.appendingPathComponent("screen.riv"), sceneBytes: payload.sceneBytes,
+                assetURLsByUniqueName: [:], source: .cache, payload: payload,
+                interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(),
+                    provenance: UUID().uuidString, payload: payload), products: [], resourceMetrics: .zero)
+            let run = ExperienceRunValues()
+            let controller = ExperienceScreenViewController(experience: experience, artifact: .init(acquired: acquired),
+                screen: try XCTUnwrap(payload.renderPlan.screens.first), runValues: run, reduceMotion: reduceMotion,
+                usesSystemDisplayLink: false, delegate: nil)
+            controller.loadViewIfNeeded()
+            controller.view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            controller.view.layoutIfNeeded()
+            addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
+            try await controller.mountInteractiveScreen()
+            let screen = try XCTUnwrap(Mirror(reflecting: controller).children.first {
+                $0.label == "interactiveScreen"
+            }?.value as? ExperienceInteractiveScreen)
+            // Read the mounted state at the fixture's one-pixel-per-point resolution.
+            _ = try await screen.resize(pixelWidth: 393, pixelHeight: 852, layoutScaleFactor: 1)
+            let mountedEnv = try await screen.environmentSnapshot()
+            XCTAssertEqual(mountedEnv?.values.first { $0.name == "reduceMotion" }?.value, .bool(reduceMotion))
+            let pixels = try await renderCopyPixels(screen)
+            let expectedX = reduceMotion ? 80 : 20
+            let otherX = reduceMotion ? 20 : 80
+            func pixel(_ data: Data, x: Int) -> [UInt8] {
+                Array(data[(40 * 393 + x) * 4..<(40 * 393 + x) * 4 + 4])
+            }
+            XCTAssertEqual(pixel(pixels, x: expectedX), [0, 0, 0, 255],
+                "First entry must select the host's still or motion state")
+            XCTAssertEqual(pixel(pixels, x: otherX), [0x33, 0x22, 0x11, 255])
+            try await screen.updateEnvironment(reduceMotion: !reduceMotion)
+            let changedEnv = try await screen.environmentSnapshot()
+            XCTAssertEqual(changedEnv?.values.first { $0.name == "reduceMotion" }?.value, .bool(!reduceMotion))
+            _ = try await screen.step(elapsedSeconds: 0)
+            let later = try await renderCopyPixels(screen)
+            XCTAssertEqual(pixel(later, x: expectedX), [0, 0, 0, 255],
+                "The fixture has no return transition: a late env write cannot repair entry")
+        }
+    }
+
     func testPublishedDeviceGlobalReachesScreenAndCopyBeforeFirstDraw() async throws {
         let expected = try PublishedRunValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,

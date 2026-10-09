@@ -425,6 +425,8 @@ final class ExperienceScreenViewController: UIViewController {
             products: artifact.acquired.products,
             pixelWidth: initialWidth,
             pixelHeight: initialHeight,
+            initialReduceMotion: lifecycleState.snapshot.reduceMotion,
+            initialSafeArea: experienceSafeAreaInsets(for: view),
             videoDecoderPool: videoDecoderPool
         )
         interactiveScreen = interactive

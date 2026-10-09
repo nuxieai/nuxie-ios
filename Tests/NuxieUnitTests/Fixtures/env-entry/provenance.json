@@ -1,0 +1,11 @@
+{
+  "fonts": [],
+  "authorship": "SDK-authored entry-state regression; generate.py",
+  "wireSource": "nuxie-runtime c52f4b43c defs/upstream-runtime",
+  "sha256": "9def57ff6bbd91c36e05288fd614a265a2ae49ba6e5bff00f9cd2d0e21a56928",
+  "expected": {
+    "reduceMotionFalse": "motion: black marker at (20,40)",
+    "reduceMotionTrue": "still: black marker at (80,40)",
+    "laterChanges": "no return to entry"
+  }
+}
