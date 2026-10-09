@@ -1427,7 +1427,8 @@ private extension JourneyService {
                 var evaluationContext = parked.context
                 do {
                     let values = try await preparedNativeValues(for: parked, release: release, journal: journal)
-                    evaluationContext = .init(event: parked.context.event, responses: try await readNativeValues(values))
+                    evaluationContext = .init(event: parked.context.event, responses: try await readNativeValues(values),
+                                              formAnswers: try await values.formAnswers(policy: release.descriptor.valuePolicy))
                     nativeRestoreRetryAt.removeValue(forKey: parked.id)
                 } catch {
                     guard admission.commitJournalIfCurrent({ true }) == true else { return }
@@ -2432,7 +2433,10 @@ private extension JourneyService {
                 } else {
                     values = nativeValuesByRun[durableRun.id]?.values
                 }
-                if let values { coordinator.useNativeValues(try await readNativeValues(values)) }
+                if let values {
+                    coordinator.useNativeValues(try await readNativeValues(values),
+                                              formAnswers: try await values.formAnswers(policy: release.descriptor.valuePolicy))
+                }
                 else { coordinator.useNativeValues([:]) }
             } catch {
                 LogWarning("JourneyService: native value read failed: \(error)")

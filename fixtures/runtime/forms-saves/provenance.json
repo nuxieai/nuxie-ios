@@ -1,20 +1,20 @@
 {
-  "sourceCommit": "513bba44a2f6fc220dad194b5e6899840e3f18a9",
-  "compilerBaseCommit": "5ced80ba74",
+  "sourceCommit": "6281edf876e1d523295cb444b8c9cd374cc0aaea",
+  "compilerBaseCommit": "761943f976dc896b47b41dd356ac2a9a4dc3d0bd",
   "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "worktree": "/Users/levi/dev/nuxie-codex/codex-data-plan",
-  "target": "/Users/levi/dev/nuxie-codex/codex-data-plan/tools/nuxie-editor/target",
+  "worktree": "/Users/levi/dev/nuxie-codex/codex-f4-device-screen",
+  "target": "/Users/levi/dev/nuxie-codex/codex-preview-tool/tools/nuxie-editor/target",
   "publisherWasm": {
-    "sha256": "f1d0ba9541a3e92b01236845e0cbcffb6dfb307f83459d864bd06fe6dd417910",
-    "sizeBytes": 17468178
+    "sha256": "b689ed61eabaabeb50329e2d980b5600dc7d5588ef3bb0c1b8fc69eafbfd445f",
+    "sizeBytes": 17489751
   },
   "authorityWasm": {
-    "sha256": "1ff58b667c5931d8a9d756bfb4a78915dd6fd66eef839d98f6d215a72bd931bc",
-    "sizeBytes": 23469939
+    "sha256": "29db745c55939b8e0a0ce5b2ac0051a05a8a4d9dd1812aef04d237272ccf68ce",
+    "sizeBytes": 23692042
   },
   "scriptCompilerWasm": {
-    "sha256": "8466040a923669a0100bd6561e03c203b6379df7207fb3fe1025064519d2d0bb",
-    "sizeBytes": 1876991
+    "sha256": "97d5867364d440b2eb1ba028c7b53272678c490b8ee537a2382f7c9d96be246d",
+    "sizeBytes": 1878943
   },
   "fonts": [
     {
@@ -45,36 +45,32 @@
   ],
   "files": {
     "NOTES.md": {
-      "sha256": "b4d3a8e16250b96bce4733b8e24affc58e23e327aaa170f756a0e335be1a8f32",
-      "sizeBytes": 3376
+      "sha256": "c7272bc77f70aa5323fb3f4c5d7abec75325c69ea61103acc013769de6e9eeef",
+      "sizeBytes": 5252
     },
     "assets/sha256/3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1.otf": {
       "sha256": "3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1",
       "sizeBytes": 209864
     },
     "expectations.json": {
-      "sha256": "f51a56bcd00b420e58d7aa946e58ab764fb9d47392616d6db28f82a762b956ba",
-      "sizeBytes": 13596
+      "sha256": "1c9b352d0b0d22b2d3331d0e134670c4343a7743a6dd851e02e43e492c8e3254",
+      "sizeBytes": 15318
     },
     "profile-entry.json": {
-      "sha256": "90169432535b4fe048f628de2d5884f3a38363bda4ce258cfcdb42703b6e50e6",
-      "sizeBytes": 63670
+      "sha256": "db5ae0501875fe0d6782dc70428070e0af17074ffa34528002f07bd832656c17",
+      "sizeBytes": 65130
     },
     "release.json": {
-      "sha256": "e7c3d91fdd111473feec5aa295ea481c1802db0935ea5573c376400673bf44b2",
-      "sizeBytes": 47101
+      "sha256": "24891f87d2508a7bf838bf1ae838d043d031b67a250b51694d8c6852c8eb4777",
+      "sizeBytes": 48198
     },
-    "renders/sha256/1f589d6b54a4854c5846d0978c7845a0bfc38d0c8cb53844ae18a8b1164e3ecd.nux": {
-      "sha256": "1f589d6b54a4854c5846d0978c7845a0bfc38d0c8cb53844ae18a8b1164e3ecd",
-      "sizeBytes": 152036
+    "renders/sha256/1883be37f4dd5035271847f1825efa07d4c66484252ee1bf58a9a299672e0f9a.nux": {
+      "sha256": "1883be37f4dd5035271847f1825efa07d4c66484252ee1bf58a9a299672e0f9a",
+      "sizeBytes": 151057
     },
     "screen.riv": {
-      "sha256": "1f589d6b54a4854c5846d0978c7845a0bfc38d0c8cb53844ae18a8b1164e3ecd",
-      "sizeBytes": 152036
-    },
-    "source/.nuxie/canvas.json": {
-      "sha256": "d313d144faba44c98c23e89791626e0b3807ce9beff6733924768f03a0c3839f",
-      "sizeBytes": 97
+      "sha256": "1883be37f4dd5035271847f1825efa07d4c66484252ee1bf58a9a299672e0f9a",
+      "sizeBytes": 151057
     },
     "source/components/error-line/frame.json": {
       "sha256": "75a7301aae76069ee18bd91a95b08de427b6de32a9a7e2c85acde827e51bfb9b",
@@ -93,8 +89,8 @@
       "sizeBytes": 62
     },
     "source/experience.json": {
-      "sha256": "2ac0d13ed2ebe6b86083885f32e061e15458e222c18f9c69da87e39ea3c0c0d7",
-      "sizeBytes": 5057
+      "sha256": "1b3f051b4d606c2bc81326ce6a7f9c0f17431573cf66a013ccba1b33a71bf1d7",
+      "sizeBytes": 5800
     },
     "source/screens/daily-plan/frame.json": {
       "sha256": "1657f2a3f268ef268fe18b0d32a384bf1cdf5e9d015472df37e349324752c592",

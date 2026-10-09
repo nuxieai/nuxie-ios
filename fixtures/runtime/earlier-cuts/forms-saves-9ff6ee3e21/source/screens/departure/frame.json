@@ -1,0 +1,1 @@
+{"$schema":"https://nuxie.com/schema/frame/1.json","size":{"device":"iphone-16"},"state":{"days":{"type":"number","default":23}},"emits":{"continue":{},"back":{}}}

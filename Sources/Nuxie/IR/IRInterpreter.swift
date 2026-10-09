@@ -283,8 +283,9 @@ final class IRInterpreter {
             guard let journeyId = ctx.journeyId else { return .null }
             return .string(journeyId)
 
-        case .responseField(let key):
-            guard let value = ctx.responseValues[key] else { return .null }
+        case .responseField(let key, let form):
+            let fields = form.map { ctx.formAnswers[$0] ?? [:] } ?? ctx.responseValues
+            guard let value = fields[key] else { return .null }
             return Self.irValue(value)
 
         case .eventsCount(let name, let since, let until, let within, let where_):

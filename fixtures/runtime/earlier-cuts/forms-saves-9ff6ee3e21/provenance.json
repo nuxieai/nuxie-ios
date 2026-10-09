@@ -1,0 +1,197 @@
+{
+  "sourceCommit": "513bba44a2f6fc220dad194b5e6899840e3f18a9",
+  "compilerBaseCommit": "5ced80ba74",
+  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
+  "worktree": "/Users/levi/dev/nuxie-codex/codex-data-plan",
+  "target": "/Users/levi/dev/nuxie-codex/codex-data-plan/tools/nuxie-editor/target",
+  "publisherWasm": {
+    "sha256": "f1d0ba9541a3e92b01236845e0cbcffb6dfb307f83459d864bd06fe6dd417910",
+    "sizeBytes": 17468178
+  },
+  "authorityWasm": {
+    "sha256": "1ff58b667c5931d8a9d756bfb4a78915dd6fd66eef839d98f6d215a72bd931bc",
+    "sizeBytes": 23469939
+  },
+  "scriptCompilerWasm": {
+    "sha256": "8466040a923669a0100bd6561e03c203b6379df7207fb3fe1025064519d2d0bb",
+    "sizeBytes": 1876991
+  },
+  "fonts": [
+    {
+      "assetUniqueName": "font-dm-sans-700-normal-0cc21809-1",
+      "authoredAssetId": 1,
+      "contentType": "font/otf",
+      "family": "DM Sans",
+      "format": "otf",
+      "key": "assets/sha256/3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1.otf",
+      "kind": "font",
+      "location": "cdn",
+      "required": true,
+      "sha256": "3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1",
+      "sizeBytes": 209864,
+      "style": "normal",
+      "weight": "700"
+    },
+    {
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "authoredAssetId": 0,
+      "family": "System",
+      "kind": "font",
+      "location": "system",
+      "required": true,
+      "style": "normal",
+      "weight": "400"
+    }
+  ],
+  "files": {
+    "NOTES.md": {
+      "sha256": "b4d3a8e16250b96bce4733b8e24affc58e23e327aaa170f756a0e335be1a8f32",
+      "sizeBytes": 3376
+    },
+    "assets/sha256/3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1.otf": {
+      "sha256": "3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1",
+      "sizeBytes": 209864
+    },
+    "expectations.json": {
+      "sha256": "f51a56bcd00b420e58d7aa946e58ab764fb9d47392616d6db28f82a762b956ba",
+      "sizeBytes": 13596
+    },
+    "profile-entry.json": {
+      "sha256": "90169432535b4fe048f628de2d5884f3a38363bda4ce258cfcdb42703b6e50e6",
+      "sizeBytes": 63670
+    },
+    "release.json": {
+      "sha256": "e7c3d91fdd111473feec5aa295ea481c1802db0935ea5573c376400673bf44b2",
+      "sizeBytes": 47101
+    },
+    "renders/sha256/1f589d6b54a4854c5846d0978c7845a0bfc38d0c8cb53844ae18a8b1164e3ecd.nux": {
+      "sha256": "1f589d6b54a4854c5846d0978c7845a0bfc38d0c8cb53844ae18a8b1164e3ecd",
+      "sizeBytes": 152036
+    },
+    "screen.riv": {
+      "sha256": "1f589d6b54a4854c5846d0978c7845a0bfc38d0c8cb53844ae18a8b1164e3ecd",
+      "sizeBytes": 152036
+    },
+    "source/.nuxie/canvas.json": {
+      "sha256": "d313d144faba44c98c23e89791626e0b3807ce9beff6733924768f03a0c3839f",
+      "sizeBytes": 97
+    },
+    "source/components/error-line/frame.json": {
+      "sha256": "75a7301aae76069ee18bd91a95b08de427b6de32a9a7e2c85acde827e51bfb9b",
+      "sizeBytes": 196
+    },
+    "source/components/error-line/index.html": {
+      "sha256": "ffb092e7c60d15e6abe5f1c69af1433646b40369fab3f16297d4dadb58e22470",
+      "sizeBytes": 71
+    },
+    "source/components/goal-card/frame.json": {
+      "sha256": "d4680e16dd5fe56885d2e9356c715e8869db9d623db3ef1c7045466a612cde86",
+      "sizeBytes": 194
+    },
+    "source/components/goal-card/index.html": {
+      "sha256": "92e1c1e4fc2d236c49185a0ac633e4ae86d6a5ee75b841bc1d10378f910ab2ed",
+      "sizeBytes": 62
+    },
+    "source/experience.json": {
+      "sha256": "2ac0d13ed2ebe6b86083885f32e061e15458e222c18f9c69da87e39ea3c0c0d7",
+      "sizeBytes": 5057
+    },
+    "source/screens/daily-plan/frame.json": {
+      "sha256": "1657f2a3f268ef268fe18b0d32a384bf1cdf5e9d015472df37e349324752c592",
+      "sizeBytes": 115
+    },
+    "source/screens/daily-plan/index.html": {
+      "sha256": "12d5308ed7be6b0df6339038e948b4cda79786a09dcfb714a0c2355102e5d736",
+      "sizeBytes": 2874
+    },
+    "source/screens/daily-plan/style.css": {
+      "sha256": "94993d9aba54d67a54a1ff09e176654dbb2e43fff1c48b301ba3b208e273499c",
+      "sizeBytes": 248
+    },
+    "source/screens/daily-reminder/frame.json": {
+      "sha256": "93532ef7d1a727ec7eaa8668045e2568a064863453730df24474deb22e74bad1",
+      "sizeBytes": 225
+    },
+    "source/screens/daily-reminder/index.html": {
+      "sha256": "82247605d8179717541b342dd07ba4a5b27a59d8be2a46045f03f946d76939b1",
+      "sizeBytes": 2627
+    },
+    "source/screens/daily-reminder/style.css": {
+      "sha256": "c39b29f94078e3234e464e6ce97805f0d98596610b980015efecb96546ef0816",
+      "sizeBytes": 563
+    },
+    "source/screens/departure/frame.json": {
+      "sha256": "09acf10ae95080a404418b05769121027e9abeaa9708804b80ea63adafa1e8a1",
+      "sizeBytes": 163
+    },
+    "source/screens/departure/index.html": {
+      "sha256": "1af982cd13b73f6b2b2770e9cef39d1d7be12a59df4231d28dac8c7296d3d004",
+      "sizeBytes": 1850
+    },
+    "source/screens/departure/style.css": {
+      "sha256": "a9ca5c53558ceb7e7b04cbd412c5617d7a092de9a16e698ee4a930c1bed0d00d",
+      "sizeBytes": 518
+    },
+    "source/screens/feedback/frame.json": {
+      "sha256": "d29b94509241a40695879bbbbc0bce6c4a6619795fb43f543456af1bc294f872",
+      "sizeBytes": 133
+    },
+    "source/screens/feedback/index.html": {
+      "sha256": "d365e93a7d196d748f41451da2d53b5578dfe696d5754484f769eb10063b5ee6",
+      "sizeBytes": 1151
+    },
+    "source/screens/goals/frame.json": {
+      "sha256": "3de96169affd760901f3e4057d73bf29c3dafbbbfec989f8836cf7c1334bed5a",
+      "sizeBytes": 115
+    },
+    "source/screens/goals/index.html": {
+      "sha256": "3519156241dcc73bec0321cf188e3552c334f34fc13eb7358841f9ac05f67108",
+      "sizeBytes": 201
+    },
+    "source/screens/italian-level/frame.json": {
+      "sha256": "9c9c8353e8663882c8dd7449587b527731a347b26662fec1917bb34bdf3c05b5",
+      "sizeBytes": 192
+    },
+    "source/screens/italian-level/index.html": {
+      "sha256": "e58878bf11761b64b20b52dbbe17c2198c757717562e349715f2767f1aee7865",
+      "sizeBytes": 1831
+    },
+    "source/screens/start-lesson/frame.json": {
+      "sha256": "d23455dfcd7c6438e9f297f44fa088bafcf6cbe3bd7691d9e29e04d1197e10fd",
+      "sizeBytes": 112
+    },
+    "source/screens/start-lesson/index.html": {
+      "sha256": "270ee6a11d2f2bafdc09a89d4ce562baefb4fda5a3063d7ca8206d8438e5a14d",
+      "sizeBytes": 1904
+    },
+    "source/screens/start-lesson/style.css": {
+      "sha256": "b071e0985813cc8b4afba43749c08bf2af60ed7f3e549da5af89ae92018e71f1",
+      "sizeBytes": 225
+    },
+    "source/screens/welcome/frame.json": {
+      "sha256": "0e57465b2b070caf995d35501e9620c051b1eeba9022889155c9b05fb9191f13",
+      "sizeBytes": 128
+    },
+    "source/screens/welcome/index.html": {
+      "sha256": "c9607aaa28eaecd5412e585435472d27992cee6abc823aa2978fffcf3d6ae0ba",
+      "sizeBytes": 1182
+    },
+    "source/screens/welcome/style.css": {
+      "sha256": "a7971e8c292e7a3f45cffe4fe1a6c89403727c0a82baaba4dcd5fd4cc67bfba6",
+      "sizeBytes": 598
+    },
+    "source/scripts/save-feedback.luau": {
+      "sha256": "0d882abe70178893a2d127542272488604fba77f3964ce55accb2b0935333ebf",
+      "sizeBytes": 183
+    },
+    "source/scripts/trip-title.luau": {
+      "sha256": "e5c5df663a4a6f3017cb8f8238eca7da13d401885e470b7f05ce69fd88617d18",
+      "sizeBytes": 307
+    },
+    "source/styles/tokens.css": {
+      "sha256": "9ab591bf00cf7fc571ede9466b8b7ccd71cf036cc91d15cc855388fda8ebaf9c",
+      "sizeBytes": 4256
+    }
+  },
+  "artifactCommit": "9ff6ee3e21"
+}

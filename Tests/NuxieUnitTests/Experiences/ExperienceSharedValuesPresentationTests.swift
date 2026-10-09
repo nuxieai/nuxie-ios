@@ -242,6 +242,26 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         }
     }
 
+    func testPublishedF5FormAnswerRoutesBothBranchesAndBoundary() async throws {
+        for (days, eventName) in [(7.0, "short_trip"), (14.0, "short_trip"), (23.0, "long_trip")] {
+            let fixture = try await signedFixture(kind: .publishedForms, formsScreen: "departure", publishedFormRoutes: true)
+            let sent = expectation(description: "onboarding saved")
+            let transport = FormSaveTestTransport(started: [sent])
+            try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
+                let screen = try await waitForScreen("scr_screens_sdeparture", presentations: presentations)
+                try await tapPublishedDepartureContinue(screen, days: days)
+                await fulfillment(of: [sent], timeout: 5)
+                _ = try await waitForScreen("scr_screens_sitalian-level", presentations: presentations)
+                let routed = events.routedEvents.filter { ["short_trip", "long_trip"].contains($0.name) }
+                XCTAssertEqual(routed.map(\.name), [eventName], "Published condition must select the expected branch")
+                XCTAssertEqual(routed.first?.properties["trip_days"] as? Double, days)
+                let saves = await transport.requests()
+                XCTAssertEqual(saves.first?.answers, ["trip_days": .number(days)])
+                await transport.release(sequence: 1, code: .saved)
+            }
+        }
+    }
+
     func testPublishedF5BackgroundSaveAllowsCompletionBeforeReply() async throws {
         let fixture = try await signedFixture(kind: .publishedForms, formsScreen: "departure", formsEvent: "continue")
         let sent = expectation(description: "background save sent")
@@ -275,13 +295,13 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         }
     }
 
-    private func tapPublishedDepartureContinue(_ screen: ExperienceScreenViewController, publishSynchronously: Bool = false) async throws {
+    private func tapPublishedDepartureContinue(_ screen: ExperienceScreenViewController, publishSynchronously: Bool = false, days: Double = 30) async throws {
         let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
         let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
             $0.label == "interactiveScreen"
         }?.value as? ExperienceInteractiveScreen)
         let root = try await interactive.rootViewModel()
-        _ = try await interactive.mutateState([.setNumber(root, path: "state/days", value: 30)])
+        _ = try await interactive.mutateState([.setNumber(root, path: "state/days", value: Float(days))])
         _ = try await interactive.step(elapsedSeconds: 0)
         // The source places Continue last in the column. Inspect its hit without releasing a click.
         let x = Float(surface.bounds.midX)
@@ -396,7 +416,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
 
     private enum FixtureKind { case sharedValues, publishedRunValues, publishedForms }
 
-    private func signedFixture(kind: FixtureKind = .sharedValues, formsScreen: String = "feedback", formsEvent: String = "sent") async throws -> Fixture {
+    private func signedFixture(kind: FixtureKind = .sharedValues, formsScreen: String = "feedback", formsEvent: String = "sent", publishedFormRoutes: Bool = false) async throws -> Fixture {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let base = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/font-converter/profile.json"))) as? [String: Any])
         var profile = base
@@ -443,6 +463,16 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 ["kind": "complete", "id": "done", "outcome": "done"]
             ]
             leg["routes"] = [["eventName": formsEvent, "host": ["kind": "screen", "screenId": entryScreen], "entryStepId": "done"]]
+            if publishedFormRoutes {
+                let publishedLeg = try XCTUnwrap(forms["leg"] as? [String: Any])
+                // Keep every published route and action. Enter at its departure navigation.
+                leg["steps"] = publishedLeg["steps"]
+                leg["routes"] = publishedLeg["routes"]
+                let steps = try XCTUnwrap(publishedLeg["steps"] as? [[String: Any]])
+                leg["entryStepId"] = try XCTUnwrap(steps.first { step in
+                    (step["action"] as? [String: Any])?["screenId"] as? String == entryScreen
+                }?["id"] as? String)
+            }
             for name in ["state", "responses", "ruleGroups"] { descriptor[name] = forms[name] }
         }
         descriptor["leg"] = leg

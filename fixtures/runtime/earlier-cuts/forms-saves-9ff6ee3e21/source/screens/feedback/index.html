@@ -1,0 +1,10 @@
+<html><head><link rel="script" href="../../scripts/save-feedback.luau"><link rel="component" href="../../components/error-line/"></head><body><main>
+<textarea id="comment" data-bind:value.two-way="responses.feedback.comment"></textarea>
+<input id="email" type="text" data-bind:value.two-way="responses.feedback.email">
+<input id="stars" type="number" data-bind:value.two-way="responses.feedback.stars">
+<button id="send" data-show="responses.feedback.valid" data-on:click="await save(responses.feedback); emit('sent')">Send</button>
+<error-line data-repeat="responses.feedback.errors.email as error" data-bind:message="error.message"></error-line>
+<p data-show="responses.feedback.saving">Saving</p><p data-show="responses.feedback.saved">Saved</p><p data-bind="responses.feedback.saveError">Save error</p>
+<button data-on:click="toggle(responses.feedback.interests, 'sleep')">Sleep</button><button data-on:click="toggle(responses.feedback.interests, 'focus')">Focus</button><button data-on:click="toggle(responses.feedback.interests, 'calm')">Calm</button>
+<button data-on:click="run(save-feedback)">Save in background</button>
+</main></body></html>

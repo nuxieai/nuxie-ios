@@ -1,0 +1,49 @@
+:root {
+ --cream: #FBF4E8;
+ --ink: #432D25;
+ --muted: #796257;
+ --terra: #A9452F;
+ --soft: #F0DECC;
+ --paper: #FFF9F0;
+ --line: #D8C2B0;
+ --olive: #566043;
+ --white: #FFF9F0;
+}
+.large-title { font-family: "Fraunces"; font-size: 42px; font-weight: 700; line-height: 46px; letter-spacing: -1px; color: var(--ink); }
+.title-1 { font-family: "Fraunces"; font-size: 30px; font-weight: 700; line-height: 35px; color: var(--ink); }
+.headline { font-family: "DM Sans"; font-size: 18px; font-weight: 700; line-height: 24px; color: var(--ink); }
+.body { font-family: "DM Sans"; font-size: 17px; font-weight: 400; line-height: 25px; color: var(--muted); }
+.footnote { font-family: "DM Sans"; font-size: 13px; font-weight: 400; line-height: 19px; color: var(--muted); }
+.eyebrow { font-family: "DM Sans"; font-size: 11px; font-weight: 700; line-height: 16px; letter-spacing: 1.6px; color: var(--terra); }
+.brand { font-family: "Fraunces"; font-size: 27px; font-weight: 700; line-height: 34px; color: var(--terra); }
+.button-label { font-family: "DM Sans"; font-size: 17px; font-weight: 700; line-height: 24px; color: var(--white); }
+.small-label { font-family: "DM Sans"; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--ink); }
+.count { font-family: "Fraunces"; font-size: 92px; font-weight: 700; line-height: 100px; color: var(--terra); }
+.hero-word { font-family: "Fraunces"; font-size: 64px; font-weight: 700; line-height: 72px; color: var(--white); }
+.hero-caption { font-family: "DM Sans"; font-size: 16px; font-weight: 400; line-height: 24px; color: var(--white); }
+.screen { width: 100%; height: 100%; background-color: var(--cream); display: flex; flex-direction: column; padding: 64px 28px 38px; gap: 26px; }
+.topbar { display: flex; flex-direction: row; align-items: center; justify-content: space-between; height: 42px; }
+.back { width: 44px; height: 44px; border-radius: 22px; background-color: var(--soft); display: flex; align-items: center; justify-content: center; }
+.intro { display: flex; flex-direction: column; gap: 15px; }
+.spacer { flex: 1; }
+.footer { display: flex; flex-direction: column; gap: 12px; }
+.cta { background-color: var(--terra); height: 58px; border-radius: 18px; display: flex; align-items: center; justify-content: center; }
+.secondary { height: 44px; display: flex; align-items: center; justify-content: center; }
+.center { text-align: center; }
+.panel { background-color: var(--soft); border-radius: 24px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.row { display: flex; flex-direction: row; align-items: center; gap: 12px; }
+.answer-slot { width: 100%; height: 88px; }
+.option { width: 100%; min-height: 88px; border-width: 1px; border-style: solid; border-color: var(--line); border-radius: 18px; padding: 20px; background-color: var(--paper); display: flex; flex-direction: row; align-items: center; gap: 14px; }
+.option-copy { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.options { display: flex; flex-direction: column; gap: 12px; }
+.check { width: 26px; height: 26px; background-color: var(--terra); border-radius: 13px; display: flex; align-items: center; justify-content: center; }
+.selected-mark { font-family: "DM Sans"; font-size: 14px; font-weight: 700; line-height: 20px; color: var(--white); }
+.pill { padding: 12px 17px; border-width: 1px; border-style: solid; border-color: var(--line); background-color: var(--paper); border-radius: 24px; display: flex; align-items: center; justify-content: center; min-height: 44px; }
+.wrap { display: flex; flex-direction: row; flex-wrap: wrap; gap: 10px; }
+.rule { height: 1px; background-color: var(--line); }
+.number { width: 30px; height: 30px; border-radius: 15px; background-color: var(--cream); display: flex; align-items: center; justify-content: center; }
+.plan-row { display: flex; flex-direction: row; gap: 14px; align-items: flex-start; }
+.plan-copy { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.terra-text { color: var(--terra); }
+.lesson-title { font-family: "Fraunces"; font-size: 46px; font-weight: 700; line-height: 50px; color: var(--white); }
+.time-title { font-family: "Fraunces"; font-size: 54px; font-weight: 700; line-height: 62px; color: var(--terra); text-align: center; }
