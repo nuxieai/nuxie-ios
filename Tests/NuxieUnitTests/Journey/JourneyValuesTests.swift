@@ -3,6 +3,18 @@ import XCTest
 @testable import Nuxie
 
 final class JourneyValuesTests: XCTestCase {
+    func testSlashLeafKeysRemainExactAndSeparateFromFormFields() {
+        let context = ArmedJourney.Context(event: [:], responses: [
+            "profile/minutes": .number(20), "profile/settings/day": .string("2026-10-10"), "top": .number(7)
+        ], formAnswers: ["onboarding": ["minutes": .number(9)]])
+        XCTAssertEqual(JourneyValues.resolve(.responseField("profile/minutes"), context: context), .number(20))
+        XCTAssertEqual(JourneyValues.evaluate(.compare(op: ">", left: .responseField("profile/minutes"), right: .number(15)), context: context), true)
+        XCTAssertEqual(JourneyValues.resolve(.responseField("profile/settings/day"), context: context), .string("2026-10-10"))
+        XCTAssertEqual(JourneyValues.resolve(.responseField("top"), context: context), .number(7))
+        XCTAssertEqual(JourneyValues.resolve(.responseField("minutes", form: "onboarding"), context: context), .number(9))
+        XCTAssertNil(JourneyValues.resolve(.responseField("profile"), context: context))
+    }
+
     func testFormFieldWithoutAnswersDoesNotReadSameNamedState() async throws {
         let bytes = Data(#"{"type":"Response.Field","form":"onboarding","key":"trip_days"}"#.utf8)
         let expression = try JSONDecoder().decode(JourneyValue.self, from: bytes)
