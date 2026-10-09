@@ -27,9 +27,12 @@ final class PublishedRuntimeFixtureLoadTests: XCTestCase {
         XCTAssertEqual(index.schemaVersion, "nuxie-sdk-releases.v1")
         StubURLProtocol.register(matcher: {
             $0.url?.host?.hasSuffix(".sdk-fixtures.nuxie.test") == true
+                || $0.url?.host == "two-fields.fixture.test"
         }) {
             request in
-            let fixtureID = request.url!.host!.components(separatedBy: ".").first!
+            let host = request.url!.host!
+            let fixtureID = host == "two-fields.fixture.test"
+                ? "published-two-fields" : host.components(separatedBy: ".").first!
             let fileURL = fixturesRoot.appendingPathComponent(fixtureID)
                 .appendingPathComponent(String(request.url!.path.dropFirst()))
             let bytes = try Data(contentsOf: fileURL)

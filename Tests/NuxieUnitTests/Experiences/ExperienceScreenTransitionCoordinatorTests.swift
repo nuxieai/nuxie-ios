@@ -410,13 +410,6 @@ private func lifecycleCommand(
             path: "screen/transition",
             value: .string(transitionId)
         ),
-        .init(
-            viewModelName: viewModelName,
-            instanceID: instanceID,
-            instanceName: nil,
-            path: "env/reduceMotion",
-            value: .bool(false)
-        ),
     ])
 }
 
