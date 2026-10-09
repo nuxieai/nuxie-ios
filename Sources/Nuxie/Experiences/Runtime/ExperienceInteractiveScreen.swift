@@ -1685,6 +1685,7 @@ actor ExperienceInteractiveScreen {
     private let listIndexPathsBySchema: [Int: [String]]
     private let rootViewModelReference: ExperienceInteractiveViewModelReference?
     private let sharedExperienceRootName: String?
+    private let environmentReference: NuxieNativeViewModelReference?
     private var snapshotTopology: ExperienceInteractiveSnapshotTopology
     private var latestSnapshot: NuxieNativeViewModelSnapshot?
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1718,6 +1719,7 @@ actor ExperienceInteractiveScreen {
         listIndexPathsBySchema: [Int: [String]],
         rootViewModelReference: ExperienceInteractiveViewModelReference?,
         sharedExperienceRootName: String?,
+        environmentReference: NuxieNativeViewModelReference?,
         snapshotTopology: ExperienceInteractiveSnapshotTopology,
         latestSnapshot: NuxieNativeViewModelSnapshot?,
         trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1738,6 +1740,7 @@ actor ExperienceInteractiveScreen {
         self.listIndexPathsBySchema = listIndexPathsBySchema
         self.rootViewModelReference = rootViewModelReference
         self.sharedExperienceRootName = sharedExperienceRootName
+        self.environmentReference = environmentReference
         self.snapshotTopology = snapshotTopology
         self.latestSnapshot = latestSnapshot
         self.trackedLists = trackedLists
@@ -1835,6 +1838,7 @@ actor ExperienceInteractiveScreen {
 
         let initialState: ExperienceInteractiveInitialState.Result
         var sharedExperienceRootName: String?
+        let environmentReference: NuxieNativeViewModelReference?
         do {
             initialState = try await ExperienceInteractiveInitialState.apply(
                 journey: payload.journey,
@@ -1843,6 +1847,7 @@ actor ExperienceInteractiveScreen {
                 products: products,
                 runtime: runtime
             )
+            environmentReference = try await runtime.bindGlobalViewModel(named: "env")
             if let shared, let root = initialState.rootReference,
                let schemaIndex = initialState.schemaIndexByViewModel[root],
                initialState.catalog.properties.contains(where: {
@@ -1927,6 +1932,7 @@ actor ExperienceInteractiveScreen {
             listIndexPathsBySchema: initialState.listIndexPathsBySchema,
             rootViewModelReference: initialState.rootReference,
             sharedExperienceRootName: sharedExperienceRootName,
+            environmentReference: environmentReference,
             snapshotTopology: snapshotTopology,
             latestSnapshot: latestSnapshot,
             trackedLists: trackedLists
@@ -1938,6 +1944,27 @@ actor ExperienceInteractiveScreen {
             throw ExperienceInteractiveScreenError.stateContract("Missing response save continuation")
         }
         return try await step(elapsedSeconds: 0, confirmedResponseSaveTrigger: trigger)
+    }
+
+    func environmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
+        guard let environmentReference else { return nil }
+        return try await runtime.snapshot(environmentReference)
+    }
+
+    func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil) async throws {
+        guard let environmentReference else { return }
+        let runtime = runtime
+        var mutations: [NuxieNativeViewModelMutation] = []
+        if let reduceMotion { mutations.append(.setBool(instance: environmentReference, path: "reduceMotion", value: reduceMotion)) }
+        if let safeArea {
+            for (edge, value) in [("top", safeArea.top), ("bottom", safeArea.bottom),
+                                  ("left", safeArea.left), ("right", safeArea.right)] {
+                mutations.append(.setNumber(instance: environmentReference, path: "safeArea/" + edge, value: Float(value)))
+            }
+        }
+        let batch = mutations
+        guard !batch.isEmpty else { return }
+        try await operationGate.withLock { _ = try await runtime.mutateViewModel(batch) }
     }
 
     func step(

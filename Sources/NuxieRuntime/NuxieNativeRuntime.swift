@@ -715,6 +715,7 @@ package actor NuxieNativeSessionGroup {
         try await executor.call {
             let models = Array(context.sharedViewModels.values)
             context.sharedViewModels.removeAll()
+            context.globalViewModels.removeAll()
             var firstError: Error?
             for model in models {
                 do { try model.close() } catch { firstError = firstError ?? error }
@@ -807,6 +808,7 @@ private final class NuxieNativeFileContext: @unchecked Sendable {
     let renderer: NuxieNativeRendererHandle
     let executor: NuxieRuntimePinnedThreadExecutor
     var sharedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    var globalViewModels: [String: NuxieNativeViewModelReference] = [:]
     private var pixelWidth: UInt32
     private var pixelHeight: UInt32
 
@@ -1008,6 +1010,12 @@ package actor NuxieNativeRuntime {
     package func rootViewModelReference() async throws -> NuxieNativeViewModelReference {
         let state = try requireState()
         return try await executor.call { try state.rootViewModelReference() }
+    }
+
+    /// Bind one file-authored global, shared by every session in this file group.
+    package func bindGlobalViewModel(named name: String) async throws -> NuxieNativeViewModelReference? {
+        let state = try requireState()
+        return try await executor.call { try state.bindGlobalViewModel(named: name) }
     }
 
     package func makeViewModel(
@@ -1320,6 +1328,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     private var pixelWidth: UInt32
     private var pixelHeight: UInt32
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    private var globalViewModels: [String: NuxieNativeViewModelReference] = [:]
     private let focusPlayerIndex: Int?
     private var auxiliaryPlayersNeedInitialStep = true
     private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle,
@@ -1799,6 +1808,37 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         return try viewModel.reference()
     }
 
+    func bindGlobalViewModel(named name: String) throws -> NuxieNativeViewModelReference? {
+        let catalog = try file.viewModelCatalog()
+        guard let schema = catalog.schemas.first(where: { $0.name == name && $0.isGlobal }) else { return nil }
+        let reference: NuxieNativeViewModelReference
+        let model: NuxieNativeViewModelHandle
+        if let sharedContext, let existing = sharedContext.globalViewModels[name] {
+            reference = existing
+            model = try sharedContext.resolve(existing)
+        } else if let existing = globalViewModels[name], let retained = retainedViewModels[existing.rawValue] {
+            reference = existing
+            model = retained
+        } else {
+            model = try file.makeViewModel(schemaIndex: schema.index,
+                authoredInstanceIndex: nil)
+            reference = try model.reference()
+            if let sharedContext {
+                sharedContext.sharedViewModels[reference.rawValue] = model
+                sharedContext.globalViewModels[name] = reference
+            } else {
+                retainedViewModels[reference.rawValue] = model
+                globalViewModels[name] = reference
+            }
+        }
+        for player in players where try player.info().kind == .stateMachine {
+            try requireOK(withStringView(name) {
+                nux_player_set_global_view_model(try player.require(), $0, try model.owned.require())
+            }, operation: "bind named global")
+        }
+        return reference
+    }
+
     func makeViewModel(
         schemaIndex: Int,
         authoredInstanceIndex: Int?
@@ -1819,7 +1859,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     }
 
     func snapshot(_ reference: NuxieNativeViewModelReference) throws -> NuxieNativeViewModelSnapshot {
-        if reference == (try rootViewModelReference()), let viewModel { return try viewModel.snapshot() }
+        if let viewModel, reference == (try viewModel.reference()) { return try viewModel.snapshot() }
         guard let handle = retainedViewModels[reference.rawValue] ?? sharedContext?.sharedViewModels[reference.rawValue] else {
             throw NuxieNativeRuntimeError.missingHandle("view model")
         }

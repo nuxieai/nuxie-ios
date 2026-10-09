@@ -115,6 +115,54 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         }
     }
 
+    func testPublishedEnvironmentReceivesHostInsetsAndMotionBeforeAndAfterMount() async throws {
+        let fixture = try await signedFixture(kind: .publishedRunValues)
+        try await withPresentation(fixture: fixture) { presentations, _, _ in
+            let tap = try await waitForScreen("tap", presentations: presentations)
+            let fields = Mirror(reflecting: tap).children
+            let artifact = try XCTUnwrap(fields.first { $0.label == "artifact" }?.value as? LoadedExperienceArtifact)
+            let experience = try XCTUnwrap(fields.first { $0.label == "experience" }?.value as? Experience)
+            let manifest = try XCTUnwrap(artifact.payload.renderPlan.screens.first { $0.screenId == "device" })
+            let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+                screen: manifest, reduceMotion: true, delegate: nil)
+            let view = EnvironmentInsetsView()
+            view.testInsets = UIEdgeInsets(top: 59, left: 7, bottom: 34, right: 9)
+            view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            controller.view = view
+            try await controller.mountInteractiveScreen()
+            do {
+                let mounted = Mirror(reflecting: controller).children
+                let screen = try XCTUnwrap(mounted.first { $0.label == "interactiveScreen" }?.value as? ExperienceInteractiveScreen)
+                let loop = try XCTUnwrap(mounted.first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+                @MainActor func assertEnvironment(_ motion: Bool) async throws {
+                    let result = try await screen.environmentSnapshot()
+                    let snapshot = try XCTUnwrap(result)
+                    XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "reduceMotion" }?.value, .bool(motion))
+                    guard case .referencedInstance(let owner) = snapshot.values.first(where: {
+                        $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "safeArea"
+                    })?.value else { return XCTFail("env has an authored safeArea instance") }
+                    for (side, value) in [("top", view.testInsets.top), ("bottom", view.testInsets.bottom),
+                                          ("left", view.testInsets.left), ("right", view.testInsets.right)] {
+                        XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == owner && $0.name == side }?.value, .number(Float(value)))
+                    }
+                }
+                try await assertEnvironment(true)
+                await controller.updateReduceMotion(false)
+                view.testInsets = UIEdgeInsets(top: 20, left: 3, bottom: 0, right: 4)
+                for size in [CGSize.zero, CGSize(width: 393, height: 852), CGSize(width: 820, height: 1180)] {
+                    view.frame = CGRect(origin: .zero, size: size)
+                    controller.syncSafeAreaInsets(force: true)
+                    try await loop.advanceZeroDelta()
+                    try await assertEnvironment(false)
+                }
+                await controller.shutdownInteractiveScreen()
+            } catch {
+                await controller.shutdownInteractiveScreen()
+                throw error
+            }
+        }
+    }
+
     func testPublishedF5WaitedFailureThenRetryControlsItsJourney() async throws {
         let fixture = try await signedFixture(kind: .publishedForms)
         let first = expectation(description: "first awaited save sent")
@@ -459,5 +507,10 @@ private actor FormSaveTestTransport: JourneyResponseSaveTransport {
         pending = [:]
         for wait in waits { wait.resume(returning: .noAnswer) }
     }
+}
+@MainActor
+private final class EnvironmentInsetsView: UIView {
+    var testInsets: UIEdgeInsets = .zero
+    override var safeAreaInsets: UIEdgeInsets { testInsets }
 }
 #endif
