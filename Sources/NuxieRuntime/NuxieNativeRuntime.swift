@@ -710,6 +710,13 @@ package actor NuxieNativeSessionGroup {
         self.context = context
     }
 
+    /// Deterministic FIFO interleavings for shared-session regression tests.
+    package func enqueueForTesting(_ operation: @escaping @Sendable () -> Void) {
+        executor.enqueue(operation)
+    }
+
+    package var queuedJobCountForTesting: Int { executor.queuedJobCountForTesting }
+
     package func retire() async throws {
         let context = context
         try await executor.call {
@@ -991,6 +998,25 @@ package actor NuxieNativeRuntime {
                 correlationID: correlationID,
                 textRunNames: textRunNames
             )
+        }
+    }
+
+    /// Freeze event-source values before another session can run on this file's lane.
+    package func stepWithSnapshot(
+        inputs: [NuxieNativePlayerInput] = [],
+        pointers: [NuxieNativePointerEvent] = [],
+        focusInputs: [NuxieNativeFocusInput] = [],
+        elapsedSeconds: Float,
+        correlationID: UInt64 = 0,
+        textRunNames: [String] = []
+    ) async throws -> (result: NuxieNativePlayerStepResult, snapshot: NuxieNativeViewModelSnapshot?) {
+        let state = try requireState()
+        return try await executor.call {
+            let result = try state.step(inputs: inputs, pointers: pointers, focusInputs: focusInputs,
+                elapsedSeconds: elapsedSeconds, correlationID: correlationID, textRunNames: textRunNames)
+            // Snapshot failure must not discard effects already committed by the step.
+            let snapshot = try? state.viewModel?.snapshot()
+            return (result, snapshot)
         }
     }
 

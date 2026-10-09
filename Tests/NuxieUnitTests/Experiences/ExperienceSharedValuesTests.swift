@@ -9,6 +9,59 @@ import UIKit
 @testable import NuxieRuntime
 
 final class ExperienceSharedValuesTests: XCTestCase {
+    func testSaveCapturesItsStepBeforeAnotherScreenWritesOnTheSharedLane() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
+        let base = try SharedValuesFixture.payload(directory: directory, screens: ["feedback"])
+        let payload = AuthenticatedRuntimePayload(valuePolicy: release.valuePolicy,
+            authenticatedKeyID: base.authenticatedKeyID, requiredCapabilities: base.requiredCapabilities,
+            renderPlan: base.renderPlan, journey: base.journey, sceneBytes: base.sceneBytes, assets: base.assets)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let a = try await preparation.openScreen(screenID: "feedback", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        let b = try await preparation.openScreen(screenID: "feedback", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await a.close(); try await b.close() }
+        let file = try await NuxieNativePreparedFile.prepare(bytes: base.sceneBytes, valuePolicy: release.valuePolicy.native)
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        let aRuntime = try XCTUnwrap(Mirror(reflecting: a).children.first { $0.label == "runtime" }?.value as? NuxieNativeRuntime)
+        let aRoot = try await aRuntime.rootViewModelReference()
+        _ = try await aRuntime.mutateViewModel([.setNumber(instance: aRoot,
+            path: "experience/responses:feedback/stars", value: 4)])
+        _ = try await b.step(elapsedSeconds: 0)
+        let pressed = try await b.step(pointers: [.init(kind: .down, x: 121, y: 1)], elapsedSeconds: 0)
+        XCTAssertTrue(pressed.pointerHits.contains { $0 != .none }, "The enabled published Save button is hit")
+
+        let entered = expectation(description: "shared lane is held")
+        let releaseLane = DispatchSemaphore(value: 0)
+        await native.sessions.enqueueForTesting { entered.fulfill(); releaseLane.wait() }
+        defer { releaseLane.signal() }
+        await fulfillment(of: [entered], timeout: 2)
+        func waitForQueuedJobs(_ count: Int) async throws {
+            let deadline = Date().addingTimeInterval(2)
+            while await native.sessions.queuedJobCountForTesting < count {
+                guard Date() < deadline else { throw CocoaError(.coderInvalidValue) }
+                await Task.yield()
+            }
+        }
+        let saving = Task { try await b.step(pointers: [.init(kind: .up, x: 121, y: 1)], elapsedSeconds: 0) }
+        try await waitForQueuedJobs(1)
+        let editing = Task { try await aRuntime.mutateViewModel([.setNumber(instance: aRoot,
+            path: "experience/responses:feedback/stars", value: 5)]) }
+        try await waitForQueuedJobs(2)
+        releaseLane.signal()
+        let result = try await saving.value
+        _ = try await editing.value
+        let save = try XCTUnwrap(result.effects.compactMap(\.responseSave).first)
+        XCTAssertEqual(result.effects.compactMap(\.responseSave).count, 1)
+        XCTAssertEqual(save.form, "feedback")
+        XCTAssertEqual(save.answers, ["stars": .number(4)])
+        let live = try await run.responseAnswers(form: "feedback", policy: release.valuePolicy)
+        XCTAssertEqual(live, ["stars": .number(5)])
+    }
+
     #if os(iOS)
     func testBothPublishedGoalsScreensShareRestoredRows() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent()
