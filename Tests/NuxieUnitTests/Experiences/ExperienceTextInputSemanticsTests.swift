@@ -222,6 +222,87 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         await controller.shutdownInteractiveScreen()
     }
 
+    func testSiblingEnvironmentWriteCannotOvertakeFrameSemanticCapture() async throws {
+        let directory = PublishedInputFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("forms-saves")
+        let geometryPath = "nuxieTextInputs/input_scr_screens_sfeedback_v2_3f92b591"
+        let input = NativeExperienceTextInput(inputId: "comment", screenId: "feedback", artboardId: "feedback",
+            viewNodeId: "scr_screens_sfeedback::v2", renderedNodeId: "scr_screens_sfeedback::v2",
+            textInputName: "scr_screens_sfeedback::v2 editable value", value: "", placeholder: nil, editable: true,
+            geometry: .init(xPath: "\(geometryPath)/x", yPath: "\(geometryPath)/y", widthPath: "\(geometryPath)/width",
+                heightPath: "\(geometryPath)/height", rotationPath: "\(geometryPath)/rotation",
+                scaleXPath: "\(geometryPath)/scaleX", scaleYPath: "\(geometryPath)/scaleY"),
+            style: .init(fontFamily: "System", fontWeight: "400", fontStyle: "normal", fontSize: 16,
+                lineHeight: -1, letterSpacing: 0, color: 0xFF111827,
+                fontAssetUniqueName: "font-system-400-normal-6cda3de3-0", textAlign: "left"),
+            keyboardType: nil, secureTextEntry: false, multiline: false, maxLength: nil, responseFieldKey: nil)
+        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
+        let base = try SharedValuesFixture.payload(directory: directory, screens: ["feedback"], textInputs: [input])
+        let payload = AuthenticatedRuntimePayload(valuePolicy: release.valuePolicy,
+            authenticatedKeyID: base.authenticatedKeyID, requiredCapabilities: base.requiredCapabilities,
+            renderPlan: base.renderPlan, journey: base.journey, sceneBytes: base.sceneBytes, assets: base.assets)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let first = try await preparation.openScreen(runValues: run, pixelWidth: 393, pixelHeight: 852)
+        let second = try await preparation.openScreen(runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await first.close(); try await second.close() }
+        let firstEnv = try await first.environmentSnapshot()
+        let secondEnv = try await second.environmentSnapshot()
+        let firstEnvironment = try XCTUnwrap(firstEnv)
+        let secondEnvironment = try XCTUnwrap(secondEnv)
+        XCTAssertEqual(firstEnvironment.rootInstanceID, secondEnvironment.rootInstanceID)
+        try await first.updateEnvironment(reduceMotion: false)
+        try await first.enableSemantics()
+        let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, valuePolicy: payload.valuePolicy.native)
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        let layer = CAMetalLayer()
+        layer.device = try await first.metalDevice().value
+        layer.pixelFormat = .bgra8Unorm
+        layer.drawableSize = CGSize(width: 393, height: 852)
+        let drawable = try XCTUnwrap(layer.nextDrawable())
+        let entered = expectation(description: "Shared executor held before rendering")
+        let releaseLane = DispatchSemaphore(value: 0)
+        await native.sessions.enqueueForTesting { entered.fulfill(); releaseLane.wait() }
+        defer { releaseLane.signal() }
+        await fulfillment(of: [entered], timeout: 2)
+        func waitForQueuedJobs(_ count: Int) async throws {
+            let deadline = Date().addingTimeInterval(2)
+            while await native.sessions.queuedJobCountForTesting < count {
+                guard Date() < deadline else { throw CocoaError(.coderInvalidValue) }
+                await Task.yield()
+            }
+        }
+        let rendering = Task { try await first.renderFrame(layoutScaleFactor: 1,
+            drawable: ExperienceInteractiveDrawable(drawable), capturesSemantics: true) }
+        try await waitForQueuedJobs(1)
+        let updating = Task { try await second.updateEnvironment(reduceMotion: true) }
+        try await waitForQueuedJobs(2)
+        releaseLane.signal()
+        let frame = try await rendering.value
+        try await updating.value
+        XCTAssertEqual(frame.outcome.disposition, .presented)
+        let capture = try XCTUnwrap(frame.semantics)
+        // F5 authors comment, email and stars; this proof requests the comment occurrence.
+        XCTAssertEqual(capture.tree.nodes.filter { $0.role == NuxieNativeSemanticRole.textField.rawValue }.count, 3)
+        XCTAssertEqual(capture.nativeInputs[input.textInputName]?.count, 1)
+        let changed = try await first.environmentSnapshot()
+        XCTAssertEqual(changed?.values.first { $0.name == "reduceMotion" }?.value, .bool(true))
+        _ = try await first.step(elapsedSeconds: 0)
+        let nextDrawable = try XCTUnwrap(layer.nextDrawable())
+        let next = try await first.renderFrame(layoutScaleFactor: 1,
+            drawable: ExperienceInteractiveDrawable(nextDrawable), capturesSemantics: true)
+        XCTAssertEqual(next.outcome.disposition, .presented)
+        let nextCapture = try XCTUnwrap(next.semantics)
+        XCTAssertEqual(nextCapture.tree.nodes.filter {
+            $0.role == NuxieNativeSemanticRole.textField.rawValue
+        }.count, 3)
+        XCTAssertEqual(nextCapture.nativeInputs[input.textInputName]?.count, 1)
+        XCTAssertGreaterThan(nextCapture.tree.renderRevision, capture.tree.renderRevision)
+    }
+
     func testNativeEditingSecondPublishedFieldKeepsFirstValue() async throws {
         let directory = PublishedInputFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("published-two-fields")
