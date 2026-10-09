@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "reduceMotion": { "type": "boolean" },
+    "safeArea": {
+      "type": "object",
+      "properties": {
+        "top": { "type": "number" },
+        "bottom": { "type": "number" },
+        "left": { "type": "number" },
+        "right": { "type": "number" }
+      }
+    },
+    "fontScale": { "type": "number" },
+    "colorScheme": { "type": "string", "enum": ["light", "dark"] },
+    "width": { "type": "number" },
+    "height": { "type": "number" },
+    "platform": { "type": "string", "enum": ["ios", "android"] },
+    "locale": { "type": "string" }
+  }
+}
