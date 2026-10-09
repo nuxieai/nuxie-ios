@@ -1,0 +1,23 @@
+{
+  "$schema": "https://nuxie.ai/schema/experience/1.json",
+  "entry": {
+    "steps": [
+      {
+        "type": "navigate",
+        "screen": "screens/tap"
+      }
+    ],
+    "trigger": {
+      "type": "event",
+      "eventName": "$app_opened"
+    },
+    "frequency": {
+      "type": "every_match"
+    }
+  },
+  "journey": [],
+  "platforms": [
+    "ios:apple_app_store",
+    "android:google_play"
+  ]
+}
