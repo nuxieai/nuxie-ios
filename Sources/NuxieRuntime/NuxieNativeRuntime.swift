@@ -2388,9 +2388,10 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
             free: nux_file_free
         )
         do {
-            try installValueMarkers(valuePolicy.markers(in: viewModelCatalog()))
+            let markers = try valuePolicy.markers(in: viewModelCatalog())
+            try installValueMarkers(markers)
             try installValueRules(valuePolicy.rules)
-            try installRuleGroups(valuePolicy.groups)
+            try installRuleGroups(valuePolicy.groupsForInstallation(markers: markers))
         } catch {
             try? owned.close()
             throw error

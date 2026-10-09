@@ -5,6 +5,68 @@ import XCTest
 @testable import NuxieRuntime
 
 final class ExperienceValuePolicyTests: XCTestCase {
+    func testGroupInstallationKeepsUnconstrainedAnswers() async throws {
+        try await checkUnconstrainedGroup(requiredEmail: true)
+    }
+
+    func testGroupInstallationRetainsAnEmptyNativeGroup() async throws {
+        try await checkUnconstrainedGroup(requiredEmail: false)
+    }
+
+    private func checkUnconstrainedGroup(requiredEmail: Bool) async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("rule-group-install")
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: directory.appendingPathComponent("policy.json"))) as? [String: Any])
+        if !requiredEmail {
+            var forms = try XCTUnwrap(root["responses"] as? [String: Any])
+            var form = try XCTUnwrap(forms["profile"] as? [String: Any])
+            var fields = try XCTUnwrap(form["fields"] as? [[String: Any]])
+            fields[0]["rules"] = []
+            form["fields"] = fields; forms["profile"] = form; root["responses"] = forms
+        }
+        try JourneyReleaseValuePolicy.validate(root)
+        let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self,
+            from: JSONSerialization.data(withJSONObject: root))
+        XCTAssertEqual(policy.ruleGroups.first?.members.map(\.property), ["email", "name"],
+            "The canonical group still lists every declared field")
+        let file = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")), valuePolicy: policy.native)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        func member(_ snapshot: NuxieNativeViewModelSnapshot, _ path: [String]) throws -> NuxieNativeViewModelValue? {
+            var owner = snapshot.rootInstanceID
+            for name in path.dropLast() {
+                guard case .referencedInstance(let next) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == owner && $0.name == name
+                })?.value else { throw CocoaError(.coderInvalidValue) }
+                owner = next
+            }
+            return snapshot.values.first { $0.ownerInstanceID == owner && $0.name == path.last }?.value
+        }
+        _ = try await native.sessions.mutate([
+            .setString(instance: native.reference, path: "responses:profile/email", value: Data("person@example.test".utf8)),
+            .setString(instance: native.reference, path: "responses:profile/name", value: Data("Ada".utf8)),
+        ])
+        let valid = try await native.sessions.snapshot(native.reference)
+        XCTAssertEqual(try member(valid, ["responses:profile", "valid"]), .bool(true))
+        XCTAssertEqual(try member(valid, ["responses:profile", "errors", "name"]), .list([]))
+        let request = try XCTUnwrap(ExperienceResponseSaveRequest.capture(
+            .hostCommand(name: "$nuxie.response.save", payload: .object([.init(key: "form", value: .string("profile"))])),
+            snapshot: valid, catalog: native.catalog, policy: policy))
+        XCTAssertEqual(request.answers, ["email": .string("person@example.test"), "name": .string("Ada")])
+        let answers = try await run.responseAnswers(form: "profile", policy: policy)
+        XCTAssertEqual(answers, request.answers)
+        _ = try await native.sessions.mutate([
+            .setString(instance: native.reference, path: "responses:profile/email", value: Data()),
+        ])
+        let cleared = try await native.sessions.snapshot(native.reference)
+        XCTAssertEqual(try member(cleared, ["responses:profile", "valid"]), .bool(!requiredEmail))
+        XCTAssertEqual(try member(cleared, ["responses:profile", "errors", "name"]), .list([]))
+    }
+
     func testPublishedF5InstallsResponseRulesBeforeFirstMutation() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
