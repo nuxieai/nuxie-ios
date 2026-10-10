@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import subprocess
@@ -273,6 +274,22 @@ class SourceIdentityTests(unittest.TestCase):
 
 
 class NativeCommandSelectionTests(unittest.TestCase):
+    def test_make_default_destination_excludes_simctl_status_and_trailing_whitespace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "xcrun"
+            binary.write_text("#!/bin/sh\ncat <<'DEVICES'\n== Devices ==\n-- iOS 27.0 --\n"
+                              "    iPhone 18 Pro Max (0E2E4AD4-728B-4620-BEC4-AA281A5942D0) (Shutdown)  \n"
+                              "DEVICES\n")
+            binary.chmod(0o755)
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in {"TEST_DESTINATION", "TEST_SIMULATOR_NAME", "TEST_SIMULATOR_OS"}}
+            environment["PATH"] = directory + os.pathsep + environment["PATH"]
+            result = subprocess.run(["make", "--no-print-directory", "-n", "test-native-runtime"],
+                                    cwd=sdk.ROOT, env=environment, text=True, capture_output=True, check=True)
+            self.assertIn("--destination 'platform=iOS Simulator,name=iPhone 18 Pro Max,OS=27.0'", result.stdout)
+            self.assertNotIn("0E2E4AD4", result.stdout)
+            self.assertNotIn("Shutdown", result.stdout)
+
     def command(self, argv):
         with patch("sys.argv", ["sdk.py", *argv]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
                 patch.object(sdk, "run") as run, patch.object(sdk, "publish_build"), \
