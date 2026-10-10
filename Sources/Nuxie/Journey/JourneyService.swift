@@ -2245,6 +2245,10 @@ private extension JourneyService {
               let originAdmission = journalCommitAdmission(journal: journal, executionFenceToken: executionFenceToken) else {
             return .rejected
         }
+        let executionKey = RunExecutionKey(runID: presentedRun.id, owner: journal.distinctId,
+            generation: executionFenceToken.generation)
+        beginRunExecution(executionKey)
+        defer { endRunExecution(executionKey) }
         guard let capture = await capturePresentationEvent(
                 name: name,
                 eventId: UUID.v7().uuidString,
@@ -2308,6 +2312,18 @@ private extension JourneyService {
             }
             return .accepted
         }
+        if isAwaitingPresentationCommerceOutcome(run, in: release.descriptor.leg) {
+            if let action = release.descriptor.leg.steps.first(where: { $0.id == routeStepId })?.action,
+               JourneyActionType(action: action)?.isCommerce == true { return .accepted }
+            if run.pendingCommerce == nil {
+                guard let effectId = run.effectReceipts[run.stepId],
+                      let retained = try? await journal.retainPresentationCommerce(run.id,
+                        stepId: run.stepId, effectId: effectId,
+                        placementId: pendingPresentationPurchasePlacements[run.id],
+                        admission: originAdmission) else { return .rejected }
+                run = retained
+            }
+        }
         let context = ArmedJourney.Context(
             event: controlEvent.properties,
             responses: run.context.responses
@@ -2353,7 +2369,11 @@ private extension JourneyService {
                 return .rejected
             }
         } else {
-            Task { await continueRun() }
+            beginRunExecution(executionKey)
+            Task { [weak self] in
+                await continueRun()
+                await self?.endRunExecution(executionKey)
+            }
         }
         return .accepted
     }
