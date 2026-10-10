@@ -7,6 +7,14 @@ import XCTest
 
 final class JourneyNativeRunValuesTests: JourneyTestCase {
     func testLiveFormAnswerObservationReadsWithoutSavingOrCreatingRunValues() async throws {
+        try await verifyLiveFormAnswerObservation(retireNativeSession: false)
+    }
+
+    func testLiveFormAnswerObservationReturnsNilWhenNativeStateIsUnavailable() async throws {
+        try await verifyLiveFormAnswerObservation(retireNativeSession: true)
+    }
+
+    private func verifyLiveFormAnswerObservation(retireNativeSession: Bool) async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("rule-group-install")
         let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self,
@@ -52,6 +60,11 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         XCTAssertEqual(try encoder.encode(journalAfter), try encoder.encode(runs))
+        if retireNativeSession {
+            try await native.sessions.retire()
+            let unavailable = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+            XCTAssertNil(unavailable, "Unavailable native state has no live observation")
+        }
         await service.shutdown()
         let retired = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
         XCTAssertNil(retired)

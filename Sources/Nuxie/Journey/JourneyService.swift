@@ -2488,7 +2488,14 @@ private extension JourneyService {
         guard identity.getDistinctId() == owner,
               let entry = nativeValuesByRun[runID], entry.owner == owner else { return nil }
         guard await entry.values.isPrepared else { return nil }
-        let answers = try await entry.values.formAnswers(policy: entry.policy)
+        let answers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>
+        do {
+            answers = try await entry.values.formAnswers(policy: entry.policy)
+        } catch {
+            // A retired or failed native read has no live observation.
+            try Task.checkCancellation()
+            return nil
+        }
         guard identity.getDistinctId() == owner,
               executionFence.token().generation == generation,
               let current = nativeValuesByRun[runID], current.owner == owner,
