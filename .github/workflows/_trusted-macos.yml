@@ -4,9 +4,7 @@ on:
   workflow_call:
     inputs:
       force_hosted:
-        description: >-
-          Run every Apple job on GitHub-hosted macOS. This is a one-way safety
-          override: fork pull requests remain hosted even when this is false.
+        description: Run Apple jobs on disposable GitHub-hosted macOS.
         required: false
         type: boolean
         default: false
@@ -14,19 +12,11 @@ on:
 permissions:
   contents: read
 
-# SwiftPM artifact metadata embeds absolute workspace paths, so every
-# .xcode-spm cache is scoped to runner.name; v2 excludes older shared entries.
 jobs:
-  # SECURITY: The nuxie-macos runner group must select only this reusable
-  # workflow at a protected nuxie-ios ref. The decision below is made from the
-  # immutable event context inside that trusted workflow. A caller can set
-  # force_hosted to broaden execution to GitHub-hosted macOS, but can never use
-  # it to put a fork pull request on a persistent Nuxie runner.
   unit:
-    name: Unit (iOS)
-    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
-    timeout-minutes: 30
-
+    name: Unit and native runtime (iOS)
+    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -34,125 +24,36 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Fetch released Nuxie runtime
-        run: make fetch-runtime-xcframework
-
-      - name: Generate Xcode Project
-        run: make generate
-
-      - name: Cache Swift packages
+      - name: Reuse immutable Bazel actions and dependencies
         uses: actions/cache@v4
         with:
-          path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
+          path: |
+            ~/.cache/nuxie/bazel
+            ~/.cache/nuxie-tools/bazelisk
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-
 
-      - name: Resolve Swift packages
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKUnitTests \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm
+      - name: Run native Bazel qualification
+        run: make test-unit test-native-runtime test-experience-input test-storekit build-ios-device
 
-      - name: Pick iOS Simulator destination
-        id: sim
-        shell: bash
-        run: |
-          set -euo pipefail
-          DESTINATION="$(python3 - <<'PY'
-          import json
-          import re
-          import subprocess
-          import sys
-
-          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
-          devices_by_runtime = data.get("devices", {})
-
-          def runtime_version(runtime_id: str):
-            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), int(match.group(2)))
-            match = re.search(r"iOS-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), 0)
-            return (-1, -1)
-
-          runtimes = sorted(
-            (r for r in devices_by_runtime.keys() if "iOS" in r),
-            key=runtime_version,
-            reverse=True,
-          )
-
-          for runtime in runtimes:
-            for device in devices_by_runtime.get(runtime, []):
-              if not device.get("isAvailable"):
-                continue
-              name = device.get("name") or ""
-              if "iPhone" not in name:
-                continue
-              udid = device.get("udid")
-              if udid:
-                print(f"platform=iOS Simulator,id={udid}")
-                sys.exit(0)
-
-          print("No available iPhone simulator found", file=sys.stderr)
-          sys.exit(1)
-          PY
-          )"
-          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
-
-      - name: Run Unit Tests on iOS Simulator
-        run: |
-          COVERAGE=NO
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            COVERAGE=YES
-          fi
-
-          xcodebuild test \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKUnitTests \
-            -destination '${{ steps.sim.outputs.destination }}' \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm \
-            -resultBundlePath UnitTestResults.xcresult \
-            -enableCodeCoverage "$COVERAGE"
-
-      - name: Run native StoreKit qualification
-        run: >-
-          make test-storekit
-          TEST_DESTINATION='${{ steps.sim.outputs.destination }}'
-          XCODEBUILD_TEST_FLAGS='-resultBundlePath StoreKitTestResults.xcresult'
-
-      - name: Audit customer framework
-        run: make verify-customer-framework
-
-      - name: Build and audit Release framework for iOS device
-        run: make build-ios-device CLONED_SOURCE_PACKAGES_DIR_PATH=.xcode-spm
-
-      - name: Upload Unit Test Results
+      - name: Upload native test evidence
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-results
-          path: UnitTestResults.xcresult
-          retention-days: 5
-
-      - name: Upload StoreKit Test Results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: storekit-test-results
-          path: StoreKitTestResults.xcresult
+          name: unit-bazel-test-results
+          path: |
+            bazel-testlogs/**/*
+            macos-unit-crash-reports/**/*
           retention-days: 5
           if-no-files-found: ignore
 
   macos-build:
     name: Build (macOS)
-    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
-    timeout-minutes: 30
-
+    needs: unit
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -160,95 +61,73 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Fetch released Nuxie runtime
-        run: make fetch-runtime-xcframework
-
-      - name: Generate Xcode Project
-        run: make generate
-
-      - name: Cache Swift packages
+      - name: Reuse immutable Bazel actions and dependencies
         uses: actions/cache@v4
         with:
-          path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v2-${{ hashFiles('**/Package.resolved') }}
+          path: |
+            ~/.cache/nuxie/bazel
+            ~/.cache/nuxie-tools/bazelisk
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-macos-v2-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-
 
-      - name: Resolve Swift packages
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKUnitTests \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm
+      - name: Run native Bazel qualification
+        run: make build-macos
 
-      - name: Build macOS Framework
-        run: |
-          xcodebuild build \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKMac \
-            -destination 'generic/platform=macOS' \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm
+      - name: Upload native test evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-bazel-test-results
+          path: |
+            bazel-testlogs/**/*
+            macos-unit-crash-reports/**/*
+          retention-days: 5
+          if-no-files-found: ignore
 
   macos-unit:
     name: Unit (macOS)
-    # The runner service account has no macOS GUI testmanagerd domain. SwiftPM
-    # executes the same package test sources directly and is headless-safe.
-    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
-    timeout-minutes: 30
-
+    needs: macos-build
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Apple CI
+        id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Run Unit Tests on macOS
-        env:
-          # The intermittent signal-11 in this lane produces no
-          # DiagnosticReports on the headless runner account; the Swift
-          # runtime backtracer prints the crashed thread's backtrace to
-          # stderr instead, straight into this log.
-          SWIFT_BACKTRACE: enable=yes,format=text,threads=crashed
-        run: >-
-          swift test
-          --only-use-versions-from-resolved-file
-          --scratch-path "${RUNNER_TEMP}/nuxie-swiftpm-build"
+      - name: Reuse immutable Bazel actions and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/nuxie/bazel
+            ~/.cache/nuxie-tools/bazelisk
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-
 
-      # The push-only intermittent signal-11 in this lane leaves its evidence
-      # in the runner account's DiagnosticReports, not in any xcresult —
-      # collect the fresh reports so the crash is diagnosable from the run.
-      - name: Collect crash reports
-        if: failure()
-        run: |
-          # ReportCrash writes the .ips asynchronously — give it time, and
-          # use a 24h window so reports from earlier same-day crashes (before
-          # collection existed or when the writer lost the race) come along.
-          sleep 15
-          mkdir -p macos-unit-crash-reports
-          for dir in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
-            find "$dir" \( -name '*.ips' -o -name '*.crash' \) -mmin -1440 \
-              -exec cp -v {} macos-unit-crash-reports/ \; 2>/dev/null || true
-          done
-          ls -la macos-unit-crash-reports || true
+      - name: Run native Bazel qualification
+        run: make test-macos-unit
 
-      - name: Upload crash reports
+      - name: Upload native test evidence
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-unit-crash-reports
-          path: macos-unit-crash-reports
-          retention-days: 3
+          name: macos-unit-bazel-test-results
+          path: |
+            bazel-testlogs/**/*
+            macos-unit-crash-reports/**/*
+          retention-days: 5
           if-no-files-found: ignore
 
   flow-runtime-ui:
     name: Experience Runtime UI (iOS)
-    needs: unit
+    needs: macos-unit
     if: ${{ !cancelled() }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
-    timeout-minutes: 30
-
+    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -256,96 +135,36 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Fetch released Nuxie runtime
-        run: make fetch-runtime-xcframework
-
-      - name: Generate Xcode Project
-        run: make generate
-
-      - name: Cache Swift packages
+      - name: Reuse immutable Bazel actions and dependencies
         uses: actions/cache@v4
         with:
-          path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
+          path: |
+            ~/.cache/nuxie/bazel
+            ~/.cache/nuxie-tools/bazelisk
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-
 
-      - name: Resolve Swift packages
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKUnitTests \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm
-
-      - name: Pick iOS Simulator destination
-        id: sim
-        shell: bash
-        run: |
-          set -euo pipefail
-          DESTINATION="$(python3 - <<'PY'
-          import json
-          import re
-          import subprocess
-          import sys
-
-          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
-          devices_by_runtime = data.get("devices", {})
-
-          def runtime_version(runtime_id: str):
-            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), int(match.group(2)))
-            match = re.search(r"iOS-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), 0)
-            return (-1, -1)
-
-          runtimes = sorted(
-            (r for r in devices_by_runtime.keys() if "iOS" in r),
-            key=runtime_version,
-            reverse=True,
-          )
-
-          for runtime in runtimes:
-            for device in devices_by_runtime.get(runtime, []):
-              if not device.get("isAvailable"):
-                continue
-              name = device.get("name") or ""
-              if "iPhone" not in name:
-                continue
-              udid = device.get("udid")
-              if udid:
-                print(f"platform=iOS Simulator,id={udid}")
-                sys.exit(0)
-
-          print("No available iPhone simulator found", file=sys.stderr)
-          sys.exit(1)
-          PY
-          )"
-          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
-
-      - name: Run experience runtime UI harness
-        env:
-          CLONED_SOURCE_PACKAGES_DIR_PATH: .xcode-spm
-          TEST_DESTINATION: ${{ steps.sim.outputs.destination }}
+      - name: Run native Bazel qualification
         run: make test-experience-runtime-ui
 
-      - name: Upload experience runtime UI report
+      - name: Upload native test evidence
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: experience-runtime-ui-report
-          path: test-results/flow-runtime
+          name: flow-runtime-ui-bazel-test-results
+          path: |
+            bazel-testlogs/**/*
+            macos-unit-crash-reports/**/*
           retention-days: 5
+          if-no-files-found: ignore
 
   integration:
     name: Integration (iOS)
     needs: flow-runtime-ui
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
-    timeout-minutes: 30
-
+    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -353,101 +172,39 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Fetch released Nuxie runtime
-        run: make fetch-runtime-xcframework
-
-      - name: Generate Xcode Project
-        run: make generate
-
-      - name: Cache Swift packages
+      - name: Reuse immutable Bazel actions and dependencies
         uses: actions/cache@v4
         with:
-          path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
+          path: |
+            ~/.cache/nuxie/bazel
+            ~/.cache/nuxie-tools/bazelisk
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-
 
-      - name: Resolve Swift packages
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKUnitTests \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm
+      - name: Run native Bazel qualification
+        run: make test-integration
 
-      - name: Pick iOS Simulator destination
-        id: sim
-        shell: bash
-        run: |
-          set -euo pipefail
-          DESTINATION="$(python3 - <<'PY'
-          import json
-          import re
-          import subprocess
-          import sys
-
-          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
-          devices_by_runtime = data.get("devices", {})
-
-          def runtime_version(runtime_id: str):
-            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), int(match.group(2)))
-            match = re.search(r"iOS-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), 0)
-            return (-1, -1)
-
-          runtimes = sorted(
-            (r for r in devices_by_runtime.keys() if "iOS" in r),
-            key=runtime_version,
-            reverse=True,
-          )
-
-          for runtime in runtimes:
-            for device in devices_by_runtime.get(runtime, []):
-              if not device.get("isAvailable"):
-                continue
-              name = device.get("name") or ""
-              if "iPhone" not in name:
-                continue
-              udid = device.get("udid")
-              if udid:
-                print(f"platform=iOS Simulator,id={udid}")
-                sys.exit(0)
-
-          print("No available iPhone simulator found", file=sys.stderr)
-          sys.exit(1)
-          PY
-          )"
-          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
-
-      - name: Run Integration Tests on iOS Simulator
-        run: |
-          xcodebuild test \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKIntegrationTests \
-            -destination '${{ steps.sim.outputs.destination }}' \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm \
-            -resultBundlePath IntegrationTestResults.xcresult \
-            -enableCodeCoverage NO
-
-      - name: Upload Integration Test Results
+      - name: Upload native test evidence
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-results
-          path: IntegrationTestResults.xcresult
+          name: integration-bazel-test-results
+          path: |
+            bazel-testlogs/**/*
+            macos-unit-crash-reports/**/*
           retention-days: 5
+          if-no-files-found: ignore
 
   e2e:
     name: E2E (iOS)
     needs: integration
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))) && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
-    timeout-minutes: 30
-
+    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    timeout-minutes: 90
+    env:
+      NUXIE_E2E_PHASE1: "1"
+      NUXIE_E2E_PHASE2: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -455,93 +212,26 @@ jobs:
         id: apple-toolchain
         uses: ./.github/actions/setup-apple-ci
 
-      - name: Fetch released Nuxie runtime
-        run: make fetch-runtime-xcframework
-
-      - name: Generate Xcode Project
-        run: make generate
-
-      - name: Cache Swift packages
+      - name: Reuse immutable Bazel actions and dependencies
         uses: actions/cache@v4
         with:
-          path: .xcode-spm
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-${{ hashFiles('**/Package.resolved') }}
+          path: |
+            ~/.cache/nuxie/bazel
+            ~/.cache/nuxie-tools/bazelisk
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-spm-ios-v2-
+            ${{ runner.os }}-${{ runner.arch }}-${{ steps.apple-toolchain.outputs.xcode-identity }}-bazel-
 
-      - name: Resolve Swift packages
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKUnitTests \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm
+      - name: Run native Bazel qualification
+        run: make test-e2e
 
-      - name: Pick iOS Simulator destination
-        id: sim
-        shell: bash
-        run: |
-          set -euo pipefail
-          DESTINATION="$(python3 - <<'PY'
-          import json
-          import re
-          import subprocess
-          import sys
-
-          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
-          devices_by_runtime = data.get("devices", {})
-
-          def runtime_version(runtime_id: str):
-            match = re.search(r"iOS-(\d+)-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), int(match.group(2)))
-            match = re.search(r"iOS-(\d+)", runtime_id)
-            if match:
-              return (int(match.group(1)), 0)
-            return (-1, -1)
-
-          runtimes = sorted(
-            (r for r in devices_by_runtime.keys() if "iOS" in r),
-            key=runtime_version,
-            reverse=True,
-          )
-
-          for runtime in runtimes:
-            for device in devices_by_runtime.get(runtime, []):
-              if not device.get("isAvailable"):
-                continue
-              name = device.get("name") or ""
-              if "iPhone" not in name:
-                continue
-              udid = device.get("udid")
-              if udid:
-                print(f"platform=iOS Simulator,id={udid}")
-                sys.exit(0)
-
-          print("No available iPhone simulator found", file=sys.stderr)
-          sys.exit(1)
-          PY
-          )"
-          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
-
-      - name: Run E2E Tests on iOS Simulator
-        env:
-          NUXIE_E2E_PHASE1: "1"
-          NUXIE_E2E_PHASE2: "1"
-        run: |
-          xcodebuild test \
-            -project NuxieSDK.xcodeproj \
-            -scheme NuxieSDKE2ETests \
-            -destination '${{ steps.sim.outputs.destination }}' \
-            -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath .xcode-spm \
-            -resultBundlePath E2ETestResults.xcresult \
-            -enableCodeCoverage NO
-
-      - name: Upload E2E Test Results
+      - name: Upload native test evidence
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-test-results
-          path: E2ETestResults.xcresult
+          name: e2e-bazel-test-results
+          path: |
+            bazel-testlogs/**/*
+            macos-unit-crash-reports/**/*
           retention-days: 5
+          if-no-files-found: ignore

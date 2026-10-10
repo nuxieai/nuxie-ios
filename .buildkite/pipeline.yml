@@ -5,6 +5,9 @@ steps:
   - label: ":apple: SDK and released runtime validation"
     command: |
       set -euo pipefail
+      source scripts/bazel/ci-cache.sh
+      python3 scripts/bazel/launcher.py --version
+      make bazel-contract-test
       make check-runtime-consumer-boundary check-runtime-package-pin
       make fetch-runtime-xcframework-clean
       make verify-runtime-artifact check-runtime-module-boundary
@@ -17,7 +20,7 @@ steps:
     concurrency_group: nuxie-macos-xcode
     timeout_in_minutes: 180
     artifact_paths:
-      - "*TestResults.xcresult/**/*"
+      - "bazel-testlogs/**/*"
       - "macos-unit-crash-reports/**/*"
     retry:
       automatic:

@@ -6,7 +6,9 @@ repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_root}"
 
 status=0
-owned_files="$(git ls-files --cached --others --exclude-standard)"
+# This archived publisher test documents the provenance of a signed fixture.
+# It is executed in the publisher repository, never by the Swift SDK build.
+owned_files="$(git ls-files --cached --others --exclude-standard | grep -Fvx 'fixtures/runtime/nested-values/generate.rs' || true)"
 if grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|rust-toolchain|rust-toolchain\.toml)$|\.rs$' <<< "${owned_files}"; then
     echo "nuxie-ios must not own Cargo manifests, Rust source, or a Rust toolchain" >&2
     status=1

@@ -5,8 +5,6 @@ on:
     branches:
       - main
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -49,9 +47,8 @@ jobs:
 
   apple-ci:
     name: Apple CI
-    # The nuxie-macos runner group admits only this reusable workflow at trusted
-    # refs. Pinning the caller to the reviewed main commit keeps pull-request
-    # YAML from changing the runner-routing decision.
-    # GitHub snapshots runner-group workflow authorization when a run is created;
-    # rerunning an older check suite does not rebuild that authorization graph.
-    uses: nuxieai/nuxie-ios/.github/workflows/_trusted-macos.yml@28664a30b357298e04242e93773f8c49088fe0e7
+    # Candidate workflows run on hosted macOS. The protected-main reusable
+    # workflow alone selects persistent Nuxie runners after landing.
+    uses: ./.github/workflows/_trusted-macos.yml
+    with:
+      force_hosted: ${{ github.ref != 'refs/heads/main' }}

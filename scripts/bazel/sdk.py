@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import plistlib
 import shutil
+import shlex
 import stat
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cache import startup_options
+from launcher import executable as installed_bazelisk
 
 ROOT = Path(__file__).resolve().parents[2]
 PLATFORMS = {
@@ -38,6 +40,13 @@ SUITES = {
     "reference-ui": ["//:NuxieExperienceRuntimeReferenceUITests"],
     "e2e": ["//:NuxieE2EAppTests", "//:NuxieE2EAppUITests"],
 }
+SCHEMES = {
+    "NuxieSDKUnitTests": "unit", "NuxieSDKMacUnitTests": "macos-unit",
+    "NuxieSDKIntegrationTests": "integration", "NuxieExperienceInputTests": "hosted-input",
+    "NuxieVideoDeviceTests": "video", "NuxieSDKStoreKitTests": "storekit",
+    "NuxieExperienceRuntimeUITests": "runtime-ui", "NuxieExperienceRuntimeReferenceUITests": "reference-ui",
+    "NuxieSDKE2ETests": "e2e",
+}
 
 
 def run(command: list[str], *, capture: bool = False, raw: bool = False) -> str:
@@ -51,18 +60,28 @@ def bazel_command() -> list[str]:
     if not binary and (ROOT.parent.parent / "node_modules/.bin/bazelisk").is_file():
         binary = str(ROOT.parent.parent / "node_modules/.bin/bazelisk")
     if not binary:
-        raise ValueError("Install Bazelisk or set BAZEL to its executable path")
+        binary = installed_bazelisk()
     command = [binary, "--nosystem_rc", "--nohome_rc", *startup_options(ROOT)]
+    user_root = os.environ.get("NUXIE_BAZEL_OUTPUT_USER_ROOT")
+    if user_root:
+        if not Path(user_root).is_absolute() or any(c in user_root for c in "\0\r\n"):
+            raise ValueError("NUXIE_BAZEL_OUTPUT_USER_ROOT must be an absolute path on one line")
+        command.append("--output_user_root=" + user_root)
     output_base = os.environ.get("NUXIE_IOS_BAZEL_OUTPUT_BASE")
     if output_base:
         command.append("--output_base=" + str(Path(output_base).resolve()))
+    if os.environ.get("NUXIE_BAZEL_BATCH") == "1" or os.environ.get("CI") or os.environ.get("BUILDKITE") or os.environ.get("GITHUB_ACTIONS"):
+        command.append("--batch")
     return command
 
 
 def options(configuration: str, sdk_platform: str, architecture: str) -> list[str]:
     cpu = PLATFORMS[sdk_platform][architecture]
+    jobs = os.environ.get("NUXIE_BAZEL_JOBS", "2")
+    if not jobs.isdecimal() or int(jobs) < 1:
+        raise ValueError("NUXIE_BAZEL_JOBS must be a positive integer")
     return ["--compilation_mode=" + ("opt" if configuration == "Release" else "dbg"),
-            "--platforms=@apple_support//platforms:" + cpu, "--jobs=2",
+            "--platforms=@apple_support//platforms:" + cpu, "--jobs=" + jobs,
             "--macos_minimum_os=12.0" if sdk_platform == "macos" else "--ios_minimum_os=15.0"]
 
 
@@ -80,7 +99,7 @@ def owning_archive(files: list[Path], target: str) -> Path:
     return selected[0]
 
 
-def extract_framework(archive: Path, destination: Path) -> Path:
+def extract_framework(archive: Path, destination: Path, bundle_name: str = "Nuxie.framework") -> Path:
     """Preserve macOS framework symlinks and reject archive path traversal."""
     with zipfile.ZipFile(archive) as bundle:
         for entry in bundle.infolist():
@@ -104,10 +123,133 @@ def extract_framework(archive: Path, destination: Path) -> Path:
                 output.write_bytes(bundle.read(entry))
                 if mode & 0o777:
                     output.chmod(mode & 0o777)
-    frameworks = [path for path in destination.rglob("Nuxie.framework") if path.is_dir()]
+    frameworks = [path for path in destination.rglob(bundle_name) if path.is_dir()]
     if len(frameworks) != 1:
         raise ValueError("SDK archive must contain exactly one Nuxie.framework")
     return frameworks[0]
+
+
+def publish_build(target: str, flags: list[str], sdk_platform: str, configuration: str) -> None:
+    names = {
+        "sdk": ("NuxieSDK", "Nuxie.framework"), "NuxieSDK": ("NuxieSDK", "Nuxie.framework"),
+        "sdk_macos": ("NuxieSDKMac", "Nuxie.framework"), "NuxieSDKMac": ("NuxieSDKMac", "Nuxie.framework"),
+        "NuxieExperienceRuntimeReferenceApp": ("NuxieExperienceRuntimeReferenceApp", "NuxieExperienceRuntimeReference.app"),
+        "NuxieExperienceRuntimeHostApp": ("NuxieExperienceRuntimeHostApp", "NuxieExperienceRuntimeHost.app"),
+        "NuxieE2EApp": ("NuxieE2EApp", "NuxieE2EApp.app"),
+    }
+    name = target.removeprefix("//:")
+    if name not in names:
+        return
+    owner, bundle_name = names[name]
+    archives = [path for path in outputs(target, flags) if path.name in (owner + ".zip", owner + ".ipa")]
+    if len(archives) != 1:
+        raise ValueError("Expected one built SDK framework/application archive")
+    directory = ROOT / ".bazel-artifacts/build" / sdk_platform / configuration
+    directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".bundle-stage-", dir=directory) as temporary:
+        stage = Path(temporary)
+        bundle = extract_framework(archives[0], stage, bundle_name)
+        dependencies = []
+        if bundle_name == "Nuxie.framework":
+            dependencies = stage_framework_dependencies(owner, flags, sdk_platform, stage)
+        if bundle_name == "Nuxie.framework" and sdk_platform != "macos":
+            run([str(ROOT / "scripts/verify-customer-framework.sh"), str(bundle)])
+        elif bundle_name == "NuxieExperienceRuntimeReference.app":
+            run([str(ROOT / "scripts/verify-runtime-reference-app.sh"), str(bundle)])
+        destination = directory / bundle_name
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.move(bundle, destination)
+        for dependency in dependencies:
+            destination = directory / dependency.name
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            elif destination.exists():
+                destination.unlink()
+            shutil.move(dependency, destination)
+
+
+def runtime_root(flags: list[str]) -> Path:
+    roots = set()
+    for file in outputs("@nuxie_runtime_release//:xcframework", flags):
+        for ancestor in file.parents:
+            if ancestor.name == "NuxieRuntime.xcframework":
+                roots.add(ancestor)
+                break
+    if len(roots) != 1:
+        raise ValueError("Expected exactly one checksum-pinned runtime XCFramework")
+    return roots.pop()
+
+
+def runtime_slice(runtime: Path, sdk_platform: str, architectures: list[str]) -> dict:
+    available = plistlib.loads((runtime / "Info.plist").read_bytes())["AvailableLibraries"]
+    platform_name = "macos" if sdk_platform == "macos" else "ios"
+    variant = "simulator" if sdk_platform == "ios-simulator" else ""
+    libraries = [library for library in available
+                 if library["SupportedPlatform"] == platform_name
+                 and library.get("SupportedPlatformVariant", "") == variant
+                 and set(architectures).issubset(library["SupportedArchitectures"])]
+    if len(libraries) != 1:
+        raise ValueError("The pinned runtime must contain exactly one compatible SDK platform slice")
+    return libraries[0]
+
+
+def stage_framework_dependencies(target: str, flags: list[str], sdk_platform: str, stage: Path) -> list[Path]:
+    """Retain the exact Swift/C imports needed to load the compiled framework."""
+    files = outputs(f'filter("^//:NuxieRuntime$", deps(//:{target}))', flags)
+    modules = [source for source in files if source.name == "NuxieRuntime.swiftmodule"]
+    if len(modules) != 1 or not modules[0].is_file():
+        raise ValueError("The built SDK framework requires its configured NuxieRuntime Swift module")
+    dependencies = []
+    for source in files:
+        if source.suffix in {".swiftmodule", ".swiftdoc", ".swiftsourceinfo", ".swiftinterface"}:
+            destination = stage / source.name
+            shutil.copy2(source, destination)
+            dependencies.append(destination)
+    runtime = runtime_root(flags)
+    library = runtime_slice(runtime, sdk_platform, [])
+    headers = runtime / library["LibraryIdentifier"] / library["HeadersPath"]
+    if not (headers / "module.modulemap").is_file():
+        raise ValueError("The pinned runtime slice must include its C ABI module map")
+    destination = stage / "runtime-headers"
+    shutil.copytree(headers, destination)
+    dependencies.append(destination)
+    return dependencies
+
+
+def test_options(args, sdk_platform):
+    flags = []
+    selectors = [args.test_filter] if args.test_filter else []
+    for flag in shlex.split(args.xcodebuild_test_flags or ""):
+        if flag.startswith("-only-testing:"):
+            selectors.append(flag.removeprefix("-only-testing:"))
+        elif flag != "-quiet":
+            raise ValueError("Unsupported Xcode test flag; use --test-filter for Bazel test selection")
+    if args.suite == "native-runtime" and not selectors:
+        selectors = ["NuxieSDKUnitTests/" + name for name in (
+            "NuxieNativeRuntimeTests", "ExperienceInteractiveScreenTests", "ExperienceRuntimePresentationLoopTests")]
+    if selectors:
+        flags.append("--test_filter=" + ",".join(selectors))
+    if sdk_platform != "macos":
+        destination = dict(item.split("=", 1) for item in (args.destination or "").split(",") if "=" in item)
+        device = args.simulator_device or destination.get("name")
+        version = args.simulator_os or destination.get("OS")
+        if "id" in destination:
+            devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"], text=True))["devices"]
+            matches = [(runtime, device) for runtime, values in devices.items() for device in values if device.get("udid") == destination["id"]]
+            if len(matches) != 1:
+                raise ValueError("The selected simulator is unavailable")
+            runtime, selected = matches[0]
+            device = selected["name"]
+            version = runtime.split(".iOS-", 1)[1].replace("-", ".")
+        if device:
+            flags.append("--ios_simulator_device=" + device)
+        if version:
+            flags.append("--ios_simulator_version=" + version)
+    flags += ["--test_env=" + key for key in sorted(os.environ) if key.startswith("NUXIE_E2E_")]
+    if "NUXIE_STOREKIT_REQUIRE_AVAILABLE" in os.environ:
+        flags.append("--test_env=NUXIE_STOREKIT_REQUIRE_AVAILABLE=" + os.environ["NUXIE_STOREKIT_REQUIRE_AVAILABLE"])
+    return flags
 
 
 def sha256(path: Path) -> str:
@@ -167,16 +309,7 @@ def merge_framework(source: Path, destination: Path) -> None:
 def runtime_dependencies(directory: Path, sdk_platform: str, architectures: list[str]) -> dict:
     """Select compile/link inputs from the actual XCFramework slice metadata."""
     runtime = directory / "runtime/NuxieRuntime.xcframework"
-    available = plistlib.loads((runtime / "Info.plist").read_bytes())["AvailableLibraries"]
-    platform_name = "macos" if sdk_platform == "macos" else "ios"
-    variant = "simulator" if sdk_platform == "ios-simulator" else ""
-    libraries = [library for library in available
-                 if library["SupportedPlatform"] == platform_name
-                 and library.get("SupportedPlatformVariant", "") == variant
-                 and set(architectures).issubset(library["SupportedArchitectures"])]
-    if len(libraries) != 1:
-        raise ValueError("The pinned runtime must contain exactly one compatible SDK platform slice")
-    library = libraries[0]
+    library = runtime_slice(runtime, sdk_platform, architectures)
     slice_path = runtime / library["LibraryIdentifier"]
     native_archive = slice_path / library["LibraryPath"]
     headers = slice_path / library["HeadersPath"]
@@ -247,12 +380,15 @@ def prepare(args: argparse.Namespace) -> None:
         stage = Path(temporary) / "products"
         stage.mkdir()
         for sdk_platform in args.platform or PLATFORMS:
+            architectures = getattr(args, "architecture", None) or list(PLATFORMS[sdk_platform])
+            if len(architectures) != len(set(architectures)) or any(architecture not in PLATFORMS[sdk_platform] for architecture in architectures):
+                raise ValueError("Select unique architectures supported by each requested SDK platform")
             target = "NuxieSDKMac" if sdk_platform == "macos" else "NuxieSDK"
             product = {"platform": sdk_platform, "configuration": args.configuration,
                        "framework": f"{sdk_platform}/{args.configuration}/Nuxie.framework", "module": "Nuxie",
-                       "architectures": list(PLATFORMS[sdk_platform]), "staticLibraries": [], "swiftModules": [],
+                       "architectures": architectures, "staticLibraries": [], "swiftModules": [],
                        "swiftHeaders": [], "swiftDependencies": ["NuxieRuntime"], "resourceBundles": []}
-            for architecture in PLATFORMS[sdk_platform]:
+            for architecture in architectures:
                 flags = options(args.configuration, sdk_platform, architecture)
                 run(bazel_command() + ["build", *flags, "//:" + target])
                 with tempfile.TemporaryDirectory(prefix="framework-", dir=temporary) as extracted:
@@ -287,16 +423,7 @@ def prepare(args: argparse.Namespace) -> None:
             products.append(product)
             if sdk_platform != "macos":
                 run([str(ROOT / "scripts/verify-customer-framework.sh"), str(stage / product["framework"])])
-        runtime_files = outputs("@nuxie_runtime_release//:xcframework", flags)
-        runtime_roots = set()
-        for file in runtime_files:
-            for ancestor in file.parents:
-                if ancestor.name == "NuxieRuntime.xcframework":
-                    runtime_roots.add(ancestor)
-                    break
-        if len(runtime_roots) != 1:
-            raise ValueError("Expected exactly one checksum-pinned runtime XCFramework")
-        shutil.copytree(runtime_roots.pop(), stage / "runtime/NuxieRuntime.xcframework", symlinks=True)
+        shutil.copytree(runtime_root(flags), stage / "runtime/NuxieRuntime.xcframework", symlinks=True)
         for product in products:
             product["nativeDependencies"] = [runtime_dependencies(stage, product["platform"], product["architectures"])]
         licenses = stage / "licenses"
@@ -330,13 +457,17 @@ def main() -> None:
         sub.add_argument("--platform", choices=PLATFORMS, action="append")
         if command in ("prepare", "plan"):
             sub.add_argument("--output", required=command == "prepare")
+            sub.add_argument("--architecture", choices=("arm64", "x86_64"), action="append")
             if command == "prepare":
                 sub.add_argument("--allow-dirty", action="store_true", help="Prepare development artifacts with dirty state and source digest")
         elif command == "test":
             sub.add_argument("--suite", choices=[*SUITES, "all"], default="all")
+            sub.add_argument("--scheme", choices=SCHEMES)
             sub.add_argument("--test-filter")
             sub.add_argument("--simulator-device")
             sub.add_argument("--simulator-os")
+            sub.add_argument("--destination")
+            sub.add_argument("--xcodebuild-test-flags")
         else:
             sub.add_argument("targets", nargs="*")
     args = parser.parse_args()
@@ -347,8 +478,21 @@ def main() -> None:
             prepare(args)
         elif args.command == "plan":
             print(json.dumps({"configuration": args.configuration, "platforms": args.platform or list(PLATFORMS),
+                              "architectures": {name: args.architecture or list(PLATFORMS[name]) for name in args.platform or PLATFORMS},
                               "runtime": json.loads((ROOT / "Runtime/artifact.json").read_text())}, indent=2))
         else:
+            if args.command == "test" and args.scheme:
+                args.suite = SCHEMES[args.scheme]
+            if args.command == "test" and args.suite == "all":
+                if args.platform:
+                    parser.error("Use an explicit test suite when selecting one platform")
+                for suite in ("unit", "native-runtime", "hosted-input", "integration", "macos-unit"):
+                    sdk_platform = "macos" if suite == "macos-unit" else "ios-simulator"
+                    architecture = "arm64" if platform.machine() == "arm64" else "x86_64"
+                    args.suite = suite
+                    flags = options(args.configuration, sdk_platform, architecture) + test_options(args, sdk_platform)
+                    run(bazel_command() + ["test", *flags, *SUITES[suite]])
+                return
             sdk_platform = (args.platform or ["macos" if args.command == "test" and args.suite == "macos-unit" else "ios-simulator"])[0]
             if args.platform and len(args.platform) != 1:
                 parser.error("build/test select one platform; prepare supports multiple platforms")
@@ -357,18 +501,12 @@ def main() -> None:
             if args.command == "build":
                 targets = args.targets or ["//:sdk_macos" if sdk_platform == "macos" else "//:sdk"]
             else:
-                targets = ["//:sdk_tests", "//:NuxieSDKMacUnitTests"] if args.suite == "all" else SUITES[args.suite]
-                selected = args.test_filter
-                if args.suite == "native-runtime" and not selected:
-                    selected = ",".join("NuxieSDKUnitTests/" + name for name in (
-                        "NuxieNativeRuntimeTests", "ExperienceInteractiveScreenTests", "ExperienceRuntimePresentationLoopTests"))
-                if selected:
-                    flags.append("--test_filter=" + selected)
-                if args.simulator_device:
-                    flags.append("--ios_simulator_device=" + args.simulator_device)
-                if args.simulator_os:
-                    flags.append("--ios_simulator_version=" + args.simulator_os)
+                targets = SUITES[args.suite]
+                flags += test_options(args, sdk_platform)
             run(bazel_command() + [args.command, *flags, *targets])
+            if args.command == "build":
+                for target in targets:
+                    publish_build(target, flags, sdk_platform, args.configuration)
     except (ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + "\n")
 

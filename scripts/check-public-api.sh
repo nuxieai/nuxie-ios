@@ -32,16 +32,17 @@ extract_platform() {
   sdk_path="$(xcrun --sdk "$sdk_name" --show-sdk-path)"
   if [[ "$name" == "macos" ]]; then
     make build-macos >&2
-    bin_path="$repo_root/DerivedData/Build/Products/Debug"
+    bin_path="$repo_root/.bazel-artifacts/build/macos/Debug"
   else
     make build-ios-device >&2
-    bin_path="$repo_root/DerivedData/Build/Products/Release-iphoneos"
+    bin_path="$repo_root/.bazel-artifacts/build/ios-device/Release"
   fi
   xcrun swift-api-digester \
     -dump-sdk \
     -module Nuxie \
     -F "$bin_path" \
     -I "$bin_path" \
+    -I "$bin_path/runtime-headers" \
     -target "$target" \
     -sdk "$sdk_path" \
     -o "$digest" \
@@ -64,6 +65,7 @@ extract_platform() {
       -module Nuxie \
       -F "$bin_path" \
       -I "$bin_path" \
+      -I "$bin_path/runtime-headers" \
       -target "$target" \
       -sdk "$sdk_path" \
       -swift-only \
