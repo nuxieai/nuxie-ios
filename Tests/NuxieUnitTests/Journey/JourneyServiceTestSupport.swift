@@ -98,6 +98,7 @@ actor JourneyNthRoutedCaptureGate {
     private let eventName: String
     private let suspendedCall: Int
     private var count = 0
+    private var released = false
     private var continuation: CheckedContinuation<Void, Never>?
 
     init(eventName: String, suspendedCall: Int) {
@@ -108,7 +109,7 @@ actor JourneyNthRoutedCaptureGate {
     func intercept(event: String) async {
         guard event == eventName else { return }
         count += 1
-        guard count == suspendedCall else { return }
+        guard count == suspendedCall, !released else { return }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
@@ -118,6 +119,7 @@ actor JourneyNthRoutedCaptureGate {
     func isSuspended() -> Bool { continuation != nil }
 
     func release() {
+        released = true
         continuation?.resume()
         continuation = nil
     }

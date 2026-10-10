@@ -6,6 +6,20 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyNativeRunValuesTests: JourneyTestCase {
+    func testNativeReadGateRetainsAnEarlyRelease() async {
+        let gate = JourneyNthRoutedCaptureGate(eventName: "native", suspendedCall: 1)
+        await gate.release()
+        let finished = expectation(description: "An already released native read cannot park")
+        let read = Task {
+            await gate.intercept(event: "native")
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 3)
+        // Unblock the red implementation after recording the failed oracle.
+        await gate.release()
+        await read.value
+    }
+
     func testLiveFormAnswerObservationReadsWithoutSavingOrCreatingRunValues() async throws {
         try await verifyLiveFormAnswerObservation(retireNativeSession: false)
     }
