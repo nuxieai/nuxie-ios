@@ -38,6 +38,16 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
     }
 
     @MainActor
+    func testDismissedLifecycleRouteRetainsPendingPurchase() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true, lifecycleRoute: SystemEventNames.screenDismissed)
+    }
+
+    @MainActor
+    func testShownLifecycleRouteRetainsPendingPurchase() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true, lifecycleRoute: SystemEventNames.screenShown)
+    }
+
+    @MainActor
     func testSettledClosedPurchaseDoesNotCloseALaterCancelledPurchase() async throws {
         try await checkDismissal(commerce: "purchase", pendingClose: true, secondPurchase: true)
     }
@@ -112,7 +122,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
 
     @MainActor
     private func checkDismissal(commerce: String?, retryOutcome: String? = nil, pendingClose: Bool = false,
-        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false, secondPurchase: Bool = false, realEventRouting: Bool = false, failReportJournalWrite: Bool = false, deferralRace: String? = nil) async throws {
+        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false, secondPurchase: Bool = false, realEventRouting: Bool = false, failReportJournalWrite: Bool = false, deferralRace: String? = nil, lifecycleRoute: String? = nil) async throws {
         struct Corpus: Decodable {
             struct Vector: Decodable { let name, outcome: String; let reports: Int }
             let cases: [Vector]
@@ -155,8 +165,13 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             .init(kind: .action, id: "close", action: ["type": .string("dismiss"), "reason": .string("author_closed")], outlets: [:], outcome: nil),
         ], routes: [
             .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "buy", entryStepId: "commerce"),
-            .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "close", entryStepId: "close_marker")
+            .init(host: .init(kind: .screen, screenId: lifecycleRoute == SystemEventNames.screenShown ? "screen_thanks" : "screen_welcome"), eventName: lifecycleRoute ?? "close", entryStepId: "close_marker")
         ])
+        if lifecycleRoute == SystemEventNames.screenShown {
+            let leg = try XCTUnwrap(snapshot.releasesByDigest.values.first).descriptor.leg
+            snapshot = replacing(snapshot, screens: leg.screens + [
+                .init(id: "screen_thanks", defaultViewModelName: nil, defaultInstanceId: nil, responseCaptures: [])])
+        }
         if type == "purchase" {
             let leg = try XCTUnwrap(snapshot.releasesByDigest.values.first).descriptor.leg
             snapshot = replacing(snapshot,
@@ -395,7 +410,16 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     XCTAssertTrue(suspended)
                 }
                 let closeTask = Task { @MainActor in
-                    await controller.runtimeDelegate?.experienceViewController(controller,
+                    if lifecycleRoute == SystemEventNames.screenShown {
+                        await controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen_thanks")
+                        return Optional(true)
+                    }
+                    if lifecycleRoute == SystemEventNames.screenDismissed {
+                        await controller.runtimeDelegate?.experienceViewController(controller,
+                            didDismissScreen: "screen_welcome", revealingScreenId: nil, method: "user")
+                        return Optional(true)
+                    }
+                    return await controller.runtimeDelegate?.experienceViewController(controller,
                         didEmitScreenEmissionBatch: close, frameSources: nil)
                 }
                 if holdClosePublication {
