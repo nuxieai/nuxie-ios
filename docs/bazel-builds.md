@@ -56,6 +56,11 @@ Swift target directly, and the authored tests stay unchanged.
 App archives use the authored bundle name; the original public application
 target labels remain available as aliases.
 
+Hosted suites retain the pinned `xctestrunner` and their original app execution
+context. A declared patch handles XCResult activity arrays with no values,
+including expected failures. `make bazel-contract-test` exercises the real
+runner decoder with empty and populated attachment records.
+
 Debug uses Swift's debug configuration; Release uses its optimized
 configuration. Both retain Swift 5 language mode, the supported iOS 15/macOS 12
 deployment targets, and the SDK/runtime strict concurrency checks. XcodeGen's

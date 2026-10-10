@@ -1,2 +1,12 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
 package(default_visibility = ["//visibility:public"])
-exports_files(["Package.swift", "Info.plist", "NuxieBundle.swift", "runtime.bzl", "sdk.bzl", "app-plist.py", "map-test-sources.py"])
+exports_files(["Package.swift", "Info.plist", "NuxieBundle.swift", "runtime.bzl", "sdk.bzl", "app-plist.py", "map-test-sources.py", "xctestrunner-empty-activities.patch"])
+
+py_test(
+    name = "xcresult_test",
+    size = "small",
+    srcs = ["xcresult-regression.py"],
+    main = "xcresult-regression.py",
+    data = ["@nuxie_xctestrunner//:for_bazel_tests"],
+)
