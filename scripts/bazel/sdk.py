@@ -10,6 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import plistlib
+import re
 import shutil
 import shlex
 import stat
@@ -234,7 +235,17 @@ def test_options(args, sdk_platform):
         selectors = ["NuxieSDKUnitTests/" + name for name in (
             "NuxieNativeRuntimeTests", "ExperienceInteractiveScreenTests", "ExperienceRuntimePresentationLoopTests")]
     if selectors:
-        flags.append("--test_filter=" + ",".join(selectors))
+        # Xcode accepts Target/Class[/method]; xctestrunner passes the filter
+        # directly to XCTest, which identifies Swift classes as Module.Class.
+        identifiers = []
+        modules = {label.removeprefix("//:") for labels in SUITES.values() for label in labels}
+        for selector in ",".join(selectors).split(","):
+            excluded = selector.startswith("-")
+            parts = selector.removeprefix("-").split("/")
+            if len(parts) > 1 and parts[0] in modules:
+                parts = [parts[0] + "." + parts[1], *parts[2:]]
+            identifiers.append(("-" if excluded else "") + "/".join(parts))
+        flags.append("--test_filter=" + ",".join(identifiers))
     if sdk_platform != "macos":
         destination = dict(item.split("=", 1) for item in (args.destination or "").split(",") if "=" in item)
         device = args.simulator_device or destination.get("name")
@@ -255,6 +266,20 @@ def test_options(args, sdk_platform):
     if "NUXIE_STOREKIT_REQUIRE_AVAILABLE" in os.environ:
         flags.append("--test_env=NUXIE_STOREKIT_REQUIRE_AVAILABLE=" + os.environ["NUXIE_STOREKIT_REQUIRE_AVAILABLE"])
     return flags
+
+
+def verify_test_results(labels: list[str]) -> None:
+    testlogs = Path(run(bazel_command() + ["info", "bazel-testlogs", "--noshow_progress"], capture=True))
+    if not testlogs.is_absolute():
+        raise ValueError("Bazel must report an absolute test log directory")
+    for label in labels:
+        package, name = label.removeprefix("//").split(":", 1)
+        log = testlogs / package / name / "test.log"
+        if not log.is_file():
+            raise ValueError(f"The XCTest test log is missing for {label}: {log}")
+        counts = [int(count) for count in re.findall(r"Executed (\d+) tests?\b", log.read_text())]
+        if not counts or max(counts) == 0:
+            raise ValueError(f"{label} executed no XCTest cases; check the test selector in {log}")
 
 
 def sha256(path: Path) -> str:
@@ -497,6 +522,7 @@ def main() -> None:
                     args.suite = suite
                     flags = options(args.configuration, sdk_platform, architecture) + test_options(args, sdk_platform)
                     run(bazel_command() + ["test", *flags, *SUITES[suite]])
+                    verify_test_results(SUITES[suite])
                 return
             sdk_platform = (args.platform or ["macos" if args.command == "test" and args.suite == "macos-unit" else "ios-simulator"])[0]
             if args.platform and len(args.platform) != 1:
@@ -509,6 +535,8 @@ def main() -> None:
                 targets = SUITES[args.suite]
                 flags += test_options(args, sdk_platform)
             run(bazel_command() + [args.command, *flags, *targets])
+            if args.command == "test":
+                verify_test_results(targets)
             if args.command == "build":
                 for target in targets:
                     publish_build(target, flags, sdk_platform, args.configuration)
