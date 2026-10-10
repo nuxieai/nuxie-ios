@@ -71,6 +71,11 @@ struct JourneyRun {
         let placementId: String?
     }
 
+    struct PendingCommerceOutcome: Codable, Sendable {
+        let effectId: String
+        let event: JourneyControlExecutor.Event
+    }
+
     let journeyId: String
     let generation: Int
     let reference: ArmedJourney.Reference
@@ -93,6 +98,7 @@ struct JourneyRun {
     var effectReceipts: [String: String] = [:]
     var pendingCommerce: PendingCommerce? = nil
     var authoredCloseOutcome: String? = nil
+    var pendingCommerceOutcome: PendingCommerceOutcome? = nil
     /// Experiment decisions survive until a selected variant reaches a visible
     /// presentation. A stable event identity makes post-show reporting
     /// idempotent across retries and process recovery.
@@ -1002,6 +1008,22 @@ struct JourneyRunJournal {
         } ?? false
     }
 
+    /// Take durable ownership before acknowledging an outcome deferred by an authored route.
+    func deferPresentationCommerceOutcome(
+        _ id: String, stepId: String, effectId: String, event: JourneyControlExecutor.Event,
+        admission: JourneyCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state -> Bool in
+            guard var run = state.runs[id], run.completion == nil else { return false }
+            guard run.pendingCommerce.map({ $0.stepId == stepId && $0.effectId == effectId })
+                ?? (run.stepId == stepId && run.effectReceipts[stepId] == effectId) else { return false }
+            if let saved = run.pendingCommerceOutcome { return saved.effectId == effectId }
+            run.pendingCommerceOutcome = .init(effectId: effectId, event: event)
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
     /// Consume one correlated terminal result and restore its original route context.
     func settlePresentationCommerce(
         _ id: String, stepId: String, effectId: String, nextStepId: String?,
@@ -1014,6 +1036,8 @@ struct JourneyRunJournal {
                 ?? (run.stepId == stepId && run.effectReceipts[stepId] == effectId) else { return nil }
             run.effectReceipts.removeValue(forKey: stepId)
             run.pendingCommerce = nil
+            run.authoredCloseOutcome = nil
+            run.pendingCommerceOutcome = nil
             if let nextStepId {
                 run.effectReceipts.removeValue(forKey: run.stepId)
                 run.stepId = nextStepId
@@ -1282,6 +1306,7 @@ struct JourneyRunJournal {
         run.pendingPresentationPublication = nil
         run.pendingCommerce = nil
         run.authoredCloseOutcome = nil
+        run.pendingCommerceOutcome = nil
         run.completion = .init(outcome: outcome, at: at)
     }
 
@@ -1398,6 +1423,7 @@ extension JourneyRun: Codable, Sendable {
         case effectReceipts
         case pendingCommerce
         case authoredCloseOutcome
+        case pendingCommerceOutcome
         case experimentExposures
         case pendingPresentationPublication
         case completion
@@ -1446,6 +1472,7 @@ extension JourneyRun: Codable, Sendable {
         )
         pendingCommerce = try container.decodeIfPresent(PendingCommerce.self, forKey: .pendingCommerce)
         authoredCloseOutcome = try container.decodeIfPresent(String.self, forKey: .authoredCloseOutcome)
+        pendingCommerceOutcome = try container.decodeIfPresent(PendingCommerceOutcome.self, forKey: .pendingCommerceOutcome)
         experimentExposures = try container.decode(
             [ExperimentExposure].self,
             forKey: .experimentExposures
@@ -1481,6 +1508,7 @@ extension JourneyRun: Codable, Sendable {
         try container.encode(effectReceipts, forKey: .effectReceipts)
         try container.encodeIfPresent(pendingCommerce, forKey: .pendingCommerce)
         try container.encodeIfPresent(authoredCloseOutcome, forKey: .authoredCloseOutcome)
+        try container.encodeIfPresent(pendingCommerceOutcome, forKey: .pendingCommerceOutcome)
         try container.encode(experimentExposures, forKey: .experimentExposures)
         try container.encodeIfPresent(
             pendingPresentationPublication,
