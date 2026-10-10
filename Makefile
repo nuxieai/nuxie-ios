@@ -26,6 +26,7 @@ DEFAULT_SIMULATOR_NAME := $(shell \
 			in_ver && /^[[:space:]]+iPhone / { \
 				name = $$0; \
 				sub(/^[[:space:]]+/, "", name); \
+				sub(/[[:space:]]+$$/, "", name); \
 				sub(/ \([^)]+\) \((Shutdown|Booted)\)$$/, "", name); \
 				print name; \
 				exit \
