@@ -145,11 +145,18 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         func settle() async throws {
             controller.advance(delta: 0.016)
             let deadline = Date().addingTimeInterval(5)
-            while !controller.hasCompletedLatestFrame, Date() < deadline {
+            // Delivery can enqueue native editing work. This predicate also waits
+            // for that work and its next presented frame to drain.
+            while !controller.hasDeliveredLatestSemanticFrame, Date() < deadline {
+                if controller.hasCompletedLatestFrame {
+                    controller.advance(delta: 0.016)
+                }
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
             if let failure = probe.failure { throw failure }
             XCTAssertTrue(controller.hasCompletedLatestFrame)
+            XCTAssertTrue(controller.hasDeliveredLatestSemanticFrame,
+                "Read only after semantic delivery and its queued editing work have settled")
         }
         func findField(_ view: UIView) -> UITextField? {
             (view as? UITextField) ?? view.subviews.lazy.compactMap { findField($0) }.first
