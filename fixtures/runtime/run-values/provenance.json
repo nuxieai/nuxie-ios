@@ -1,27 +1,57 @@
 {
-  "superprojectCommit": "97d23aae674d8035ffda773cefdf936f85a1ea46",
-  "publisherSourceCommit": "97d23aae674d8035ffda773cefdf936f85a1ea46",
-  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
-  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
-  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
+  "sourceCommit": "1b558a2cb6b4bd4b5fd493f3f8c9752bf06d1bdc",
+  "compilerBaseCommit": "020ffb241c3664a8afdcc5453991dea9381c64ce",
   "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "sha256": "e25f18da6205712aee0efb6e779094cb9bd133a662cfae8184b6535ab1ff2e08",
-  "sizeBytes": 5353,
-  "publisherWasmSha256": "2f3e64c33ad2858af55a3cb7822bba02c0384ff5688c3ccf849aed4cc99e629f",
-  "authorityWasmSha256": "1511d8dcb9e6a88222c3711d925716cbd4768e60df12517b2f2dc7fb65997353",
-  "qualification": "First cut. Real publisher; C8 first-advanced-frame semantic values and C9 real pointer/shared values/native continue event pass. Platform pixels and released-Experience admission remain separate. Non-visibility focus/semantic-listener additions are documented in NOTES.md.",
+  "worktree": "/Users/levi/dev/nuxie-codex/codex-f4-device-screen",
+  "target": "/Users/levi/dev/nuxie-codex/codex-preview-tool/tools/nuxie-editor/target",
+  "publisherWasm": {
+    "sha256": "b689ed61eabaabeb50329e2d980b5600dc7d5588ef3bb0c1b8fc69eafbfd445f",
+    "sizeBytes": 17489751
+  },
+  "authorityWasm": {
+    "sha256": "4c23f90816ee256e811717fe6b5db14aea1eec260d3520ddfc97117a9da4b6be",
+    "sizeBytes": 23690399
+  },
+  "fonts": [
+    {
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "authoredAssetId": 0,
+      "family": "System",
+      "kind": "font",
+      "location": "system",
+      "required": true,
+      "style": "normal",
+      "weight": "400"
+    }
+  ],
   "files": {
     "NOTES.md": {
-      "sha256": "94efac5560740d5d90792d51a3515a461b2f9de5aca9fd7cc9c2f795b07410f7",
-      "sizeBytes": 8058
+      "sha256": "34d46e8f81509a0a8d6a0f17f139b73095040b6e95eea8d3a0e1848cee8056be",
+      "sizeBytes": 5026
+    },
+    "env-schema.json": {
+      "sha256": "38b4d40b59ff1ca45e7f73225c33249134f0ab0ca1c8a8b23e454decbe10ca6b",
+      "sizeBytes": 661
     },
     "expectations.json": {
-      "sha256": "cccc1749bf5852e7b8b3339a18da0cec3face0b2f0f96f6db497318bd525ece5",
-      "sizeBytes": 829
+      "sha256": "41e23bc48961ba88ecf113ffb3bc7d134593c0ff7cf371ea92b08e807ea0318d",
+      "sizeBytes": 1850
+    },
+    "profile-entry.json": {
+      "sha256": "18f1db0cc057b3ab2629ddd59dd3259a17e6bc3368f1ee78db470dba8443310c",
+      "sizeBytes": 13621
+    },
+    "release.json": {
+      "sha256": "1593df4c1dcdb7a6dc63701f262e6beee5b688f53cf7b2ace3d0746a42104dde",
+      "sizeBytes": 9566
+    },
+    "renders/sha256/4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb.nux": {
+      "sha256": "4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb",
+      "sizeBytes": 10855
     },
     "screen.riv": {
-      "sha256": "e25f18da6205712aee0efb6e779094cb9bd133a662cfae8184b6535ab1ff2e08",
-      "sizeBytes": 5353
+      "sha256": "4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb",
+      "sizeBytes": 10855
     },
     "source/components/answer-card/frame.json": {
       "sha256": "b74869099b375140a2b450ae8513d16513568910925a2cec6f77c27af85bc021",
@@ -31,17 +61,37 @@
       "sha256": "4b3df10edc18fbfe06253e0fc343da5f80423abb561b3fc12b908b09f387806c",
       "sizeBytes": 112
     },
+    "source/components/motion-note/frame.json": {
+      "sha256": "de1e91e32e74e4d1b6bca31f050859148a8b630bf09021b3079f81e49b6e8b1c",
+      "sizeBytes": 87
+    },
+    "source/components/motion-note/index.html": {
+      "sha256": "d7379f71a268b8108dff48ddd8217907cdd38c97acf18b19ae837a6945a5c94c",
+      "sizeBytes": 83
+    },
     "source/experience.json": {
-      "sha256": "fe1c7b3ed7b72f89117c89207a8d3b310bc771aef986123ae159167452a3741b",
-      "sizeBytes": 527
+      "sha256": "a8560b934e134878047e8a3b710f2f7216e9d883e9df210a77a222c0eb77dcdc",
+      "sizeBytes": 843
+    },
+    "source/screens/device/frame.json": {
+      "sha256": "cf54c14a85f859cfaaf1a421f7e0d554039be1a8e34ddecbc9fdb1cefb25758f",
+      "sizeBytes": 86
+    },
+    "source/screens/device/index.html": {
+      "sha256": "c9b938117f1f19d6131c76bae0b5ce9c1f745581484eb29ffdcc55135e8a7868",
+      "sizeBytes": 323
+    },
+    "source/screens/device/style.css": {
+      "sha256": "035e718541a64c241ff44c19a7828e8bc47976b9c2f7f8af668b352ef34cc9b9",
+      "sizeBytes": 102
     },
     "source/screens/level/frame.json": {
-      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
-      "sizeBytes": 100
+      "sha256": "d8c3a8e2fe9f63cb57a7d673110228861a1a11edce2e581ffa7571a2b0be93bf",
+      "sizeBytes": 137
     },
     "source/screens/level/index.html": {
-      "sha256": "3a5261b715dd5c6c8490b61f8553bea4b03c82d01d45abde582e53a62d2a4c6b",
-      "sizeBytes": 251
+      "sha256": "7d2b34ca06afe90da611e7b3b5326d672015b1a99cb2cbd8182d5822e098908b",
+      "sizeBytes": 308
     },
     "source/screens/tap/frame.json": {
       "sha256": "d8c3a8e2fe9f63cb57a7d673110228861a1a11edce2e581ffa7571a2b0be93bf",
@@ -52,15 +102,5 @@
       "sizeBytes": 218
     }
   },
-  "fonts": [
-    {
-      "location": "system",
-      "family": "System",
-      "weight": "400",
-      "style": "normal",
-      "authoredAssetId": 0,
-      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
-      "required": true
-    }
-  ]
+  "compilerFixCommit": "d9c4e168a49fd029e6aa9aaebb670f37feaecaa8"
 }

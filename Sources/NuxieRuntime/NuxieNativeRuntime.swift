@@ -556,6 +556,7 @@ package actor NuxieNativePreparedFile {
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let bytes: Data
     private let importMode: NuxieNativeImportMode
+    private let valuePolicy: NuxieNativeValuePolicy
     private let preparedArtboards: [NuxieNativeArtboardInfo]
     private let preparedCatalog: NuxieNativeViewModelCatalog
     private var fileImportCount = 1
@@ -565,19 +566,22 @@ package actor NuxieNativePreparedFile {
         executor: NuxieRuntimePinnedThreadExecutor,
         bytes: Data,
         importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy,
         preparedArtboards: [NuxieNativeArtboardInfo],
         preparedCatalog: NuxieNativeViewModelCatalog
     ) {
         self.executor = executor
         self.bytes = bytes
         self.importMode = importMode
+        self.valuePolicy = valuePolicy
         self.preparedArtboards = preparedArtboards
         self.preparedCatalog = preparedCatalog
     }
 
     package static func prepare(
         bytes: Data,
-        importMode: NuxieNativeImportMode = .portable
+        importMode: NuxieNativeImportMode = .portable,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) async throws -> NuxieNativePreparedFile {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
@@ -593,7 +597,8 @@ package actor NuxieNativePreparedFile {
                         executor: executor,
                         renderer: renderer,
                         bytes: bytes,
-                        importMode: importMode
+                        importMode: importMode,
+                        valuePolicy: valuePolicy
                     )
                 } catch {
                     try? renderer.close()
@@ -615,6 +620,7 @@ package actor NuxieNativePreparedFile {
                 executor: executor,
                 bytes: bytes,
                 importMode: importMode,
+                valuePolicy: valuePolicy,
                 preparedArtboards: metadata.0,
                 preparedCatalog: metadata.1
             )
@@ -634,6 +640,7 @@ package actor NuxieNativePreparedFile {
         let executor = self.executor
         let bytes = self.bytes
         let importMode = self.importMode
+        let valuePolicy = self.valuePolicy
         fileImportCount += 1
         let state = try await executor.call {
             try NuxieNativeRuntimeState(
@@ -644,7 +651,8 @@ package actor NuxieNativePreparedFile {
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
                 bindDefaultViewModel: bindDefaultViewModel,
-                importMode: importMode
+                importMode: importMode,
+                valuePolicy: valuePolicy
             )
         }
         openedSessionCount += 1
@@ -656,7 +664,7 @@ package actor NuxieNativePreparedFile {
     }
 
     package nonisolated func hasSameBytes(as other: NuxieNativePreparedFile) -> Bool {
-        bytes == other.bytes
+        bytes == other.bytes && valuePolicy == other.valuePolicy
     }
 
     package func viewModelCatalog() -> NuxieNativeViewModelCatalog { preparedCatalog }
@@ -665,9 +673,10 @@ package actor NuxieNativePreparedFile {
         let executor = executor
         let bytes = bytes
         let importMode = importMode
+        let valuePolicy = valuePolicy
         let context = try await executor.call {
             try NuxieNativeFileContext(executor: executor, bytes: bytes,
-                importMode: importMode, pixelWidth: 1, pixelHeight: 1)
+                importMode: importMode, valuePolicy: valuePolicy, pixelWidth: 1, pixelHeight: 1)
         }
         fileImportCount += 1
         return NuxieNativeSessionGroup(preparedFile: self, executor: executor, context: context)
@@ -701,11 +710,19 @@ package actor NuxieNativeSessionGroup {
         self.context = context
     }
 
+    /// Deterministic FIFO interleavings for shared-session regression tests.
+    package func enqueueForTesting(_ operation: @escaping @Sendable () -> Void) {
+        executor.enqueue(operation)
+    }
+
+    package var queuedJobCountForTesting: Int { executor.queuedJobCountForTesting }
+
     package func retire() async throws {
         let context = context
         try await executor.call {
             let models = Array(context.sharedViewModels.values)
             context.sharedViewModels.removeAll()
+            context.globalViewModels.removeAll()
             var firstError: Error?
             for model in models {
                 do { try model.close() } catch { firstError = firstError ?? error }
@@ -798,11 +815,12 @@ private final class NuxieNativeFileContext: @unchecked Sendable {
     let renderer: NuxieNativeRendererHandle
     let executor: NuxieRuntimePinnedThreadExecutor
     var sharedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    var globalViewModels: [String: NuxieNativeViewModelReference] = [:]
     private var pixelWidth: UInt32
     private var pixelHeight: UInt32
 
     init(executor: NuxieRuntimePinnedThreadExecutor, bytes: Data,
-        importMode: NuxieNativeImportMode, pixelWidth: UInt32, pixelHeight: UInt32) throws {
+        importMode: NuxieNativeImportMode, valuePolicy: NuxieNativeValuePolicy, pixelWidth: UInt32, pixelHeight: UInt32) throws {
         self.executor = executor
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -810,7 +828,7 @@ private final class NuxieNativeFileContext: @unchecked Sendable {
             pixelWidth: pixelWidth, pixelHeight: pixelHeight)
         do {
             file = try NuxieNativeFileHandle(executor: executor, renderer: renderer,
-                bytes: bytes, importMode: importMode)
+                bytes: bytes, importMode: importMode, valuePolicy: valuePolicy)
         } catch {
             try? renderer.close()
             throw error
@@ -983,6 +1001,25 @@ package actor NuxieNativeRuntime {
         }
     }
 
+    /// Freeze event-source values before another session can run on this file's lane.
+    package func stepWithSnapshot(
+        inputs: [NuxieNativePlayerInput] = [],
+        pointers: [NuxieNativePointerEvent] = [],
+        focusInputs: [NuxieNativeFocusInput] = [],
+        elapsedSeconds: Float,
+        correlationID: UInt64 = 0,
+        textRunNames: [String] = []
+    ) async throws -> (result: NuxieNativePlayerStepResult, snapshot: NuxieNativeViewModelSnapshot?) {
+        let state = try requireState()
+        return try await executor.call {
+            let result = try state.step(inputs: inputs, pointers: pointers, focusInputs: focusInputs,
+                elapsedSeconds: elapsedSeconds, correlationID: correlationID, textRunNames: textRunNames)
+            // Snapshot failure must not discard effects already committed by the step.
+            let snapshot = try? state.viewModel?.snapshot()
+            return (result, snapshot)
+        }
+    }
+
     package func snapshot() async throws -> NuxieNativeViewModelSnapshot {
         let state = try requireState()
         guard let viewModel = state.viewModel else {
@@ -991,9 +1028,20 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try viewModel.snapshot() }
     }
 
+    package func snapshot(_ reference: NuxieNativeViewModelReference) async throws -> NuxieNativeViewModelSnapshot {
+        let state = try requireState()
+        return try await executor.call { try state.snapshot(reference) }
+    }
+
     package func rootViewModelReference() async throws -> NuxieNativeViewModelReference {
         let state = try requireState()
         return try await executor.call { try state.rootViewModelReference() }
+    }
+
+    /// Bind one file-authored global, shared by every session in this file group.
+    package func bindGlobalViewModel(named name: String) async throws -> NuxieNativeViewModelReference? {
+        let state = try requireState()
+        return try await executor.call { try state.bindGlobalViewModel(named: name) }
     }
 
     package func makeViewModel(
@@ -1006,6 +1054,17 @@ package actor NuxieNativeRuntime {
                 schemaIndex: schemaIndex,
                 authoredInstanceIndex: authoredInstanceIndex
             )
+        }
+    }
+
+    /// Retain a native list child without recreating its authored state.
+    package func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64) async throws -> NuxieNativeViewModelReference {
+        let state = try requireState()
+        let executor = self.executor
+        return try await executor.call {
+            try state.acquireListItem(owner: owner, path: path, index: index,
+                expectedIdentity: expectedIdentity, executor: executor)
         }
     }
 
@@ -1125,6 +1184,20 @@ package actor NuxieNativeRuntime {
         readback: NuxieNativeFrameReadback? = nil,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> NuxieNativeRendererOutcome {
+        try await renderFrame(layoutScaleFactor: layoutScaleFactor, drawable: drawable,
+            clearColor: clearColor, readback: readback, completion: completion).outcome
+    }
+
+    /// The shared file's writes cannot invalidate the frame between presentation and capture.
+    package func renderFrame(
+        layoutScaleFactor: Float,
+        drawable: NuxieNativeDrawableState,
+        clearColor: UInt32 = 0,
+        readback: NuxieNativeFrameReadback? = nil,
+        capturesSemantics: Bool = false,
+        nativeInputs: [String] = [],
+        completion: (@Sendable () -> Void)? = nil
+    ) async throws -> (outcome: NuxieNativeRendererOutcome, semantics: NuxieNativeSemanticCapture?) {
         let state: NuxieNativeRuntimeState
         do {
             state = try requireState()
@@ -1136,12 +1209,13 @@ package actor NuxieNativeRuntime {
             completion?()
             throw error
         }
+        let executor = self.executor
         return try await executor.call {
             do { try state.prepareRenderer() } catch {
                 completion?()
                 throw error
             }
-            return try state.renderer.render(
+            let outcome = try state.renderer.render(
                 player: state.player,
                 layoutScaleFactor: layoutScaleFactor,
                 drawable: drawable,
@@ -1149,6 +1223,9 @@ package actor NuxieNativeRuntime {
                 readback: readback,
                 completion: completion
             )
+            let semantics = capturesSemantics && outcome.disposition == .presented
+                ? try state.captureSemantics(executor: executor, textRuns: [], nativeInputs: nativeInputs) : nil
+            return (outcome, semantics)
         }
     }
 
@@ -1277,6 +1354,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     private var pixelWidth: UInt32
     private var pixelHeight: UInt32
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    private var globalViewModels: [String: NuxieNativeViewModelReference] = [:]
     private let focusPlayerIndex: Int?
     private var auxiliaryPlayersNeedInitialStep = true
     private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle,
@@ -1292,7 +1370,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         pixelWidth: UInt32,
         pixelHeight: UInt32,
         bindDefaultViewModel: Bool,
-        importMode: NuxieNativeImportMode
+        importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) throws {
         sharedContext = nil
         self.pixelWidth = pixelWidth
@@ -1308,7 +1387,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 executor: executor,
                 renderer: renderer,
                 bytes: bytes,
-                importMode: importMode
+                importMode: importMode,
+                valuePolicy: valuePolicy
             )
         } catch {
             try? renderer.close()
@@ -1754,6 +1834,37 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         return try viewModel.reference()
     }
 
+    func bindGlobalViewModel(named name: String) throws -> NuxieNativeViewModelReference? {
+        let catalog = try file.viewModelCatalog()
+        guard let schema = catalog.schemas.first(where: { $0.name == name && $0.isGlobal }) else { return nil }
+        let reference: NuxieNativeViewModelReference
+        let model: NuxieNativeViewModelHandle
+        if let sharedContext, let existing = sharedContext.globalViewModels[name] {
+            reference = existing
+            model = try sharedContext.resolve(existing)
+        } else if let existing = globalViewModels[name], let retained = retainedViewModels[existing.rawValue] {
+            reference = existing
+            model = retained
+        } else {
+            model = try file.makeViewModel(schemaIndex: schema.index,
+                authoredInstanceIndex: nil)
+            reference = try model.reference()
+            if let sharedContext {
+                sharedContext.sharedViewModels[reference.rawValue] = model
+                sharedContext.globalViewModels[name] = reference
+            } else {
+                retainedViewModels[reference.rawValue] = model
+                globalViewModels[name] = reference
+            }
+        }
+        for player in players where try player.info().kind == .stateMachine {
+            try requireOK(withStringView(name) {
+                nux_player_set_global_view_model(try player.require(), $0, try model.owned.require())
+            }, operation: "bind named global")
+        }
+        return reference
+    }
+
     func makeViewModel(
         schemaIndex: Int,
         authoredInstanceIndex: Int?
@@ -1771,6 +1882,45 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         retainedViewModels[reference.rawValue] = handle
         return reference
+    }
+
+    func snapshot(_ reference: NuxieNativeViewModelReference) throws -> NuxieNativeViewModelSnapshot {
+        if let viewModel, reference == (try viewModel.reference()) { return try viewModel.snapshot() }
+        guard let handle = retainedViewModels[reference.rawValue] ?? sharedContext?.sharedViewModels[reference.rawValue] else {
+            throw NuxieNativeRuntimeError.missingHandle("view model")
+        }
+        return try handle.snapshot()
+    }
+
+    func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64, executor: NuxieRuntimePinnedThreadExecutor) throws
+        -> NuxieNativeViewModelReference {
+        let root = try self.rootViewModelReference()
+        guard index >= 0, let handle = owner == root ? self.viewModel
+            : (self.retainedViewModels[owner.rawValue] ?? self.sharedContext?.sharedViewModels[owner.rawValue]) else {
+            throw NuxieNativeRuntimeError.missingHandle("list owner")
+        }
+        var pointer: OpaquePointer?
+        try requireOK(withStringView(path) {
+            nux_view_model_instance_list_item_acquire(try handle.owned.require(), $0, index, &pointer)
+        }, operation: "acquire product list child")
+        guard let pointer else { throw NuxieNativeRuntimeError.missingHandle("list child") }
+        let child = NuxieNativeViewModelHandle(executor: executor, handle: pointer)
+        do {
+            let reference = try child.reference()
+            guard reference.rawValue == expectedIdentity else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("list child changed since snapshot")
+            }
+            if self.retainedViewModels[reference.rawValue] != nil {
+                try child.close()
+            } else {
+                self.retainedViewModels[reference.rawValue] = child
+            }
+            return reference
+        } catch {
+            try? child.close()
+            throw error
+        }
     }
 
     func releaseViewModels(
@@ -2078,15 +2228,99 @@ private enum NuxieNativeAppleAssetImporter {
     }
 }
 
+/// Owns all strings and nested arrays for one synchronous install call.
+private final class NuxieNativeInstallStorage {
+    private var releases: [() -> Void] = []
+    deinit { for release in releases.reversed() { release() } }
+
+    func array<T>(_ values: [T]) -> UnsafePointer<T>? {
+        guard !values.isEmpty else { return nil }
+        let pointer = UnsafeMutablePointer<T>.allocate(capacity: values.count)
+        pointer.initialize(from: values, count: values.count)
+        releases.append { pointer.deinitialize(count: values.count); pointer.deallocate() }
+        return UnsafePointer(pointer)
+    }
+
+    func string(_ value: String) -> NuxStringView {
+        let bytes = value.utf8.map { CChar(bitPattern: $0) }
+        return NuxStringView(data: array(bytes), len: bytes.count)
+    }
+}
+
+func withNuxieNativeValueMarkers<T>(_ entries: [NuxieNativeValueMarker],
+    _ body: (UnsafePointer<NuxValueMarker>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { NuxValueMarker(model: storage.string($0.model),
+        value: storage.string($0.value), marker: storage.string($0.marker)) }
+    return try body(storage.array(values), values.count)
+}
+
+func withNuxieNativeValueRules<T>(_ entries: [NuxieNativeValueRule],
+    _ body: (UnsafePointer<NuxValueRule>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { entry in
+        NuxValueRule(model: storage.string(entry.model), property: storage.string(entry.property),
+            kind: entry.kind, mode: entry.mode, number_bound: entry.numberBound,
+            text: storage.string(entry.text), values: storage.array(entry.values.map(storage.string)),
+            value_count: entry.values.count, picked_property: storage.string(entry.pickedProperty),
+            bound_flags: entry.boundFlags, minimum: entry.minimum, maximum: entry.maximum,
+            code: storage.string(entry.code), message: storage.string(entry.message))
+    }
+    return try body(storage.array(values), values.count)
+}
+
+func withNuxieNativeRuleGroups<T>(_ entries: [NuxieNativeRuleGroup],
+    _ body: (UnsafePointer<NuxRuleGroup>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { entry in
+        let members = entry.members.map { member in
+            NuxRuleGroupMember(property: storage.string(member.property),
+                errors_path: storage.string(member.errorsPath), item_model: storage.string(member.itemModel),
+                code_property: storage.string(member.codeProperty), message_property: storage.string(member.messageProperty))
+        }
+        return NuxRuleGroup(model: storage.string(entry.model), valid: storage.string(entry.valid),
+            members: storage.array(members), member_count: members.count)
+    }
+    return try body(storage.array(values), values.count)
+}
+
 private final class NuxieNativeFileHandle: @unchecked Sendable {
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let owned: NuxieNativeOwnedHandle
+
+    func installValueMarkers(_ entries: [NuxieNativeValueMarker]) throws {
+        try withNuxieNativeValueMarkers(entries) { entries, count in
+            try requireOK(nux_file_set_value_markers(try owned.require(), entries, count), operation: "install value markers")
+        }
+    }
+
+    func installValueRules(_ entries: [NuxieNativeValueRule]) throws {
+        try withNuxieNativeValueRules(entries) { entries, count in
+            var result: OpaquePointer?
+            let status = nux_file_set_value_rules_with_result(try owned.require(), entries, count, &result)
+            if result != nil {
+                try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
+            } else {
+                try requireOK(status, operation: "install value rules")
+            }
+        }
+    }
+
+    func installRuleGroups(_ entries: [NuxieNativeRuleGroup]) throws {
+        try withNuxieNativeRuleGroups(entries) { entries, count in
+            try requireOK(nux_file_set_rule_groups(try owned.require(), entries, count), operation: "install rule groups")
+        }
+    }
 
     init(
         executor: NuxieRuntimePinnedThreadExecutor,
         renderer: NuxieNativeRendererHandle,
         bytes: Data,
-        importMode: NuxieNativeImportMode
+        importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) throws {
         let renderer = try renderer.require()
         var file: OpaquePointer?
@@ -2153,6 +2387,14 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
             executor: executor,
             free: nux_file_free
         )
+        do {
+            try installValueMarkers(valuePolicy.markers(in: viewModelCatalog()))
+            try installValueRules(valuePolicy.rules)
+            try installRuleGroups(valuePolicy.groups)
+        } catch {
+            try? owned.close()
+            throw error
+        }
     }
 
     func assets() throws -> [NuxieNativeFileAssetDescriptor] {

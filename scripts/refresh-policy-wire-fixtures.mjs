@@ -94,6 +94,10 @@ const refresh = (value, fixturePath) => {
     }
     if (descriptor.schemaVersion !== 'nuxie.journey-release.v3') migrateInputTable(descriptor, fixturePath);
     descriptor.schemaVersion = 'nuxie.journey-release.v3';
+    // Retained fixtures declare no native forms; compiled state remains catalog-owned.
+    descriptor.state ??= {};
+    descriptor.responses ??= {};
+    descriptor.ruleGroups ??= [];
     const bytes = Buffer.from(canonical(descriptor));
     const digest = createHash('sha256').update(bytes).digest('hex');
     replacements.set(value.descriptorSha256, digest);
@@ -106,7 +110,7 @@ const refresh = (value, fixturePath) => {
   }
   for (const [key, child] of Object.entries(value)) {
     if (child === 'nuxie.journey-plane-profile.v1') value[key] = 'nuxie.journey-plane-profile.v2';
-    else if (child === 'nuxie.journey-release.v1' || child === 'nuxie.journey-release.v2') value[key] = 'nuxie.journey-release.v3';
+    else if (key === 'schemaVersion' && (child === 'nuxie.journey-release.v1' || child === 'nuxie.journey-release.v2')) value[key] = 'nuxie.journey-release.v3';
     else refresh(child, fixturePath);
   }
 };
@@ -141,6 +145,17 @@ for (const { path, source, value } of documents) {
   if (!dryRun && encoded !== JSON.stringify(JSON.parse(source))) {
     writeFileSync(path, `${JSON.stringify(JSON.parse(encoded), null, 2)}\n`);
   }
+}
+// Published fixture manifests cover the re-signed envelopes as well as scene bytes.
+if (!dryRun) for (const { path, value } of documents) {
+  if (!path.endsWith('/provenance.json') || !value.files || Array.isArray(value.files)) continue;
+  const current = JSON.parse(readFileSync(path, 'utf8'));
+  for (const [name, record] of Object.entries(current.files)) {
+    const bytes = readFileSync(resolve(dirname(path), name));
+    record.sha256 = createHash('sha256').update(bytes).digest('hex');
+    record.sizeBytes = bytes.length;
+  }
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`);
 }
 if (!dryRun && migratedInputs.some(item => item.previousScene || item.fixturePath === 'fixtures/journeys/planes/release.json')) writeFileSync(resolve(root, 'fixtures/journeys/planes/release-v3-migration.json'), `${JSON.stringify(migratedInputs, null, 2)}\n`);
 console.log(JSON.stringify({ dryRun, verifiedEnvelopes: envelopes, migratedInputs }, null, 2));

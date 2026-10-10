@@ -26,6 +26,10 @@ struct ArmedJourney {
     struct Context {
         let event: ExactJSONObject<JourneyReleaseJSONValue>
         let responses: ExactJSONObject<JourneyReleaseJSONValue>
+        // Derived from native answers for evaluation, never restored from the journal.
+        var formAnswers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>> = [:]
+
+        private enum CodingKeys: String, CodingKey { case event, responses }
     }
     let reference: Reference
     let binding: Binding

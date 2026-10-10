@@ -3,7 +3,8 @@
   "property": "experience",
   "screens": [
     "tap",
-    "level"
+    "level",
+    "device"
   ],
   "startingValues": {
     "trip_days": 23,
@@ -18,13 +19,75 @@
     "inputDefault": 0,
     "tickValue": 1,
     "noTickValue": 0,
-    "tickText": "Tick"
+    "tickText": "Tick",
+    "nextLabel": "Next"
   },
-  "qualification": "C8 first cut proves connected values, not platform pixels. Component copies may draw about one pixel high until UNIV-3966. Platform proof of the tick on the first drawn frame waits for republishing after that fix. Source text includes Days as a binding fallback, Continue, and Tick.",
+  "qualification": "Release v3 with tap, level and device. Platform first-frame rendering remains a platform check.",
   "notYetIncluded": [
-    "device screen and device values schema file (C5)",
+    "the six other device values (width, height, fontScale, colorScheme, platform, locale) [D2.51], after the merge (Levi's M7)",
     "empty screen and tips_seen (C6, C7)",
-    "release.json (C10)",
     "Journey branches"
-  ]
+  ],
+  "release": {
+    "schemaVersion": "nuxie.journey-release.v3",
+    "state": {
+      "trip_days": {
+        "type": "number"
+      },
+      "level": {
+        "type": "number"
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "markers": [
+    {
+      "model": "Experience",
+      "property": "trip_days",
+      "marker": "isset:trip_days",
+      "value": 23,
+      "present": true
+    },
+    {
+      "model": "Experience",
+      "property": "level",
+      "marker": "isset:level",
+      "value": 1,
+      "present": true
+    }
+  ],
+  "device": {
+    "global": "env",
+    "properties": [
+      "reduceMotion",
+      "safeArea"
+    ],
+    "safeAreaProperties": [
+      "top",
+      "bottom",
+      "left",
+      "right"
+    ],
+    "startingValues": {
+      "reduceMotion": false,
+      "safeArea/top": 0
+    },
+    "writes": {
+      "reduceMotion": true,
+      "safeArea/top": 59
+    },
+    "before": {
+      "topText": "0",
+      "still": false,
+      "calm": false
+    },
+    "after": {
+      "topText": "59",
+      "still": true,
+      "calm": true
+    },
+    "label": "Device",
+    "offsetDelta": 39
+  }
 }

@@ -4,6 +4,19 @@ import Metal
 import NuxieRuntime
 import QuartzCore
 
+private func environmentMutations(reference: NuxieNativeViewModelReference,
+    reduceMotion: Bool?, safeArea: ExperienceSafeAreaInsets?) -> [NuxieNativeViewModelMutation] {
+    var mutations: [NuxieNativeViewModelMutation] = []
+    if let reduceMotion { mutations.append(.setBool(instance: reference, path: "reduceMotion", value: reduceMotion)) }
+    if let safeArea {
+        for (edge, value) in [("top", safeArea.top), ("bottom", safeArea.bottom),
+                              ("left", safeArea.left), ("right", safeArea.right)] {
+            mutations.append(.setNumber(instance: reference, path: "safeArea/" + edge, value: Float(value)))
+        }
+    }
+    return mutations
+}
+
 /// Product-owned player policy. The native wrapper receives only the resolved
 /// generic selector and never learns what a Nuxie screen means.
 enum ExperienceInteractivePlayerSelection: Equatable, Sendable {
@@ -196,6 +209,7 @@ struct ExperienceInteractiveEffect: Equatable, Sendable {
     let sequence: UInt64
     let correlationID: UInt64
     let kind: ExperienceInteractiveEffectKind
+    var responseSave: ExperienceResponseSaveRequest? = nil
 }
 
 /// Serializes an async operation through its complete projection phase. An
@@ -1539,7 +1553,7 @@ actor ExperienceInteractivePreparation {
         )
         let preparedFile: NuxieNativePreparedFile
         do {
-            preparedFile = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, importMode: importMode)
+            preparedFile = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, importMode: importMode, valuePolicy: payload.valuePolicy.native)
             systemFontCache.didImport(binding.systemFonts)
         } catch {
             systemFontCache.didFailImport(binding.systemFonts)
@@ -1572,6 +1586,8 @@ actor ExperienceInteractivePreparation {
         player: ExperienceInteractivePlayerSelection = .defaultScene,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        initialReduceMotion: Bool? = nil,
+        initialSafeArea: ExperienceSafeAreaInsets? = nil,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
@@ -1602,6 +1618,8 @@ actor ExperienceInteractivePreparation {
                 player: resolvedPlayer,
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
+                initialReduceMotion: initialReduceMotion,
+                initialSafeArea: initialSafeArea,
                 videoDecoderPool: videoDecoderPool
             )
             systemFontCache.didImport(systemFontLeases)
@@ -1635,6 +1653,7 @@ actor ExperienceInteractiveScreen {
     private var needsLayoutReadback = false
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
+    private let valuePolicy: JourneyReleaseValuePolicy
     private let controlActionIds: Set<String>
     private let declaredEventNames: Set<String>
     private let textInputs: [String: NativeExperienceTextInput]
@@ -1647,6 +1666,7 @@ actor ExperienceInteractiveScreen {
     private let listIndexPathsBySchema: [Int: [String]]
     private let rootViewModelReference: ExperienceInteractiveViewModelReference?
     private let sharedExperienceRootName: String?
+    private let environmentReference: NuxieNativeViewModelReference?
     private var snapshotTopology: ExperienceInteractiveSnapshotTopology
     private var latestSnapshot: NuxieNativeViewModelSnapshot?
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1667,6 +1687,7 @@ actor ExperienceInteractiveScreen {
         videoPlayback: ExperienceVideoPlayback?,
         fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
+        valuePolicy: JourneyReleaseValuePolicy,
         controlActionIds: Set<String>,
         declaredEventNames: Set<String>,
         textInputs: [String: NativeExperienceTextInput],
@@ -1679,6 +1700,7 @@ actor ExperienceInteractiveScreen {
         listIndexPathsBySchema: [Int: [String]],
         rootViewModelReference: ExperienceInteractiveViewModelReference?,
         sharedExperienceRootName: String?,
+        environmentReference: NuxieNativeViewModelReference?,
         snapshotTopology: ExperienceInteractiveSnapshotTopology,
         latestSnapshot: NuxieNativeViewModelSnapshot?,
         trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1687,6 +1709,7 @@ actor ExperienceInteractiveScreen {
         self.videoPlayback = videoPlayback
         self.fontScope = fontScope
         self.layoutBounds = ExperienceLayoutBounds(artboardBounds)
+        self.valuePolicy = valuePolicy
         self.controlActionIds = controlActionIds
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
@@ -1698,6 +1721,7 @@ actor ExperienceInteractiveScreen {
         self.listIndexPathsBySchema = listIndexPathsBySchema
         self.rootViewModelReference = rootViewModelReference
         self.sharedExperienceRootName = sharedExperienceRootName
+        self.environmentReference = environmentReference
         self.snapshotTopology = snapshotTopology
         self.latestSnapshot = latestSnapshot
         self.trackedLists = trackedLists
@@ -1746,6 +1770,8 @@ actor ExperienceInteractiveScreen {
         player: ExperienceInteractivePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        initialReduceMotion: Bool?,
+        initialSafeArea: ExperienceSafeAreaInsets?,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
@@ -1795,6 +1821,7 @@ actor ExperienceInteractiveScreen {
 
         let initialState: ExperienceInteractiveInitialState.Result
         var sharedExperienceRootName: String?
+        let environmentReference: NuxieNativeViewModelReference?
         do {
             initialState = try await ExperienceInteractiveInitialState.apply(
                 journey: payload.journey,
@@ -1803,6 +1830,13 @@ actor ExperienceInteractiveScreen {
                 products: products,
                 runtime: runtime
             )
+            environmentReference = try await runtime.bindGlobalViewModel(named: "env")
+            if let environmentReference {
+                // Entry transitions must see host values during the initialization advance.
+                let mutations = environmentMutations(reference: environmentReference,
+                    reduceMotion: initialReduceMotion, safeArea: initialSafeArea)
+                if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
+            }
             if let shared, let root = initialState.rootReference,
                let schemaIndex = initialState.schemaIndexByViewModel[root],
                initialState.catalog.properties.contains(where: {
@@ -1872,6 +1906,7 @@ actor ExperienceInteractiveScreen {
                 width: manifestScreen.width,
                 height: manifestScreen.height
             ),
+            valuePolicy: payload.valuePolicy,
             controlActionIds: payload.definition
                 .flatMap { $0.controlsByScreen[screenID] }
                 .map { Set($0.keys) } ?? [],
@@ -1886,10 +1921,32 @@ actor ExperienceInteractiveScreen {
             listIndexPathsBySchema: initialState.listIndexPathsBySchema,
             rootViewModelReference: initialState.rootReference,
             sharedExperienceRootName: sharedExperienceRootName,
+            environmentReference: environmentReference,
             snapshotTopology: snapshotTopology,
             latestSnapshot: latestSnapshot,
             trackedLists: trackedLists
         )
+    }
+
+    func confirmResponseSave(trigger: String) async throws -> ExperienceInteractiveStepResult {
+        guard !trigger.isEmpty else {
+            throw ExperienceInteractiveScreenError.stateContract("Missing response save continuation")
+        }
+        return try await step(elapsedSeconds: 0, confirmedResponseSaveTrigger: trigger)
+    }
+
+    func environmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
+        guard let environmentReference else { return nil }
+        return try await runtime.snapshot(environmentReference)
+    }
+
+    func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil) async throws {
+        guard let environmentReference else { return }
+        let runtime = runtime
+        let batch = environmentMutations(reference: environmentReference,
+            reduceMotion: reduceMotion, safeArea: safeArea)
+        guard !batch.isEmpty else { return }
+        try await operationGate.withLock { _ = try await runtime.mutateViewModel(batch) }
     }
 
     func step(
@@ -1898,13 +1955,18 @@ actor ExperienceInteractiveScreen {
         focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64 = 0,
-        capturesTextLayout: Bool = false
+        capturesTextLayout: Bool = false,
+        confirmedResponseSaveTrigger: String? = nil
     ) async throws -> ExperienceInteractiveStepResult {
         let nativeInputs = inputs.map(Self.nativeInput)
         let nativePointers = pointers.map(Self.nativePointer)
         let runtime = runtime
         return try await operationGate.withLock { [self] in
-            var result = try await runtime.step(
+            if let trigger = confirmedResponseSaveTrigger {
+                let root = try await runtime.rootViewModelReference()
+                _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
+            }
+            let frame = try await runtime.stepWithSnapshot(
                 inputs: nativeInputs,
                 pointers: nativePointers,
                 focusInputs: focusInputs,
@@ -1912,6 +1974,8 @@ actor ExperienceInteractiveScreen {
                 correlationID: correlationID,
                 textRunNames: []
             )
+            var result = frame.result
+            let eventSnapshot = frame.snapshot
             try await refreshLayoutBounds()
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
@@ -1920,7 +1984,6 @@ actor ExperienceInteractiveScreen {
             // Discover generated state on newly materialized components
             // before projecting this frame's changes. Native effects have
             // committed: a recoverable topology failure must not discard them.
-            let eventSnapshot = try? await runtime.snapshot()
             if let eventSnapshot { try? await refreshTrackedTopology(snapshot: eventSnapshot) }
             await captureTextFrame(result, requested: capturesTextLayout, snapshot: eventSnapshot)
             return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
@@ -1973,7 +2036,17 @@ actor ExperienceInteractiveScreen {
             keepGoing: result.keepGoing,
             pointerHits: result.pointerHits.map(Self.pointerHit),
             focusState: result.focusState,
-            effects: effects
+            effects: effects.map { effect in
+                var captured = effect
+                do {
+                    captured.responseSave = try ExperienceResponseSaveRequest.capture(effect.kind,
+                        snapshot: eventSnapshot, catalog: viewModelCatalog, policy: valuePolicy)
+                } catch {
+                    // Never include a sheet or arbitrary event properties in diagnostic output.
+                    LogWarning("ExperienceInteractiveScreen: rejected native response save")
+                }
+                return captured
+            }
         )
     }
 
@@ -3629,19 +3702,16 @@ actor ExperienceInteractiveScreen {
             state = isOccluded ? .occluded : .timeout
         }
         let runtime = runtime
-        let textRuns: [String] = []
         let nativeInputs = Array(Set(textInputs.values.filter(\.editable).map(\.textInputName))).sorted()
         return try await operationGate.withLock { [self] in
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
             let ready = try await videoPlayback?.isReadyForPresentation() ?? true
-            let outcome = try await runtime.render(layoutScaleFactor: layoutScaleFactor, drawable: ready ? state : .timeout, clearColor: clearColor, readback: readback, completion: completion)
-            let semantics: NuxieNativeSemanticCapture?
-            if capturesSemantics, outcome.disposition == .presented {
-                semantics = try await runtime.captureSemantics(textRuns: textRuns, nativeInputs: nativeInputs)
-            } else {
-                semantics = nil
-            }
+            let frame = try await runtime.renderFrame(layoutScaleFactor: layoutScaleFactor,
+                drawable: ready ? state : .timeout, clearColor: clearColor, readback: readback,
+                capturesSemantics: capturesSemantics, nativeInputs: nativeInputs, completion: completion)
+            let outcome = frame.outcome
+            let semantics = frame.semantics
             let captions: [ExperienceInteractiveVideoCaption]?
             if capturesCaptions, outcome.disposition == .presented {
                 captions = try await videoPlayback?.captions() ?? []
@@ -3889,6 +3959,75 @@ enum StoreProductViewModelProjection {
         let instanceID: String?
         let instanceName: String?
         let parentPath: String
+    }
+
+    /// The signed table is only a product catalog. Authored state stays in the native file.
+    static func productRows(in values: [JourneyViewModelValue]) -> [JourneyViewModelValue] {
+        let productIdentities = Set(values.filter {
+            $0.path.split(separator: "/").last == "placementId" && $0.value.value is String
+        }.map(identity))
+        let productIDs = Set(values.filter { productIdentities.contains(identity($0)) }.compactMap(\.instanceId))
+        var linkedIDs = productIDs
+        func containsProduct(_ value: Any) -> Bool {
+            if let fields = value as? [String: Any] {
+                if fields["placementId"] is String { return true }
+                if let id = (fields["vmInstanceId"] ?? fields["instanceId"]) as? String, linkedIDs.contains(id) { return true }
+                return fields.values.contains(where: containsProduct)
+            }
+            return (value as? [Any])?.contains(where: containsProduct) ?? false
+        }
+        var selected = Set<Int>()
+        var linkedGroups = Set<Identity>()
+        var previousCount = -1
+        while selected.count != previousCount {
+            previousCount = selected.count
+            for value in values where value.path.contains("/") {
+                if ["vmInstanceId", "instanceId"].contains(value.path.split(separator: "/").last.map(String.init) ?? ""),
+                   let id = value.value.value as? String, linkedIDs.contains(id) {
+                    linkedGroups.insert(identity(value))
+                }
+            }
+            for (index, value) in values.enumerated() {
+                if productIdentities.contains(identity(value)) || linkedGroups.contains(identity(value))
+                    || containsProduct(value.value.value) {
+                    selected.insert(index)
+                    if let id = value.instanceId { linkedIDs.insert(id) }
+                }
+            }
+        }
+        // Null slots are internal placeholders, not signed starting values. Keep
+        // their positions so product hydration cannot shift a native plain row.
+        func productValue(_ value: Any) -> Any? {
+            if let rows = value as? [Any] {
+                guard rows.contains(where: containsProduct) else { return nil }
+                return rows.map { productValue($0) ?? NSNull() }
+            }
+            guard let fields = value as? [String: Any], containsProduct(fields) else { return nil }
+            if fields["placementId"] is String { return fields }
+            if let id = (fields["vmInstanceId"] ?? fields["instanceId"]) as? String,
+               productIDs.contains(id) { return fields }
+            var result: [String: Any] = [:]
+            for (key, child) in fields {
+                if ["vmInstanceId", "instanceId", "viewModelId", "viewModelName", "instanceName"].contains(key) {
+                    result[key] = child
+                } else if let child = productValue(child) {
+                    result[key] = child
+                }
+            }
+            return result
+        }
+        return values.enumerated().compactMap { index, row in
+            guard selected.contains(index) else { return nil }
+            if productIdentities.contains(identity(row)) { return row }
+            let leaf = row.path.split(separator: "/").last.map(String.init) ?? ""
+            if linkedGroups.contains(identity(row)),
+               ["vmInstanceId", "instanceId", "viewModelId", "viewModelName", "instanceName"].contains(leaf) {
+                return row
+            }
+            guard let value = productValue(row.value.value) else { return nil }
+            return JourneyViewModelValue(viewModelName: row.viewModelName, instanceId: row.instanceId,
+                instanceName: row.instanceName, path: row.path, value: AnyCodable(value))
+        }
     }
 
     static func apply(
@@ -4155,7 +4294,7 @@ private enum ExperienceInteractiveInitialState {
         let sourceValues = try ExperienceInteractiveStateCompiler.signedValues(
             StoreProductViewModelProjection.apply(
                 products,
-                to: journey.viewModelValues ?? []
+                to: StoreProductViewModelProjection.productRows(in: journey.viewModelValues ?? [])
             )
         )
         let listIndexPathsBySchema = Dictionary(grouping: catalog.properties.filter {
@@ -4260,6 +4399,7 @@ private enum ExperienceInteractiveInitialState {
                     throw stateValue(value.path)
                 }
                 for row in rows {
+                    if case .null = row { continue }
                     let referenced = try referencedInstance(
                         row,
                         expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4283,14 +4423,9 @@ private enum ExperienceInteractiveInitialState {
         var nativeReferences: [Selection: NuxieNativeViewModelReference] = [.root: nativeRoot]
         for selection in requestOrder where selection != .root {
             guard let request = requests[selection] else { continue }
-            let authoredIndex = try authoredInstanceIndex(
-                request.instanceName,
-                schema: request.schema,
-                catalog: catalog
-            )
             let reference = try await runtime.makeViewModel(
                 schemaIndex: request.schema.index,
-                authoredInstanceIndex: authoredIndex
+                authoredInstanceIndex: nil
             )
             nativeReferences[selection] = reference
             let identity: ExperienceInteractiveViewModelIdentity
@@ -4378,12 +4513,26 @@ private enum ExperienceInteractiveInitialState {
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }
-                finalMutations[owner, default: []].append(.listClear(
-                    instance: reference,
-                    path: value.path
-                ))
+                let current = try await runtime.snapshot(reference)
+                let nativeIDs: [UInt64]
+                if case .list(let ids) = current.values.first(where: {
+                    $0.ownerInstanceID == reference.rawValue && $0.name == value.path
+                })?.value {
+                    nativeIDs = ids
+                } else {
+                    nativeIDs = []
+                }
                 var productRows: [ExperienceInteractiveViewModelReference] = []
+                for (index, id) in nativeIDs.enumerated() {
+                    let retained = try await runtime.acquireListItem(owner: reference, path: value.path,
+                        index: index, expectedIdentity: id)
+                    guard let item = ExperienceInteractiveViewModelReference(rawValue: retained.rawValue) else {
+                        throw stateValue(value.path)
+                    }
+                    productRows.append(item)
+                }
                 for (index, row) in rows.enumerated() {
+                    if case .null = row { continue }
                     let referenced = try referencedInstance(
                         row,
                         expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4399,13 +4548,17 @@ private enum ExperienceInteractiveInitialState {
                     ) else {
                         throw ExperienceInteractiveScreenError.stateContract(value.path)
                     }
-                    productRows.append(productChild)
-                    finalMutations[owner, default: []].append(.listInsert(
-                        instance: reference,
-                        path: value.path,
-                        index: index,
-                        value: child
-                    ))
+                    if index < productRows.count {
+                        productRows[index] = productChild
+                        finalMutations[owner, default: []].append(.listSet(
+                            instance: reference, path: value.path, index: index, value: child))
+                    } else {
+                        // Never synthesize or replay a missing non-product slot.
+                        guard index == productRows.count else { throw stateValue(value.path) }
+                        productRows.append(productChild)
+                        finalMutations[owner, default: []].append(.listInsert(
+                            instance: reference, path: value.path, index: index, value: child))
+                    }
                     detachedMutations[referenced.selection, default: []]
                         += try scalarMutations(
                         referenced.values,
@@ -4531,23 +4684,6 @@ private enum ExperienceInteractiveInitialState {
         }
         requests[request.selection] = request
         order.append(request.selection)
-    }
-
-    private static func authoredInstanceIndex(
-        _ instanceName: String?,
-        schema: NuxieNativeViewModelCatalog.Schema,
-        catalog: NuxieNativeViewModelCatalog
-    ) throws -> Int? {
-        guard let instanceName else { return nil }
-        let matches = catalog.authoredInstances.filter {
-            $0.schemaIndex == schema.index && $0.name == instanceName
-        }
-        guard matches.count == 1 else {
-            throw ExperienceInteractiveScreenError.stateContract(
-                "authored instance '\(instanceName)' does not resolve exactly once"
-            )
-        }
-        return matches[0].index
     }
 
     private static func schemaHintsByRemoteID(

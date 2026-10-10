@@ -7,6 +7,11 @@ import NuxieRuntime
 actor ExperienceRunValues {
     private var retired = false
     private let restoredSnapshot: ExperienceRunSnapshot?
+    #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    private let saveDisplayGate = ExperienceInteractiveOperationGate()
+    private var saveDisplayObservers: [UUID: @MainActor @Sendable () -> Void] = [:]
+    private var appliedSaveDisplays: ExactJSONObject<JourneyResponseSaveDisplay> = [:]
+    #endif
 
     init(snapshot: ExperienceRunSnapshot? = nil) { restoredSnapshot = snapshot }
 
@@ -25,6 +30,37 @@ actor ExperienceRunValues {
         #endif
     }
 
+    func responseAnswers(form: String, policy: JourneyReleaseValuePolicy) async throws -> ExactJSONObject<JourneyReleaseJSONValue> {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        guard !retired, let declaration = policy.responses[form], let native = try await nativeTask?.value else {
+            throw ExperienceInteractiveScreenError.stateContract("Response form is unavailable")
+        }
+        let snapshot = try await native.sessions.snapshot(native.reference)
+        guard !retired else { throw CancellationError() }
+        return try ExperienceResponseSheet.read(form: form, declaration: declaration, snapshot: snapshot, catalog: native.catalog)
+        #else
+        throw JourneyResponseSaveError.wrongOwner
+        #endif
+    }
+
+    func formAnswers(policy: JourneyReleaseValuePolicy) async throws -> ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>> {
+        guard !policy.responses.isEmpty else { return [:] }
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        guard !retired, let native = try await nativeTask?.value else {
+            throw ExperienceInteractiveScreenError.stateContract("Response forms are unavailable")
+        }
+        let snapshot = try await native.sessions.snapshot(native.reference)
+        guard !retired else { throw CancellationError() }
+        var answers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>> = [:]
+        for (form, declaration) in policy.responses {
+            answers[form] = try ExperienceResponseSheet.read(form: form, declaration: declaration, snapshot: snapshot, catalog: native.catalog)
+        }
+        return answers
+        #else
+        return [:]
+        #endif
+    }
+
     var isPrepared: Bool {
         #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
         nativeTask != nil
@@ -33,9 +69,73 @@ actor ExperienceRunValues {
         #endif
     }
 
+    func observeSaveDisplays(id: UUID, observer: @escaping @MainActor @Sendable () -> Void) {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        guard !retired else { return }
+        saveDisplayObservers[id] = observer
+        #endif
+    }
+
+    func removeSaveDisplayObserver(id: UUID) {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        saveDisplayObservers[id] = nil
+        #endif
+    }
+
+    func applyResponseSaveDisplays(
+        _ displays: ExactJSONObject<JourneyResponseSaveDisplay>,
+        policy: JourneyReleaseValuePolicy
+    ) async throws {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        try await saveDisplayGate.withLock {
+            try await self.writeResponseSaveDisplays(displays, policy: policy)
+        }
+        #else
+        throw JourneyResponseSaveError.wrongOwner
+        #endif
+    }
+
+    private func writeResponseSaveDisplays(
+        _ displays: ExactJSONObject<JourneyResponseSaveDisplay>,
+        policy: JourneyReleaseValuePolicy
+    ) async throws {
+        #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        guard !retired, let native = try await nativeTask?.value, !retired else {
+            throw CancellationError()
+        }
+        var changed = false
+        for (form, display) in displays {
+            guard policy.responses[form] != nil else {
+                throw ExperienceInteractiveScreenError.stateContract("Response form is unavailable")
+            }
+            if let applied = appliedSaveDisplays[form] {
+                guard display.sequence >= applied.sequence else { continue }
+                // A delayed journal read cannot return a completed attempt to Saving.
+                if display.sequence == applied.sequence && (!applied.saving || display == applied) { continue }
+            }
+            guard !retired else { throw CancellationError() }
+            let path = "responses:\(form)/"
+            _ = try await native.sessions.mutate([
+                .setBool(instance: native.reference, path: path + "saving", value: display.saving),
+                .setBool(instance: native.reference, path: path + "saved", value: display.saved),
+                .setString(instance: native.reference, path: path + "saveError", value: Data(display.saveError.utf8)),
+            ])
+            guard !retired else { throw CancellationError() }
+            appliedSaveDisplays[form] = display
+            changed = true
+        }
+        if changed {
+            for observer in saveDisplayObservers.values { await observer() }
+        }
+        #else
+        throw JourneyResponseSaveError.wrongOwner
+        #endif
+    }
+
     func retire() async {
         retired = true
         #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+        saveDisplayObservers = [:]
         let task = nativeTask
         nativeTask = nil
         preparation = nil

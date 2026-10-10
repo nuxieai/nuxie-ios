@@ -2,5 +2,8 @@
   "$schema": "https://nuxie.com/schema/frame/1.json",
   "size": {
     "device": "iphone-16"
+  },
+  "emits": {
+    "continue": {}
   }
 }

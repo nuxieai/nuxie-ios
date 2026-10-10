@@ -455,7 +455,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         XCTAssertEqual(
             secondSnapshot.values.first(where: { $0.name == "Number" })?.value,
-            .number(23)
+            .number(0)
         )
         let metrics = await preparation.metrics()
         XCTAssertEqual(
@@ -861,6 +861,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         defer { Task { try? await screen.close() } }
 
+        let root = try await screen.rootViewModel()
+        _ = try await screen.mutateState([
+            .setString(root, path: "String", value: Data("signed-state".utf8)),
+        ])
         for _ in 0..<3 {
             _ = try await renderAndWait(screen)
             _ = try await screen.step(elapsedSeconds: 0)
@@ -957,6 +961,39 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(metrics.openedSessionCount, 2)
     }
 
+
+    func testInitialProductRowsKeepLinksButExcludeAuthoredDefaults() {
+        let values: [JourneyViewModelValue] = [
+            .init(viewModelName: "Root", instanceId: "root", path: "Number", value: AnyCodable(999)),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/vmInstanceId", value: AnyCodable("monthly")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/viewModelId", value: AnyCodable("Product")),
+            .init(viewModelName: "Root", instanceId: "root", path: "products", value: AnyCodable([["instanceId": "monthly"]])),
+            .init(viewModelName: "Product", instanceId: "monthly", path: "placementId", value: AnyCodable("paywall:monthly")),
+            .init(viewModelName: "Product", instanceId: "monthly", path: "price", value: AnyCodable("$0.00")),
+            .init(viewModelName: "Other", instanceId: "other", path: "Number", value: AnyCodable(888)),
+        ]
+        XCTAssertEqual(StoreProductViewModelProjection.productRows(in: values).map(\.path),
+            ["selected/vmInstanceId", "selected/viewModelId", "products", "placementId", "price"])
+    }
+
+    func testProductProjectionKeepsOnlyProductSlotsAndReferenceMetadata() throws {
+        let projected = StoreProductViewModelProjection.productRows(in: [
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/vmInstanceId", value: AnyCodable("monthly")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/viewModelId", value: AnyCodable("Product")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/unrelated", value: AnyCodable(999)),
+            .init(viewModelName: "Root", instanceId: "root", path: "items", value: AnyCodable([
+                ["instanceId": "note", "values": ["count": 999]],
+                ["instanceId": "monthly", "values": ["price": "$0"]],
+            ])),
+            .init(viewModelName: "Product", instanceId: "monthly", path: "placementId", value: AnyCodable("monthly")),
+        ])
+        XCTAssertFalse(projected.contains { $0.path == "selected/unrelated" })
+        let rows = try XCTUnwrap(projected.first { $0.path == "items" }?.value.value as? [Any])
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows[0] is NSNull, "Plain slot carries no signed values")
+        let product = try XCTUnwrap(rows[1] as? [String: Any])
+        XCTAssertEqual((product["values"] as? [String: String])?["price"], "$0")
+    }
 
     func testStoreKitProductsReplaceSignedCatalogValuesBeforeRuntimeOpen() throws {
         let values = [
@@ -1215,7 +1252,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
 
-    func testFactoryValidatesRootSchemaAndAtomicallyAppliesSignedSDKState() async throws {
+    func testFactoryKeepsNativeRootDefaults() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
         let screen = try await ExperienceInteractiveScreen.open(
@@ -1230,21 +1267,66 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let resolved = try await screen.viewModel(named: "Test", instanceID: "root-sdk-id")
         let snapshot = try await screen.snapshot()
         XCTAssertEqual(root, resolved)
-        XCTAssertEqual(
-            snapshot.values.first(where: { $0.name == "Number" })?.value,
-            .number(23)
-        )
-        XCTAssertEqual(
-            snapshot.values.first(where: { $0.name == "Boolean" })?.value,
-            .bool(true)
-        )
-        XCTAssertEqual(
-            snapshot.values.first(where: { $0.name == "String" })?.value,
-            .bytes(Data("signed-state".utf8))
-        )
+        let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes)
+        let native = try await file.openSession(artboardName: payload.renderPlan.screens[0].artboardName,
+            player: .stateMachine("State Machine 1"), pixelWidth: 16, pixelHeight: 16, bindDefaultViewModel: true)
+        defer { Task { try? await native.close() } }
+        let authored = try await native.snapshot()
+        for name in ["Number", "Boolean", "String"] {
+            let actual = try XCTUnwrap(snapshot.values.first { $0.ownerInstanceID == root.rawValue && $0.name == name })
+            let expected = try XCTUnwrap(authored.values.first { $0.ownerInstanceID == authored.rootInstanceID && $0.name == name })
+            XCTAssertEqual(String(describing: actual.value), String(describing: expected.value))
+        }
     }
 
-    func testFactoryHydratesCanonicalListStateInOneSignedPayload() async throws {
+    func testProductHydrationPreservesNativePlainListRows() async throws {
+        // Extend the exact native list fixture with product strings. The second
+        // authored row stays at 2, distinct from instance zero and its signed value.
+        var scene = try exactComponentListFixture()
+        func replace(_ old: [UInt8], _ new: [UInt8]) throws {
+            let range = try XCTUnwrap(scene.range(of: Data(old)))
+            scene.replaceSubrange(range, with: new)
+        }
+        func stringProperty(_ name: String) -> [UInt8] {
+            [0xbb, 0x03, 0xad, 0x04, UInt8(name.utf8.count)] + Array(name.utf8) + [0]
+        }
+        func stringValue(_ index: UInt8, _ value: String) -> [UInt8] {
+            [0xb1, 0x03, 0xaa, 0x04, index, 0xb1, 0x04, UInt8(value.utf8.count)] + Array(value.utf8) + [0]
+        }
+        let property: [UInt8] = [0xaf, 0x03, 0xad, 0x04, 5] + Array("value".utf8) + [0]
+        try replace(property, property + stringProperty("placementId") + stringProperty("price"))
+        let first: [UInt8] = [0xba, 0x03, 0xbf, 0x04, 0, 0, 0x80, 0x3f, 0xaa, 0x04, 0, 0]
+        try replace(first, first + stringValue(1, "paywall:monthly") + stringValue(2, "$0"))
+        let payload = try await statePayload(defaultViewModelName: "Doc", values: [
+            .init(viewModelName: "Doc", instanceId: "root-sdk-id", path: "items", value: AnyCodable([
+                ["vmInstanceId": "monthly", "viewModelId": "ItemVM", "values":
+                    ["placementId": "paywall:monthly", "price": "$0"]],
+                ["vmInstanceId": "note", "viewModelId": "ItemVM", "values": ["value": 999]],
+            ])),
+        ], scene: scene, artboardName: "Main")
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let screen = try await preparation.openScreen(products: [StoreProduct(
+            productId: "monthly", placementId: "paywall:monthly", name: "Monthly", price: "$9.99",
+            period: .month, periodCount: 1, periodLabel: "month", renewalPrice: "$9.99",
+            renewalPeriod: "month", productType: .autoRenewable)],
+            player: .staticArtboard, pixelWidth: 16, pixelHeight: 16)
+        defer { Task { try? await screen.close() } }
+        let snapshot = try await screen.snapshot()
+        let root = try await screen.rootViewModel()
+        guard case .list(let ids) = snapshot.values.first(where: {
+            $0.ownerInstanceID == root.rawValue && $0.name == "items"
+        })?.value else { return XCTFail("Native list is absent") }
+        XCTAssertEqual(ids.count, 6, "Product hydration preserves the authored list")
+        guard ids.count >= 2 else { return }
+        func value(_ index: Int, _ name: String) -> ExperienceInteractiveViewModelValue? {
+            snapshot.values.first { $0.ownerInstanceID == ids[index] && $0.name == name }?.value
+        }
+        XCTAssertEqual(value(1, "value"), .number(2), "Plain row keeps its distinct file value")
+        XCTAssertEqual(value(0, "placementId"), .bytes(Data("paywall:monthly".utf8)))
+        XCTAssertEqual(value(0, "price"), .bytes(Data("$9.99".utf8)))
+    }
+
+    func testFactoryKeepsAuthoredListDespiteSignedDefaults() async throws {
         let payload = try await componentListStatePayload(values: [
             JourneyViewModelValue(
                 viewModelName: "Doc",
@@ -1266,66 +1348,22 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
 
         let root = try await screen.rootViewModel()
-        let row = try await screen.viewModel(named: "ItemVM", instanceID: "row-sdk-id")
         let snapshot = try await screen.snapshot()
         let rootValues = snapshot.values.filter { $0.ownerInstanceID == root.rawValue }
         guard case .list(let linkedRows) = rootValues.first(where: {
             $0.name == "items"
         })?.value,
         let linkedRow = linkedRows.first else {
-            return XCTFail("Expected signed list state")
+            return XCTFail("Expected the file authored list")
         }
+        XCTAssertEqual(linkedRows.count, 6)
         XCTAssertEqual(
             snapshot.values.first(where: {
                 $0.ownerInstanceID == linkedRow && $0.name == "value"
             })?.value,
-            .number(11)
+            .number(1)
         )
 
-        _ = try await screen.mutateState(
-            [.setNumber(row, path: "value", value: 22)],
-            correlationID: 92
-        )
-        let mutated = try await screen.snapshot()
-        XCTAssertEqual(
-            mutated.values.first(where: {
-                $0.ownerInstanceID == linkedRow && $0.name == "value"
-            })?.value,
-            .number(22)
-        )
-
-        do {
-            _ = try await screen.mutateState(
-                [
-                    .listRemove(root, path: "items", index: 0),
-                    .setNumber(root, path: "missing", value: 1),
-                ],
-                correlationID: 93
-            )
-            XCTFail("Expected the mixed native batch to roll back")
-        } catch {}
-        _ = try await screen.mutateState(
-            [.listRemove(root, path: "items", index: 0)],
-            correlationID: 94
-        )
-        let removed = try await screen.snapshot()
-        XCTAssertEqual(
-            removed.values.first(where: {
-                $0.ownerInstanceID == root.rawValue && $0.name == "items"
-            })?.value,
-            .list([])
-        )
-        _ = try await screen.mutateState(
-            [.listInsert(root, path: "items", index: 0, value: row)],
-            correlationID: 95
-        )
-        let reinserted = try await screen.snapshot()
-        XCTAssertEqual(
-            reinserted.values.first(where: {
-                $0.ownerInstanceID == root.rawValue && $0.name == "items"
-            })?.value,
-            .list([linkedRow])
-        )
     }
 
     func testSwiftProductStateCommandResolvesSignedIdentityAndCommitsTypedBatch() async throws {
@@ -1589,6 +1627,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
+        _ = try await screen.applyStateCommand(.snapshot(
+            ExperienceInteractiveStateCompiler.signedValues(payload.journey.viewModelValues ?? [])))
         let root = try await screen.rootViewModel()
         let rowReference = try await screen.viewModel(named: "ItemVM", instanceID: "row-sdk-id")
         let snapshot = try await screen.snapshot()
@@ -2014,7 +2054,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
     }
 
-    func testFactoryRejectsConflictingAuthoredSelectorsForOneRemoteIdentity() async throws {
+    func testFactoryIgnoresNonProductAuthoredSelectors() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",
             values: [
@@ -2034,23 +2074,12 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ),
             ]
         )
-        do {
-            _ = try await ExperienceInteractiveScreen.open(
-                payload: payload,
-                player: .stateMachine("State Machine 1"),
-                pixelWidth: 16,
-                pixelHeight: 16
-            )
-            XCTFail("Expected conflicting authored selectors to fail")
-        } catch {
-            guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("conflicting authored instance selectors"))
-        }
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload, player: .stateMachine("State Machine 1"), pixelWidth: 16, pixelHeight: 16)
+        try await screen.close()
     }
 
-    func testFactoryRejectsSignedReferenceWithNonObjectValues() async throws {
+    func testFactoryIgnoresNonProductReferenceValues() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",
             values: [JourneyViewModelValue(
@@ -2064,20 +2093,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ]])
             )]
         )
-        do {
-            _ = try await ExperienceInteractiveScreen.open(
-                payload: payload,
-                player: .stateMachine("State Machine 1"),
-                pixelWidth: 16,
-                pixelHeight: 16
-            )
-            XCTFail("Expected malformed signed row values to fail")
-        } catch {
-            guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("non-object values"))
-        }
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload, player: .stateMachine("State Machine 1"), pixelWidth: 16, pixelHeight: 16)
+        try await screen.close()
     }
 
     func testListIndexPlannerWritesEveryAuthoredIndexAndIgnoresOtherProperties() throws {
@@ -2955,6 +2973,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
+        _ = try await screen.applyStateCommand(.snapshot(
+            ExperienceInteractiveStateCompiler.signedValues(payload.journey.viewModelValues ?? [])))
         let root = try await screen.rootViewModel()
 
         _ = try await screen.mutateState(

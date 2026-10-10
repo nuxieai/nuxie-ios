@@ -1,0 +1,9 @@
+<!doctype html><html><head><link rel="stylesheet" href="../../styles/tokens.css"></head><body><main class="screen">
+<header class="topbar"><button id="back" class="back" aria-label="Back" data-on:click="emit('back')"><span class="headline">←</span></button><p class="eyebrow">02 / 04 · YOUR ITALIAN</p></header>
+<section class="intro"><h1 class="large-title">A fresh start,<br>or a head start?</h1><p class="body">How much Italian do you know?<br>There’s no wrong place to begin.</p></section>
+<section class="options">
+<button id="new" class="option" data-on:click="set(state.level, 'new')"><div class="option-copy"><p class="headline">I’m starting from ciao</p><p class="footnote">Little or no Italian yet</p></div><div class="check" data-show="state.level == 'new'"><p class="selected-mark">•</p></div></button>
+<button id="basics" class="option" data-on:click="set(state.level, 'basics')"><div class="option-copy"><p class="headline">I know a few basics</p><p class="footnote">A few words and familiar phrases</p></div><div class="check" data-show="state.level == 'basics'"><p class="selected-mark">•</p></div></button>
+<button id="conversational" class="option" data-on:click="set(state.level, 'conversational')"><div class="option-copy"><p class="headline">I can have a little chat</p><p class="footnote">Ready to speak more naturally</p></div><div class="check" data-show="state.level == 'conversational'"><p class="selected-mark">•</p></div></button>
+</section><div class="spacer"></div><footer class="footer"><button id="continue" class="cta" data-on:click="set(responses.onboarding.italian_level, state.level); save(responses.onboarding); emit('continue')"><span class="button-label">Show my daily plan</span></button><p class="footnote center">We’ll start where you are.</p></footer>
+</main></body></html>

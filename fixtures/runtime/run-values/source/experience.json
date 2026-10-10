@@ -6,7 +6,14 @@
         "type": "navigate",
         "screen": "screens/tap"
       }
-    ]
+    ],
+    "trigger": {
+      "type": "event",
+      "eventName": "$app_opened"
+    },
+    "frequency": {
+      "type": "every_match"
+    }
   },
   "state": {
     "trip_days": {
@@ -26,6 +33,16 @@
         {
           "type": "navigate",
           "screen": "screens/level"
+        }
+      ]
+    },
+    {
+      "screen": "screens/level",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/device"
         }
       ]
     }

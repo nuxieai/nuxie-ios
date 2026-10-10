@@ -16,7 +16,7 @@ printf '%s\n' "public SDK fixture" >"${temporary}/sdk/README.md"
 git -C "${temporary}/sdk" add README.md scripts/check-product-neutrality.sh
 "${temporary}/sdk/scripts/check-product-neutrality.sh" >/dev/null
 
-for fixture in shared-values run-values published-input forms-saves/goals; do
+for fixture in shared-values run-values published-input forms-saves forms-saves/goals; do
   mkdir -p "${temporary}/sdk/fixtures/runtime/${fixture}"
   for metadata in NOTES.md provenance.json; do
     printf '%s%s\n' "tools/nuxie-" "editor" \

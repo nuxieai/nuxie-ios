@@ -1,0 +1,9 @@
+{
+  "journey": [
+    {
+      "screen": "screens/welcome",
+      "x": 0,
+      "y": 0
+    }
+  ]
+}

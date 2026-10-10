@@ -86,7 +86,7 @@ indirect enum IRExpr: Codable, Equatable, Sendable {
 
     // Journey context
     case journeyId
-    case responseField(key: String)
+    case responseField(key: String, form: String? = nil)
 
     /// Forward compatibility: an IR node type this SDK version doesn't know.
     /// Decodes tolerantly (one new server op must never brick the whole
@@ -312,7 +312,8 @@ indirect enum IRExpr: Codable, Equatable, Sendable {
         case "Response.Field":
             let valueContainer = try decoder.container(keyedBy: UserCodingKeys.self)
             self = .responseField(
-                key: try valueContainer.decode(String.self, forKey: .key)
+                key: try valueContainer.decode(String.self, forKey: .key),
+                form: try valueContainer.decodeIfPresent(String.self, forKey: .form)
             )
 
         default:
@@ -521,10 +522,11 @@ indirect enum IRExpr: Codable, Equatable, Sendable {
         case .journeyId:
             try typeContainer.encode("Journey.Id", forKey: .type)
 
-        case .responseField(let key):
+        case .responseField(let key, let form):
             try typeContainer.encode("Response.Field", forKey: .type)
             var valueContainer = encoder.container(keyedBy: UserCodingKeys.self)
             try valueContainer.encode(key, forKey: .key)
+            try valueContainer.encodeIfPresent(form, forKey: .form)
 
         case .unknown(let type):
             try typeContainer.encode(type, forKey: .type)
@@ -550,7 +552,7 @@ indirect enum IRExpr: Codable, Equatable, Sendable {
     }
     
     private enum UserCodingKeys: String, CodingKey, Sendable {
-        case op, key, value
+        case op, key, value, form
     }
     
     private enum SegmentCodingKeys: String, CodingKey, Sendable {

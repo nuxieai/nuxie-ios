@@ -173,7 +173,7 @@ actor JourneyService {
     typealias NativeValuesReader = @Sendable (ExperienceRunValues) async throws -> ExactJSONObject<JourneyReleaseJSONValue>
     private let readNativeValues: NativeValuesReader
     private let prepareNativeValues: NativeValuesPreparer
-    private var nativeValuesByRun: [String: (owner: String, values: ExperienceRunValues)] = [:]
+    private var nativeValuesByRun: [String: (owner: String, values: ExperienceRunValues, policy: JourneyReleaseValuePolicy)] = [:]
     private var retainedReleasesByDigest: [String: AuthenticatedJourneyRelease] = [:]
     private var retainedReleaseOrder: [String] = []
     private var retainedReleaseBytes = 0
@@ -335,7 +335,7 @@ extension JourneyService {
             admissionGeneration: admissionGeneration,
             distinctId: distinctId
         ) else { return }
-        if let storageScope { await responseSaveDelivery?.activate(scope: storageScope) }
+        await activateResponseSaveDelivery()
         await commitProfile(
             snapshot,
             artifacts: artifacts,
@@ -350,6 +350,7 @@ extension JourneyService {
         distinctId: String
     ) async {
         _ = advanceProfileDelivery(distinctId: distinctId)
+        await activateResponseSaveDelivery()
         await commitProfile(snapshot, artifacts: nil, distinctId: distinctId)
     }
 }
@@ -1426,7 +1427,8 @@ private extension JourneyService {
                 var evaluationContext = parked.context
                 do {
                     let values = try await preparedNativeValues(for: parked, release: release, journal: journal)
-                    evaluationContext = .init(event: parked.context.event, responses: try await readNativeValues(values))
+                    evaluationContext = .init(event: parked.context.event, responses: try await readNativeValues(values),
+                                              formAnswers: try await values.formAnswers(policy: release.descriptor.valuePolicy))
                     nativeRestoreRetryAt.removeValue(forKey: parked.id)
                 } catch {
                     guard admission.commitJournalIfCurrent({ true }) == true else { return }
@@ -1618,6 +1620,98 @@ private extension JourneyService {
                 "JourneyService: failed to abandon retained Journey: \(error)"
             )
         }
+    }
+}
+
+// MARK: - Native response saves
+
+private extension JourneyService {
+    func activateResponseSaveDelivery() async {
+        guard let storageScope, let responseSaveDelivery else { return }
+        await responseSaveDelivery.setDisplayObserver { [weak self] journal, journeyID in
+            await self?.responseSaveDisplayChanged(journal: journal, journeyID: journeyID)
+        }
+        await responseSaveDelivery.activate(scope: storageScope)
+    }
+
+    func applyResponseSaveDisplay(run: JourneyRun, journal: JourneyRunJournal,
+        values: ExperienceRunValues, policy: JourneyReleaseValuePolicy) async throws {
+        let stored = try await journal.responseSaveDisplays(journeyId: run.journeyId)
+        var declared: ExactJSONObject<JourneyResponseSaveDisplay> = [:]
+        for (form, display) in stored where policy.responses[form] != nil { declared[form] = display }
+        if !declared.isEmpty { try await values.applyResponseSaveDisplays(declared, policy: policy) }
+    }
+
+    func responseSaveDisplayChanged(journal changed: JourneyRunJournal, journeyID: String) async {
+        let fence = executionFence.token()
+        guard let journal, isCurrentIdentity(journal: journal),
+              journal.distinctId == changed.distinctId,
+              journal.responseSaveNamespace == changed.responseSaveNamespace else { return }
+        do {
+            for run in try await journal.runs() where run.journeyId == journeyID && run.completion == nil {
+                guard executionFence.isCurrent(fence), isCurrentIdentity(journal: journal),
+                      let native = nativeValuesByRun[run.id], native.owner == journal.distinctId else { continue }
+                try await applyResponseSaveDisplay(run: run, journal: journal, values: native.values,
+                    policy: native.policy)
+            }
+        } catch is CancellationError { }
+        catch { LogWarning("JourneyService: save display could not be refreshed") }
+    }
+
+    func handleResponseSave(_ save: ExperienceFrameSave, runID: String,
+        release: AuthenticatedJourneyRelease, executionFenceToken: JourneyProfileFenceToken) async -> Bool {
+        guard executionFence.isCurrent(executionFenceToken), let journal,
+              isCurrentIdentity(journal: journal), let responseSaveDelivery,
+              release.descriptor.valuePolicy.responses[save.request.form] != nil,
+              release.descriptor.leg.screens.contains(where: { $0.id == save.screenID }) else { return false }
+        do {
+            guard let run = try await journal.runs().first(where: { $0.id == runID && $0.completion == nil }),
+                  await presenter?.ownsJourneyPresentation(owner: .init(journeyId: run.journeyId,
+                    distinctId: journal.distinctId)) == true,
+                  executionFence.isCurrent(executionFenceToken), isCurrentIdentity(journal: journal) else { return false }
+            let values = try await preparedNativeValues(for: run, release: release, journal: journal)
+            guard executionFence.isCurrent(executionFenceToken), isCurrentIdentity(journal: journal) else { return false }
+            guard let admission = journalCommitAdmission(journal: journal,
+                executionFenceToken: executionFenceToken) else { return false }
+            let sheet: JourneyResponseSave
+            if save.request.awaitTrigger != nil {
+                sheet = try await responseSaveDelivery.reserveWaiting(journal: journal, run: run,
+                    formName: save.request.form, answers: save.request.answers, admission: admission)
+            } else {
+                sheet = try await responseSaveDelivery.enqueue(journal: journal, run: run,
+                    formName: save.request.form, answers: save.request.answers, admission: admission)
+            }
+            do {
+                try await applyResponseSaveDisplay(run: run, journal: journal, values: values,
+                    policy: release.descriptor.valuePolicy)
+            } catch is CancellationError { }
+            catch { LogWarning("JourneyService: accepted save display could not be refreshed") }
+            if save.request.awaitTrigger != nil {
+                Task { [weak self] in
+                    do {
+                        let reply = try await responseSaveDelivery.sendWaiting(sheet: sheet, journal: journal)
+                        guard reply.confirmed,
+                              await self?.responseSaveContinuationIsCurrent(runID: runID, journal: journal,
+                                fence: executionFenceToken) == true else { return }
+                        await save.onConfirmed()
+                    } catch is CancellationError { }
+                    catch { LogWarning("JourneyService: awaited response save could not complete") }
+                }
+            }
+            return true
+        } catch is CancellationError { return false }
+        catch {
+            LogWarning("JourneyService: native response save could not be accepted")
+            return false
+        }
+    }
+
+    func responseSaveContinuationIsCurrent(runID: String, journal: JourneyRunJournal,
+        fence: JourneyProfileFenceToken) async -> Bool {
+        guard executionFence.isCurrent(fence), isCurrentIdentity(journal: journal),
+              let runs = try? await journal.runs() else { return false }
+        return executionFence.isCurrent(fence) && isCurrentIdentity(journal: journal)
+            && runs.contains { $0.id == runID && $0.completion == nil }
     }
 }
 
@@ -2263,10 +2357,10 @@ private extension JourneyService {
         for value in takeNativeValues(owner: owner) { await value.retire() }
     }
 
-    func nativeValues(for runID: String, owner: String, snapshot: ExperienceRunSnapshot? = nil) -> ExperienceRunValues {
+    func nativeValues(for runID: String, owner: String, policy: JourneyReleaseValuePolicy, snapshot: ExperienceRunSnapshot? = nil) -> ExperienceRunValues {
         if let existing = nativeValuesByRun[runID], existing.owner == owner { return existing.values }
         let values = ExperienceRunValues(snapshot: snapshot)
-        nativeValuesByRun[runID] = (owner, values)
+        nativeValuesByRun[runID] = (owner, values, policy)
         return values
     }
 }
@@ -2274,11 +2368,13 @@ private extension JourneyService {
 private extension JourneyService {
     private func preparedNativeValues(for run: JourneyRun, release: AuthenticatedJourneyRelease,
         journal: JourneyRunJournal) async throws -> ExperienceRunValues {
-        let values = nativeValues(for: run.id, owner: journal.distinctId, snapshot: run.nativeSnapshot)
+        let values = nativeValues(for: run.id, owner: journal.distinctId, policy: release.descriptor.valuePolicy, snapshot: run.nativeSnapshot)
         if !(await values.isPrepared) {
             try await prepareNativeValues(values, release, run.executionSnapshot.delivery,
                 journal.pinnedArtifacts(forRunId: run.id))
         }
+        try await applyResponseSaveDisplay(run: run, journal: journal, values: values,
+            policy: release.descriptor.valuePolicy)
         return values
     }
 
@@ -2337,7 +2433,10 @@ private extension JourneyService {
                 } else {
                     values = nativeValuesByRun[durableRun.id]?.values
                 }
-                if let values { coordinator.useNativeValues(try await readNativeValues(values)) }
+                if let values {
+                    coordinator.useNativeValues(try await readNativeValues(values),
+                                              formAnswers: try await values.formAnswers(policy: release.descriptor.valuePolicy))
+                }
                 else { coordinator.useNativeValues([:]) }
             } catch {
                 LogWarning("JourneyService: native value read failed: \(error)")
@@ -2554,7 +2653,7 @@ private extension JourneyService {
                         release: release,
                         delivery: executionSnapshot.delivery,
                         pinnedArtifacts: pinnedArtifacts,
-                        runValues: nativeValues(for: presentedRun.id, owner: journal.distinctId),
+                        runValues: nativeValues(for: presentedRun.id, owner: journal.distinctId, policy: release.descriptor.valuePolicy),
                         screenId: screenId,
                         owner: .init(
                             journeyId: run.journeyId,
@@ -2591,6 +2690,10 @@ private extension JourneyService {
                                 release: release,
                                 executionFenceToken: executionFenceToken
                             )
+                        },
+                        onResponseSave: { [weak self] save in
+                            await self?.handleResponseSave(save, runID: presentedRun.id, release: release,
+                                executionFenceToken: executionFenceToken) ?? false
                         },
                         onLinkOpened: { [weak self] link in
                             await self?.handlePresentationLinkOpened(link, run: presentedRun,

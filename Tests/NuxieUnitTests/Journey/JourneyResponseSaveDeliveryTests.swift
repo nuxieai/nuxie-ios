@@ -6,6 +6,95 @@ import XCTest
 #endif
 
 final class JourneyResponseSaveDeliveryTests: XCTestCase {
+    func testWaitingReservationPrecedesSendAndObserverSeesPersistedReply() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        let started = expectation(description: "request held")
+        let observed = expectation(description: "committed reply observed")
+        let transport = HeldResponseSaveTransport(started: started)
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: transport,
+            clock: MockDateProvider(), sleeper: MockSleepProvider())
+        addTeardownBlock { await transport.release(); await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        await delivery.setDisplayObserver { changedJournal, journeyID in
+            XCTAssertEqual(changedJournal.distinctId, "anon")
+            XCTAssertEqual(journeyID, run.journeyId)
+            do {
+                let state = try await changedJournal.responseSaveDisplays(journeyId: journeyID)
+                XCTAssertEqual(state["feedback"], .init(sequence: 1, saving: false, saved: true, saveError: ""))
+            } catch { XCTFail("Reply must be persisted before display notification") }
+            observed.fulfill()
+        }
+        let sheet = try await delivery.reserveWaiting(journal: journal, run: run, formName: "feedback", answers: [:])
+        let status = try await journal.responseSaveDisplays(journeyId: run.journeyId)
+        XCTAssertEqual(status["feedback"], .saving(sequence: 1))
+        let before = await transport.requests()
+        XCTAssertTrue(before.isEmpty)
+        let waiting = Task { try await delivery.sendWaiting(sheet: sheet, journal: journal) }
+        await fulfillment(of: [started], timeout: 5)
+        await transport.release()
+        let reply = try await waiting.value
+        XCTAssertTrue(reply.confirmed)
+        await fulfillment(of: [observed], timeout: 5)
+        let pending = try await journal.pendingResponseSaves()
+        XCTAssertTrue(pending.isEmpty)
+    }
+
+    func testLatestSaveAttemptOwnsPersistedDisplayAcrossRestarts() async throws {
+        struct Vector: Decodable {
+            struct Step: Decodable {
+                let action: String
+                let sequence: Int64
+                let code: String?
+                let saving: Bool
+                let saved: Bool
+                let saveError: String
+                let pending: [Int64]
+            }
+            let steps: [Step]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let vectors = try ExactJSONCodec.decode(Vector.self,
+            from: Data(contentsOf: root.appendingPathComponent("fixtures/responses/save-display.json")))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        var sheets: [Int64: JourneyResponseSave] = [:]
+        var newest: Int64 = 0
+        for step in vectors.steps {
+            switch step.action {
+            case "queue", "wait":
+                let sheet = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: step.action == "queue")
+                XCTAssertEqual(sheet.sequence, step.sequence)
+                sheets[sheet.sequence] = sheet
+                newest = sheet.sequence
+            case "retry", "stop":
+                _ = try await journal.recordResponseSaveReply(try XCTUnwrap(sheets[step.sequence]),
+                    reply: .init(code: try XCTUnwrap(JourneyResponseSaveReply.Code(rawValue: step.code ?? "")), sequence: nil),
+                    at: Date(timeIntervalSince1970: 1000))
+            case "fail_wait":
+                try await journal.recordWaitingResponseSaveReply(try XCTUnwrap(sheets[step.sequence]),
+                    reply: .init(code: try XCTUnwrap(JourneyResponseSaveReply.Code(rawValue: step.code ?? "")), sequence: nil))
+            case "confirm":
+                try await journal.confirmResponseSave(try XCTUnwrap(sheets[step.sequence]), storedSequence: step.sequence)
+            default: XCTFail("Unknown shared save-display action")
+            }
+            journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+            let states = try await journal.responseSaveDisplays(journeyId: run.journeyId)
+            let state = try XCTUnwrap(states["feedback"])
+            XCTAssertEqual(state.sequence, newest)
+            XCTAssertEqual(state.saving, step.saving)
+            XCTAssertEqual(state.saved, step.saved)
+            XCTAssertEqual(state.saveError, step.saveError)
+            let pending = try await journal.pendingResponseSaves()
+            XCTAssertEqual(pending.map(\.sequence), step.pending)
+        }
+    }
+
     private struct Vectors: Decodable {
         struct Reply: Decodable {
             let bodyText: String
@@ -132,6 +221,16 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
         addTeardownBlock { await transport.release(); await service.shutdown() }
         await delivery.activate(scope: .testFixture)
+        let observed = expectation(description: "background receipt committed")
+        await delivery.setDisplayObserver { changedJournal, journeyID in
+            do {
+                let states = try await changedJournal.responseSaveDisplays(journeyId: journeyID)
+                XCTAssertEqual(states["feedback"], .init(sequence: 1, saving: false, saved: true, saveError: ""))
+                let pending = try await changedJournal.pendingResponseSaves()
+                XCTAssertTrue(pending.isEmpty)
+            } catch { XCTFail("Background display notification must follow durable receipt") }
+            observed.fulfill()
+        }
         _ = try await delivery.enqueue(journal: journal, run: run, formName: "feedback", answers: [:])
         await fulfillment(of: [started], timeout: 5)
         await service.onAppDidEnterBackground()
@@ -140,6 +239,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             if try await journal.pendingResponseSaves().isEmpty { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
+        await fulfillment(of: [observed], timeout: 5)
         let pending = try await journal.pendingResponseSaves()
         XCTAssertTrue(pending.isEmpty)
         let requests = await transport.requests()
