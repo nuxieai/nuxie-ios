@@ -23,6 +23,35 @@ consumer_spec.loader.exec_module(consumer)
 
 
 class ConsumerArtifactContractTests(unittest.TestCase):
+    def test_configured_outputs_load_external_inputs_from_the_bazel_execution_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "worktree"
+            workspace.mkdir()
+            execution_root = root / "isolated-output/execroot/_main"
+            files = ["bazel-out/ios-arm64/bin/NuxieSDK.zip",
+                     "external/+runtime+nuxie_runtime_release/NuxieRuntime.xcframework/Info.plist"]
+            for name in files:
+                file = execution_root / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text("configured output: " + name)
+
+            def bazel_response(command, *, capture=False):
+                self.assertTrue(capture)
+                if "cquery" in command:
+                    self.assertIn("--platforms=selected-ios-platform", command)
+                    return "\n".join(files)
+                self.assertEqual(command[-3:], ["info", "execution_root", "--noshow_progress"])
+                return str(execution_root)
+
+            with patch.object(sdk, "ROOT", workspace), patch.object(sdk, "run", side_effect=bazel_response), \
+                    patch.dict("os.environ", {"NUXIE_BAZEL_BIN": "selected-bazel"}, clear=True):
+                result = sdk.outputs("//:NuxieSDK", ["--platforms=selected-ios-platform"])
+            self.assertEqual([file.read_text() for file in result],
+                             ["configured output: " + name for name in files])
+            self.assertTrue(all(file.is_relative_to(execution_root) for file in result))
+            self.assertFalse((workspace / "external").exists())
+
     def test_cache_override_reaches_bazel_without_overriding_worktree_output_base(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

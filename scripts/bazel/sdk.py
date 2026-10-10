@@ -87,7 +87,12 @@ def options(configuration: str, sdk_platform: str, architecture: str) -> list[st
 
 def outputs(label: str, flags: list[str]) -> list[Path]:
     result = run(bazel_command() + ["cquery", label, *flags, "--output=files", "--noshow_progress"], capture=True)
-    return [ROOT / line for line in result.splitlines() if line.strip()]
+    execution_root = Path(run(bazel_command() + ["info", "execution_root", "--noshow_progress"], capture=True))
+    if not execution_root.is_absolute():
+        raise ValueError("Bazel must report an absolute execution root")
+    # cquery paths are relative to Bazel's execution root. In particular,
+    # external repository inputs have no corresponding checkout-local path.
+    return [execution_root / line for line in result.splitlines() if line.strip()]
 
 
 def owning_archive(files: list[Path], target: str) -> Path:
