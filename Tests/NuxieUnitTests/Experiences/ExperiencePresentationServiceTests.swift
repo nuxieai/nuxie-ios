@@ -1144,6 +1144,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         }
                         let recorder = InMemoryExperiencePresentationTrace()
                         let request = JourneyPresentationRequest(
+                            fences: testPresentationFences(),
                             release: release,
                             delivery: journeyDelivery(),
                             screenId: screenID,
@@ -1163,7 +1164,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                                 ),
                                 recorder: recorder
                             ),
-                            onEmissionBatch: { _ in true },
+                            onEmissionBatch: { _, _ in true },
                             onOutcome: { _, _ in true }
                         )
 
@@ -1211,6 +1212,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         await gate.suspend()
                     }
                     let request = JourneyPresentationRequest(
+                        fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -1221,7 +1223,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         reservation: service.reserveJourneyPresentation(
                             ownerDistinctId: "user-1"
                         ),
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentation = Task { @MainActor in
