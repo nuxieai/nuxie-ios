@@ -2,6 +2,7 @@ load("@rules_apple//apple:ios.bzl", "ios_application", "ios_dynamic_framework", 
 load("@rules_apple//apple:macos.bzl", "macos_dynamic_framework", "macos_unit_test")
 load("@rules_apple//apple:resources.bzl", "apple_resource_bundle", "apple_resource_group")
 load("@rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl", "ios_xctestrun_runner")
+load("@rules_apple//apple/testing/default_runner:macos_test_runner.bzl", "macos_test_runner")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
 load("//scripts/bazel:sdk.bzl", "sdk_framework_module", "sdk_platform_artifact", "sdk_test_library")
 
@@ -145,14 +146,21 @@ ios_unit_test(
 sdk_test_library(
     name = "mac_unit_test_sources",
     module_name = "NuxieSDKMacUnitTests",
-    srcs = glob(["Tests/NuxieUnitTests/**/*.swift"]),
+    srcs = glob(["Tests/NuxieUnitTests/**/*.swift"]) + ["//scripts/bazel:MacOSHomeTests.swift"],
     defines = ["SWIFT_PACKAGE"],
     deps = _TEST_DEPS,
+)
+macos_test_runner(
+    name = "sdk_macos_test_runner",
+    testonly = True,
+    visibility = ["//visibility:private"],
+    pre_action = "//scripts/bazel:macos_test_home",
 )
 macos_unit_test(
     name = "NuxieSDKMacUnitTests",
     bundle_id = "com.nuxie.sdk.macos.unittests",
     minimum_os_version = "12.0",
+    runner = ":sdk_macos_test_runner",
     deps = [":mac_unit_test_sources"],
     resources = [":unit_fixture_folders", ":unit_fixtures"],
     data = [":sdk_test_inputs"],

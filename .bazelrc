@@ -4,9 +4,9 @@ build --jobs=2
 build --announce_rc
 build --compilation_mode=dbg
 build:release --compilation_mode=opt
-build:ios-device --platforms=@apple_support//platforms:ios_arm64 --ios_minimum_os=15.0
-build:ios-simulator --platforms=@apple_support//platforms:ios_sim_arm64 --ios_minimum_os=15.0
-build:macos --platforms=@apple_support//platforms:macos_arm64 --macos_minimum_os=12.0
+build:ios-device --platforms=@apple_support//platforms:ios_arm64 --apple_platforms=@apple_support//platforms:ios_arm64 --ios_multi_cpus=arm64 --ios_minimum_os=15.0
+build:ios-simulator --platforms=@apple_support//platforms:ios_sim_arm64 --apple_platforms=@apple_support//platforms:ios_sim_arm64 --ios_multi_cpus=sim_arm64 --ios_minimum_os=15.0
+build:macos --platforms=@apple_support//platforms:macos_arm64 --apple_platforms=@apple_support//platforms:macos_arm64 --macos_cpus=arm64 --macos_minimum_os=12.0
 test --test_output=errors
 test --test_env=NUXIE_STOREKIT_REQUIRE_AVAILABLE=1
 try-import %workspace%/.bazelrc.local

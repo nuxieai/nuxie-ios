@@ -1,7 +1,14 @@
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 
 package(default_visibility = ["//visibility:public"])
-exports_files(["Package.swift", "Info.plist", "NuxieBundle.swift", "runtime.bzl", "sdk.bzl", "app-plist.py", "map-test-sources.py", "xctestrunner-empty-activities.patch"])
+exports_files(["Package.swift", "Info.plist", "NuxieBundle.swift", "runtime.bzl", "sdk.bzl", "app-plist.py", "map-test-sources.py", "xctestrunner-empty-activities.patch", "MacOSHomeTests.swift"])
+
+py_binary(
+    name = "macos_test_home",
+    testonly = True,
+    srcs = ["macos-test-home.py"],
+    main = "macos-test-home.py",
+)
 
 py_test(
     name = "xcresult_test",

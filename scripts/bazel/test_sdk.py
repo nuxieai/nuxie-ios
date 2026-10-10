@@ -24,6 +24,30 @@ consumer_spec.loader.exec_module(consumer)
 
 
 class ConsumerArtifactContractTests(unittest.TestCase):
+    def test_apple_platform_requests_also_select_the_legacy_bundle_cpu(self):
+        for platform, architectures in sdk.PLATFORMS.items():
+            for architecture, apple_platform in architectures.items():
+                with self.subTest(platform=platform, architecture=architecture):
+                    flags = sdk.options("Release", platform, architecture)
+                    self.assertIn("--apple_platforms=@apple_support//platforms:" + apple_platform, flags)
+                    expected_cpu = "--macos_cpus=" + architecture if platform == "macos" else "--ios_multi_cpus=" + apple_platform.removeprefix("ios_")
+                    self.assertIn(expected_cpu, flags)
+
+    def test_framework_platform_uses_actual_macho_load_command(self):
+        framework = Path("/private/stage/Nuxie.framework")
+        for sdk_platform, expected in [("ios-device", "IOS"), ("ios-simulator", "IOSSIMULATOR"), ("macos", "MACOS")]:
+            with self.subTest(platform=sdk_platform), patch.object(sdk, "run", return_value=
+                    "Load command 8\n      cmd LC_BUILD_VERSION\n platform " + expected + "\n    minos 15.0\n") as run:
+                sdk.verify_framework_platform(framework, sdk_platform, "arm64")
+                run.assert_called_once_with(["xcrun", "vtool", "-arch", "arm64", "-show-build",
+                                             "/private/stage/Nuxie.framework/Nuxie"], capture=True)
+
+    def test_device_framework_rejects_simulator_or_missing_build_metadata(self):
+        for metadata in ("platform IOSSIMULATOR\n", "", "platform IOS\nplatform IOSSIMULATOR\n"):
+            with self.subTest(metadata=metadata), patch.object(sdk, "run", return_value=metadata):
+                with self.assertRaisesRegex(ValueError, "expected IOS"):
+                    sdk.verify_framework_platform(Path("/private/Nuxie.framework"), "ios-device", "arm64")
+
     def test_configured_outputs_load_external_inputs_from_the_bazel_execution_root(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

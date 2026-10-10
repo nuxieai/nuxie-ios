@@ -61,6 +61,12 @@ context. A declared patch handles XCResult activity arrays with no values,
 including expected failures. `make bazel-contract-test` exercises the real
 runner decoder with empty and populated attachment records.
 
+The macOS runner sets `HOME` and Foundation's `CFFIXED_USER_HOME` in its
+test process to a private directory under Bazel's `TEST_TMPDIR`. Its supported
+pre-action updates only the runner-owned XCTest configuration. A separate
+Bazel XCTest verifies that Foundation resolves Application Support there and
+can write it while the normal Darwin sandbox remains enabled.
+
 Debug uses Swift's debug configuration; Release uses its optimized
 configuration. Both retain Swift 5 language mode, the supported iOS 15/macOS 12
 deployment targets, and the SDK/runtime strict concurrency checks. XcodeGen's
@@ -109,6 +115,8 @@ Preparation replaces only an output directory owned by a previous SDK manifest;
 it rejects unrelated files. Distribution preparation uses the pinned released
 runtime. Local builds/tests retain the explicit `NUXIE_RUNTIME_USE_LOCAL=1`
 staged-runtime opt-in.
+Preparation also checks each architecture's actual Mach-O build platform before
+staging it, so an iOS simulator binary cannot be published as a device product.
 
 Distribution preparation requires committed SDK source and checks that its
 content identity stays unchanged throughout compilation. For an explicit local
