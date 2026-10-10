@@ -278,7 +278,6 @@ ios_unit_test(
     deps = [":storekit_test_sources"],
     resources = ["Tests/NuxieStoreKitTests/Fixtures/NuxieNativePurchase.storekit"],
     data = [":sdk_test_inputs"],
-    env = {"NUXIE_STOREKIT_REQUIRE_AVAILABLE": "1"},
     size = "large",
 )
 

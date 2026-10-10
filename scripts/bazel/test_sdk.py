@@ -183,6 +183,16 @@ class ConsumerArtifactContractTests(unittest.TestCase):
                     sdk.prepare(args)
                 run.assert_not_called()
 
+    def test_distribution_rejects_unsupported_architecture_before_any_bazel_action(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(output=directory, platform=["ios-device"], configuration="Release", architecture=["x86_64"])
+            with patch.dict("os.environ", {"NUXIE_RUNTIME_USE_LOCAL": ""}), \
+                    patch.object(sdk, "source_identity", return_value=("a" * 40, False, "b" * 64)), \
+                    patch.object(sdk, "run") as run:
+                with self.assertRaisesRegex(ValueError, "supported by each requested SDK platform"):
+                    sdk.prepare(args)
+                run.assert_not_called()
+
     def test_source_addressed_consumer_rejects_development_artifacts_before_swiftc(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "sdk-artifacts.json"
@@ -236,7 +246,8 @@ class SourceIdentityTests(unittest.TestCase):
 class NativeCommandSelectionTests(unittest.TestCase):
     def command(self, argv):
         with patch("sys.argv", ["sdk.py", *argv]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
-                patch.object(sdk, "run") as run, patch.object(sdk.platform, "machine", return_value="arm64"):
+                patch.object(sdk, "run") as run, patch.object(sdk, "publish_build"), \
+                patch.object(sdk.platform, "machine", return_value="arm64"):
             sdk.main()
             return run.call_args.args[0]
 
@@ -263,6 +274,88 @@ class NativeCommandSelectionTests(unittest.TestCase):
         self.assertEqual(selector, "--test_filter=NuxieSDKUnitTests/NuxieNativeRuntimeTests,"
                          "NuxieSDKUnitTests/ExperienceInteractiveScreenTests,"
                          "NuxieSDKUnitTests/ExperienceRuntimePresentationLoopTests")
+
+    def test_make_scheme_and_xcode_selector_preserve_destination_and_filter(self):
+        command = self.command(["test", "--scheme", "NuxieSDKUnitTests",
+                                "--destination", "platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5",
+                                "--xcodebuild-test-flags=-quiet -only-testing:NuxieSDKUnitTests/NuxieNativeRuntimeTests"])
+        self.assertEqual(command[-1], "//:NuxieSDKUnitTests")
+        self.assertIn("--test_filter=NuxieSDKUnitTests/NuxieNativeRuntimeTests", command)
+        self.assertIn("--ios_simulator_device=iPhone 17 Pro", command)
+        self.assertIn("--ios_simulator_version=26.5", command)
+
+    def test_all_suites_keep_macos_compilation_separate_from_ios(self):
+        with patch("sys.argv", ["sdk.py", "test"]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
+                patch.object(sdk, "run") as run, patch.object(sdk.platform, "machine", return_value="arm64"):
+            sdk.main()
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(len(commands), 5)
+        self.assertTrue(all("--platforms=@apple_support//platforms:ios_sim_arm64" in command for command in commands[:4]))
+        self.assertIn("--platforms=@apple_support//platforms:macos_arm64", commands[4])
+        self.assertEqual(commands[4][-1], "//:NuxieSDKMacUnitTests")
+
+    def test_ci_uses_owned_output_root_batch_mode_and_standalone_launcher(self):
+        with patch.dict("os.environ", {"CI": "1", "NUXIE_BAZEL_OUTPUT_USER_ROOT": "/tmp/owned CI"}, clear=True), \
+                patch.object(sdk.shutil, "which", return_value=None), \
+                patch.object(sdk, "ROOT", Path("/isolated/standalone")), \
+                patch.object(sdk, "installed_bazelisk", return_value="/cache/verified-bazelisk"):
+            command = sdk.bazel_command()
+        self.assertEqual(command, ["/cache/verified-bazelisk", "--nosystem_rc", "--nohome_rc",
+                                   "--output_user_root=/tmp/owned CI", "--batch"])
+
+    def test_explicit_batch_and_storekit_diagnostic_environment_are_preserved(self):
+        with patch.dict("os.environ", {"NUXIE_BAZEL_BIN": "bazel", "NUXIE_BAZEL_BATCH": "1",
+                                       "NUXIE_STOREKIT_REQUIRE_AVAILABLE": "0"}, clear=True):
+            self.assertIn("--batch", sdk.bazel_command())
+            command = self.command(["test", "--suite", "storekit"])
+        self.assertIn("--test_env=NUXIE_STOREKIT_REQUIRE_AVAILABLE=0", command)
+
+    def test_framework_publication_is_checked_before_replacing_previous_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "NuxieSDK.zip"
+            with zipfile.ZipFile(archive, "w") as zip:
+                zip.writestr("Nuxie.framework/Nuxie", b"new framework")
+            previous = root / ".bazel-artifacts/build/ios-simulator/Debug/Nuxie.framework/Nuxie"
+            previous.parent.mkdir(parents=True)
+            previous.write_bytes(b"previous framework")
+            with patch.object(sdk, "ROOT", root), patch.object(sdk, "outputs", return_value=[archive]), \
+                    patch.object(sdk, "stage_framework_dependencies", return_value=[]), \
+                    patch.object(sdk, "run", side_effect=subprocess.CalledProcessError(1, "audit")):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    sdk.publish_build("//:sdk", [], "ios-simulator", "Debug")
+            self.assertEqual(previous.read_bytes(), b"previous framework")
+            with patch.object(sdk, "ROOT", root), patch.object(sdk, "outputs", return_value=[archive]), \
+                    patch.object(sdk, "stage_framework_dependencies", return_value=[]), patch.object(sdk, "run"):
+                sdk.publish_build("//:sdk", [], "ios-simulator", "Debug")
+            self.assertEqual(previous.read_bytes(), b"new framework")
+
+    def test_framework_publication_retains_owning_runtime_module_and_platform_c_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = root / "compiled/NuxieRuntime.swiftmodule"
+            module.parent.mkdir()
+            module.write_bytes(b"configured runtime module")
+            runtime = root / "NuxieRuntime.xcframework"
+            libraries = []
+            for identifier, variant in [("device", ""), ("simulator", "simulator")]:
+                headers = runtime / identifier / "Headers"
+                headers.mkdir(parents=True)
+                (headers / "module.modulemap").write_text("module NuxieRuntimeC { header \"nux.h\" }")
+                (headers / "nux.h").write_text(identifier + " C ABI")
+                libraries.append({"LibraryIdentifier": identifier, "HeadersPath": "Headers",
+                                  "SupportedPlatform": "ios", "SupportedPlatformVariant": variant,
+                                  "SupportedArchitectures": ["arm64"]})
+            (runtime / "Info.plist").write_bytes(plistlib.dumps({"AvailableLibraries": libraries}))
+            stage = root / "stage"
+            stage.mkdir()
+            flags = ["--platforms=simulator"]
+            with patch.object(sdk, "outputs", return_value=[module]) as outputs, \
+                    patch.object(sdk, "runtime_root", return_value=runtime):
+                sdk.stage_framework_dependencies("NuxieSDK", flags, "ios-simulator", stage)
+            outputs.assert_called_once_with('filter("^//:NuxieRuntime$", deps(//:NuxieSDK))', flags)
+            self.assertEqual((stage / "NuxieRuntime.swiftmodule").read_bytes(), module.read_bytes())
+            self.assertEqual((stage / "runtime-headers/nux.h").read_text(), "simulator C ABI")
 
 
 class AuthoredAppMetadataTests(unittest.TestCase):

@@ -41,8 +41,8 @@ RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
 RUNTIME_ARTIFACT_METADATA := Runtime/artifact.json
 DOWNLOADED_RUNTIME_ARCHIVE := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework.zip
-NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
-NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
+NUXIE_RUNTIME_REFERENCE_APP := $(CURDIR)/.bazel-artifacts/build/ios-simulator/Debug/NuxieExperienceRuntimeReference.app
+NUXIE_FRAMEWORK ?= $(CURDIR)/.bazel-artifacts/build/ios-simulator/Debug/Nuxie.framework
 BAZEL_SDK_OUTPUT ?= $(CURDIR)/.bazel-artifacts/sdk
 
 .PHONY: bazel-build-ios-simulator bazel-build-ios-device bazel-build-macos bazel-test bazel-prepare bazel-contract-test
@@ -263,20 +263,24 @@ check-provider-adapters:
 	@bash scripts/check-provider-adapter-boundary.sh
 
 # Run tests on iOS simulator
-test-xcode: test-product-neutrality check-staged-runtime-xcframework generate
-	@echo "Running tests on $(TEST_DESTINATION)..."
-	@xcodebuild test \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME)" \
-		-configuration Debug \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination '$(TEST_DESTINATION)' \
-		$(XCODEBUILD_TEST_FLAGS)
-	@$(MAKE) verify-customer-framework
+test-xcode: test-product-neutrality
+	@scripts/bazel/sdk.sh test --scheme "$(SCHEME)" --destination '$(TEST_DESTINATION)' --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
+	@$(MAKE) bazel-build-ios-simulator
 
-# Hosted video qualification supports both simulators and physical devices.
-test-video: SCHEME = NuxieVideoDeviceTests
-test-video: test-xcode
+# The native Bazel runner owns simulator tests. Preserve the existing signed
+# physical-device diagnostic through Xcode's device test runner.
+test-video:
+	@case '$(TEST_DESTINATION)' in \
+		platform=iOS,*) $(MAKE) test-video-device ;; \
+		*) $(MAKE) test-xcode SCHEME=NuxieVideoDeviceTests ;; \
+	esac
+
+.PHONY: test-video-device
+test-video-device: test-product-neutrality check-staged-runtime-xcframework generate
+	@xcodebuild test -project "$(XCODEPROJ)" -scheme NuxieVideoDeviceTests \
+		-configuration Debug -derivedDataPath "$(DERIVED_DATA)" \
+		-destination '$(TEST_DESTINATION)' $(XCODEBUILD_TEST_FLAGS)
+	@$(MAKE) verify-customer-framework NUXIE_FRAMEWORK="$(DERIVED_DATA)/Build/Products/Debug-iphoneos/Nuxie.framework"
 
 # UIKit target-action delivery requires an application host.
 test-experience-input: SCHEME = NuxieExperienceInputTests
@@ -289,32 +293,17 @@ test-unit: test-xcode
 # Set STOREKIT_REQUIRE_AVAILABLE=0 only to compile the suite and inspect its
 # explicit XCTest skips while diagnosing an Xcode/simulator-runtime mismatch.
 test-storekit: check-storekit-test-toolchain
-	@$(MAKE) --no-print-directory test-xcode \
-		SCHEME="$(SCHEME_STOREKIT)" \
-		XCODEBUILD_TEST_FLAGS="$(XCODEBUILD_TEST_FLAGS) NUXIE_STOREKIT_REQUIRE_AVAILABLE=$(STOREKIT_REQUIRE_AVAILABLE)"
+	@NUXIE_STOREKIT_REQUIRE_AVAILABLE=$(STOREKIT_REQUIRE_AVAILABLE) scripts/bazel/sdk.sh test --suite storekit --destination '$(TEST_DESTINATION)' --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
 
-test-native-runtime: check-staged-runtime-xcframework
-	@$(MAKE) test-xcode SCHEME=NuxieSDKUnitTests XCODEBUILD_TEST_FLAGS='-quiet -only-testing:NuxieSDKUnitTests/NuxieNativeRuntimeTests -only-testing:NuxieSDKUnitTests/ExperienceInteractiveScreenTests -only-testing:NuxieSDKUnitTests/ExperienceRuntimePresentationLoopTests'
+test-native-runtime:
+	@scripts/bazel/sdk.sh test --suite native-runtime --destination '$(TEST_DESTINATION)' --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
 
-test-runtime-reference-ui: check-staged-runtime-xcframework generate
-	@echo "Testing first-frame presentation through the standalone runtime app..."
-	@xcodebuild test \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME_RUNTIME_REFERENCE_UI)" \
-		-configuration Debug \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination '$(TEST_DESTINATION)'
-	@$(MAKE) verify-runtime-reference-app
+test-runtime-reference-ui:
+	@scripts/bazel/sdk.sh test --suite reference-ui --destination '$(TEST_DESTINATION)'
+	@$(MAKE) build-reference-app
 
-test-macos-unit: generate
-	@echo "Running unit tests on macOS..."
-	@scripts/run-macos-unit-tests.sh \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME_MACOS_UNIT)" \
-		-configuration Debug \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination 'platform=macOS' \
-		$(XCODEBUILD_TEST_FLAGS)
+test-macos-unit:
+	@scripts/bazel/sdk.sh test --suite macos-unit --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
 
 test-macos-unit-runner:
 	@bash scripts/test-run-macos-unit-tests.sh
@@ -325,13 +314,8 @@ test-integration: test-xcode
 test-e2e: SCHEME = $(SCHEME_E2E)
 test-e2e: test-xcode
 
-test-experience-runtime-ui: check-staged-runtime-xcframework generate
-	@echo "Running signed release runtime UI tests on iOS Simulator..."
-	@TEST_DESTINATION='$(TEST_DESTINATION)' \
-		TEST_SIMULATOR_NAME='$(TEST_SIMULATOR_NAME)' \
-		TEST_SIMULATOR_OS='$(TEST_SIMULATOR_OS)' \
-		SCHEME_EXPERIENCE_RUNTIME_UI='$(SCHEME_EXPERIENCE_RUNTIME_UI)' \
-		scripts/run-experience-runtime-ui-tests.sh
+test-experience-runtime-ui:
+	@scripts/bazel/sdk.sh test --suite runtime-ui --destination '$(TEST_DESTINATION)' --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
 
 # Compatibility for the SHA-pinned trusted workflow. Remove after test.yml is
 # repinned to a revision that calls test-experience-runtime-ui.
@@ -351,38 +335,14 @@ test-all: check-sdk-guidance check-provider-adapters check-event-catalog
 test: test-all
 test-ios: test
 
-build-ios-device: check-staged-runtime-xcframework generate
-	@echo "Building Release framework for a generic iOS device..."
-	@xcodebuild build \
-		-quiet \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME_IOS)" \
-		-configuration Release \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination 'generic/platform=iOS' \
-		$(if $(CLONED_SOURCE_PACKAGES_DIR_PATH),-clonedSourcePackagesDirPath "$(CLONED_SOURCE_PACKAGES_DIR_PATH)") \
-		CODE_SIGNING_ALLOWED=NO
-	@$(MAKE) verify-customer-framework \
-		NUXIE_FRAMEWORK="$(DERIVED_DATA)/Build/Products/Release-iphoneos/Nuxie.framework"
+build-ios-device:
+	@scripts/bazel/sdk.sh build --platform ios-device --configuration Release
 
-build-macos: generate
-	@echo "Building macOS framework..."
-	@xcodebuild build \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME_MACOS)" \
-		-configuration Debug \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination 'generic/platform=macOS'
+build-macos:
+	@scripts/bazel/sdk.sh build --platform macos
 
-build-reference-app: check-staged-runtime-xcframework generate
-	@echo "Building signed release runtime reference app..."
-	@xcodebuild build \
-		-project "$(XCODEPROJ)" \
-		-scheme "$(SCHEME_REFERENCE_APP)" \
-		-configuration Debug \
-		-derivedDataPath "$(DERIVED_DATA)" \
-		-destination '$(TEST_DESTINATION)'
-	@$(MAKE) verify-runtime-reference-app
+build-reference-app:
+	@scripts/bazel/sdk.sh build --platform ios-simulator //:NuxieExperienceRuntimeReferenceApp
 
 verify-runtime-reference-app:
 	@scripts/verify-runtime-reference-app.sh "$(NUXIE_RUNTIME_REFERENCE_APP)"
@@ -397,7 +357,7 @@ verify-runtime-native-archive:
 		"$(NUXIE_RUNTIME_XCFRAMEWORK)"
 
 install-reference-app: build-reference-app
-	@APP_PATH="$$(find "$(DERIVED_DATA)/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name 'NuxieExperienceRuntimeReference.app' -print -quit)"; \
+	@APP_PATH="$(NUXIE_RUNTIME_REFERENCE_APP)"; \
 	if [ -z "$$APP_PATH" ]; then \
 		echo "Reference app bundle was not found."; \
 		exit 1; \

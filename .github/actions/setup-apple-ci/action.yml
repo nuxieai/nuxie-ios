@@ -64,3 +64,7 @@ runs:
         echo "value=${xcode_version}-${xcode_build}" >> "${GITHUB_OUTPUT}"
         xcodebuild -version
         xcodegen --version
+
+    - name: Install checksum-pinned Bazelisk
+      shell: bash
+      run: python3 scripts/bazel/launcher.py --version

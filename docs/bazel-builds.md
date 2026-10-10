@@ -1,7 +1,7 @@
 # Native Bazel builds
 
 The SDK has direct Swift, Apple framework, application, and XCTest targets.
-Install Bazelisk and select Xcode with `xcode-select`; `.bazelversion` pins Bazel.
+Select Xcode with `xcode-select`; `.bazelversion` pins Bazel. The frontend installs checksum-pinned Bazelisk automatically in a user-owned tool cache when no explicit launcher is configured.
 `MODULE.bazel` pins the Swift/Apple rules, and the authored `Package.resolved`
 continues to pin Quick, Nimble, and their transitive test dependencies.
 
@@ -15,6 +15,7 @@ Matching compile actions reuse the shared cache across worktrees.
 Set an absolute `NUXIE_BAZEL_CACHE_DIR` when using `scripts/bazel/sdk.sh` to
 relocate only the reusable caches. `NUXIE_IOS_BAZEL_OUTPUT_BASE`, when explicitly
 set, must be unique to the checkout. The default already provides isolation.
+CI uses batch mode and accepts an absolute `NUXIE_BAZEL_OUTPUT_USER_ROOT` for guarded per-agent output storage. The shared action/repository caches still follow `NUXIE_BAZEL_CACHE_DIR`, and every checkout retains a distinct output base. Set `NUXIE_BAZEL_JOBS` to bound compilation.
 Run `python3 -B -m unittest discover -s scripts/bazel -p 'test_cache.py'` for the
 cache override checks.
 
@@ -55,12 +56,14 @@ The SDK and test-support modules retain XcodeGen's explicit testability in both
 configurations; runtime adapters, applications, and tests use ordinary Debug
 testability and omit it in Release. The published SwiftPM manifest is unchanged.
 
-The original Make/Xcode qualification commands remain available during the
-migration. Additive `make bazel-test`, `make bazel-build-ios-simulator`,
-`make bazel-build-ios-device`, `make bazel-build-macos`, and
-`make bazel-contract-test` expose the native graph without changing the default
-Make goal. The mandatory SDK gate remains `make test` until the Bazel equivalents
-have completed qualification.
+`make test`, its focused suite targets, `make build-ios-device`, `make build-macos`, and `make build-reference-app` use the native Bazel graph. `make bazel-contract-test` checks frontend, cache, metadata, and publication contracts without compiling Swift. Frameworks and applications are published under checkout-local `.bazel-artifacts/build/<platform>/<configuration>/` after their native/privacy audits pass. XcodeGen remains available for IDE projects; the explicit concurrency-warning and coverage diagnostics retain their existing Xcode/SwiftPM machinery.
+
+Framework publication also retains the configured `NuxieRuntime` Swift module
+and C ABI headers so `make check-public-api` imports the same compiled SDK.
+The provider adapter consumer smoke still verifies the published SwiftPM package
+with third-party provider dependencies. Physical-device video qualification
+uses the explicit `make test-video-device TEST_DESTINATION='platform=iOS,id=…'`
+Xcode runner; the regular video simulator suite uses Bazel.
 
 ## Consumer artifacts
 
@@ -77,7 +80,7 @@ the standalone `Nuxie_Nuxie.bundle`, static SDK/runtime libraries, Swift import
 modules and headers, and the immutable runtime XCFramework. macOS remains
 available for the SDK's existing non-rendering surface; iOS wrappers need only
 device and simulator products. With no `--platform`, preparation retains all
-three SDK platforms.
+three SDK platforms. A focused development/import check can select `--architecture arm64`; default preparation retains every supported architecture.
 
 The output root contains `sdk-artifacts.json` with schema version 1, SDK source
 revision, dirty state, and source content digest, the exact runtime release URL/checksum/source revision,
