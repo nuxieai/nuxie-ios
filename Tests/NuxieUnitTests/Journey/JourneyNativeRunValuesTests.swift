@@ -6,6 +6,110 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyNativeRunValuesTests: JourneyTestCase {
+    func testNativeReadGateRetainsAnEarlyRelease() async {
+        let gate = JourneyNthRoutedCaptureGate(eventName: "native", suspendedCall: 1)
+        await gate.release()
+        let finished = expectation(description: "An already released native read cannot park")
+        let read = Task {
+            await gate.intercept(event: "native")
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 3)
+        // Unblock the red implementation after recording the failed oracle.
+        await gate.release()
+        await read.value
+    }
+
+    func testLiveFormAnswerObservationReadsWithoutSavingOrCreatingRunValues() async throws {
+        try await verifyLiveFormAnswerObservation(retireNativeSession: false)
+    }
+
+    func testLiveFormAnswerObservationReturnsNilWhenNativeStateIsUnavailable() async throws {
+        try await verifyLiveFormAnswerObservation(retireNativeSession: true)
+    }
+
+    func testLiveFormAnswerObservationThrowsForMalformedResponseSheet() async throws {
+        try await verifyLiveFormAnswerObservation(retireNativeSession: false, mismatchedResponseModel: true)
+    }
+
+    private func verifyLiveFormAnswerObservation(retireNativeSession: Bool,
+        mismatchedResponseModel: Bool = false) async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("rule-group-install")
+        let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self,
+            from: Data(contentsOf: directory.appendingPathComponent("policy.json")))
+        let storage = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(storage) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let presenter = await MainActor.run { RecordingJourneyPresenter() }
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: storage, presenter: presenter)
+        addTeardownBlock { await service.shutdown() }
+        let absent = try await service.liveFormAnswersJSON(runID: "unknown", owner: "customer")
+        XCTAssertNil(absent)
+        let insertedUnknownRun = await service.hasNativeValuesForTesting(runID: "unknown")
+        XCTAssertFalse(insertedUnknownRun, "An observation cannot create native run state")
+        await service.initialize()
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let initial = try await authenticatedRenderedSnapshot(fixture)
+        var responses = policy.responses
+        if mismatchedResponseModel {
+            let form = try XCTUnwrap(responses["profile"])
+            responses["profile"] = .init(title: form.title, model: "DifferentResponseModel", fields: form.fields)
+        }
+        let snapshot = replacing(initial, responses: responses)
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let shown = await MainActor.run { presenter.request }
+        let values = try XCTUnwrap(shown).runValues
+        let journal = try JourneyRunJournal(directory: storage, distinctId: "customer")
+        let runs = try await journal.runs()
+        let runID = try XCTUnwrap(runs.first).id
+        let file = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")), valuePolicy: policy.native)
+        let prepared = try await values.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        _ = try await native.sessions.mutate([
+            .setString(instance: native.reference, path: "responses:profile/name", value: Data("Ada".utf8)),
+        ])
+        if mismatchedResponseModel {
+            do {
+                _ = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+                XCTFail("A malformed response sheet must throw instead of looking unavailable")
+            } catch {
+                XCTAssertEqual(error as? ExperienceInteractiveScreenError,
+                    .stateContract("Native response form does not match its release"))
+            }
+            return
+        }
+        let before = try await values.snapshot()
+        let observed = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+        let answers = try JSONDecoder().decode(ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>.self,
+            from: XCTUnwrap(observed))
+        XCTAssertEqual(answers["profile"]?["name"], .string("Ada"))
+        let after = try await values.snapshot()
+        XCTAssertEqual(before, after)
+        let wrongOwner = try await service.liveFormAnswersJSON(runID: runID, owner: "other")
+        XCTAssertNil(wrongOwner)
+        let observedAgain = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+        let answersAgain = try JSONDecoder().decode(ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>.self,
+            from: XCTUnwrap(observedAgain))
+        XCTAssertEqual(answersAgain["profile"]?["name"], .string("Ada"))
+        let journalAfter = try await journal.runs()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(journalAfter), try encoder.encode(runs))
+        if retireNativeSession {
+            try await native.sessions.retire()
+            let unavailable = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+            XCTAssertNil(unavailable, "Unavailable native state has no live observation")
+        }
+        await service.shutdown()
+        let retired = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+        XCTAssertNil(retired)
+    }
+
     func testTimedWaitRestoresPublishedGoalsBeforeContinuingWithoutAScreen() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let initial = try await authenticatedRenderedSnapshot(fixture)

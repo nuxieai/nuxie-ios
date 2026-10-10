@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 protocol JourneyProfileConsuming: AnyObject, Sendable {
     func profileDidCommit(
@@ -2245,6 +2246,10 @@ private extension JourneyService {
               let originAdmission = journalCommitAdmission(journal: journal, executionFenceToken: executionFenceToken) else {
             return .rejected
         }
+        let executionKey = RunExecutionKey(runID: presentedRun.id, owner: journal.distinctId,
+            generation: executionFenceToken.generation)
+        beginRunExecution(executionKey)
+        defer { endRunExecution(executionKey) }
         guard let capture = await capturePresentationEvent(
                 name: name,
                 eventId: UUID.v7().uuidString,
@@ -2308,6 +2313,18 @@ private extension JourneyService {
             }
             return .accepted
         }
+        if isAwaitingPresentationCommerceOutcome(run, in: release.descriptor.leg) {
+            if let action = release.descriptor.leg.steps.first(where: { $0.id == routeStepId })?.action,
+               JourneyActionType(action: action)?.isCommerce == true { return .accepted }
+            if run.pendingCommerce == nil {
+                guard let effectId = run.effectReceipts[run.stepId],
+                      let retained = try? await journal.retainPresentationCommerce(run.id,
+                        stepId: run.stepId, effectId: effectId,
+                        placementId: pendingPresentationPurchasePlacements[run.id],
+                        admission: originAdmission) else { return .rejected }
+                run = retained
+            }
+        }
         let context = ArmedJourney.Context(
             event: controlEvent.properties,
             responses: run.context.responses
@@ -2353,7 +2370,11 @@ private extension JourneyService {
                 return .rejected
             }
         } else {
-            Task { await continueRun() }
+            beginRunExecution(executionKey)
+            Task { [weak self] in
+                await continueRun()
+                await self?.endRunExecution(executionKey)
+            }
         }
         return .accepted
     }
@@ -2440,6 +2461,44 @@ private extension JourneyService {
         })?.entryStepId
     }
 
+}
+
+extension JourneyService {
+    /// Observes only an existing run. Never prepares native state or creates a map entry.
+    func liveFormAnswersJSON(runID: String, owner: String) async throws -> Data? {
+        let generation = executionFence.token().generation
+        guard identity.getDistinctId() == owner,
+              let entry = nativeValuesByRun[runID], entry.owner == owner else { return nil }
+        guard await entry.values.isPrepared else { return nil }
+        let answers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>
+        do {
+            answers = try await entry.values.formAnswers(policy: entry.policy)
+        } catch {
+            try Task.checkCancellation()
+            switch error {
+            case is CancellationError,
+                 ExperienceInteractiveScreenError.stateContract("Response forms are unavailable"):
+                return nil
+            #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+            case NuxieNativeRuntimeError.closed,
+                 NuxieNativeRuntimeError.missingHandle("shared view model"),
+                 NuxieRuntimeExecutorError.closed:
+                return nil
+            #endif
+            default:
+                throw error
+            }
+        }
+        guard identity.getDistinctId() == owner,
+              executionFence.token().generation == generation,
+              let current = nativeValuesByRun[runID], current.owner == owner,
+              current.values === entry.values else { return nil }
+        return try JSONEncoder().encode(answers)
+    }
+
+    func hasNativeValuesForTesting(runID: String) -> Bool {
+        nativeValuesByRun[runID] != nil
+    }
 }
 
 // MARK: - Durable execution
