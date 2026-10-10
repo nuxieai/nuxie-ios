@@ -47,8 +47,9 @@ frontend rejects successful runner exits that execute zero XCTest cases. The
 StoreKit suite requires native StoreKitTest availability; unavailable execution
 cannot count as qualification.
 
-The iOS unit suite runs inside the existing runtime host application so UIKit
-scene delivery and Metal initialization receive the simulator app lifecycle.
+The iOS unit suite runs inside a private UIKit test host so scene delivery and
+Metal initialization receive the simulator app lifecycle. The host preserves
+the authored suites' legacy window context without the runtime browser scene.
 App archives use the authored bundle name; the original public application
 target labels remain available as aliases.
 

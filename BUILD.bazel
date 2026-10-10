@@ -120,13 +120,32 @@ sdk_test_library(
     defines = ["SWIFT_PACKAGE", "NUXIE_PROVIDER_ADAPTER_TESTS"],
     deps = _TEST_DEPS,
 )
+swift_library(
+    name = "unit_test_host_sources",
+    testonly = True,
+    visibility = ["//visibility:private"],
+    module_name = "BazelSDKUnitTestHost",
+    srcs = ["//scripts/bazel:UnitTestHost.swift"],
+    copts = _TEST_SWIFT,
+    deps = [":Nuxie"],
+)
+ios_application(
+    name = "BazelSDKUnitTestHost",
+    testonly = True,
+    visibility = ["//visibility:private"],
+    bundle_id = "com.nuxie.sdk.bazel-unit-tests-host",
+    minimum_os_version = "15.0",
+    families = ["iphone", "ipad"],
+    infoplists = ["//scripts/bazel:Info.plist"],
+    deps = [":unit_test_host_sources"],
+)
 ios_unit_test(
     name = "NuxieSDKUnitTests",
     bundle_id = "com.nuxie.sdk.unittests",
     minimum_os_version = "15.0",
     # UIKit scene delivery and native Metal require application initialization;
     # direct xctest logic execution does not supply the simulator app lifecycle.
-    test_host = ":NuxieExperienceRuntimeHostApp",
+    test_host = ":BazelSDKUnitTestHost",
     deps = [":unit_test_sources"],
     resources = [":unit_fixture_folders", ":unit_fixtures"],
     data = [":sdk_test_inputs"],
