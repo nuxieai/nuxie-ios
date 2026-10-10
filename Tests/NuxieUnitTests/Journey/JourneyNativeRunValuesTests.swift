@@ -28,7 +28,12 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         try await verifyLiveFormAnswerObservation(retireNativeSession: true)
     }
 
-    private func verifyLiveFormAnswerObservation(retireNativeSession: Bool) async throws {
+    func testLiveFormAnswerObservationThrowsForMalformedResponseSheet() async throws {
+        try await verifyLiveFormAnswerObservation(retireNativeSession: false, mismatchedResponseModel: true)
+    }
+
+    private func verifyLiveFormAnswerObservation(retireNativeSession: Bool,
+        mismatchedResponseModel: Bool = false) async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("rule-group-install")
         let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self,
@@ -44,10 +49,17 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         addTeardownBlock { await service.shutdown() }
         let absent = try await service.liveFormAnswersJSON(runID: "unknown", owner: "customer")
         XCTAssertNil(absent)
+        let insertedUnknownRun = await service.hasNativeValuesForTesting(runID: "unknown")
+        XCTAssertFalse(insertedUnknownRun, "An observation cannot create native run state")
         await service.initialize()
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let initial = try await authenticatedRenderedSnapshot(fixture)
-        let snapshot = replacing(initial, responses: policy.responses)
+        var responses = policy.responses
+        if mismatchedResponseModel {
+            let form = try XCTUnwrap(responses["profile"])
+            responses["profile"] = .init(title: form.title, model: "DifferentResponseModel", fields: form.fields)
+        }
+        let snapshot = replacing(initial, responses: responses)
         await service.profileDidCommit(snapshot, distinctId: "customer")
         let shown = await MainActor.run { presenter.request }
         let values = try XCTUnwrap(shown).runValues
@@ -61,6 +73,16 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         _ = try await native.sessions.mutate([
             .setString(instance: native.reference, path: "responses:profile/name", value: Data("Ada".utf8)),
         ])
+        if mismatchedResponseModel {
+            do {
+                _ = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+                XCTFail("A malformed response sheet must throw instead of looking unavailable")
+            } catch {
+                XCTAssertEqual(error as? ExperienceInteractiveScreenError,
+                    .stateContract("Native response form does not match its release"))
+            }
+            return
+        }
         let before = try await values.snapshot()
         let observed = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
         let answers = try JSONDecoder().decode(ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>.self,
@@ -70,6 +92,10 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         XCTAssertEqual(before, after)
         let wrongOwner = try await service.liveFormAnswersJSON(runID: runID, owner: "other")
         XCTAssertNil(wrongOwner)
+        let observedAgain = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+        let answersAgain = try JSONDecoder().decode(ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>.self,
+            from: XCTUnwrap(observedAgain))
+        XCTAssertEqual(answersAgain["profile"]?["name"], .string("Ada"))
         let journalAfter = try await journal.runs()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
