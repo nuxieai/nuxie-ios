@@ -124,6 +124,9 @@ ios_unit_test(
     name = "NuxieSDKUnitTests",
     bundle_id = "com.nuxie.sdk.unittests",
     minimum_os_version = "15.0",
+    # UIKit scene delivery and native Metal require application initialization;
+    # direct xctest logic execution does not supply the simulator app lifecycle.
+    test_host = ":NuxieExperienceRuntimeHostApp",
     deps = [":unit_test_sources"],
     resources = [":unit_fixture_folders", ":unit_fixtures"],
     data = [":sdk_test_inputs"],
@@ -180,7 +183,7 @@ swift_library(
     deps = [":Nuxie"],
 )
 ios_application(
-    name = "NuxieExperienceRuntimeHostApp",
+    name = "NuxieExperienceRuntimeHost",
     bundle_name = "NuxieExperienceRuntimeHost",
     bundle_id = "com.nuxie.sdk.experience-runtime-host",
     minimum_os_version = "15.0",
@@ -189,6 +192,7 @@ ios_application(
     deps = [":experience_host_sources"],
     resources = [":experience_host_resources"],
 )
+alias(name = "NuxieExperienceRuntimeHostApp", actual = ":NuxieExperienceRuntimeHost")
 
 sdk_test_library(
     name = "experience_input_test_sources",
@@ -288,7 +292,7 @@ swift_library(
     deps = [":Nuxie"],
 )
 ios_application(
-    name = "NuxieExperienceRuntimeReferenceApp",
+    name = "NuxieExperienceRuntimeReference",
     bundle_name = "NuxieExperienceRuntimeReference",
     bundle_id = "com.nuxie.sdk.experience-runtime-reference",
     minimum_os_version = "15.0",
@@ -297,6 +301,7 @@ ios_application(
     deps = [":reference_app_sources"],
     resources = [":unit_fixture_folders"],
 )
+alias(name = "NuxieExperienceRuntimeReferenceApp", actual = ":NuxieExperienceRuntimeReference")
 
 swift_library(
     name = "e2e_app_sources",

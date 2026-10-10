@@ -47,6 +47,11 @@ frontend rejects successful runner exits that execute zero XCTest cases. The
 StoreKit suite requires native StoreKitTest availability; unavailable execution
 cannot count as qualification.
 
+The iOS unit suite runs inside the existing runtime host application so UIKit
+scene delivery and Metal initialization receive the simulator app lifecycle.
+App archives use the authored bundle name; the original public application
+target labels remain available as aliases.
+
 Debug uses Swift's debug configuration; Release uses its optimized
 configuration. Both retain Swift 5 language mode, the supported iOS 15/macOS 12
 deployment targets, and the SDK/runtime strict concurrency checks. XcodeGen's
@@ -127,7 +132,8 @@ platform-bound framework artifacts.
 | `NuxieRuntime`, `NuxieRuntimeMac` | Swift runtime adapter and Mac alias |
 | `NuxieSDK`, `NuxieSDKMac` | SDK dynamic frameworks, including Swift import modules |
 | `NuxieTestSupportiOS`, `NuxieTestSupportMac` | Shared test-support module aliases |
-| `NuxieSDKUnitTests`, `NuxieSDKMacUnitTests`, `NuxieSDKIntegrationTests` | Unhosted XCTest bundles |
+| `NuxieSDKUnitTests` | Hosted UIKit and native Metal unit tests |
+| `NuxieSDKMacUnitTests`, `NuxieSDKIntegrationTests` | Unhosted XCTest bundles |
 | `NuxieVideoDeviceTests`, `NuxieExperienceInputTests` | Hosted runtime/input XCTest bundles |
 | `NuxieStoreKitTestHost`, `NuxieSDKStoreKitTests` | iOS 17 StoreKit host and qualification bundle |
 | `NuxieExperienceRuntimeHostApp`, `NuxieExperienceRuntimeReferenceApp` | Runtime host and reference applications |

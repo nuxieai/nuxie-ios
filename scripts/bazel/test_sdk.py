@@ -429,6 +429,17 @@ class NativeCommandSelectionTests(unittest.TestCase):
 
 
 class AuthoredAppMetadataTests(unittest.TestCase):
+    def test_application_publication_uses_the_authored_bundle_archive_from_its_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "NuxieExperienceRuntimeHost.ipa"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("Payload/NuxieExperienceRuntimeHost.app/Info.plist", b"authored bundle")
+            with patch.object(sdk, "ROOT", root), patch.object(sdk, "outputs", return_value=[archive]):
+                sdk.publish_build("//:NuxieExperienceRuntimeHostApp", [], "ios-simulator", "Debug")
+            published = root / ".bazel-artifacts/build/ios-simulator/Debug/NuxieExperienceRuntimeHost.app/Info.plist"
+            self.assertEqual(published.read_bytes(), b"authored bundle")
+
     def test_app_version_resolution_retains_native_settings_and_authored_metadata(self):
         source = sdk.ROOT / "Tests/ExperienceRuntimeHostApp/Sources/Info.plist"
         authored = plistlib.loads(source.read_bytes())

@@ -147,7 +147,10 @@ def publish_build(target: str, flags: list[str], sdk_platform: str, configuratio
     if name not in names:
         return
     owner, bundle_name = names[name]
-    archives = [path for path in outputs(target, flags) if path.name in (owner + ".zip", owner + ".ipa")]
+    archive_names = {owner + ".zip", owner + ".ipa"}
+    if bundle_name.endswith(".app"):
+        archive_names.add(bundle_name.removesuffix(".app") + ".ipa")
+    archives = [path for path in outputs(target, flags) if path.name in archive_names]
     if len(archives) != 1:
         raise ValueError("Expected one built SDK framework/application archive")
     directory = ROOT / ".bazel-artifacts/build" / sdk_platform / configuration
