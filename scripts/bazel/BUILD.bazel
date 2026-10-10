@@ -1,2 +1,2 @@
 package(default_visibility = ["//visibility:public"])
-exports_files(["Package.swift", "Info.plist", "NuxieBundle.swift", "UnitTestHost.swift", "runtime.bzl", "sdk.bzl", "app-plist.py", "map-test-sources.py"])
+exports_files(["Package.swift", "Info.plist", "NuxieBundle.swift", "runtime.bzl", "sdk.bzl", "app-plist.py", "map-test-sources.py"])
