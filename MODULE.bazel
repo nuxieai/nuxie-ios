@@ -6,6 +6,19 @@ bazel_dep(name = "rules_apple", version = "4.5.0")
 bazel_dep(name = "rules_swift", version = "4.1.0")
 bazel_dep(name = "rules_swift_package_manager", version = "1.24.1")
 bazel_dep(name = "rules_cc", version = "0.2.20")
+bazel_dep(name = "rules_python", version = "1.8.0")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+    name = "nuxie_xctestrunner",
+    urls = ["https://github.com/google/xctestrunner/archive/d2ed8cea1af0e33e12acbb69b748877433813a3d.tar.gz"],
+    strip_prefix = "xctestrunner-d2ed8cea1af0e33e12acbb69b748877433813a3d",
+    sha256 = "6ff20c63f74e8ecdfbae95b894582eece3a6119329236110581cb85e1a5be2b2",
+    patches = ["//scripts/bazel:xctestrunner-empty-activities.patch"],
+    patch_strip = 1,
+)
+apple_tools = use_extension("@rules_apple//apple:extensions.bzl", "non_module_deps")
+override_repo(apple_tools, xctestrunner = "nuxie_xctestrunner")
 
 swift_deps = use_extension("@rules_swift_package_manager//:extensions.bzl", "swift_deps")
 swift_deps.from_package(

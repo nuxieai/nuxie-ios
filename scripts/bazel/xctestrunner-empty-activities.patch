@@ -1,0 +1,6 @@
+diff --git a/xctestrunner/test_runner/xcresult_util.py b/xctestrunner/test_runner/xcresult_util.py
+--- a/xctestrunner/test_runner/xcresult_util.py
++++ b/xctestrunner/test_runner/xcresult_util.py
+@@ -82 +82 @@
+-    activity_summaries = test_summary_result['activitySummaries']['_values']
++    activity_summaries = test_summary_result['activitySummaries'].get('_values', [])

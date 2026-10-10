@@ -65,6 +65,7 @@ bazel-prepare:
 
 bazel-contract-test:
 	@python3 -B -m unittest discover -s scripts/bazel -p 'test_*.py'
+	@python3 -c 'import sys; sys.path.insert(0, "scripts/bazel"); import sdk; sdk.run(sdk.bazel_command() + ["test", "//scripts/bazel:xcresult_test"])'
 
 # Default target
 help:
@@ -324,7 +325,7 @@ test-flow-runtime-ui: test-experience-runtime-ui
 
 # The holistic gate: iOS unit + focused native-runtime + hosted UIKit input + integration
 # (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
-test-all: check-sdk-guidance check-provider-adapters check-event-catalog
+test-all: bazel-contract-test check-sdk-guidance check-provider-adapters check-event-catalog
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
 	@$(MAKE) test-experience-input
