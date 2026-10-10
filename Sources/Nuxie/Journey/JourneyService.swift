@@ -2482,6 +2482,20 @@ private extension JourneyService {
         for value in takeNativeValues(owner: owner) { await value.retire() }
     }
 
+    /// Observes only an existing run. Never prepares native state or creates a map entry.
+    internal func liveFormAnswersJSON(runID: String, owner: String) async throws -> Data? {
+        let generation = executionFence.token().generation
+        guard identity.getDistinctId() == owner,
+              let entry = nativeValuesByRun[runID], entry.owner == owner else { return nil }
+        guard await entry.values.isPrepared else { return nil }
+        let answers = try await entry.values.formAnswers(policy: entry.policy)
+        guard identity.getDistinctId() == owner,
+              executionFence.token().generation == generation,
+              let current = nativeValuesByRun[runID], current.owner == owner,
+              current.values === entry.values else { return nil }
+        return try JSONEncoder().encode(answers)
+    }
+
     func nativeValues(for runID: String, owner: String, policy: JourneyReleaseValuePolicy, snapshot: ExperienceRunSnapshot? = nil) -> ExperienceRunValues {
         if let existing = nativeValuesByRun[runID], existing.owner == owner { return existing.values }
         let values = ExperienceRunValues(snapshot: snapshot)

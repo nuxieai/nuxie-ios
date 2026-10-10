@@ -49,6 +49,17 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     sdkLifecycle.snapshot()?.graph.core
   }
 
+  /// Reads the live native form answers of an existing run for qualification.
+  /// Returns nil for an unavailable run or a different identity. Does not create,
+  /// prepare, save, or advance a run. The result is a JSON object keyed by form.
+  @_spi(Testing)
+  public func liveFormAnswersJSON(runID: String, distinctId: String) async throws -> Data? {
+    guard let operation = runningOperation() else { return nil }
+    defer { operation.finish() }
+    guard let journeys = operation.graph.core.journeys as? JourneyService else { return nil }
+    return try await journeys.liveFormAnswersJSON(runID: runID, owner: distinctId)
+  }
+
   // MARK: - Setup
 
   /// Setup the SDK (must be called before any other methods)

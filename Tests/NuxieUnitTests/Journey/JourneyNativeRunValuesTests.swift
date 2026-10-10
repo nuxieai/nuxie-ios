@@ -6,6 +6,57 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyNativeRunValuesTests: JourneyTestCase {
+    func testLiveFormAnswerObservationReadsWithoutSavingOrCreatingRunValues() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("rule-group-install")
+        let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self,
+            from: Data(contentsOf: directory.appendingPathComponent("policy.json")))
+        let storage = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(storage) }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let presenter = await MainActor.run { RecordingJourneyPresenter() }
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: storage, presenter: presenter)
+        addTeardownBlock { await service.shutdown() }
+        let absent = try await service.liveFormAnswersJSON(runID: "unknown", owner: "customer")
+        XCTAssertNil(absent)
+        await service.initialize()
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let initial = try await authenticatedRenderedSnapshot(fixture)
+        let snapshot = replacing(initial, responses: policy.responses)
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let shown = await MainActor.run { presenter.request }
+        let values = try XCTUnwrap(shown).runValues
+        let journal = try JourneyRunJournal(directory: storage, distinctId: "customer")
+        let runs = try await journal.runs()
+        let runID = try XCTUnwrap(runs.first).id
+        let file = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")), valuePolicy: policy.native)
+        let prepared = try await values.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        _ = try await native.sessions.mutate([
+            .setString(instance: native.reference, path: "responses:profile/name", value: Data("Ada".utf8)),
+        ])
+        let before = try await values.snapshot()
+        let observed = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+        let answers = try JSONDecoder().decode(ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>.self,
+            from: XCTUnwrap(observed))
+        XCTAssertEqual(answers["profile"]?["name"], .string("Ada"))
+        let after = try await values.snapshot()
+        XCTAssertEqual(before, after)
+        let wrongOwner = try await service.liveFormAnswersJSON(runID: runID, owner: "other")
+        XCTAssertNil(wrongOwner)
+        let journalAfter = try await journal.runs()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(journalAfter), try encoder.encode(runs))
+        await service.shutdown()
+        let retired = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
+        XCTAssertNil(retired)
+    }
+
     func testTimedWaitRestoresPublishedGoalsBeforeContinuingWithoutAScreen() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let initial = try await authenticatedRenderedSnapshot(fixture)
