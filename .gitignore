@@ -111,3 +111,10 @@ plans/
 # macOS
 .DS_Store
 *.profraw
+
+# Bazel outputs and local configuration
+/bazel-*
+/.bazelrc.local
+/.bazel-artifacts/
+/.bazel-cache.local.bazelrc
+/.bazel-cache.*.tmp

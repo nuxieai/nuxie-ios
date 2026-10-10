@@ -1,0 +1,24 @@
+module(name = "nuxie_ios", version = "0.1.0")
+
+# These releases support Bazel 9; the selected Xcode supplies Apple's SDKs.
+bazel_dep(name = "apple_support", version = "2.8.0")
+bazel_dep(name = "rules_apple", version = "4.5.0")
+bazel_dep(name = "rules_swift", version = "4.1.0")
+bazel_dep(name = "rules_swift_package_manager", version = "1.24.1")
+bazel_dep(name = "rules_cc", version = "0.2.20")
+
+swift_deps = use_extension("@rules_swift_package_manager//:extensions.bzl", "swift_deps")
+swift_deps.from_package(
+    declare_swift_package = False,
+    resolved = "//:Package.resolved",
+    swift = "//scripts/bazel:Package.swift",
+)
+use_repo(
+    swift_deps,
+    "swiftpkg_nimble",
+    "swiftpkg_quick",
+)
+
+runtime = use_extension("//scripts/bazel:runtime.bzl", "runtime")
+runtime.artifact(metadata = "//:Runtime/artifact.json")
+use_repo(runtime, "nuxie_runtime_release")

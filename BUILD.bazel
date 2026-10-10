@@ -1,0 +1,357 @@
+load("@rules_apple//apple:ios.bzl", "ios_application", "ios_dynamic_framework", "ios_ui_test", "ios_unit_test")
+load("@rules_apple//apple:macos.bzl", "macos_dynamic_framework", "macos_unit_test")
+load("@rules_apple//apple:resources.bzl", "apple_resource_bundle", "apple_resource_group")
+load("@rules_swift//swift:swift_library.bzl", "swift_library")
+load("//scripts/bazel:sdk.bzl", "sdk_framework_module", "sdk_platform_artifact", "sdk_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Package.swift", "Package.resolved", "Runtime/artifact.json", "Runtime/artifact-set.json"])
+
+_SWIFT = ["-swift-version", "5", "-strict-concurrency=complete"]
+_TEST_SWIFT = ["-swift-version", "5"]
+_SDK_RESOURCES = [
+    "Sources/Nuxie/PrivacyInfo.xcprivacy",
+    "Sources/Nuxie/Resources/LICENSE-unicode.txt",
+    "Sources/Nuxie/Resources/timezone-bundle.json",
+] + glob(["Sources/Nuxie/Resources/**/*.strings"])
+_TEST_DEPS = [":Nuxie", ":NuxieRuntime", ":NuxieTestSupport", "@swiftpkg_nimble//:Nimble", "@swiftpkg_quick//:Quick"]
+
+apple_resource_bundle(
+    name = "sdk_resources",
+    bundle_name = "Nuxie_Nuxie",
+    bundle_id = "com.nuxie.sdk.resources",
+    infoplists = ["//scripts/bazel:Info.plist"],
+    resources = _SDK_RESOURCES,
+)
+
+swift_library(
+    name = "NuxieRuntime",
+    module_name = "NuxieRuntime",
+    package_name = "Nuxie",
+    srcs = glob(["Sources/NuxieRuntime/**/*.swift"]),
+    copts = _SWIFT,
+    deps = ["@nuxie_runtime_release//:runtime"],
+)
+alias(name = "NuxieRuntimeMac", actual = ":NuxieRuntime")
+
+# Public SwiftInfo/CcInfo providers let wrappers statically link the SDK into
+# their existing bridge framework without adding an unembedded dynamic Nuxie.
+swift_library(
+    name = "Nuxie",
+    module_name = "Nuxie",
+    package_name = "Nuxie",
+    srcs = glob(["Sources/Nuxie/**/*.swift"]) + ["//scripts/bazel:NuxieBundle.swift"],
+    copts = _SWIFT + ["-DNUXIE_BAZEL"],
+    features = ["swift.enable_testing"],
+    generates_header = True,
+    data = [":sdk_resources"],
+    deps = [":NuxieRuntime"],
+)
+
+sdk_framework_module(name = "sdk_framework_module", deps = [":Nuxie"])
+
+ios_dynamic_framework(
+    name = "NuxieSDK",
+    bundle_name = "Nuxie",
+    bundle_id = "com.nuxie.sdk",
+    families = ["iphone", "ipad"],
+    minimum_os_version = "15.0",
+    infoplists = ["//scripts/bazel:Info.plist"],
+    deps = [":sdk_framework_module"],
+    resources = _SDK_RESOURCES,
+)
+
+macos_dynamic_framework(
+    name = "NuxieSDKMac",
+    bundle_name = "Nuxie",
+    bundle_id = "com.nuxie.sdk.macos",
+    minimum_os_version = "12.0",
+    infoplists = ["//scripts/bazel:Info.plist"],
+    deps = [":sdk_framework_module"],
+    resources = _SDK_RESOURCES,
+)
+
+alias(name = "sdk", actual = ":NuxieSDK")
+alias(name = "sdk_macos", actual = ":NuxieSDKMac")
+sdk_platform_artifact(name = "sdk_ios_device", artifact = ":NuxieSDK", platform = "@apple_support//platforms:ios_arm64")
+sdk_platform_artifact(name = "sdk_ios_simulator", artifact = ":NuxieSDK", platform = "@apple_support//platforms:ios_sim_arm64")
+
+swift_library(
+    name = "NuxieTestSupport",
+    testonly = True,
+    module_name = "NuxieTestSupport",
+    package_name = "Nuxie",
+    srcs = glob(["Tests/NuxieTestSupport/**/*.swift"]),
+    copts = _TEST_SWIFT,
+    features = ["swift.enable_testing"],
+    deps = [":Nuxie", ":NuxieRuntime", "@swiftpkg_nimble//:Nimble", "@swiftpkg_quick//:Quick"],
+)
+alias(name = "NuxieTestSupportiOS", actual = ":NuxieTestSupport")
+alias(name = "NuxieTestSupportMac", actual = ":NuxieTestSupport")
+
+# Existing source/fixture conformance tests inspect these paths through
+# #filePath. They are declared test inputs, never SDK production resources.
+filegroup(
+    name = "sdk_test_inputs",
+    testonly = True,
+    srcs = glob(["Sources/**", "Tests/**", "fixtures/**", "docs/**", "Examples/Adapters/**"]),
+)
+
+apple_resource_group(
+    name = "unit_fixture_folders",
+    structured_resources = glob(["Tests/ExperienceRuntimeHostApp/Fixtures/**", "fixtures/video/**"]),
+    strip_structured_resources_prefixes = ["Tests/ExperienceRuntimeHostApp", "fixtures"],
+)
+apple_resource_group(
+    name = "unit_fixtures",
+    resources = glob(["Tests/NuxieUnitTests/Fixtures/*"], exclude = ["**/*.swift", "**/*.py", "**/*.md"]),
+    structured_resources = glob(["Tests/NuxieUnitTests/Fixtures/**/*"], exclude = ["**/*.swift", "**/*.py", "**/*.md"]),
+    strip_structured_resources_prefixes = ["Tests/NuxieUnitTests"],
+)
+
+sdk_test_library(
+    name = "unit_test_sources",
+    module_name = "NuxieSDKUnitTests",
+    srcs = glob(["Tests/NuxieUnitTests/**/*.swift"], exclude = [
+        "Tests/NuxieUnitTests/Experiences/ExperienceHardwareInputTests.swift",
+        "Tests/NuxieUnitTests/Experiences/ExperienceTextInputSemanticsTests.swift",
+    ]) + ["Examples/Adapters/NuxieProviderCheckoutRoute.swift"],
+    defines = ["SWIFT_PACKAGE", "NUXIE_PROVIDER_ADAPTER_TESTS"],
+    deps = _TEST_DEPS,
+)
+ios_unit_test(
+    name = "NuxieSDKUnitTests",
+    bundle_id = "com.nuxie.sdk.unittests",
+    minimum_os_version = "15.0",
+    deps = [":unit_test_sources"],
+    resources = [":unit_fixture_folders", ":unit_fixtures"],
+    data = [":sdk_test_inputs"],
+    size = "large",
+)
+
+sdk_test_library(
+    name = "mac_unit_test_sources",
+    module_name = "NuxieSDKMacUnitTests",
+    srcs = glob(["Tests/NuxieUnitTests/**/*.swift"]),
+    defines = ["SWIFT_PACKAGE"],
+    deps = _TEST_DEPS,
+)
+macos_unit_test(
+    name = "NuxieSDKMacUnitTests",
+    bundle_id = "com.nuxie.sdk.macos.unittests",
+    minimum_os_version = "12.0",
+    deps = [":mac_unit_test_sources"],
+    resources = [":unit_fixture_folders", ":unit_fixtures"],
+    data = [":sdk_test_inputs"],
+    size = "large",
+)
+
+sdk_test_library(
+    name = "integration_test_sources",
+    module_name = "NuxieSDKIntegrationTests",
+    srcs = glob(["Tests/NuxieIntegrationTests/**/*.swift"]),
+    defines = ["SWIFT_PACKAGE"],
+    deps = _TEST_DEPS,
+)
+ios_unit_test(
+    name = "NuxieSDKIntegrationTests",
+    bundle_id = "com.nuxie.sdk.integrationtests",
+    minimum_os_version = "15.0",
+    deps = [":integration_test_sources"],
+    data = [":sdk_test_inputs"],
+    size = "large",
+)
+
+apple_resource_group(
+    name = "experience_host_resources",
+    structured_resources = glob([
+        "Tests/ExperienceRuntimeHostApp/Fixtures/**",
+        "Tests/ExperienceRuntimeHostApp/PresentationStates/**",
+        "fixtures/journeys/rendered-semantic-roles/**",
+    ]),
+    strip_structured_resources_prefixes = ["Tests/ExperienceRuntimeHostApp", "fixtures/journeys"],
+)
+swift_library(
+    name = "experience_host_sources",
+    module_name = "NuxieExperienceRuntimeHost",
+    srcs = glob(["Tests/ExperienceRuntimeHostApp/Sources/**/*.swift"]),
+    copts = _TEST_SWIFT,
+    deps = [":Nuxie"],
+)
+ios_application(
+    name = "NuxieExperienceRuntimeHostApp",
+    bundle_name = "NuxieExperienceRuntimeHost",
+    bundle_id = "com.nuxie.sdk.experience-runtime-host",
+    minimum_os_version = "15.0",
+    families = ["iphone", "ipad"],
+    infoplists = [":experience_host_plist"],
+    deps = [":experience_host_sources"],
+    resources = [":experience_host_resources"],
+)
+
+sdk_test_library(
+    name = "experience_input_test_sources",
+    module_name = "NuxieExperienceInputTests",
+    srcs = ["Tests/NuxieUnitTests/Experiences/" + name + ".swift" for name in [
+        "ExperienceTextInputSemanticsTests", "ExperienceHardwareInputTests", "ExperienceTextInputTypographyTests",
+        "SignedSemanticJourneyTests", "ExperienceSharedValuesTests", "ExperienceSharedValuesPresentationTests",
+    ]],
+    defines = ["NUXIE_HOSTED_INPUT_TESTS"],
+    deps = _TEST_DEPS,
+)
+apple_resource_group(
+    name = "experience_input_resources",
+    structured_resources = glob([
+        "fixtures/journeys/rendered-semantic-screen-control/**",
+        "fixtures/journeys/rendered-semantic-screen-control-condition/**",
+        "fixtures/journeys/rendered-semantic-screen-control-error/**",
+        "fixtures/journeys/rendered-semantic-roles/**",
+        "fixtures/journeys/rendered-text-input/**",
+    ]),
+    strip_structured_resources_prefixes = ["fixtures/journeys"],
+    resources = ["Tests/NuxieUnitTests/Fixtures/semantic_text.riv", "Tests/NuxieUnitTests/Fixtures/native_input_layout.riv"],
+)
+ios_unit_test(
+    name = "NuxieExperienceInputTests",
+    bundle_id = "com.nuxie.sdk.experience-input-tests",
+    minimum_os_version = "15.0",
+    test_host = ":NuxieExperienceRuntimeHostApp",
+    deps = [":experience_input_test_sources"],
+    resources = [":experience_input_resources"],
+    data = [":sdk_test_inputs"],
+    size = "large",
+)
+
+sdk_test_library(
+    name = "video_test_sources",
+    module_name = "NuxieVideoDeviceTests",
+    srcs = [
+        "Tests/NuxieUnitTests/Experiences/ExperienceVideoPlaybackTests.swift",
+        "Tests/NuxieUnitTests/Experiences/ExperienceVideoConcurrencyTests.swift",
+    ],
+    defines = ["SWIFT_PACKAGE"],
+    deps = _TEST_DEPS,
+)
+apple_resource_group(
+    name = "video_resources",
+    structured_resources = glob(["fixtures/video/**"]),
+    strip_structured_resources_prefixes = ["fixtures"],
+)
+ios_unit_test(
+    name = "NuxieVideoDeviceTests",
+    bundle_id = "com.nuxie.sdk.video-device-tests",
+    minimum_os_version = "15.0",
+    test_host = ":NuxieExperienceRuntimeHostApp",
+    deps = [":video_test_sources"],
+    resources = [":video_resources"],
+    data = [":sdk_test_inputs"],
+    size = "large",
+)
+
+swift_library(
+    name = "storekit_host_sources",
+    module_name = "NuxieStoreKitTestHost",
+    srcs = glob(["Tests/NuxieStoreKitTestHost/Sources/**/*.swift"]),
+    copts = _TEST_SWIFT,
+)
+ios_application(
+    name = "NuxieStoreKitTestHost",
+    bundle_id = "com.nuxie.sdk.storekit-test-host",
+    minimum_os_version = "17.0",
+    families = ["iphone", "ipad"],
+    infoplists = ["//scripts/bazel:Info.plist"],
+    deps = [":storekit_host_sources"],
+)
+sdk_test_library(
+    name = "storekit_test_sources",
+    module_name = "NuxieSDKStoreKitTests",
+    srcs = glob(["Tests/NuxieStoreKitTests/**/*.swift"]),
+    strict_concurrency = True,
+    deps = _TEST_DEPS,
+)
+ios_unit_test(
+    name = "NuxieSDKStoreKitTests",
+    bundle_id = "com.nuxie.sdk.storekittests",
+    minimum_os_version = "17.0",
+    test_host = ":NuxieStoreKitTestHost",
+    deps = [":storekit_test_sources"],
+    resources = ["Tests/NuxieStoreKitTests/Fixtures/NuxieNativePurchase.storekit"],
+    data = [":sdk_test_inputs"],
+    env = {"NUXIE_STOREKIT_REQUIRE_AVAILABLE": "1"},
+    size = "large",
+)
+
+swift_library(
+    name = "reference_app_sources",
+    module_name = "NuxieExperienceRuntimeReference",
+    srcs = glob(["Examples/ExperienceRuntimeReferenceApp/Sources/**/*.swift"]),
+    copts = _TEST_SWIFT,
+    deps = [":Nuxie"],
+)
+ios_application(
+    name = "NuxieExperienceRuntimeReferenceApp",
+    bundle_name = "NuxieExperienceRuntimeReference",
+    bundle_id = "com.nuxie.sdk.experience-runtime-reference",
+    minimum_os_version = "15.0",
+    families = ["iphone"],
+    infoplists = [":reference_app_plist"],
+    deps = [":reference_app_sources"],
+    resources = [":unit_fixture_folders"],
+)
+
+swift_library(
+    name = "e2e_app_sources",
+    module_name = "NuxieE2EApp",
+    srcs = glob(["Examples/E2EApp/Sources/**/*.swift"]),
+    copts = _TEST_SWIFT,
+    deps = [":Nuxie"],
+)
+ios_application(
+    name = "NuxieE2EApp",
+    bundle_id = "io.nuxie.e2eapp",
+    minimum_os_version = "15.0",
+    families = ["iphone"],
+    infoplists = [":e2e_app_plist"],
+    deps = [":e2e_app_sources"],
+)
+sdk_test_library(
+    name = "e2e_unit_test_sources",
+    module_name = "NuxieE2EAppTests",
+    srcs = glob(["Examples/E2EApp/Tests/Unit/**/*.swift"]),
+    deps = [":e2e_app_sources"],
+)
+ios_unit_test(
+    name = "NuxieE2EAppTests",
+    bundle_id = "io.nuxie.e2eapp.tests",
+    minimum_os_version = "15.0",
+    test_host = ":NuxieE2EApp",
+    deps = [":e2e_unit_test_sources"],
+    size = "large",
+)
+
+sdk_test_library(name = "e2e_ui_test_sources", module_name = "NuxieE2EAppUITests", srcs = glob(["Examples/E2EApp/Tests/UI/**/*.swift"]))
+ios_ui_test(name = "NuxieE2EAppUITests", bundle_id = "io.nuxie.e2eapp.uitests", minimum_os_version = "15.0", test_host = ":NuxieE2EApp", deps = [":e2e_ui_test_sources"], size = "large")
+sdk_test_library(name = "experience_ui_test_sources", module_name = "NuxieExperienceRuntimeUITests", srcs = glob(["Tests/ExperienceRuntimeUITests/**/*.swift"]))
+ios_ui_test(name = "NuxieExperienceRuntimeUITests", bundle_id = "com.nuxie.sdk.experience-runtime-uitests", minimum_os_version = "15.0", test_host = ":NuxieExperienceRuntimeHostApp", deps = [":experience_ui_test_sources"], data = [":sdk_test_inputs"], size = "large")
+sdk_test_library(name = "reference_ui_test_sources", module_name = "NuxieExperienceRuntimeReferenceUITests", srcs = glob(["Tests/ExperienceRuntimeReferenceUITests/**/*.swift"]))
+ios_ui_test(name = "NuxieExperienceRuntimeReferenceUITests", bundle_id = "com.nuxie.sdk.experience-runtime-reference-uitests", minimum_os_version = "15.0", test_host = ":NuxieExperienceRuntimeReferenceApp", deps = [":reference_ui_test_sources"], data = [":sdk_test_inputs"], size = "large")
+
+test_suite(name = "sdk_tests", tests = [":NuxieSDKUnitTests", ":NuxieExperienceInputTests", ":NuxieSDKIntegrationTests"])
+
+# rules_apple handles executable, bundle ID/name/type and development-language
+# substitutions; authored Xcode version settings are resolved separately.
+[
+    genrule(
+        name = name,
+        srcs = [source],
+        outs = [name + ".plist"],
+        tools = ["//scripts/bazel:app-plist.py"],
+        cmd = "$(location //scripts/bazel:app-plist.py) $(location " + source + ") $@ " + version + " 1",
+    )
+    for name, source, version in [
+        ("experience_host_plist", "Tests/ExperienceRuntimeHostApp/Sources/Info.plist", "0.1.0"),
+        ("reference_app_plist", "Examples/ExperienceRuntimeReferenceApp/Sources/Info.plist", "0.1.0"),
+        ("e2e_app_plist", "Examples/E2EApp/Sources/App/Info.plist", "1.0"),
+    ]
+]

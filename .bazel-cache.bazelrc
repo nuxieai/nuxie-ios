@@ -1,0 +1,9 @@
+# Shared immutable caches across Nuxie repositories and Git worktrees.
+# Leave output_base unset: Bazel derives an isolated directory from each checkout.
+common --repository_cache=~/.cache/nuxie/bazel/repositories
+common --repo_contents_cache=~/.cache/nuxie/bazel/repository-contents
+common --repo_contents_cache_gc_max_age=14d
+build --disk_cache=~/.cache/nuxie/bazel/actions
+build --experimental_disk_cache_gc_max_size=16G
+build --experimental_disk_cache_gc_max_age=14d
+build --guard_against_concurrent_changes=full
