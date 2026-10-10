@@ -82,7 +82,10 @@ def options(configuration: str, sdk_platform: str, architecture: str) -> list[st
     if not jobs.isdecimal() or int(jobs) < 1:
         raise ValueError("NUXIE_BAZEL_JOBS must be a positive integer")
     return ["--compilation_mode=" + ("opt" if configuration == "Release" else "dbg"),
-            "--platforms=@apple_support//platforms:" + cpu, "--jobs=" + jobs,
+            "--platforms=@apple_support//platforms:" + cpu,
+            "--apple_platforms=@apple_support//platforms:" + cpu,
+            ("--macos_cpus=" + architecture if sdk_platform == "macos" else "--ios_multi_cpus=" + cpu.removeprefix("ios_")),
+            "--jobs=" + jobs,
             "--macos_minimum_os=12.0" if sdk_platform == "macos" else "--ios_minimum_os=15.0"]
 
 
@@ -188,6 +191,16 @@ def runtime_root(flags: list[str]) -> Path:
     if len(roots) != 1:
         raise ValueError("Expected exactly one checksum-pinned runtime XCFramework")
     return roots.pop()
+
+
+def verify_framework_platform(framework: Path, sdk_platform: str, architecture: str) -> None:
+    """Check the built Mach-O, independently of requested Bazel platform labels."""
+    expected = {"ios-device": "IOS", "ios-simulator": "IOSSIMULATOR", "macos": "MACOS"}[sdk_platform]
+    binary = framework / framework.name.removesuffix(".framework")
+    metadata = run(["xcrun", "vtool", "-arch", architecture, "-show-build", str(binary)], capture=True)
+    actual = re.findall(r"^\s*platform\s+(\S+)\s*$", metadata, re.MULTILINE)
+    if actual != [expected]:
+        raise ValueError(f"Prepared {sdk_platform}/{architecture} framework has Mach-O platforms {actual}; expected {expected}")
 
 
 def runtime_slice(runtime: Path, sdk_platform: str, architectures: list[str]) -> dict:
@@ -426,6 +439,7 @@ def prepare(args: argparse.Namespace) -> None:
                 run(bazel_command() + ["build", *flags, "//:" + target])
                 with tempfile.TemporaryDirectory(prefix="framework-", dir=temporary) as extracted:
                     framework = extract_framework(owning_archive(outputs("//:" + target, flags), target), Path(extracted))
+                    verify_framework_platform(framework, sdk_platform, architecture)
                     merge_framework(framework, stage / product["framework"])
                 static_directory = stage / sdk_platform / args.configuration / "static" / architecture
                 static_directory.mkdir(parents=True)

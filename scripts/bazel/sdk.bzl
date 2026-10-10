@@ -52,12 +52,20 @@ def sdk_test_library(name, module_name, srcs, deps = [], defines = [], strict_co
     )
 
 def _platform_transition_impl(_settings, attr):
-    return {"//command_line_option:platforms": [str(attr.platform)]}
+    # rules_apple's legacy bundle transition derives the actual platform from
+    # ios_multi_cpus, so the platform label alone does not select device code.
+    if not attr.platform.name.startswith("ios_"):
+        fail("SDK platform-bound artifacts require an iOS platform")
+    return {
+        "//command_line_option:platforms": [str(attr.platform)],
+        "//command_line_option:apple_platforms": [str(attr.platform)],
+        "//command_line_option:ios_multi_cpus": [attr.platform.name.removeprefix("ios_")],
+    }
 
 _platform_transition = transition(
     implementation = _platform_transition_impl,
     inputs = [],
-    outputs = ["//command_line_option:platforms"],
+    outputs = ["//command_line_option:platforms", "//command_line_option:apple_platforms", "//command_line_option:ios_multi_cpus"],
 )
 
 def _platform_artifact_impl(ctx):
