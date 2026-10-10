@@ -1,0 +1,136 @@
+{
+  "suite": "events/runtime-link-targets",
+  "version": 1,
+  "cases": [
+    {
+      "url": "https://example.test/path",
+      "target": null,
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/path",
+      "target": "",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/path",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/path",
+      "target": "_parent",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/path",
+      "target": "_top",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/path",
+      "target": "_blank",
+      "destination": "external"
+    },
+    {
+      "url": "https://example.test/path",
+      "target": "in_app",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/path",
+      "target": "external",
+      "destination": "external"
+    },
+    {
+      "url": "mailto:hello@example.test",
+      "target": "_self",
+      "destination": "external"
+    },
+    {
+      "url": "tel:+15555550100",
+      "target": "_self",
+      "destination": "external"
+    },
+    {
+      "url": "sampleapp://item/42",
+      "target": "_self",
+      "destination": "external"
+    },
+    {
+      "url": "not a url",
+      "target": "_self",
+      "destination": null
+    },
+    {
+      "url": "https://",
+      "target": "_self",
+      "destination": null
+    },
+    {
+      "url": "/relative",
+      "target": "_self",
+      "destination": null
+    },
+    {
+      "url": "",
+      "target": "_self",
+      "destination": null
+    },
+    {
+      "url": "https://example.test/?q=a|b",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/?q={value}",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/a^b",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://münich.example/path",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://under_score.example/path",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "mailto:",
+      "target": "_self",
+      "destination": "external"
+    },
+    {
+      "url": "HTTPS://example.test/path",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/bad%escape",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/a%",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/a[b]?x=[v]",
+      "target": "_self",
+      "destination": "in_app"
+    },
+    {
+      "url": "https://example.test/#first#second",
+      "target": "_self",
+      "destination": "in_app"
+    }
+  ]
+}

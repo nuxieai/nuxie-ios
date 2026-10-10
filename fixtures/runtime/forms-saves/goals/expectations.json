@@ -1,0 +1,63 @@
+{
+  "model": "Experience",
+  "property": "experience",
+  "screens": [
+    "goals",
+    "quiet"
+  ],
+  "listProperty": "goals",
+  "itemProperty": "title",
+  "startingValues": {
+    "goals": [
+      {
+        "title": "Read"
+      },
+      {
+        "title": "Walk"
+      }
+    ]
+  },
+  "snapshot": {
+    "goals": [
+      {
+        "title": "Walk"
+      },
+      {
+        "title": "Sleep"
+      },
+      {
+        "title": "Read"
+      }
+    ]
+  },
+  "recovery": {
+    "goals": [
+      {
+        "title": "Walk"
+      },
+      {
+        "title": "Sleep"
+      },
+      {
+        "title": "Read"
+      }
+    ]
+  },
+  "emptyRecovery": {
+    "goals": []
+  },
+  "notYetIncluded": [
+    "forms and saves",
+    "rules and release table",
+    "groups and form state",
+    "rating event values and await continuations",
+    "authored row remove"
+  ],
+  "screenText": {
+    "quiet": "Quiet"
+  },
+  "sourceText": {
+    "cardFallback": "Title",
+    "qualification": "Authored fallback metadata; the title binding replaces it, so it is not a visible runtime expectation."
+  }
+}

@@ -450,11 +450,11 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTAssertFalse(initiallyReady, "Opening a decoder is not a decoded first frame")
         }
         if forceFirstFrameTimeout {
-            try await host.resizeViewport(pixelWidth: 0, pixelHeight: 0)
+            try await host.resizeViewport(bounds: .zero)
             let hiddenReady = try await host.isReadyForPresentation()
             XCTAssertTrue(hiddenReady, "An offscreen video must not block presentation")
             try await Task.sleep(nanoseconds: 2_100_000_000)
-            try await host.resizeViewport(pixelWidth: UInt32(width), pixelHeight: UInt32(height))
+            try await host.resizeViewport(bounds: CGRect(x: 0, y: 0, width: width, height: height))
             let restoredReady = try await host.isReadyForPresentation()
             XCTAssertTrue(restoredReady, "A presented screen stays admitted while the restored video waits")
             // Do not tick the decoder: admission must not accept an opened
@@ -512,7 +512,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 _ = try await host.tick()
                 guard let drawable = layer.nextDrawable() else { return XCTFail("Metal drawable unavailable") }
                 let completed = expectation(description: "endpoint scrub pixels")
-                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
@@ -556,7 +556,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 XCTAssertGreaterThan(host.deliveredFrames, before, "Paused seek to \(seconds) must present decoded pixels")
                 guard let drawable = layer.nextDrawable() else { return XCTFail("Metal drawable unavailable") }
                 let completed = expectation(description: "paused seek pixels")
-                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
@@ -642,7 +642,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             guard let drawable = layer.nextDrawable() else { XCTFail("Metal drawable unavailable"); break }
             let clockBefore = clockQualification ? try mediaClock() : 0
             let completed = expectation(description: "video frame presented")
-            _ = try await runtime.render(drawable: .available(.init(drawable)),
+            _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                 readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             let clockAfter = clockQualification ? try mediaClock() : 0
@@ -684,7 +684,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 let before = try mediaClock()
                 let drawable = try XCTUnwrap(layer.nextDrawable())
                 let completed = expectation(description: "Seek/resume composed timing sample")
-                _ = try await runtime.render(drawable: .available(.init(drawable)),
+                _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let after = try mediaClock()
@@ -857,6 +857,17 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let screen = try await ExperienceInteractiveScreen.open(payload: payload,
             pixelWidth: UInt32(width), pixelHeight: UInt32(height), videoDecoderPool: pool)
         defer { Task { try? await screen.close() } }
+        let playback = try XCTUnwrap(Mirror(reflecting: screen).children
+            .first { $0.label == "videoPlayback" }?.value as? ExperienceVideoPlayback)
+        let initialViewport = try XCTUnwrap(Mirror(reflecting: playback).children
+            .first { $0.label == "viewport" }?.value as? CGRect)
+        XCTAssertEqual(initialViewport, .zero, "Video visibility must wait for the first settled layout")
+        XCTAssertTrue(playback.playbackDiagnostics.isEmpty,
+            "Opening a screen must not acquire video decoders before its first layout")
+        _ = try await screen.resize(pixelWidth: UInt32(width), pixelHeight: UInt32(height), layoutScaleFactor: 1)
+        _ = try await screen.step(elapsedSeconds: 0)
+        XCTAssertFalse(playback.playbackDiagnostics.isEmpty,
+            "The settled first layout must admit visible video")
         let device = try await screen.metalDevice().value
         let layer = CAMetalLayer()
         layer.device = device
@@ -879,7 +890,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             _ = try await screen.step(elapsedSeconds: 0.03)
             let drawable = try XCTUnwrap(layer.nextDrawable())
             let completed = expectation(description: "prepared video presented")
-            let result = try await screen.renderFrame(drawable: .init(drawable), capturesSemantics: false,
+            let result = try await screen.renderFrame(layoutScaleFactor: 1, drawable: .init(drawable), capturesSemantics: false,
                 capturesCaptions: true, completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             XCTAssertEqual(result.outcome.disposition, .presented)

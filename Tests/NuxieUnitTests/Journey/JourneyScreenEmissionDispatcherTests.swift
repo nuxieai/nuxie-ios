@@ -2,6 +2,45 @@ import XCTest
 @testable import Nuxie
 
 final class JourneyScreenEmissionDispatcherTests: XCTestCase {
+    func testReservedEventDropsOnlyItselfFromSharedFrame() async throws {
+        struct Vector: Decodable {
+            let events: [String]
+            let expectedEvents: [String]
+            let expectedSequences: [UInt64]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/events/reserved-event-filtering.json")))
+        let run = ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
+            lifecycleGeneration: 0, presentationEpoch: 0)
+        for scripted in [false, true] {
+            let dispatcher = ScreenEmissionDispatcher(createId: incrementingID(), now: { "2026-10-06T00:00:00Z" },
+                executeScriptAction: { _ in vector.events.map { .event(name: $0, payload: [:]) } })
+            let result = scripted
+                ? await dispatcher.dispatch(run: run, screenId: "screen",
+                    definition: .init(actionId: "control", binding: .script), invocation: .init(actionId: "control"))
+                : await dispatcher.dispatch(run: run, source: .init(screenId: "screen", actionId: "runtime", componentId: nil, instanceId: nil),
+                    drafts: vector.events.map { .event(name: $0, payload: [:]) })
+            let batch = try XCTUnwrap(result.success)
+            XCTAssertEqual(batch.emissions.map(\.name), vector.expectedEvents)
+            XCTAssertEqual(batch.emissions.map(\.sequence), vector.expectedSequences)
+        }
+    }
+
+    func testUnaliasedControlDropsOnlyItsOwnDrafts() async throws {
+        let dispatcher = ScreenEmissionDispatcher(createId: incrementingID(), now: { "2026-08-17T22:00:00.000Z" }, executeScriptAction: { _ in [] })
+        let result = await dispatcher.dispatch(run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0, lifecycleGeneration: 0, presentationEpoch: 0),
+            screenId: "screen", definition: ScreenControlActionDefinition(actionId: "control", binding: .declarative([
+                .emit(eventName: "before_missing", payload: [:]),
+                .emit(eventName: "requires_alias", payload: ["instance": .instanceId])
+            ])), invocation: ScreenActionInvocation(actionId: "control", value: nil, componentId: nil, instanceId: nil),
+            additionalDrafts: [.event(name: "sibling", payload: [:])])
+        let batch = try XCTUnwrap(result.success)
+        XCTAssertEqual(batch.emissions.map(\.name), ["sibling"])
+        XCTAssertEqual(batch.emissions.map(\.sequence), [0])
+    }
+
     func testTypedRuntimeEffectsProduceOneAtomicBatch() async throws {
         let dispatcher = ScreenEmissionDispatcher(
             createId: incrementingID(),
@@ -23,7 +62,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
                 instanceId: "survey_1"
             ),
             drafts: [
-                .responseSet(field: "answer", value: .string("premium")),
+                .event(name: "answer_changed", payload: ["answer": .string("premium")]),
                 .event(name: "survey_submitted", payload: [
                     "answer": .string("premium"),
                 ]),
@@ -35,7 +74,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(batch.emissions.map(\.id), ["id_2", "id_3"])
         XCTAssertEqual(batch.emissions.map(\.sequence), [0, 1])
         XCTAssertEqual(batch.emissions.map(\.name), [
-            JourneyResponseControlNames.responseSet,
+            "answer_changed",
             "survey_submitted",
         ])
     }
@@ -105,7 +144,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             definition: ScreenControlActionDefinition(
                 actionId: "submit_survey",
                 binding: .declarative([
-                    .responseSet(field: "answer", value: .invocationValue),
+                    .emit(eventName: "answer_changed", payload: ["answer": .invocationValue]),
                     .emit(eventName: "survey_submitted", payload: [
                         "component": .componentId,
                         "instance": .instanceId,
@@ -119,10 +158,10 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(invocation.componentId, "submit_button")
         XCTAssertEqual(invocation.instanceId, "survey_1")
         let batch = try XCTUnwrap(result.success)
-        XCTAssertEqual(batch.emissions.map(\.name), ["$response_set", "survey_submitted"])
+        XCTAssertEqual(batch.emissions.map(\.name), ["answer_changed", "survey_submitted"])
         XCTAssertEqual(batch.emissions.map(\.sequence), [0, 1])
         XCTAssertEqual(
-            batch.emissions[0].payload["value"],
+            batch.emissions[0].payload["answer"],
             .object(["plan": .string("premium"), "seats": .number(3)])
         )
         XCTAssertEqual(batch.emissions[1].payload, [
@@ -158,7 +197,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             executeScriptAction: { input in
                 XCTAssertEqual(input.actionId, "choose_plan")
                 return [
-                    .responseSet(field: "plan", value: .string("premium")),
+                    .event(name: "plan_changed", payload: ["plan": .string("premium")]),
                     .event(name: "plan_chosen", payload: ["plan": .string("premium")]),
                 ]
             }
@@ -170,7 +209,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             definition: ScreenControlActionDefinition(
                 actionId: "choose_plan",
                 binding: .declarative([
-                    .responseSet(field: "plan", value: .invocationValue),
+                    .emit(eventName: "plan_changed", payload: ["plan": .invocationValue]),
                     .emit(
                         eventName: "plan_chosen",
                         payload: ["plan": .invocationValue]
@@ -226,7 +265,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             screenId: "survey",
             definition: ScreenControlActionDefinition(
                 actionId: "clear",
-                binding: .declarative([.responseUnset(field: "plan")])
+                binding: .declarative([.emit(eventName: "plan_cleared", payload: [:])])
             ),
             invocation: ScreenActionInvocation(actionId: "clear")
         )
@@ -239,7 +278,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
         XCTAssertEqual(batch.batchSequence, 1)
         XCTAssertNil(batch.previousCommittedBatchSequence)
         XCTAssertEqual(batch.emissions.map(\.sequence), [0])
-        XCTAssertEqual(batch.emissions.map(\.name), ["$response_unset"])
+        XCTAssertEqual(batch.emissions.map(\.name), ["plan_cleared"])
     }
 
     func testRestoredProgressAllocatesMonotonicSuccessorSequences() async throws {
@@ -264,7 +303,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
             screenId: "survey",
             definition: ScreenControlActionDefinition(
                 actionId: "clear",
-                binding: .declarative([.responseUnset(field: "plan")])
+                binding: .declarative([.emit(eventName: "plan_cleared", payload: [:])])
             ),
             invocation: ScreenActionInvocation(actionId: "clear")
         )
@@ -331,7 +370,7 @@ final class JourneyScreenEmissionDispatcherTests: XCTestCase {
         )
         let definition = ScreenControlActionDefinition(
             actionId: "clear",
-            binding: .declarative([.responseUnset(field: "plan")])
+            binding: .declarative([.emit(eventName: "plan_cleared", payload: [:])])
         )
         let invocation = ScreenActionInvocation(actionId: "clear")
 

@@ -100,10 +100,14 @@ struct Journey {
 }
 
 struct JourneyReleaseDescriptor {
-    static let wireSchemaVersion = "nuxie.journey-release.v2"
+    static let wireSchemaVersion = "nuxie.journey-release.v3"
     static let mediaType = "application/vnd.nuxie.journey+json"
-    static let signatureDomain = "nuxie.journey-release.v2\u{0}"
+    static let signatureDomain = "nuxie.journey-release.v3\u{0}"
 
+    let state: [String: JourneyReleaseValuePolicy.State]
+    let responses: [String: JourneyReleaseValuePolicy.Form]
+    let ruleGroups: [JourneyReleaseValuePolicy.Group]
+    var valuePolicy: JourneyReleaseValuePolicy { .init(state: state, responses: responses, ruleGroups: ruleGroups) }
     let schemaVersion: String
     let identity: JourneyReleaseIdentity
     let metadata: [String: JourneyReleaseJSONValue]

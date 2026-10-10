@@ -1,0 +1,726 @@
+{
+  "runtimeCommit": "79ea4691971958501c64f7ff55076790ec8c9c4d",
+  "source": "crates/nuxie-runtime/src/mechanical_port/source/input/focusable.rs",
+  "modifiers": {
+    "shift": 1,
+    "control": 2,
+    "alt": 4,
+    "meta": 8
+  },
+  "keys": [
+    {
+      "key": "A",
+      "iosHid": 4,
+      "androidKeyCode": 29,
+      "rive": 65
+    },
+    {
+      "key": "B",
+      "iosHid": 5,
+      "androidKeyCode": 30,
+      "rive": 66
+    },
+    {
+      "key": "C",
+      "iosHid": 6,
+      "androidKeyCode": 31,
+      "rive": 67
+    },
+    {
+      "key": "D",
+      "iosHid": 7,
+      "androidKeyCode": 32,
+      "rive": 68
+    },
+    {
+      "key": "E",
+      "iosHid": 8,
+      "androidKeyCode": 33,
+      "rive": 69
+    },
+    {
+      "key": "F",
+      "iosHid": 9,
+      "androidKeyCode": 34,
+      "rive": 70
+    },
+    {
+      "key": "G",
+      "iosHid": 10,
+      "androidKeyCode": 35,
+      "rive": 71
+    },
+    {
+      "key": "H",
+      "iosHid": 11,
+      "androidKeyCode": 36,
+      "rive": 72
+    },
+    {
+      "key": "I",
+      "iosHid": 12,
+      "androidKeyCode": 37,
+      "rive": 73
+    },
+    {
+      "key": "J",
+      "iosHid": 13,
+      "androidKeyCode": 38,
+      "rive": 74
+    },
+    {
+      "key": "K",
+      "iosHid": 14,
+      "androidKeyCode": 39,
+      "rive": 75
+    },
+    {
+      "key": "L",
+      "iosHid": 15,
+      "androidKeyCode": 40,
+      "rive": 76
+    },
+    {
+      "key": "M",
+      "iosHid": 16,
+      "androidKeyCode": 41,
+      "rive": 77
+    },
+    {
+      "key": "N",
+      "iosHid": 17,
+      "androidKeyCode": 42,
+      "rive": 78
+    },
+    {
+      "key": "O",
+      "iosHid": 18,
+      "androidKeyCode": 43,
+      "rive": 79
+    },
+    {
+      "key": "P",
+      "iosHid": 19,
+      "androidKeyCode": 44,
+      "rive": 80
+    },
+    {
+      "key": "Q",
+      "iosHid": 20,
+      "androidKeyCode": 45,
+      "rive": 81
+    },
+    {
+      "key": "R",
+      "iosHid": 21,
+      "androidKeyCode": 46,
+      "rive": 82
+    },
+    {
+      "key": "S",
+      "iosHid": 22,
+      "androidKeyCode": 47,
+      "rive": 83
+    },
+    {
+      "key": "T",
+      "iosHid": 23,
+      "androidKeyCode": 48,
+      "rive": 84
+    },
+    {
+      "key": "U",
+      "iosHid": 24,
+      "androidKeyCode": 49,
+      "rive": 85
+    },
+    {
+      "key": "V",
+      "iosHid": 25,
+      "androidKeyCode": 50,
+      "rive": 86
+    },
+    {
+      "key": "W",
+      "iosHid": 26,
+      "androidKeyCode": 51,
+      "rive": 87
+    },
+    {
+      "key": "X",
+      "iosHid": 27,
+      "androidKeyCode": 52,
+      "rive": 88
+    },
+    {
+      "key": "Y",
+      "iosHid": 28,
+      "androidKeyCode": 53,
+      "rive": 89
+    },
+    {
+      "key": "Z",
+      "iosHid": 29,
+      "androidKeyCode": 54,
+      "rive": 90
+    },
+    {
+      "key": "0",
+      "iosHid": 39,
+      "androidKeyCode": 7,
+      "rive": 48
+    },
+    {
+      "key": "1",
+      "iosHid": 30,
+      "androidKeyCode": 8,
+      "rive": 49
+    },
+    {
+      "key": "2",
+      "iosHid": 31,
+      "androidKeyCode": 9,
+      "rive": 50
+    },
+    {
+      "key": "3",
+      "iosHid": 32,
+      "androidKeyCode": 10,
+      "rive": 51
+    },
+    {
+      "key": "4",
+      "iosHid": 33,
+      "androidKeyCode": 11,
+      "rive": 52
+    },
+    {
+      "key": "5",
+      "iosHid": 34,
+      "androidKeyCode": 12,
+      "rive": 53
+    },
+    {
+      "key": "6",
+      "iosHid": 35,
+      "androidKeyCode": 13,
+      "rive": 54
+    },
+    {
+      "key": "7",
+      "iosHid": 36,
+      "androidKeyCode": 14,
+      "rive": 55
+    },
+    {
+      "key": "8",
+      "iosHid": 37,
+      "androidKeyCode": 15,
+      "rive": 56
+    },
+    {
+      "key": "9",
+      "iosHid": 38,
+      "androidKeyCode": 16,
+      "rive": 57
+    },
+    {
+      "key": "Space",
+      "iosHid": 44,
+      "androidKeyCode": 62,
+      "rive": 32
+    },
+    {
+      "key": "Apostrophe",
+      "iosHid": 52,
+      "androidKeyCode": 75,
+      "rive": 39
+    },
+    {
+      "key": "Comma",
+      "iosHid": 54,
+      "androidKeyCode": 55,
+      "rive": 44
+    },
+    {
+      "key": "Minus",
+      "iosHid": 45,
+      "androidKeyCode": 69,
+      "rive": 45
+    },
+    {
+      "key": "Period",
+      "iosHid": 55,
+      "androidKeyCode": 56,
+      "rive": 46
+    },
+    {
+      "key": "Slash",
+      "iosHid": 56,
+      "androidKeyCode": 76,
+      "rive": 47
+    },
+    {
+      "key": "Semicolon",
+      "iosHid": 51,
+      "androidKeyCode": 74,
+      "rive": 59
+    },
+    {
+      "key": "Equal",
+      "iosHid": 46,
+      "androidKeyCode": 70,
+      "rive": 61
+    },
+    {
+      "key": "LeftBracket",
+      "iosHid": 47,
+      "androidKeyCode": 71,
+      "rive": 91
+    },
+    {
+      "key": "Backslash",
+      "iosHid": 49,
+      "androidKeyCode": 73,
+      "rive": 92
+    },
+    {
+      "key": "NonUSPound",
+      "iosHid": 50,
+      "androidKeyCode": null,
+      "rive": 92
+    },
+    {
+      "key": "RightBracket",
+      "iosHid": 48,
+      "androidKeyCode": 72,
+      "rive": 93
+    },
+    {
+      "key": "GraveAccent",
+      "iosHid": 53,
+      "androidKeyCode": 68,
+      "rive": 96
+    },
+    {
+      "key": "World1",
+      "iosHid": 100,
+      "androidKeyCode": null,
+      "rive": 161
+    },
+    {
+      "key": "Escape",
+      "iosHid": 41,
+      "androidKeyCode": 111,
+      "rive": 256
+    },
+    {
+      "key": "Enter",
+      "iosHid": 40,
+      "androidKeyCode": 66,
+      "rive": 257
+    },
+    {
+      "key": "Tab",
+      "iosHid": 43,
+      "androidKeyCode": 61,
+      "rive": 258
+    },
+    {
+      "key": "Backspace",
+      "iosHid": 42,
+      "androidKeyCode": 67,
+      "rive": 259
+    },
+    {
+      "key": "Insert",
+      "iosHid": 73,
+      "androidKeyCode": 124,
+      "rive": 260
+    },
+    {
+      "key": "Delete",
+      "iosHid": 76,
+      "androidKeyCode": 112,
+      "rive": 261
+    },
+    {
+      "key": "Right",
+      "iosHid": 79,
+      "androidKeyCode": 22,
+      "rive": 262
+    },
+    {
+      "key": "Left",
+      "iosHid": 80,
+      "androidKeyCode": 21,
+      "rive": 263
+    },
+    {
+      "key": "Down",
+      "iosHid": 81,
+      "androidKeyCode": 20,
+      "rive": 264
+    },
+    {
+      "key": "Up",
+      "iosHid": 82,
+      "androidKeyCode": 19,
+      "rive": 265
+    },
+    {
+      "key": "PageUp",
+      "iosHid": 75,
+      "androidKeyCode": 92,
+      "rive": 266
+    },
+    {
+      "key": "PageDown",
+      "iosHid": 78,
+      "androidKeyCode": 93,
+      "rive": 267
+    },
+    {
+      "key": "Home",
+      "iosHid": 74,
+      "androidKeyCode": 122,
+      "rive": 268
+    },
+    {
+      "key": "End",
+      "iosHid": 77,
+      "androidKeyCode": 123,
+      "rive": 269
+    },
+    {
+      "key": "CapsLock",
+      "iosHid": 57,
+      "androidKeyCode": 115,
+      "rive": 280
+    },
+    {
+      "key": "ScrollLock",
+      "iosHid": 71,
+      "androidKeyCode": 116,
+      "rive": 281
+    },
+    {
+      "key": "NumLock",
+      "iosHid": 83,
+      "androidKeyCode": 143,
+      "rive": 282
+    },
+    {
+      "key": "PrintScreen",
+      "iosHid": 70,
+      "androidKeyCode": 120,
+      "rive": 283
+    },
+    {
+      "key": "Pause",
+      "iosHid": 72,
+      "androidKeyCode": 121,
+      "rive": 284
+    },
+    {
+      "key": "F1",
+      "iosHid": 58,
+      "androidKeyCode": 131,
+      "rive": 290
+    },
+    {
+      "key": "F2",
+      "iosHid": 59,
+      "androidKeyCode": 132,
+      "rive": 291
+    },
+    {
+      "key": "F3",
+      "iosHid": 60,
+      "androidKeyCode": 133,
+      "rive": 292
+    },
+    {
+      "key": "F4",
+      "iosHid": 61,
+      "androidKeyCode": 134,
+      "rive": 293
+    },
+    {
+      "key": "F5",
+      "iosHid": 62,
+      "androidKeyCode": 135,
+      "rive": 294
+    },
+    {
+      "key": "F6",
+      "iosHid": 63,
+      "androidKeyCode": 136,
+      "rive": 295
+    },
+    {
+      "key": "F7",
+      "iosHid": 64,
+      "androidKeyCode": 137,
+      "rive": 296
+    },
+    {
+      "key": "F8",
+      "iosHid": 65,
+      "androidKeyCode": 138,
+      "rive": 297
+    },
+    {
+      "key": "F9",
+      "iosHid": 66,
+      "androidKeyCode": 139,
+      "rive": 298
+    },
+    {
+      "key": "F10",
+      "iosHid": 67,
+      "androidKeyCode": 140,
+      "rive": 299
+    },
+    {
+      "key": "F11",
+      "iosHid": 68,
+      "androidKeyCode": 141,
+      "rive": 300
+    },
+    {
+      "key": "F12",
+      "iosHid": 69,
+      "androidKeyCode": 142,
+      "rive": 301
+    },
+    {
+      "key": "F13",
+      "iosHid": 104,
+      "androidKeyCode": 326,
+      "rive": 302
+    },
+    {
+      "key": "F14",
+      "iosHid": 105,
+      "androidKeyCode": 327,
+      "rive": 303
+    },
+    {
+      "key": "F15",
+      "iosHid": 106,
+      "androidKeyCode": 328,
+      "rive": 304
+    },
+    {
+      "key": "F16",
+      "iosHid": 107,
+      "androidKeyCode": 329,
+      "rive": 305
+    },
+    {
+      "key": "F17",
+      "iosHid": 108,
+      "androidKeyCode": 330,
+      "rive": 306
+    },
+    {
+      "key": "F18",
+      "iosHid": 109,
+      "androidKeyCode": 331,
+      "rive": 307
+    },
+    {
+      "key": "F19",
+      "iosHid": 110,
+      "androidKeyCode": 332,
+      "rive": 308
+    },
+    {
+      "key": "F20",
+      "iosHid": 111,
+      "androidKeyCode": 333,
+      "rive": 309
+    },
+    {
+      "key": "F21",
+      "iosHid": 112,
+      "androidKeyCode": 334,
+      "rive": 310
+    },
+    {
+      "key": "F22",
+      "iosHid": 113,
+      "androidKeyCode": 335,
+      "rive": 311
+    },
+    {
+      "key": "F23",
+      "iosHid": 114,
+      "androidKeyCode": 336,
+      "rive": 312
+    },
+    {
+      "key": "F24",
+      "iosHid": 115,
+      "androidKeyCode": 337,
+      "rive": 313
+    },
+    {
+      "key": "Kp0",
+      "iosHid": 98,
+      "androidKeyCode": 144,
+      "rive": 320
+    },
+    {
+      "key": "Kp1",
+      "iosHid": 89,
+      "androidKeyCode": 145,
+      "rive": 321
+    },
+    {
+      "key": "Kp2",
+      "iosHid": 90,
+      "androidKeyCode": 146,
+      "rive": 322
+    },
+    {
+      "key": "Kp3",
+      "iosHid": 91,
+      "androidKeyCode": 147,
+      "rive": 323
+    },
+    {
+      "key": "Kp4",
+      "iosHid": 92,
+      "androidKeyCode": 148,
+      "rive": 324
+    },
+    {
+      "key": "Kp5",
+      "iosHid": 93,
+      "androidKeyCode": 149,
+      "rive": 325
+    },
+    {
+      "key": "Kp6",
+      "iosHid": 94,
+      "androidKeyCode": 150,
+      "rive": 326
+    },
+    {
+      "key": "Kp7",
+      "iosHid": 95,
+      "androidKeyCode": 151,
+      "rive": 327
+    },
+    {
+      "key": "Kp8",
+      "iosHid": 96,
+      "androidKeyCode": 152,
+      "rive": 328
+    },
+    {
+      "key": "Kp9",
+      "iosHid": 97,
+      "androidKeyCode": 153,
+      "rive": 329
+    },
+    {
+      "key": "KpDecimal",
+      "iosHid": 99,
+      "androidKeyCode": 158,
+      "rive": 330
+    },
+    {
+      "key": "KpDivide",
+      "iosHid": 84,
+      "androidKeyCode": 154,
+      "rive": 331
+    },
+    {
+      "key": "KpMultiply",
+      "iosHid": 85,
+      "androidKeyCode": 155,
+      "rive": 332
+    },
+    {
+      "key": "KpSubtract",
+      "iosHid": 86,
+      "androidKeyCode": 156,
+      "rive": 333
+    },
+    {
+      "key": "KpAdd",
+      "iosHid": 87,
+      "androidKeyCode": 157,
+      "rive": 334
+    },
+    {
+      "key": "KpEnter",
+      "iosHid": 88,
+      "androidKeyCode": 160,
+      "rive": 335
+    },
+    {
+      "key": "KpEqual",
+      "iosHid": 103,
+      "androidKeyCode": 161,
+      "rive": 336
+    },
+    {
+      "key": "LeftShift",
+      "iosHid": 225,
+      "androidKeyCode": 59,
+      "rive": 340
+    },
+    {
+      "key": "LeftControl",
+      "iosHid": 224,
+      "androidKeyCode": 113,
+      "rive": 341
+    },
+    {
+      "key": "LeftAlt",
+      "iosHid": 226,
+      "androidKeyCode": 57,
+      "rive": 342
+    },
+    {
+      "key": "LeftSuper",
+      "iosHid": 227,
+      "androidKeyCode": 117,
+      "rive": 343
+    },
+    {
+      "key": "RightShift",
+      "iosHid": 229,
+      "androidKeyCode": 60,
+      "rive": 344
+    },
+    {
+      "key": "RightControl",
+      "iosHid": 228,
+      "androidKeyCode": 114,
+      "rive": 345
+    },
+    {
+      "key": "RightAlt",
+      "iosHid": 230,
+      "androidKeyCode": 58,
+      "rive": 346
+    },
+    {
+      "key": "RightSuper",
+      "iosHid": 231,
+      "androidKeyCode": 118,
+      "rive": 347
+    },
+    {
+      "key": "Menu",
+      "iosHid": 101,
+      "androidKeyCode": 82,
+      "rive": 348
+    }
+  ]
+}

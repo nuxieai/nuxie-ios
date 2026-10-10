@@ -54,7 +54,7 @@ extension NuxieNativeRuntimeError: LocalizedError {
 package enum NuxieNativePlayerSelection: Equatable, Sendable {
     case defaultScene
     /// Advance and render the authored/default scene, while also forwarding
-    /// input to one named auxiliary state machine on the same artboard.
+    /// named inputs to one auxiliary state machine on the same artboard.
     /// The auxiliary is stepped once for initialization and thereafter only
     /// when an input transaction exists, avoiding a second transaction on
     /// ordinary animation-only frames.
@@ -321,9 +321,33 @@ package enum NuxieNativeTextGeometryCapture: Equatable, Sendable {
     case failed(NuxieNativeRuntimeError)
 }
 
+package enum NuxieNativeFocusLimits {
+    package static let inputsPerStep = Int(NUX_PLAYER_STEP_MAX_FOCUS_INPUTS)
+    package static let textBytesPerInput = Int(NUX_PLAYER_STEP_MAX_TEXT_BYTES)
+    package static let textBytesPerStep = 4 * 1_024 * 1_024
+}
+
+package enum NuxieNativeFocusInput: Equatable, Sendable {
+    case next, previous, clear
+    case key(code: UInt16, modifiers: UInt8, pressed: Bool, repeated: Bool)
+    case text(String)
+}
+
+package struct NuxieNativeFocusState: Equatable, Sendable {
+    package let hasFocus: Bool
+    package let expectsKeyboardInput: Bool
+
+    package init(hasFocus: Bool, expectsKeyboardInput: Bool) {
+        self.hasFocus = hasFocus
+        self.expectsKeyboardInput = expectsKeyboardInput
+    }
+}
+
 package struct NuxieNativePlayerStepResult: Equatable, Sendable {
     package var keepGoing: Bool
     package let pointerHits: [NuxieNativePointerHit]
+    package let focusResults: [Bool]
+    package let focusState: NuxieNativeFocusState?
     package let stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)]
     package let events: [NuxieNativeEvent]
     package let hostCommands: [NuxieNativeHostCommand]
@@ -337,7 +361,9 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
         events: [NuxieNativeEvent],
         hostCommands: [NuxieNativeHostCommand],
         viewModelChanges: [NuxieNativeViewModelChange],
-        textGeometry: NuxieNativeTextGeometryCapture = .notRequested
+        textGeometry: NuxieNativeTextGeometryCapture = .notRequested,
+        focusResults: [Bool] = [],
+        focusState: NuxieNativeFocusState? = nil
     ) {
         self.keepGoing = keepGoing
         self.pointerHits = pointerHits
@@ -346,11 +372,15 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
         self.hostCommands = hostCommands
         self.viewModelChanges = viewModelChanges
         self.textGeometry = textGeometry
+        self.focusResults = focusResults
+        self.focusState = focusState
     }
 
     package static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.keepGoing == rhs.keepGoing
             && lhs.pointerHits == rhs.pointerHits
+            && lhs.focusResults == rhs.focusResults
+            && lhs.focusState == rhs.focusState
             && lhs.stateChanges.elementsEqual(rhs.stateChanges) {
                 $0.layerIndex == $1.layerIndex
                     && $0.coreType == $1.coreType
@@ -435,16 +465,6 @@ package enum NuxieNativeViewModelMutation: Equatable, Sendable {
         value: NuxieNativeViewModelReference
     )
     case listClear(instance: NuxieNativeViewModelReference, path: String)
-}
-
-package struct NuxieNativeTextRunMutation: Equatable, Sendable {
-    package let name: String
-    package let text: Data
-
-    package init(name: String, text: Data) {
-        self.name = name
-        self.text = text
-    }
 }
 
 package struct NuxieNativeMetalDevice: @unchecked Sendable {
@@ -536,7 +556,9 @@ package actor NuxieNativePreparedFile {
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let bytes: Data
     private let importMode: NuxieNativeImportMode
+    private let valuePolicy: NuxieNativeValuePolicy
     private let preparedArtboards: [NuxieNativeArtboardInfo]
+    private let preparedCatalog: NuxieNativeViewModelCatalog
     private var fileImportCount = 1
     private var openedSessionCount = 0
 
@@ -544,21 +566,26 @@ package actor NuxieNativePreparedFile {
         executor: NuxieRuntimePinnedThreadExecutor,
         bytes: Data,
         importMode: NuxieNativeImportMode,
-        preparedArtboards: [NuxieNativeArtboardInfo]
+        valuePolicy: NuxieNativeValuePolicy,
+        preparedArtboards: [NuxieNativeArtboardInfo],
+        preparedCatalog: NuxieNativeViewModelCatalog
     ) {
         self.executor = executor
         self.bytes = bytes
         self.importMode = importMode
+        self.valuePolicy = valuePolicy
         self.preparedArtboards = preparedArtboards
+        self.preparedCatalog = preparedCatalog
     }
 
     package static func prepare(
         bytes: Data,
-        importMode: NuxieNativeImportMode = .portable
+        importMode: NuxieNativeImportMode = .portable,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) async throws -> NuxieNativePreparedFile {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
-            let preparedArtboards = try await executor.call {
+            let metadata = try await executor.call {
                 let renderer = try NuxieNativeRendererHandle(
                     executor: executor,
                     pixelWidth: 1,
@@ -570,7 +597,8 @@ package actor NuxieNativePreparedFile {
                         executor: executor,
                         renderer: renderer,
                         bytes: bytes,
-                        importMode: importMode
+                        importMode: importMode,
+                        valuePolicy: valuePolicy
                     )
                 } catch {
                     try? renderer.close()
@@ -578,9 +606,10 @@ package actor NuxieNativePreparedFile {
                 }
                 do {
                     let artboards = try file.artboards()
+                    let catalog = try file.viewModelCatalog()
                     try file.close()
                     try renderer.close()
-                    return artboards
+                    return (artboards, catalog)
                 } catch {
                     try? file.close()
                     try? renderer.close()
@@ -591,7 +620,9 @@ package actor NuxieNativePreparedFile {
                 executor: executor,
                 bytes: bytes,
                 importMode: importMode,
-                preparedArtboards: preparedArtboards
+                valuePolicy: valuePolicy,
+                preparedArtboards: metadata.0,
+                preparedCatalog: metadata.1
             )
         } catch {
             executor.shutdown()
@@ -609,6 +640,7 @@ package actor NuxieNativePreparedFile {
         let executor = self.executor
         let bytes = self.bytes
         let importMode = self.importMode
+        let valuePolicy = self.valuePolicy
         fileImportCount += 1
         let state = try await executor.call {
             try NuxieNativeRuntimeState(
@@ -619,7 +651,8 @@ package actor NuxieNativePreparedFile {
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
                 bindDefaultViewModel: bindDefaultViewModel,
-                importMode: importMode
+                importMode: importMode,
+                valuePolicy: valuePolicy
             )
         }
         openedSessionCount += 1
@@ -630,6 +663,27 @@ package actor NuxieNativePreparedFile {
         )
     }
 
+    package nonisolated func hasSameBytes(as other: NuxieNativePreparedFile) -> Bool {
+        bytes == other.bytes && valuePolicy == other.valuePolicy
+    }
+
+    package func viewModelCatalog() -> NuxieNativeViewModelCatalog { preparedCatalog }
+
+    package func makeSessionGroup() async throws -> NuxieNativeSessionGroup {
+        let executor = executor
+        let bytes = bytes
+        let importMode = importMode
+        let valuePolicy = valuePolicy
+        let context = try await executor.call {
+            try NuxieNativeFileContext(executor: executor, bytes: bytes,
+                importMode: importMode, valuePolicy: valuePolicy, pixelWidth: 1, pixelHeight: 1)
+        }
+        fileImportCount += 1
+        return NuxieNativeSessionGroup(preparedFile: self, executor: executor, context: context)
+    }
+
+    fileprivate func recordOpenedSession() { openedSessionCount += 1 }
+
     package func metrics() -> NuxieNativePreparedFileMetrics {
         NuxieNativePreparedFileMetrics(
             fileImportCount: fileImportCount,
@@ -639,6 +693,177 @@ package actor NuxieNativePreparedFile {
 
     package func artboards() async throws -> [NuxieNativeArtboardInfo] {
         preparedArtboards
+    }
+}
+
+/// A group of sessions sharing one imported file and its renderer domain.
+/// All mutable native handles remain confined to the prepared file's lane.
+package actor NuxieNativeSessionGroup {
+    private let preparedFile: NuxieNativePreparedFile
+    private let executor: NuxieRuntimePinnedThreadExecutor
+    private let context: NuxieNativeFileContext
+
+    fileprivate init(preparedFile: NuxieNativePreparedFile,
+        executor: NuxieRuntimePinnedThreadExecutor, context: NuxieNativeFileContext) {
+        self.preparedFile = preparedFile
+        self.executor = executor
+        self.context = context
+    }
+
+    /// Deterministic FIFO interleavings for shared-session regression tests.
+    package func enqueueForTesting(_ operation: @escaping @Sendable () -> Void) {
+        executor.enqueue(operation)
+    }
+
+    package var queuedJobCountForTesting: Int { executor.queuedJobCountForTesting }
+
+    package func retire() async throws {
+        let context = context
+        try await executor.call {
+            let models = Array(context.sharedViewModels.values)
+            context.sharedViewModels.removeAll()
+            context.globalViewModels.removeAll()
+            var firstError: Error?
+            for model in models {
+                do { try model.close() } catch { firstError = firstError ?? error }
+            }
+            if let firstError { throw firstError }
+        }
+    }
+
+    package func viewModelCatalog() async throws -> NuxieNativeViewModelCatalog {
+        let context = context
+        return try await executor.call { try context.file.viewModelCatalog() }
+    }
+
+    package func makeViewModel(schemaIndex: Int, authoredInstanceIndex: Int?) async throws
+        -> NuxieNativeViewModelReference {
+        let context = context
+        return try await executor.call {
+            let model = try context.file.makeViewModel(schemaIndex: schemaIndex,
+                authoredInstanceIndex: authoredInstanceIndex)
+            let reference = try model.reference()
+            context.sharedViewModels[reference.rawValue] = model
+            return reference
+        }
+    }
+
+    /// Retain the existing child only if it still occupies the snapshot's slot.
+    package func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64) async throws -> NuxieNativeViewModelReference {
+        guard index >= 0 else {
+            throw NuxieNativeRuntimeError.invalidNativeValue("list index must be nonnegative")
+        }
+        let context = context
+        let executor = executor
+        return try await executor.call {
+            let owner = try context.resolve(owner)
+            var pointer: OpaquePointer?
+            try requireOK(withStringView(path) {
+                nux_view_model_instance_list_item_acquire(try owner.owned.require(), $0, index, &pointer)
+            }, operation: "acquire existing list child")
+            guard let pointer else { throw NuxieNativeRuntimeError.missingHandle("list child") }
+            let child = NuxieNativeViewModelHandle(executor: executor, handle: pointer)
+            do {
+                let reference = try child.reference()
+                guard reference.rawValue == expectedIdentity else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("list child changed since snapshot")
+                }
+                if context.sharedViewModels[reference.rawValue] != nil {
+                    try child.close()
+                } else {
+                    context.sharedViewModels[reference.rawValue] = child
+                }
+                return reference
+            } catch {
+                try? child.close()
+                throw error
+            }
+        }
+    }
+
+    package func snapshot(_ reference: NuxieNativeViewModelReference) async throws
+        -> NuxieNativeViewModelSnapshot {
+        let context = context
+        return try await executor.call { try context.resolve(reference).snapshot() }
+    }
+
+    package func mutate(_ mutations: [NuxieNativeViewModelMutation], correlationID: UInt64 = 0) async throws
+        -> NuxieNativeViewModelMutationResult {
+        let context = context
+        return try await executor.call {
+            try NuxieNativeViewModelHandle.mutate(mutations, correlationID: correlationID,
+                resolve: context.resolve)
+        }
+    }
+
+    package func openSession(artboardName: String, player: NuxieNativePlayerSelection,
+        pixelWidth: UInt32, pixelHeight: UInt32, bindDefaultViewModel: Bool) async throws -> NuxieNativeRuntime {
+        let context = context
+        let state = try await executor.call {
+            try NuxieNativeRuntimeState(context: context, artboardName: artboardName,
+                selection: player, pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                bindDefaultViewModel: bindDefaultViewModel)
+        }
+        await preparedFile.recordOpenedSession()
+        return NuxieNativeRuntime(executor: executor, state: state, preparedFile: preparedFile)
+    }
+}
+
+private final class NuxieNativeFileContext: @unchecked Sendable {
+    let file: NuxieNativeFileHandle
+    let renderer: NuxieNativeRendererHandle
+    let executor: NuxieRuntimePinnedThreadExecutor
+    var sharedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    var globalViewModels: [String: NuxieNativeViewModelReference] = [:]
+    private var pixelWidth: UInt32
+    private var pixelHeight: UInt32
+
+    init(executor: NuxieRuntimePinnedThreadExecutor, bytes: Data,
+        importMode: NuxieNativeImportMode, valuePolicy: NuxieNativeValuePolicy, pixelWidth: UInt32, pixelHeight: UInt32) throws {
+        self.executor = executor
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        renderer = try NuxieNativeRendererHandle(executor: executor,
+            pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        do {
+            file = try NuxieNativeFileHandle(executor: executor, renderer: renderer,
+                bytes: bytes, importMode: importMode, valuePolicy: valuePolicy)
+        } catch {
+            try? renderer.close()
+            throw error
+        }
+    }
+
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32) throws -> NuxieNativeRendererOutcome {
+        let outcome = try renderer.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        return outcome
+    }
+
+    func prepareRenderer(pixelWidth: UInt32, pixelHeight: UInt32) throws {
+        if self.pixelWidth != pixelWidth || self.pixelHeight != pixelHeight {
+            _ = try resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        }
+    }
+
+    func resolve(_ reference: NuxieNativeViewModelReference) throws -> NuxieNativeViewModelHandle {
+        guard let model = sharedViewModels[reference.rawValue] else {
+            throw NuxieNativeRuntimeError.missingHandle("shared view model")
+        }
+        return model
+    }
+
+    deinit {
+        let models = Array(sharedViewModels.values)
+        let file = file
+        let renderer = renderer
+        executor.enqueue {
+            for model in models { try? model.close() }
+            try? file.close()
+            try? renderer.close()
+        }
     }
 }
 
@@ -758,6 +983,7 @@ package actor NuxieNativeRuntime {
     package func step(
         inputs: [NuxieNativePlayerInput] = [],
         pointers: [NuxieNativePointerEvent] = [],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64 = 0,
         textRunNames: [String] = []
@@ -767,10 +993,30 @@ package actor NuxieNativeRuntime {
             try state.step(
                 inputs: inputs,
                 pointers: pointers,
+                focusInputs: focusInputs,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
                 textRunNames: textRunNames
             )
+        }
+    }
+
+    /// Freeze event-source values before another session can run on this file's lane.
+    package func stepWithSnapshot(
+        inputs: [NuxieNativePlayerInput] = [],
+        pointers: [NuxieNativePointerEvent] = [],
+        focusInputs: [NuxieNativeFocusInput] = [],
+        elapsedSeconds: Float,
+        correlationID: UInt64 = 0,
+        textRunNames: [String] = []
+    ) async throws -> (result: NuxieNativePlayerStepResult, snapshot: NuxieNativeViewModelSnapshot?) {
+        let state = try requireState()
+        return try await executor.call {
+            let result = try state.step(inputs: inputs, pointers: pointers, focusInputs: focusInputs,
+                elapsedSeconds: elapsedSeconds, correlationID: correlationID, textRunNames: textRunNames)
+            // Snapshot failure must not discard effects already committed by the step.
+            let snapshot = try? state.viewModel?.snapshot()
+            return (result, snapshot)
         }
     }
 
@@ -782,9 +1028,20 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try viewModel.snapshot() }
     }
 
+    package func snapshot(_ reference: NuxieNativeViewModelReference) async throws -> NuxieNativeViewModelSnapshot {
+        let state = try requireState()
+        return try await executor.call { try state.snapshot(reference) }
+    }
+
     package func rootViewModelReference() async throws -> NuxieNativeViewModelReference {
         let state = try requireState()
         return try await executor.call { try state.rootViewModelReference() }
+    }
+
+    /// Bind one file-authored global, shared by every session in this file group.
+    package func bindGlobalViewModel(named name: String) async throws -> NuxieNativeViewModelReference? {
+        let state = try requireState()
+        return try await executor.call { try state.bindGlobalViewModel(named: name) }
     }
 
     package func makeViewModel(
@@ -797,6 +1054,17 @@ package actor NuxieNativeRuntime {
                 schemaIndex: schemaIndex,
                 authoredInstanceIndex: authoredInstanceIndex
             )
+        }
+    }
+
+    /// Retain a native list child without recreating its authored state.
+    package func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64) async throws -> NuxieNativeViewModelReference {
+        let state = try requireState()
+        let executor = self.executor
+        return try await executor.call {
+            try state.acquireListItem(owner: owner, path: path, index: index,
+                expectedIdentity: expectedIdentity, executor: executor)
         }
     }
 
@@ -817,17 +1085,6 @@ package actor NuxieNativeRuntime {
         return try await executor.call {
             try state.mutateViewModel(mutations, correlationID: correlationID)
         }
-    }
-
-    package func setTextRuns(_ mutations: [NuxieNativeTextRunMutation]) async throws -> Bool {
-        let state = try requireState()
-        return try await executor.call { try state.artboard.setTextRuns(mutations) }
-    }
-
-    /// Validate the captured editor owner and mutate on the same pinned executor turn.
-    package func setSemanticTextRun(captureID: UUID, name: String, text: Data) async throws -> Bool {
-        let state = try requireState()
-        return try await executor.call { try state.setSemanticTextRun(captureID: captureID, name: name, text: text) }
     }
 
     /// Execution-only access to a non-rendering value in the captured field occurrence.
@@ -871,12 +1128,6 @@ package actor NuxieNativeRuntime {
         }
     }
 
-    /// Returns whether the property changed, not whether reverse conversion accepted it.
-    package func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) async throws -> Bool {
-        let state = try requireState()
-        return try await executor.call { try state.setFieldString(captureID: captureID, nodeID: nodeID, name: name, value: value) }
-    }
-
     package func setFieldContentOffset(captureID: UUID, nodeID: UInt32, name: String, x: Float, y: Float) async throws {
         let state = try requireState()
         try await executor.call {
@@ -898,21 +1149,55 @@ package actor NuxieNativeRuntime {
         }
     }
 
+    package func setLayoutSize(width: Float, height: Float) async throws {
+        let state = try requireState()
+        try await executor.call {
+            try requireOK(nux_player_layout_size_set(try state.player.require(), width, height),
+                operation: "set player layout size")
+        }
+    }
+
+    package func layoutSize() async throws -> CGSize {
+        let state = try requireState()
+        return try await executor.call {
+            var size = NuxPlayerLayoutSize()
+            size.struct_size = UInt32(MemoryLayout<NuxPlayerLayoutSize>.size)
+            try requireOK(nux_player_layout_size(try state.player.require(), &size),
+                operation: "read player layout size")
+            return CGSize(width: CGFloat(size.width), height: CGFloat(size.height))
+        }
+    }
+
     package func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws
         -> NuxieNativeRendererOutcome
     {
         let state = try requireState()
         return try await executor.call {
-            try state.renderer.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+            try state.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
         }
     }
 
     package func render(
+        layoutScaleFactor: Float,
         drawable: NuxieNativeDrawableState,
         clearColor: UInt32 = 0,
         readback: NuxieNativeFrameReadback? = nil,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> NuxieNativeRendererOutcome {
+        try await renderFrame(layoutScaleFactor: layoutScaleFactor, drawable: drawable,
+            clearColor: clearColor, readback: readback, completion: completion).outcome
+    }
+
+    /// The shared file's writes cannot invalidate the frame between presentation and capture.
+    package func renderFrame(
+        layoutScaleFactor: Float,
+        drawable: NuxieNativeDrawableState,
+        clearColor: UInt32 = 0,
+        readback: NuxieNativeFrameReadback? = nil,
+        capturesSemantics: Bool = false,
+        nativeInputs: [String] = [],
+        completion: (@Sendable () -> Void)? = nil
+    ) async throws -> (outcome: NuxieNativeRendererOutcome, semantics: NuxieNativeSemanticCapture?) {
         let state: NuxieNativeRuntimeState
         do {
             state = try requireState()
@@ -924,14 +1209,23 @@ package actor NuxieNativeRuntime {
             completion?()
             throw error
         }
+        let executor = self.executor
         return try await executor.call {
-            try state.renderer.render(
+            do { try state.prepareRenderer() } catch {
+                completion?()
+                throw error
+            }
+            let outcome = try state.renderer.render(
                 player: state.player,
+                layoutScaleFactor: layoutScaleFactor,
                 drawable: drawable,
                 clearColor: clearColor,
                 readback: readback,
                 completion: completion
             )
+            let semantics = capturesSemantics && outcome.disposition == .presented
+                ? try state.captureSemantics(executor: executor, textRuns: [], nativeInputs: nativeInputs) : nil
+            return (outcome, semantics)
         }
     }
 
@@ -1056,7 +1350,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     var player: NuxieNativePlayerHandle { players[0] }
     let viewModel: NuxieNativeViewModelHandle?
     let renderer: NuxieNativeRendererHandle
+    private let sharedContext: NuxieNativeFileContext?
+    private var pixelWidth: UInt32
+    private var pixelHeight: UInt32
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
+    private var globalViewModels: [String: NuxieNativeViewModelReference] = [:]
+    private let focusPlayerIndex: Int?
     private var auxiliaryPlayersNeedInitialStep = true
     private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle,
         fields: [String: NuxieNativeSemanticNode], tree: NuxieNativeSemanticTree,
@@ -1071,8 +1370,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         pixelWidth: UInt32,
         pixelHeight: UInt32,
         bindDefaultViewModel: Bool,
-        importMode: NuxieNativeImportMode
+        importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) throws {
+        sharedContext = nil
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
         let renderer = try NuxieNativeRendererHandle(
             executor: executor,
             pixelWidth: pixelWidth,
@@ -1084,7 +1387,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 executor: executor,
                 renderer: renderer,
                 bytes: bytes,
-                importMode: importMode
+                importMode: importMode,
+                valuePolicy: valuePolicy
             )
         } catch {
             try? renderer.close()
@@ -1109,6 +1413,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             self.file = file
             self.artboard = artboard
             self.players = players
+            self.focusPlayerIndex = try players.firstIndex { try $0.info().kind == .stateMachine }
             self.viewModel = viewModel
             self.renderer = renderer
         } catch {
@@ -1118,6 +1423,45 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             try? renderer.close()
             throw error
         }
+    }
+
+    init(context: NuxieNativeFileContext, artboardName: String,
+        selection: NuxieNativePlayerSelection, pixelWidth: UInt32, pixelHeight: UInt32,
+        bindDefaultViewModel: Bool) throws {
+        self.sharedContext = context
+        self.file = context.file
+        self.renderer = context.renderer
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        let artboard = try context.file.makeArtboard(named: artboardName)
+        var root: NuxieNativeViewModelHandle?
+        do {
+            if bindDefaultViewModel {
+                let model = try artboard.makeDefaultViewModel()
+                root = model
+                try artboard.bind(viewModel: model)
+            }
+            let players = try Self.makePlayers(artboard: artboard, selection: selection)
+            self.players = players
+            self.focusPlayerIndex = try players.firstIndex { try $0.info().kind == .stateMachine }
+            self.artboard = artboard
+            self.viewModel = root
+        } catch {
+            try? root?.close()
+            try? artboard.close()
+            throw error
+        }
+    }
+
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32) throws -> NuxieNativeRendererOutcome {
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        if let sharedContext { return try sharedContext.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight) }
+        return try renderer.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    }
+
+    func prepareRenderer() throws {
+        try sharedContext?.prepareRenderer(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
     }
 
     func close() throws {
@@ -1140,9 +1484,13 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         operations.append(contentsOf: [
             { try self.viewModel?.close() },
             { try self.artboard.close() },
-            { try self.file.close() },
-            { try self.renderer.close() },
         ])
+        if sharedContext == nil {
+            operations.append(contentsOf: [
+                { try self.file.close() },
+                { try self.renderer.close() },
+            ])
+        }
         for operation in operations {
             do { try operation() } catch { firstError = firstError ?? error }
         }
@@ -1153,18 +1501,21 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     func step(
         inputs: [NuxieNativePlayerInput],
         pointers: [NuxieNativePointerEvent],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64,
         textRunNames: [String] = []
     ) throws -> NuxieNativePlayerStepResult {
         var keepGoing = false
+        var focusResults: [Bool] = []
+        var focusState: NuxieNativeFocusState?
         var pointerHits = Array(repeating: NuxieNativePointerHit.none, count: pointers.count)
         var stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)] = []
         var events: [NuxieNativeEvent] = []
         var hostCommands: [NuxieNativeHostCommand] = []
         var viewModelChanges: [NuxieNativeViewModelChange] = []
         var textGeometry = NuxieNativeTextGeometryCapture.notRequested
-        let stepsAuxiliary = auxiliaryPlayersNeedInitialStep || !inputs.isEmpty || !pointers.isEmpty
+        let stepsAuxiliary = auxiliaryPlayersNeedInitialStep || !inputs.isEmpty || !pointers.isEmpty || !focusInputs.isEmpty
         let finalPlayerIndex = stepsAuxiliary ? players.count - 1 : 0
 
         for (index, player) in players.enumerated() {
@@ -1172,7 +1523,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if isAuxiliary,
                !auxiliaryPlayersNeedInitialStep,
                inputs.isEmpty,
-               pointers.isEmpty {
+               pointers.isEmpty,
+               focusInputs.isEmpty {
                 continue
             }
             let result = try player.step(
@@ -1187,10 +1539,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                     playerCount: players.count
                 ),
                 pointers: pointers,
+                focusInputs: index == focusPlayerIndex ? focusInputs : [],
                 elapsedSeconds: isAuxiliary ? 0 : elapsedSeconds,
                 correlationID: correlationID,
                 textRunNames: index == finalPlayerIndex ? textRunNames : []
             )
+            if index == focusPlayerIndex { focusResults = result.focusResults }
             if index == finalPlayerIndex { textGeometry = result.textGeometry }
             keepGoing = keepGoing || result.keepGoing
             for (index, hit) in result.pointerHits.enumerated() where index < pointerHits.count {
@@ -1204,6 +1558,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             viewModelChanges.append(contentsOf: result.viewModelChanges)
         }
         auxiliaryPlayersNeedInitialStep = false
+        if let focusPlayerIndex {
+            focusState = try players[focusPlayerIndex].focusState()
+        }
 
         return NuxieNativePlayerStepResult(
             keepGoing: keepGoing,
@@ -1212,7 +1569,9 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             events: events,
             hostCommands: hostCommands,
             viewModelChanges: viewModelChanges,
-            textGeometry: textGeometry
+            textGeometry: textGeometry,
+            focusResults: focusResults,
+            focusState: focusState
         )
     }
 
@@ -1233,11 +1592,15 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             try requireOK(nux_semantic_snapshot_info(pointer, &info), operation: "read semantic snapshot info")
             guard info.node_count <= 16_384 else { throw NuxieNativeSemanticTreeError.tooManyNodes }
             var nodes: [NuxieNativeSemanticNode] = []
+            var containsNativeObscuredValue = false
             nodes.reserveCapacity(info.node_count)
             for index in 0..<info.node_count {
                 var node = NuxSemanticNodeView()
                 node.struct_size = UInt32(MemoryLayout<NuxSemanticNodeView>.size)
                 try requireOK(nux_semantic_snapshot_node(pointer, index, &node), operation: "read semantic node")
+                if node.state_flags & NuxieNativeSemanticNode.obscured != 0, node.value.len != 0 {
+                    containsNativeObscuredValue = true
+                }
                 let value = node.state_flags & NuxieNativeSemanticNode.obscured == 0
                     ? try copyString(node.value, label: "semantic value") : ""
                 nodes.append(NuxieNativeSemanticNode(
@@ -1310,34 +1673,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             }
             try retireSemanticCapture()
             semanticCapture = (id, owned, fields, tree, inputIDs)
-            return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields, nativeInputs: inputs)
+            return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields, nativeInputs: inputs,
+                containsNativeObscuredValue: containsNativeObscuredValue)
         } catch {
             try? owned.close()
             throw error
         }
-    }
-
-    func setSemanticTextRun(captureID: UUID, name: String, text: Data) throws -> Bool {
-        guard let capture = semanticCapture, capture.id == captureID else {
-            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "write semantic text")
-        }
-        let player = try self.player.require()
-        let snapshot = try capture.handle.require()
-        try requireOK(nux_player_validate_semantic_snapshot(player, snapshot), operation: "validate semantic text capture")
-        guard let field = capture.fields[name],
-              field.stateFlags & (NuxieNativeSemanticNode.disabled | NuxieNativeSemanticNode.hidden
-                | NuxieNativeSemanticNode.readOnly) == 0 else {
-            throw nativeFailure(status: NUX_STATUS_NOT_FOUND.rawValue, operation: "resolve editable semantic field")
-        }
-        var currentID: UInt32 = 0
-        let status = withStringView(name) { nux_player_semantic_node_for_text_run(player, snapshot, $0, &currentID) }
-        try requireOK(status, operation: "validate semantic text owner")
-        guard currentID == field.id else {
-            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "validate semantic text owner")
-        }
-        let changed = try artboard.setTextRuns([NuxieNativeTextRunMutation(name: name, text: text)])
-        if changed { try retireSemanticCapture() }
-        return changed
     }
 
     func retireSemanticCapture() throws {
@@ -1441,25 +1782,6 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             obscured: raw.obscured == 1, multiline: raw.multiline == 1)
     }
 
-    func setFieldString(captureID: UUID, nodeID: UInt32, name: String, value: Data) throws -> Bool {
-        let previous = try readFieldString(captureID: captureID, nodeID: nodeID, name: name)
-        guard let capture = semanticCapture, capture.id == captureID else {
-            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "write field value")
-        }
-        let player = try self.player.require()
-        let snapshot = try capture.handle.require()
-        let status = withStringView(name) { key in
-            value.withUnsafeBytes { buffer in
-                nux_player_field_string_set(player, snapshot, nodeID, key,
-                    NuxStringView(data: buffer.bindMemory(to: CChar.self).baseAddress, len: value.count))
-            }
-        }
-        try requireOK(status, operation: "write field value")
-        let changed = previous != value
-        if changed { try retireSemanticCapture() }
-        return changed
-    }
-
     func setFieldContentOffset(captureID: UUID, nodeID: UInt32, name: String, x: Float, y: Float) throws {
         guard let capture = semanticCapture, capture.id == captureID else {
             throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "scroll input content")
@@ -1512,6 +1834,37 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         return try viewModel.reference()
     }
 
+    func bindGlobalViewModel(named name: String) throws -> NuxieNativeViewModelReference? {
+        let catalog = try file.viewModelCatalog()
+        guard let schema = catalog.schemas.first(where: { $0.name == name && $0.isGlobal }) else { return nil }
+        let reference: NuxieNativeViewModelReference
+        let model: NuxieNativeViewModelHandle
+        if let sharedContext, let existing = sharedContext.globalViewModels[name] {
+            reference = existing
+            model = try sharedContext.resolve(existing)
+        } else if let existing = globalViewModels[name], let retained = retainedViewModels[existing.rawValue] {
+            reference = existing
+            model = retained
+        } else {
+            model = try file.makeViewModel(schemaIndex: schema.index,
+                authoredInstanceIndex: nil)
+            reference = try model.reference()
+            if let sharedContext {
+                sharedContext.sharedViewModels[reference.rawValue] = model
+                sharedContext.globalViewModels[name] = reference
+            } else {
+                retainedViewModels[reference.rawValue] = model
+                globalViewModels[name] = reference
+            }
+        }
+        for player in players where try player.info().kind == .stateMachine {
+            try requireOK(withStringView(name) {
+                nux_player_set_global_view_model(try player.require(), $0, try model.owned.require())
+            }, operation: "bind named global")
+        }
+        return reference
+    }
+
     func makeViewModel(
         schemaIndex: Int,
         authoredInstanceIndex: Int?
@@ -1529,6 +1882,45 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         retainedViewModels[reference.rawValue] = handle
         return reference
+    }
+
+    func snapshot(_ reference: NuxieNativeViewModelReference) throws -> NuxieNativeViewModelSnapshot {
+        if let viewModel, reference == (try viewModel.reference()) { return try viewModel.snapshot() }
+        guard let handle = retainedViewModels[reference.rawValue] ?? sharedContext?.sharedViewModels[reference.rawValue] else {
+            throw NuxieNativeRuntimeError.missingHandle("view model")
+        }
+        return try handle.snapshot()
+    }
+
+    func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+        index: Int, expectedIdentity: UInt64, executor: NuxieRuntimePinnedThreadExecutor) throws
+        -> NuxieNativeViewModelReference {
+        let root = try self.rootViewModelReference()
+        guard index >= 0, let handle = owner == root ? self.viewModel
+            : (self.retainedViewModels[owner.rawValue] ?? self.sharedContext?.sharedViewModels[owner.rawValue]) else {
+            throw NuxieNativeRuntimeError.missingHandle("list owner")
+        }
+        var pointer: OpaquePointer?
+        try requireOK(withStringView(path) {
+            nux_view_model_instance_list_item_acquire(try handle.owned.require(), $0, index, &pointer)
+        }, operation: "acquire product list child")
+        guard let pointer else { throw NuxieNativeRuntimeError.missingHandle("list child") }
+        let child = NuxieNativeViewModelHandle(executor: executor, handle: pointer)
+        do {
+            let reference = try child.reference()
+            guard reference.rawValue == expectedIdentity else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("list child changed since snapshot")
+            }
+            if self.retainedViewModels[reference.rawValue] != nil {
+                try child.close()
+            } else {
+                self.retainedViewModels[reference.rawValue] = child
+            }
+            return reference
+        } catch {
+            try? child.close()
+            throw error
+        }
     }
 
     func releaseViewModels(
@@ -1558,7 +1950,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if let rootReference, reference == rootReference, let viewModel {
                 return viewModel
             }
-            guard let handle = retainedViewModels[reference.rawValue] else {
+            guard let handle = retainedViewModels[reference.rawValue]
+                    ?? sharedContext?.sharedViewModels[reference.rawValue] else {
                 throw NuxieNativeRuntimeError.missingHandle(
                     "view model \(reference.rawValue)"
                 )
@@ -1835,15 +2228,99 @@ private enum NuxieNativeAppleAssetImporter {
     }
 }
 
+/// Owns all strings and nested arrays for one synchronous install call.
+private final class NuxieNativeInstallStorage {
+    private var releases: [() -> Void] = []
+    deinit { for release in releases.reversed() { release() } }
+
+    func array<T>(_ values: [T]) -> UnsafePointer<T>? {
+        guard !values.isEmpty else { return nil }
+        let pointer = UnsafeMutablePointer<T>.allocate(capacity: values.count)
+        pointer.initialize(from: values, count: values.count)
+        releases.append { pointer.deinitialize(count: values.count); pointer.deallocate() }
+        return UnsafePointer(pointer)
+    }
+
+    func string(_ value: String) -> NuxStringView {
+        let bytes = value.utf8.map { CChar(bitPattern: $0) }
+        return NuxStringView(data: array(bytes), len: bytes.count)
+    }
+}
+
+func withNuxieNativeValueMarkers<T>(_ entries: [NuxieNativeValueMarker],
+    _ body: (UnsafePointer<NuxValueMarker>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { NuxValueMarker(model: storage.string($0.model),
+        value: storage.string($0.value), marker: storage.string($0.marker)) }
+    return try body(storage.array(values), values.count)
+}
+
+func withNuxieNativeValueRules<T>(_ entries: [NuxieNativeValueRule],
+    _ body: (UnsafePointer<NuxValueRule>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { entry in
+        NuxValueRule(model: storage.string(entry.model), property: storage.string(entry.property),
+            kind: entry.kind, mode: entry.mode, number_bound: entry.numberBound,
+            text: storage.string(entry.text), values: storage.array(entry.values.map(storage.string)),
+            value_count: entry.values.count, picked_property: storage.string(entry.pickedProperty),
+            bound_flags: entry.boundFlags, minimum: entry.minimum, maximum: entry.maximum,
+            code: storage.string(entry.code), message: storage.string(entry.message))
+    }
+    return try body(storage.array(values), values.count)
+}
+
+func withNuxieNativeRuleGroups<T>(_ entries: [NuxieNativeRuleGroup],
+    _ body: (UnsafePointer<NuxRuleGroup>?, Int) throws -> T) rethrows -> T {
+    let storage = NuxieNativeInstallStorage()
+    defer { withExtendedLifetime(storage) {} }
+    let values = entries.map { entry in
+        let members = entry.members.map { member in
+            NuxRuleGroupMember(property: storage.string(member.property),
+                errors_path: storage.string(member.errorsPath), item_model: storage.string(member.itemModel),
+                code_property: storage.string(member.codeProperty), message_property: storage.string(member.messageProperty))
+        }
+        return NuxRuleGroup(model: storage.string(entry.model), valid: storage.string(entry.valid),
+            members: storage.array(members), member_count: members.count)
+    }
+    return try body(storage.array(values), values.count)
+}
+
 private final class NuxieNativeFileHandle: @unchecked Sendable {
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let owned: NuxieNativeOwnedHandle
+
+    func installValueMarkers(_ entries: [NuxieNativeValueMarker]) throws {
+        try withNuxieNativeValueMarkers(entries) { entries, count in
+            try requireOK(nux_file_set_value_markers(try owned.require(), entries, count), operation: "install value markers")
+        }
+    }
+
+    func installValueRules(_ entries: [NuxieNativeValueRule]) throws {
+        try withNuxieNativeValueRules(entries) { entries, count in
+            var result: OpaquePointer?
+            let status = nux_file_set_value_rules_with_result(try owned.require(), entries, count, &result)
+            if result != nil {
+                try NuxieNativeCapiResultHandle.consume(callStatus: status, result: &result)
+            } else {
+                try requireOK(status, operation: "install value rules")
+            }
+        }
+    }
+
+    func installRuleGroups(_ entries: [NuxieNativeRuleGroup]) throws {
+        try withNuxieNativeRuleGroups(entries) { entries, count in
+            try requireOK(nux_file_set_rule_groups(try owned.require(), entries, count), operation: "install rule groups")
+        }
+    }
 
     init(
         executor: NuxieRuntimePinnedThreadExecutor,
         renderer: NuxieNativeRendererHandle,
         bytes: Data,
-        importMode: NuxieNativeImportMode
+        importMode: NuxieNativeImportMode,
+        valuePolicy: NuxieNativeValuePolicy = .empty
     ) throws {
         let renderer = try renderer.require()
         var file: OpaquePointer?
@@ -1910,6 +2387,15 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
             executor: executor,
             free: nux_file_free
         )
+        do {
+            let markers = try valuePolicy.markers(in: viewModelCatalog())
+            try installValueMarkers(markers)
+            try installValueRules(valuePolicy.rules)
+            try installRuleGroups(valuePolicy.groupsForInstallation(markers: markers))
+        } catch {
+            try? owned.close()
+            throw error
+        }
     }
 
     func assets() throws -> [NuxieNativeFileAssetDescriptor] {
@@ -2225,33 +2711,6 @@ private final class NuxieNativeArtboardHandle: @unchecked Sendable {
         )
     }
 
-    func setTextRuns(_ mutations: [NuxieNativeTextRunMutation]) throws -> Bool {
-        let storage = NuxieNativeBorrowedStorage()
-        let native = mutations.map { mutation in
-            NuxTextRunMutation(
-                name: storage.stringView(mutation.name),
-                text: storage.byteView(mutation.text)
-            )
-        }
-        return try native.withUnsafeBufferPointer { buffer in
-            var batch = NuxTextRunMutationBatch()
-            batch.struct_size = UInt32(MemoryLayout<NuxTextRunMutationBatch>.size)
-            batch.mutations = buffer.baseAddress
-            batch.mutation_count = buffer.count
-            var changed: UInt32 = 0
-            try requireOK(
-                nux_artboard_instance_set_text_runs(try owned.require(), &batch, &changed),
-                operation: "set text runs"
-            )
-            guard changed == 0 || changed == 1 else {
-                throw NuxieNativeRuntimeError.invalidNativeValue(
-                    "non-canonical text mutation result"
-                )
-            }
-            return changed == 1
-        }
-    }
-
     func close() throws { try owned.close() }
 }
 
@@ -2284,42 +2743,55 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
     func step(
         inputs: [NuxieNativePlayerInput],
         pointers: [NuxieNativePointerEvent],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64,
         textRunNames: [String] = []
     ) throws -> NuxieNativePlayerStepResult {
-        try withNativeInputChanges(inputs) { nativeInputs in
-            let nativePointers = pointers.map {
-                NuxPlayerPointerEvent(
-                    kind: $0.kind.rawValue,
-                    x: $0.x,
-                    y: $0.y,
-                    pointer_id: $0.pointerID,
-                    timestamp_seconds: $0.timestamp
-                )
-            }
-            return try nativeInputs.withUnsafeBufferPointer { inputBuffer in
-                try nativePointers.withUnsafeBufferPointer { pointerBuffer in
-                    var step = NuxPlayerStep()
-                    step.struct_size = UInt32(MemoryLayout<NuxPlayerStep>.size)
-                    step.inputs = inputBuffer.baseAddress
-                    step.input_count = inputBuffer.count
-                    step.pointers = pointerBuffer.baseAddress
-                    step.pointer_count = pointerBuffer.count
-                    step.elapsed_seconds = elapsedSeconds
-                    step.correlation_id = correlationID
-                    var result: OpaquePointer?
-                    let status = nux_player_step(try owned.require(), &step, &result)
-                    guard let result else {
-                        throw nativeFailure(status: status, operation: "step player")
+        let stateMachine = try !focusInputs.isEmpty && info().kind == .stateMachine
+        return try withNativeFocusInputs(stateMachine ? focusInputs : []) { focusBuffer in
+            try withNativeInputChanges(inputs) { nativeInputs in
+                let nativePointers = pointers.map {
+                    NuxPlayerPointerEvent(
+                        kind: $0.kind.rawValue,
+                        x: $0.x,
+                        y: $0.y,
+                        pointer_id: $0.pointerID,
+                        timestamp_seconds: $0.timestamp
+                    )
+                }
+                return try nativeInputs.withUnsafeBufferPointer { inputBuffer in
+                    try nativePointers.withUnsafeBufferPointer { pointerBuffer in
+                        var step = NuxPlayerStep()
+                        step.struct_size = UInt32(MemoryLayout<NuxPlayerStep>.size)
+                        step.inputs = inputBuffer.baseAddress
+                        step.input_count = inputBuffer.count
+                        step.pointers = pointerBuffer.baseAddress
+                        step.pointer_count = pointerBuffer.count
+                        step.focus_inputs = focusBuffer.baseAddress
+                        step.focus_input_count = focusBuffer.count
+                        step.elapsed_seconds = elapsedSeconds
+                        step.correlation_id = correlationID
+                        var result: OpaquePointer?
+                        let status = nux_player_step(try owned.require(), &step, &result)
+                        guard let result else {
+                            throw nativeFailure(status: status, operation: "step player")
+                        }
+                        let ownedResult = NuxieNativePlayerStepResultHandle(result)
+                        defer { try? ownedResult.close() }
+                        return try ownedResult.copy(callStatus: status,
+                            player: try owned.require(), textRunNames: textRunNames)
                     }
-                    let ownedResult = NuxieNativePlayerStepResultHandle(result)
-                    defer { try? ownedResult.close() }
-                    return try ownedResult.copy(callStatus: status,
-                        player: try owned.require(), textRunNames: textRunNames)
                 }
             }
         }
+    }
+
+    func focusState() throws -> NuxieNativeFocusState {
+        var state = NuxPlayerFocusState()
+        state.struct_size = UInt32(MemoryLayout<NuxPlayerFocusState>.size)
+        try requireOK(nux_player_focus_state(try owned.require(), &state), operation: "read focus state")
+        return .init(hasFocus: state.has_focus == 1, expectsKeyboardInput: state.expects_keyboard_input == 1)
     }
 
     func close() throws { try owned.close() }
@@ -2462,6 +2934,11 @@ private final class NuxieNativePlayerStepResultHandle {
                 readListItem: nux_player_step_result_view_model_change_list_item
             )
         }
+        let focusResults = try (0..<info.focus_input_result_count).map { index in
+            var value: UInt32 = 0
+            try requireOK(nux_player_step_result_focus_input(result, index, &value), operation: "read focus input result")
+            return value == 1
+        }
         return NuxieNativePlayerStepResult(
             keepGoing: info.keep_going,
             pointerHits: pointerHits,
@@ -2469,7 +2946,8 @@ private final class NuxieNativePlayerStepResultHandle {
             events: events,
             hostCommands: hostCommands,
             viewModelChanges: viewModelChanges,
-            textGeometry: copyTextGeometry(player: player, names: textRunNames)
+            textGeometry: copyTextGeometry(player: player, names: textRunNames),
+            focusResults: focusResults
         )
     }
 
@@ -2884,6 +3362,7 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
 
     func render(
         player: NuxieNativePlayerHandle,
+        layoutScaleFactor: Float,
         drawable: NuxieNativeDrawableState,
         clearColor: UInt32,
         readback: NuxieNativeFrameReadback?,
@@ -2903,7 +3382,8 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
             operation.drawable_state = UInt32(NUX_METAL_DRAWABLE_STATE_OCCLUDED)
         }
         operation.clear_color = clearColor
-        operation.fit = UInt32(NUX_RENDERER_FIT_CONTAIN_CENTER)
+        operation.fit = UInt32(NUX_RENDERER_FIT_LAYOUT)
+        operation.layout_scale_factor = layoutScaleFactor
         if let readback {
             operation.readback_buffer = Unmanaged.passUnretained(readback.buffer as AnyObject).toOpaque()
             operation.readback_bytes_per_row = readback.bytesPerRow
@@ -3044,6 +3524,46 @@ private final class NuxieNativeBorrowedStorage {
         bytes.append(pointer)
         return NuxByteView(data: UnsafePointer(pointer), len: value.count)
     }
+}
+
+private func withNativeFocusInputs<T>(
+    _ inputs: [NuxieNativeFocusInput],
+    _ operation: (UnsafeBufferPointer<NuxPlayerFocusInput>) throws -> T
+) throws -> T {
+    guard inputs.count <= NuxieNativeFocusLimits.inputsPerStep else {
+        throw NuxieNativeRuntimeError.invalidNativeValue("too many focus inputs")
+    }
+    let storage = NuxieNativeBorrowedStorage()
+    defer { withExtendedLifetime(storage) {} }
+    var textBytes = 0
+    let native = try inputs.map { input in
+        var value = NuxPlayerFocusInput()
+        switch input {
+        case .next: value.kind = NUX_PLAYER_FOCUS_KIND_NEXT.rawValue
+        case .previous: value.kind = NUX_PLAYER_FOCUS_KIND_PREVIOUS.rawValue
+        case .clear: value.kind = NUX_PLAYER_FOCUS_KIND_CLEAR.rawValue
+        case .key(let code, let modifiers, let pressed, let repeated):
+            guard modifiers <= 15 else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("invalid focus modifiers")
+            }
+            value.kind = NUX_PLAYER_FOCUS_KIND_KEY.rawValue
+            value.key_code = UInt32(code)
+            value.modifiers = UInt32(modifiers)
+            value.pressed = pressed ? 1 : 0
+            value.repeat = repeated ? 1 : 0
+        case .text(let text):
+            let count = text.utf8.count
+            guard count <= NuxieNativeFocusLimits.textBytesPerInput,
+                  textBytes <= NuxieNativeFocusLimits.textBytesPerStep - count else {
+                throw NuxieNativeRuntimeError.invalidNativeValue("focus text exceeds step limits")
+            }
+            textBytes += count
+            value.kind = NUX_PLAYER_FOCUS_KIND_TEXT.rawValue
+            value.text = storage.stringView(text)
+        }
+        return value
+    }
+    return try native.withUnsafeBufferPointer(operation)
 }
 
 private func withNativeInputChanges<T>(
@@ -3304,7 +3824,7 @@ private final class NuxieVideoActionCollector {
 
 extension NuxieNativeRuntime {
     /// Query all requested occurrences on the runtime lane after scene advance.
-    /// The viewport is in root-artboard coordinates, including any letterboxing.
+    /// The viewport is the visible view bounds in root-artboard points.
     package func visibleVideoIDs(_ componentIDs: [Int], viewport: CGRect) async throws -> Set<Int> {
         let state = try requireState()
         return try await executor.call {

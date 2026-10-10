@@ -2,6 +2,7 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
+import XCTest
 import Quick
 import Nimble
 @testable import Nuxie
@@ -236,7 +237,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             service = ExperiencePresentationService(
                 windowProvider: mockWindowProvider,
                 experiences: mockExperienceService,
-                eventLog: mockEventLog
+                eventLog: mockEventLog,
+                identity: MockIdentityService()
             )
         }
 
@@ -297,7 +299,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 outputs: [],
                 completionOutputs: [:]
             )
-            let descriptor = JourneyReleaseDescriptor(
+            let descriptor = JourneyReleaseDescriptor(state: [:], responses: [:], ruleGroups: [],
                 schemaVersion: JourneyReleaseDescriptor.wireSchemaVersion,
                 identity: identity,
                 metadata: [:],
@@ -368,6 +370,31 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
             }
 
             context("when window scene is available") {
+                it("returns no handoff for an unopenable link without dismissing") { @MainActor in
+                    let versionID = "unopenable-link"
+                    let screenID = "screen-selected"
+                    let controller = MockExperienceViewController(mockExperienceVersionId: versionID, mockScreenId: screenID)
+                    controller.canOpenLink = false
+                    mockExperienceService.mockViewControllers[versionID] = controller
+                    let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(), release: makeJourneyRelease(versionId: versionID, screenId: screenID),
+                        delivery: journeyDelivery(), screenId: screenID, owner: owner,
+                        reservation: service.reserveJourneyPresentation(ownerDistinctId: "user-1"),
+                        onLinkOpened: { _ in XCTFail("An unopenable link must not be recorded") },
+                        onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in XCTFail("Link must not finish the run"); return false })
+                    let shown = await service.presentJourney(request)
+                    expect(shown).to(equal(.shown))
+                    #if canImport(UIKit)
+                    service.linkHandoff = { _, _ in false }
+                    #endif
+                    let result = await service.openJourneyLink(owner: owner,
+                        request: .init(urlString: "missing-app://item", target: "external", screenId: screenID,
+                            instanceId: nil, effectId: "unopenable-effect"))
+                    expect(result).to(beNil())
+                    expect(controller.performedOpenLinks).to(beEmpty())
+                    expect(controller.performDismissReasons).to(beEmpty())
+                }
+
                 it("tears down the Journey surface while retrying durable host input") { @MainActor in
                     let versionID = "Journey-host-dismiss"
                     let screenID = "screen-selected"
@@ -397,7 +424,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -406,7 +433,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
                     )
 
@@ -456,12 +483,12 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     mockExperienceService.mockViewControllers[versionID] = controller
                     let outcomes = JourneyPresentationOutcomeRecorder()
                     let reservation = service.reserveJourneyPresentation(ownerDistinctId: "user-1")
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: makeJourneyRelease(versionId: versionID, screenId: screenID),
                         delivery: journeyDelivery(), screenId: screenID,
                         owner: .init(journeyId: "journey-owner", distinctId: "user-1"),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
                     )
                     let result = await service.presentJourney(request)
@@ -503,7 +530,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -512,7 +539,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
                     )
 
@@ -549,7 +576,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -561,7 +588,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         onScreenDismissed: { _, _, _ in
                             order.screenDismissed()
                         },
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in order.surfaceOutcome() }
                     )
                     let presentationResult = await service.presentJourney(request)
@@ -592,7 +619,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let ownerRequest = JourneyPresentationRequest(
+                    let ownerRequest = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -601,13 +628,13 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { outcome, _ in outcomes.record(outcome) }
                     )
                     let ownerResult = await service.presentJourney(ownerRequest)
                     expect(ownerResult).to(equal(.shown))
 
-                    let contenderRequest = JourneyPresentationRequest(
+                    let contenderRequest = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -616,7 +643,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: nil,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let contenderResult = await service.presentJourney(contenderRequest)
@@ -644,7 +671,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -653,7 +680,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentationResult = await service.presentJourney(request)
@@ -710,7 +737,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -719,7 +746,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentationResult = await service.presentJourney(request)
@@ -792,7 +819,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -801,7 +828,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentationResult = await service.presentJourney(request)
@@ -878,7 +905,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -887,7 +914,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentationResult = await service.presentJourney(request)
@@ -936,7 +963,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -945,7 +972,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentationResult = await service.presentJourney(request)
@@ -1007,7 +1034,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -1016,7 +1043,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { outcome, _ in
                             outcomes.record(outcome)
                         }
@@ -1036,8 +1063,12 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         effectId: "effect-dismiss"
                     )
 
-                    expect(actionResult).to(equal(.handled))
-                    expect(controller.performDismissReasons).to(equal([.userDismissed]))
+                    expect(actionResult).to(equal(.completed(outcome: "completed")))
+                    expect(controller.performDismissReasons).to(beEmpty())
+                    expect(service.isExperiencePresented).to(beTrue())
+                    await service.finishJourneyPresentation(owner: .init(
+                        journeyId: "journey-owner", distinctId: "user-1"
+                    ))
                     await expect(service.isExperiencePresented).toEventually(beFalse())
                     expect(outcomes.outcomes).to(beEmpty())
                 }
@@ -1236,7 +1267,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -1245,7 +1276,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentation = Task { @MainActor in
@@ -1287,7 +1318,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
-                    let request = JourneyPresentationRequest(
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
                         release: release,
                         delivery: journeyDelivery(),
                         screenId: screenID,
@@ -1296,7 +1327,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                             distinctId: "user-1"
                         ),
                         reservation: reservation,
-                        onEmissionBatch: { _ in true },
+                        onEmissionBatch: { _, _ in true },
                         onOutcome: { _, _ in true }
                     )
                     let presentation = Task { @MainActor in

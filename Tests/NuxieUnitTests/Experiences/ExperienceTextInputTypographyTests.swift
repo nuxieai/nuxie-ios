@@ -14,10 +14,38 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             let name: String
             let fontSize: Double
             let lineHeight: Double
-            let containScale: Double
+            let viewSizeScale: Double
             let geometryScale: Double
             let expectedFontSize: Double
             let expectedBaselineDistance: Double?
+        }
+    }
+
+    func testComposingUnderlineUsesFieldTintWithoutDrawingNativeGlyphs() throws {
+        for multiline in [false, true] {
+            let bridge = ExperienceTextInputOverlayBridge()
+            defer { bridge.clear() }
+            let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+            let item = Fixture.Case(name: "composition", fontSize: 23, lineHeight: -1,
+                viewSizeScale: 1, geometryScale: 1, expectedFontSize: 23, expectedBaselineDistance: nil)
+            bindNativeFixture(bridge, screenID: "screen",
+                renderPlan: plan(item, text: "", multiline: multiline, color: 0xff2166aa),
+                surfaceView: surface, artboardBounds: surface.bounds,
+                textWriter: { _, _, completion in completion(.success(())) })
+            let transform = CGAffineTransform(translationX: 10, y: 20)
+            updateNativeFixture(bridge, frame: .init(snapshot: .init(rootInstanceID: 1, instances: [], values: []),
+                geometry: .captured(["run": .init(renderRevision: 1, worldTransform: transform,
+                    contentTransform: transform, textBounds: .zero,
+                    layout: .init(transform: transform, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)), firstBaseline: nil)])))
+            let editor = try XCTUnwrap(surface.subviews.first { $0 is UITextInput } as? (UIView & UITextInput))
+            let tint = UIColor(red: 33 / 255.0, green: 102 / 255.0, blue: 170 / 255.0, alpha: 1)
+            let attributes = try XCTUnwrap(editor.markedTextStyle)
+            XCTAssertEqual(attributes[.underlineStyle] as? Int, NSUnderlineStyle.single.rawValue)
+            XCTAssertEqual(attributes[.underlineColor] as? UIColor, tint)
+            XCTAssertEqual(attributes[.foregroundColor] as? UIColor, .clear)
+            XCTAssertEqual(editor.tintColor, tint)
+            if let field = editor as? UITextField { XCTAssertEqual(field.textColor, .clear) }
+            if let textView = editor as? UITextView { XCTAssertEqual(textView.textColor, .clear) }
         }
     }
 
@@ -28,13 +56,13 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             let bridge = ExperienceTextInputOverlayBridge()
             defer { bridge.clear() }
             let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
-            let item = Fixture.Case(name: weight, fontSize: 23, lineHeight: -1, containScale: 1,
+            let item = Fixture.Case(name: weight, fontSize: 23, lineHeight: -1, viewSizeScale: 1,
                 geometryScale: 1, expectedFontSize: 23, expectedBaselineDistance: nil)
-            bridge.bind(screenID: "screen", renderPlan: plan(item, text: "System input", systemWeight: weight),
+            bindNativeFixture(bridge, screenID: "screen", renderPlan: plan(item, text: "System input", systemWeight: weight),
                 surfaceView: surface, artboardBounds: surface.bounds,
                 textWriter: { _, _, completion in completion(.success(())) })
             let transform = CGAffineTransform(translationX: 10, y: 20)
-            bridge.update(frame: .init(snapshot: .init(rootInstanceID: 1, instances: [], values: []),
+            updateNativeFixture(bridge, frame: .init(snapshot: .init(rootInstanceID: 1, instances: [], values: []),
                 geometry: .captured(["run": .init(renderRevision: 1, worldTransform: transform,
                     contentTransform: transform, textBounds: .zero,
                     layout: .init(transform: transform, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)), firstBaseline: nil)])))
@@ -56,17 +84,17 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         for item in fixture.cases {
             let bridge = ExperienceTextInputOverlayBridge()
             defer { bridge.clear() }
-            let size = 400 * item.containScale
+            let size = 400 * item.viewSizeScale
             let surface = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
             var writes = 0
             var commits = 0
             bridge.onAcceptedTextChange = { _, _ in commits += 1 }
-            bridge.bind(screenID: "screen", renderPlan: plan(item, text: fixture.text), surfaceView: surface,
+            bindNativeFixture(bridge, screenID: "screen", renderPlan: plan(item, text: fixture.text), surfaceView: surface,
                 artboardBounds: CGRect(x: 0, y: 0, width: 400, height: 400),
                 textWriter: { _, _, done in writes += 1; done(.success(())) })
             func update(scale: Double) {
                 let matrix = CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: 10, ty: 10)
-                bridge.update(frame: .init(
+                updateNativeFixture(bridge, frame: .init(
                     snapshot: .init(rootInstanceID: 1, instances: [], values: []),
                     geometry: .captured(["run": .init(renderRevision: 1,
                         worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
@@ -86,7 +114,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             oracle.attributedText = NSAttributedString(string: fixture.text, attributes: [
                 .font: UIFont.systemFont(ofSize: item.fontSize), .paragraphStyle: paragraph,
             ])
-            let projectionScale = item.containScale * item.geometryScale
+            let projectionScale = item.geometryScale
             XCTAssertEqual(try XCTUnwrap(editor.font).pointSize, item.fontSize, accuracy: 0.01, item.name)
             let unitOrigin = editor.convert(CGPoint.zero, to: surface)
             let unitEnd = editor.convert(CGPoint(x: 0, y: 1), to: surface)
@@ -144,14 +172,14 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
     }
 
     func testEffectiveMetricsRestyleAnUnchangedFrameWithoutTextTransactions() throws {
-        let item = Fixture.Case(name: "effective", fontSize: 18, lineHeight: 24, containScale: 1,
+        let item = Fixture.Case(name: "effective", fontSize: 18, lineHeight: 24, viewSizeScale: 1,
             geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
         let text = "Alpha\nBravo\nCharlie"
         let bridge = ExperienceTextInputOverlayBridge()
         defer { bridge.clear() }
         let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
         var writes = 0
-        bridge.bind(screenID: "screen", renderPlan: plan(item, text: text, prefix: "nuxieTextInputs/field/"),
+        bindNativeFixture(bridge, screenID: "screen", renderPlan: plan(item, text: text, prefix: "nuxieTextInputs/field/"),
             surfaceView: surface, artboardBounds: surface.bounds,
             textWriter: { _, _, done in writes += 1; done(.success(())) })
         func snapshot(_ size: Float?, _ height: Float?) -> ExperienceInteractiveViewModelSnapshot {
@@ -168,7 +196,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         }
         func update(_ size: Float?, _ height: Float?) {
             let matrix = CGAffineTransform(translationX: 10, y: 10)
-            bridge.update(frame: .init(snapshot: snapshot(size, height),
+            updateNativeFixture(bridge, frame: .init(snapshot: snapshot(size, height),
                 geometry: .captured(["run": .init(renderRevision: 1,
                     worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
                     layout: .init(transform: matrix, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)),
@@ -231,24 +259,24 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
     }
 
     func testPresentedAffineGeometryPreservesEditingAndRejectsUnavailableFields() throws {
-        let item = Fixture.Case(name: "affine", fontSize: 18, lineHeight: 24, containScale: 1,
+        let item = Fixture.Case(name: "affine", fontSize: 18, lineHeight: 24, viewSizeScale: 1,
             geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
         let text = "Alpha\nBravo\nCharlie"
         let bridge = ExperienceTextInputOverlayBridge()
         defer { bridge.clear() }
         let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
         var writes = 0
-        bridge.bind(screenID: "screen", renderPlan: plan(item, text: text), surfaceView: surface,
+        bindNativeFixture(bridge, screenID: "screen", renderPlan: plan(item, text: text), surfaceView: surface,
             artboardBounds: surface.bounds, textWriter: { _, _, done in writes += 1; done(.success(())) })
         let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [], values: [])
         func update(_ transform: CGAffineTransform) {
-            bridge.update(frame: .init(snapshot: snapshot, geometry: .captured(["run": .init(renderRevision: 1,
+            updateNativeFixture(bridge, frame: .init(snapshot: snapshot, geometry: .captured(["run": .init(renderRevision: 1,
                 worldTransform: transform, contentTransform: transform, textBounds: .zero,
                 layout: .init(transform: transform, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)),
                 firstBaseline: 20)])))
         }
         update(.init(translationX: 24, y: 32))
-        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
+        var editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
         XCTAssertFalse(editor.isHidden, "Presented geometry works without local VM geometry paths")
         editor.selectedRange = NSRange(location: 1, length: 3)
         #if NUXIE_HOSTED_INPUT_TESTS
@@ -289,10 +317,12 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         update(.init(translationX: 24, y: 32))
         XCTAssertFalse(editor.isHidden)
         XCTAssertTrue(editor.isEditable)
-        bridge.update(frame: .init(snapshot: snapshot, geometry: .captured([:])))
+        updateNativeFixture(bridge, frame: .init(snapshot: snapshot, geometry: .captured([:])))
         XCTAssertTrue(editor.isHidden)
         XCTAssertFalse(editor.isEditable)
+        XCTAssertNil(editor.superview, "An absent native occurrence retires its editor")
         update(.init(translationX: 24, y: 32))
+        editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? UITextView }.first)
         surface.bounds = .zero
         bridge.layout()
         XCTAssertTrue(editor.isHidden)
@@ -305,284 +335,68 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         bridge.layout()
         XCTAssertFalse(editor.isHidden)
         XCTAssertTrue(editor.isEditable)
-        bridge.update(frame: .init(snapshot: nil, geometry: .notRequested))
+        updateNativeFixture(bridge, frame: .init(snapshot: nil, geometry: .notRequested))
         XCTAssertTrue(editor.isHidden)
         XCTAssertFalse(editor.isEditable)
     }
 
-    func testPublishedRuntimeFontBaselinesMatchNativeEditors() async throws {
-        try await verifyPublishedEditors(fixture: "font-metrics-binding", singleLine: false)
-    }
+    func testPublishedOrdinaryTextRunMetricsRemainAvailable() async throws {
+        for fixture in ["font-metrics-binding", "text-input-single-line"] {
+            let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("fixtures/runtime/\(fixture)")
+            struct Expected: Decodable {
+                struct Field: Decodable { let path: String; let runName: String; let x: Float; let y: Float; let width: Float; let height: Float; let secure: Bool? }
+                struct Metrics: Decodable { let fontSize: Float; let lineHeight: Float }
+                let geometry: [Field]; let cases: [Metrics]
+            }
+            let expected = try JSONDecoder().decode(Expected.self, from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
+            let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
+            let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+            let font = try XCTUnwrap(assets.first { $0.kind == .font })
+            let fontBytes = try Data(contentsOf: directory.appendingPathComponent("2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5.otf"))
+            let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Paywall", player: .staticArtboard,
+                pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: true,
+                importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: [font.ordinal: fontBytes]))
+            addTeardownBlock { try await runtime.close() }
+            let root = try await runtime.rootViewModelReference()
+            for item in expected.cases {
+                _ = try await runtime.mutateViewModel([
+                    .setNumber(instance: root, path: "requestedFontSize", value: item.fontSize),
+                    .setNumber(instance: root, path: "requestedLineHeight", value: item.lineHeight),
+                ])
+                let frame = try await runtime.step(elapsedSeconds: 0, textRunNames: expected.geometry.map(\.runName))
+                guard case .captured(let geometry) = frame.textGeometry else { return XCTFail("Ordinary text-run geometry must remain available") }
+                let snapshot = try await runtime.snapshot()
+                for (index, field) in expected.geometry.enumerated() {
+                    let captured = try XCTUnwrap(geometry[field.runName])
+                    let layout = try XCTUnwrap(captured.layout)
+                    XCTAssertEqual(layout.bounds.width, CGFloat(field.width), accuracy: 0.1)
+                    XCTAssertEqual(layout.bounds.height, CGFloat(field.height), accuracy: 0.1)
+                    XCTAssertEqual(layout.transform.tx, CGFloat(field.x), accuracy: 0.1)
+                    XCTAssertEqual(layout.transform.ty, CGFloat(field.y), accuracy: 0.1)
+                    if field.secure == true { XCTAssertNil(captured.firstBaseline) }
+                    else { XCTAssertGreaterThan(try XCTUnwrap(captured.firstBaseline), 0) }
+                    let parts = field.path.split(separator: "/").map(String.init)
+                    var owner = snapshot.rootInstanceID
+                    for part in parts {
+                        let entry = try XCTUnwrap(snapshot.values.first { $0.ownerInstanceID == owner && $0.name == part })
+                        guard case .referencedInstance(let child) = entry.value else { return XCTFail("Metric owner must remain a model") }
+                        owner = child
+                    }
+                    let fixed = fixture == "font-metrics-binding" && index == 1
+                    XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == owner && $0.name == "fontSize" }?.value,
+                        .number(fixed ? 18 : item.fontSize))
+                    XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == owner && $0.name == "lineHeight" }?.value,
+                        .number(fixed ? 24 : item.lineHeight))
+                }
+            }
 
-    func testPublishedSingleLineAndSecureEditorsPreserveNativeTypography() async throws {
-        try await verifyPublishedEditors(fixture: "text-input-single-line", singleLine: true)
-    }
-
-    private func verifyPublishedEditors(fixture: String, singleLine: Bool) async throws {
-        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("fixtures/runtime/\(fixture)")
-        struct PublishedInput: Decodable {
-            struct Style: Decodable {
-                let fontFamily: String; let fontWeight: String; let fontStyle: String
-                let fontSize: Double; let lineHeight: Double; let letterSpacing: Double
-                let color: UInt32; let fontAssetUniqueName: String; let textAlign: String?
-            }
-            let viewNodeId: String; let renderedNodeId: String; let artboardId: String
-            let textObjectKey: String; let textRunObjectKey: String
-            let textName: String; let textRunName: String; let value: String
-            let editable: Bool; let multiline: Bool; let secureTextEntry: Bool?; let style: Style
         }
-        struct Report: Decodable {
-            struct Metadata: Decodable { let textInputs: [PublishedInput] }
-            let builtPackageMetadata: Metadata
-        }
-        struct Expected: Decodable {
-            struct Field: Decodable { let path: String; let runName: String }
-            struct Metrics: Decodable { let fontSize: Float; let lineHeight: Float }
-            let geometry: [Field]; let cases: [Metrics]
-        }
-        let report = try JSONDecoder().decode(Report.self, from: Data(contentsOf: directory.appendingPathComponent("report.json")))
-        let expected = try JSONDecoder().decode(Expected.self, from: Data(contentsOf: directory.appendingPathComponent("expectations.json")))
-        let sha = "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5"
-        let fontBytes = try Data(contentsOf: directory.appendingPathComponent("\(sha).otf"))
-        let inputs = try report.builtPackageMetadata.textInputs.map { item in
-            let prefix = try XCTUnwrap(expected.geometry.first { $0.runName == item.textRunName }).path
-            return NativeExperienceTextInput(inputId: item.viewNodeId, screenId: "screen", artboardId: item.artboardId,
-                viewNodeId: item.viewNodeId, renderedNodeId: item.renderedNodeId,
-                textObjectKey: item.textObjectKey, textRunObjectKey: item.textRunObjectKey,
-                textName: item.textName, textRunName: item.textRunName,
-                value: item.value, placeholder: nil, editable: item.editable,
-                geometry: .init(xPath: "\(prefix)/x", yPath: "\(prefix)/y", widthPath: "\(prefix)/width",
-                    heightPath: "\(prefix)/height", rotationPath: "\(prefix)/rotation", scaleXPath: "\(prefix)/scaleX", scaleYPath: "\(prefix)/scaleY"),
-                style: .init(fontFamily: item.style.fontFamily, fontWeight: item.style.fontWeight,
-                    fontStyle: item.style.fontStyle, fontSize: item.style.fontSize, lineHeight: item.style.lineHeight,
-                    letterSpacing: item.style.letterSpacing, color: item.style.color,
-                    fontAssetUniqueName: item.style.fontAssetUniqueName, textAlign: item.style.textAlign),
-                keyboardType: nil, secureTextEntry: item.secureTextEntry ?? false, multiline: item.multiline, maxLength: nil, responseFieldKey: nil)
-        }
-        let fontName = try XCTUnwrap(inputs.first).style.fontAssetUniqueName
-        let scope = ExperienceRuntimeFontScope()
-        defer { scope.close() }
-        let registeredName = try XCTUnwrap(ExperienceRuntimeFontRegistry.registerFont(assetUniqueName: fontName, data: fontBytes, in: scope))
-        let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "published", appId: "a", environment: "test"),
-            scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),
-            screens: [], transitions: [], textInputs: inputs, images: [], fonts: [
-                .init(location: .external(key: sha), authoredAssetId: 0, assetUniqueName: fontName,
-                    family: "Fixture Sans", weight: "400", style: "normal", sha256: sha,
-                    sizeBytes: fontBytes.count, contentType: "font/otf", format: "otf", required: true)
-            ])
-        let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
-        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
-        let font = try XCTUnwrap(assets.first { $0.kind == .font })
-        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Paywall", player: .staticArtboard,
-            pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: true,
-            importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: [font.ordinal: fontBytes]))
-        defer { Task { try? await runtime.close() } }
-        let root = try await runtime.rootViewModelReference()
-        let layer = CAMetalLayer()
-        layer.device = try await runtime.metalDevice().value
-        layer.pixelFormat = .bgra8Unorm
-        layer.drawableSize = CGSize(width: 390, height: 844)
-        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-        let bridge = ExperienceTextInputOverlayBridge()
-        defer { bridge.clear() }
-        var writes = 0
-        bridge.bind(screenID: "screen", renderPlan: plan, surfaceView: surface,
-            artboardBounds: surface.bounds, textWriter: { _, _, done in writes += 1; done(.success(())) })
-        var initialWrites = writes
-        var lastSnapshot: ExperienceInteractiveViewModelSnapshot?
-        #if NUXIE_HOSTED_INPUT_TESTS
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 900))
-        let controller = UIViewController()
-        window.rootViewController = controller
-        controller.view.addSubview(surface)
-        window.makeKeyAndVisible()
-        defer { surface.endEditing(true); window.isHidden = true; window.rootViewController = nil }
-        #endif
-        for (caseIndex, item) in expected.cases.enumerated() {
-            _ = try await runtime.mutateViewModel([
-                .setNumber(instance: root, path: "requestedFontSize", value: item.fontSize),
-                .setNumber(instance: root, path: "requestedLineHeight", value: item.lineHeight),
-            ])
-            let step = try await runtime.step(elapsedSeconds: 0, textRunNames: inputs.map(\.textRunName))
-            guard case .captured(let geometry) = step.textGeometry else { return XCTFail("No native geometry") }
-            let native = try await runtime.snapshot()
-            let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: native.rootInstanceID,
-                instances: native.instances.map { .init(id: $0.id, schemaIndex: $0.schemaIndex, valueRange: $0.valueRange) },
-                values: native.values.map { entry in
-                    let value: ExperienceInteractiveViewModelValue
-                    switch entry.value {
-                    case .number(let n): value = .number(n)
-                    case .referencedInstance(let id): value = .referencedInstance(id)
-                    case .bytes(let bytes): value = .bytes(bytes)
-                    case .bool(let bool): value = .bool(bool)
-                    case .integer(let n): value = .integer(n)
-                    case .list(let ids): value = .list(ids)
-                    case .unsupported: value = .unsupported
-                    }
-                    return .init(ownerInstanceID: entry.ownerInstanceID, propertyIndex: entry.propertyIndex, name: entry.name, value: value)
-                })
-            lastSnapshot = snapshot
-            guard let drawable = layer.nextDrawable() else { throw XCTSkip("No Metal drawable") }
-            let completed = expectation(description: "published frame completed")
-            let outcome = try await runtime.render(drawable: .available(.init(drawable)), completion: { completed.fulfill() })
-            await fulfillment(of: [completed], timeout: 2)
-            XCTAssertEqual(outcome.disposition, .presented)
-            bridge.update(frame: .init(snapshot: snapshot, geometry: step.textGeometry))
-            if singleLine {
-                let fields = surface.subviews.compactMap { $0 as? UITextField }.sorted { $0.center.y < $1.center.y }
-                XCTAssertEqual(fields.count, inputs.count)
-                XCTAssertEqual(writes, initialWrites)
-                if caseIndex == 0 {
-                    for editor in fields where editor.isSecureTextEntry {
-                        #if NUXIE_HOSTED_INPUT_TESTS
-                        XCTAssertTrue(editor.becomeFirstResponder())
-                        editor.insertText("AAAAA")
-                        editor.resignFirstResponder()
-                        #else
-                        editor.text = "AAAAA"
-                        editor.sendActions(for: .editingChanged)
-                        #endif
-                        editor.layoutIfNeeded()
-                    }
-                    initialWrites = writes
-                }
-                for (index, editor) in fields.enumerated() {
-                    let captured = try XCTUnwrap(geometry[inputs[index].textRunName])
-                    XCTAssertEqual(editor.font?.fontName, registeredName)
-                    XCTAssertEqual(editor.font?.pointSize, CGFloat(item.fontSize))
-                    if editor.isSecureTextEntry {
-                        XCTAssertNil(captured.firstBaseline, "Secure text is never shaped by the renderer")
-                        XCTAssertEqual(inputs[index].value, "")
-                        // A secure field has no rendered baseline. Its native caret
-                        // follows UIKit typography at the captured content origin.
-                        let reference = UITextField()
-                        reference.defaultTextAttributes = editor.defaultTextAttributes
-                        reference.isSecureTextEntry = true
-                        reference.text = "AAAAA"
-                        reference.contentVerticalAlignment = .top
-                        let origin = CGPoint.zero.applying(captured.contentTransform)
-                        reference.frame = CGRect(origin: origin, size: CGSize(width: editor.bounds.width,
-                            height: reference.intrinsicContentSize.height))
-                        surface.addSubview(reference)
-                        reference.layoutIfNeeded()
-                        XCTAssertEqual(reference.font?.fontName, editor.font?.fontName, "Native reference font")
-                        XCTAssertEqual(reference.font?.pointSize, editor.font?.pointSize, "Native reference size")
-                        let expectedCaret = reference.textInputView.convert(reference.caretRect(for: reference.beginningOfDocument), to: surface)
-                        let actualCaret = editor.textInputView.convert(editor.caretRect(for: editor.beginningOfDocument), to: surface)
-                        XCTAssertEqual(actualCaret.minY, expectedCaret.minY, accuracy: 1)
-                        XCTAssertEqual(actualCaret.height, expectedCaret.height, accuracy: 1)
-                        reference.removeFromSuperview()
-                    } else {
-                        let baseline = try XCTUnwrap(captured.firstBaseline)
-                        let point = CGPoint(x: 0, y: baseline).applying(captured.contentTransform)
-                        try assertSingleLineInkBaseline(editor, surface: surface, baseline: point.y)
-                    }
-                    XCTAssertEqual(editor.text, "AAAAA")
-                    if caseIndex == 0 {
-                        #if NUXIE_HOSTED_INPUT_TESTS
-                        if !editor.isSecureTextEntry { XCTAssertTrue(editor.becomeFirstResponder()) }
-                        #endif
-                        let start = try XCTUnwrap(editor.position(from: editor.beginningOfDocument, offset: 1))
-                        let end = try XCTUnwrap(editor.position(from: start, offset: 3))
-                        editor.selectedTextRange = editor.textRange(from: start, to: end)
-                        #if NUXIE_HOSTED_INPUT_TESTS
-                        if !editor.isSecureTextEntry {
-                            editor.setMarkedText("AAA", selectedRange: NSRange(location: 0, length: 3))
-                        }
-                        #endif
-                    }
-                    let selection = try XCTUnwrap(editor.selectedTextRange)
-                    XCTAssertEqual(editor.offset(from: editor.beginningOfDocument, to: selection.start), 1)
-                    XCTAssertEqual(editor.offset(from: selection.start, to: selection.end), 3)
-                    #if NUXIE_HOSTED_INPUT_TESTS
-                    if !editor.isSecureTextEntry { XCTAssertNotNil(editor.markedTextRange) }
-                    #endif
-                }
-                initialWrites = writes
-                continue
-            }
-            let editors = surface.subviews.compactMap { $0 as? UITextView }.sorted { $0.center.y < $1.center.y }
-            XCTAssertEqual(editors.count, inputs.count)
-            for (index, editor) in editors.enumerated() {
-                let field = try XCTUnwrap(geometry[inputs[index].textRunName])
-                let baseline = try XCTUnwrap(field.firstBaseline)
-                let expectedPoint = CGPoint(x: 0, y: baseline).applying(field.contentTransform)
-                let first = try XCTUnwrap(baselines(editor).first)
-                let actualPoint = editor.convert(CGPoint(x: 0, y: editor.textContainerInset.top + first), to: surface)
-                XCTAssertEqual(actualPoint.y, expectedPoint.y, accuracy: 0.5, "\(inputs[index].inputId) font size \(item.fontSize)")
-                XCTAssertEqual(editor.font?.fontName, registeredName)
-                XCTAssertEqual(editor.font?.pointSize, index == 0 ? CGFloat(item.fontSize) : 18)
-                XCTAssertEqual(editor.text, inputs[index].value)
-                XCTAssertEqual(writes, initialWrites)
-                let lines = baselines(editor)
-                XCTAssertEqual(lines.count, 3)
-                let interval = index == 0 ? item.lineHeight : 24
-                if interval > 0 {
-                    for line in 1..<lines.count {
-                        XCTAssertEqual(lines[line] - lines[line - 1], CGFloat(interval), accuracy: 0.1)
-                    }
-                }
-                if index == 0 {
-                    if caseIndex == 0 {
-                        editor.selectedRange = NSRange(location: 1, length: 3)
-                        #if NUXIE_HOSTED_INPUT_TESTS
-                        XCTAssertTrue(editor.becomeFirstResponder())
-                        editor.setMarkedText("lph", selectedRange: NSRange(location: 0, length: 3))
-                        #endif
-                        // Creating composition is an explicit user edit. Only
-                        // subsequent geometry/style frames must be write-free.
-                        initialWrites = writes
-                    }
-                    XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3))
-                    #if NUXIE_HOSTED_INPUT_TESTS
-                    let marked = try XCTUnwrap(editor.markedTextRange)
-                    XCTAssertEqual(editor.offset(from: editor.beginningOfDocument, to: marked.start), 1)
-                    XCTAssertEqual(editor.offset(from: marked.start, to: marked.end), 3)
-                    #endif
-                }
-            }
-        }
-        let editor = surface.subviews.compactMap { $0 as? UITextView }.min { $0.center.y < $1.center.y }
-        let priorInset = editor?.textContainerInset
-        let caret = editor.map { $0.caretRect(for: $0.beginningOfDocument) }
-        let fields = surface.subviews.compactMap { $0 as? UITextField }
-        let fieldCarets = fields.map { $0.textInputView.convert($0.caretRect(for: $0.beginningOfDocument), to: surface) }
-        _ = try await runtime.setTextRuns(inputs.map { .init(name: $0.textRunName, text: Data()) })
-        let blank = try await runtime.step(elapsedSeconds: 0, textRunNames: inputs.map(\.textRunName))
-        guard case .captured(let blankGeometry) = blank.textGeometry else { return XCTFail("No blank geometry") }
-        XCTAssertTrue(blankGeometry.values.allSatisfy { $0.firstBaseline == nil })
-        guard let drawable = layer.nextDrawable() else { throw XCTSkip("No blank drawable") }
-        let blankCompleted = expectation(description: "blank frame completed")
-        _ = try await runtime.render(drawable: .available(.init(drawable)), completion: { blankCompleted.fulfill() })
-        await fulfillment(of: [blankCompleted], timeout: 2)
-        bridge.update(frame: .init(snapshot: try XCTUnwrap(lastSnapshot), geometry: blank.textGeometry))
-        if let editor {
-            XCTAssertEqual(editor.textContainerInset, priorInset)
-            XCTAssertEqual(editor.caretRect(for: editor.beginningOfDocument), caret)
-            XCTAssertEqual(editor.selectedRange, NSRange(location: 1, length: 3))
-            XCTAssertEqual(editor.text, inputs[0].value)
-            #if NUXIE_HOSTED_INPUT_TESTS
-            XCTAssertNotNil(editor.markedTextRange)
-            #endif
-        }
-        for (index, field) in fields.enumerated() {
-            XCTAssertEqual(field.textInputView.convert(field.caretRect(for: field.beginningOfDocument), to: surface), fieldCarets[index])
-            XCTAssertEqual(field.text, "AAAAA")
-            let selection = try XCTUnwrap(field.selectedTextRange)
-            XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: selection.start), 1)
-            XCTAssertEqual(field.offset(from: selection.start, to: selection.end), 3)
-            #if NUXIE_HOSTED_INPUT_TESTS
-            if !field.isSecureTextEntry { XCTAssertNotNil(field.markedTextRange) }
-            #endif
-        }
-        XCTAssertEqual(writes, initialWrites)
-        try await runtime.close()
     }
 
     func testSingleLineAndSecureFieldsUseCapturedFirstBaseline() throws {
-        let item = Fixture.Case(name: "single-line", fontSize: 18, lineHeight: 24, containScale: 1,
+        let item = Fixture.Case(name: "single-line", fontSize: 18, lineHeight: 24, viewSizeScale: 1,
             geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
         var ordinaryCarets: [CGRect] = []
         for secure in [false, true] {
@@ -590,7 +404,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             defer { bridge.clear() }
             let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
             var writes = 0
-            bridge.bind(screenID: "screen", renderPlan: plan(item, text: "AAAAA", prefix: "nuxieTextInputs/field/", multiline: false, secure: secure),
+            bindNativeFixture(bridge, screenID: "screen", renderPlan: plan(item, text: "AAAAA", prefix: "nuxieTextInputs/field/", multiline: false, secure: secure),
                 surfaceView: surface, artboardBounds: surface.bounds,
                 textWriter: { _, _, done in writes += 1; done(.success(())) })
             let matrix = CGAffineTransform(translationX: 24, y: 24)
@@ -601,7 +415,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                     .init(ownerInstanceID: 3, propertyIndex: 0, name: "fontSize", value: .number(size)),
                     .init(ownerInstanceID: 3, propertyIndex: 1, name: "lineHeight", value: .number(height)),
                 ])
-                bridge.update(frame: .init(snapshot: snapshot, geometry: .captured(["run": .init(renderRevision: 1,
+                updateNativeFixture(bridge, frame: .init(snapshot: snapshot, geometry: .captured(["run": .init(renderRevision: 1,
                     worldTransform: matrix, contentTransform: matrix, textBounds: .zero,
                     layout: .init(transform: matrix, bounds: CGRect(x: 0, y: 0, width: 240, height: 180)), firstBaseline: baseline)])))
             }
@@ -652,7 +466,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
                 }
                 XCTAssertEqual(field.isSecureTextEntry, secure)
                 XCTAssertEqual(field.font?.pointSize, CGFloat(size))
-                XCTAssertEqual(field.text, "AAAAA")
+                XCTAssertTrue(field.text == "AAAAA", "Native field must retain its text")
                 XCTAssertEqual(writes, before)
                 let range = try XCTUnwrap(field.selectedTextRange)
                 XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: range.start), 1)
@@ -667,11 +481,11 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             if !secure { try assertSingleLineInkBaseline(field, surface: surface, baseline: 42) }
             XCTAssertEqual(field.textInputView.convert(field.caretRect(for: field.beginningOfDocument), to: surface), caret)
             XCTAssertEqual(writes, before)
-            XCTAssertEqual(field.text, "AAAAA")
+            XCTAssertTrue(field.text == "AAAAA", "Native field must retain its text")
             XCTAssertTrue(field.point(inside: CGPoint(x: 120, y: 170), with: nil), "Baseline correction preserves the entire authored touch area")
             update(size: 0.5, height: -1, baseline: 0.5)
             XCTAssertEqual(field.font?.pointSize, 0.5, "Positive effective sizes must not be clamped")
-            XCTAssertEqual(field.text, "AAAAA")
+            XCTAssertTrue(field.text == "AAAAA", "Native field must retain its text")
             XCTAssertEqual(writes, before)
             #if NUXIE_HOSTED_INPUT_TESTS
             if !secure { XCTAssertNotNil(field.markedTextRange) }
@@ -746,14 +560,56 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         return result
     }
 
-    private func plan(_ item: Fixture.Case, text: String, prefix: String = "", multiline: Bool = true, secure: Bool = false, systemWeight: String? = nil) -> NativeExperienceRenderPlan {
+    private final class NativeFixtureState {
+        let input: NativeExperienceTextInput
+        var text: String
+        init(_ input: NativeExperienceTextInput) { self.input = input; text = input.value }
+    }
+    private var nativeFixtures: [ObjectIdentifier: NativeFixtureState] = [:]
+
+    private func bindNativeFixture(_ bridge: ExperienceTextInputOverlayBridge, screenID: String,
+        renderPlan: NativeExperienceRenderPlan, surfaceView: UIView, artboardBounds: CGRect,
+        textWriter: @escaping (_ inputID: String, _ text: String, _ completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void) -> Void) {
+        let state = NativeFixtureState(renderPlan.textInputs[0])
+        nativeFixtures[ObjectIdentifier(bridge)] = state
+        bridge.bind(screenID: screenID, renderPlan: renderPlan, surfaceView: surfaceView, artboardBounds: artboardBounds,
+            semanticTextWriter: { _, target, text, done in
+                textWriter(target.inputID, text) { result in
+                    switch result {
+                    case .success: state.text = text; done(.accepted)
+                    case .failure: done(.rejected)
+                    }
+                }
+            }, semanticTextReader: { _, _, done in done(.success(.init(text: state.text))) })
+    }
+
+    /// Literal geometry fixtures supply native occurrences, never identities from a published text run.
+    private func updateNativeFixture(_ bridge: ExperienceTextInputOverlayBridge, frame: ExperienceInteractiveTextFrame) {
+        bridge.update(frame: frame)
+        guard let state = nativeFixtures[ObjectIdentifier(bridge)] else { return XCTFail("Missing native fixture") }
+        let input = state.input
+        let secure = input.secureTextEntry == true
+        let geometry: NuxieNativeTextRunGeometry?
+        if case .captured(let entries) = frame.geometry { geometry = entries["run"] } else { geometry = nil }
+        let nodes: [NuxieNativeSemanticNode] = geometry.map { _ in [.init(id: 1, parentID: nil, siblingIndex: 0,
+            role: NuxieNativeSemanticRole.textField.rawValue, stateFlags: secure ? NuxieNativeSemanticNode.obscured : 0,
+            traitFlags: 0, headingLevel: 0, actions: 0, bounds: .zero, label: "Input", value: "", hint: "")] } ?? []
+        let occurrences: [NuxieNativeInputOccurrence] = geometry.map { [.init(nodeID: 1, geometry: .init(
+            renderRevision: $0.renderRevision, worldTransform: $0.contentTransform, textBounds: $0.textBounds,
+            layout: $0.layout, firstBaseline: $0.firstBaseline, obscured: secure, multiline: input.multiline == true))] } ?? []
+        do {
+            _ = bridge.applySemantics(.init(id: UUID(), tree: try .init(renderRevision: 1, treeVersion: 1, nodes: nodes),
+                fieldsByTextRun: [:], nativeInputs: [input.textInputName: occurrences]))
+        } catch { XCTFail("Literal native geometry fixture must be valid") }
+    }
+
+    private func plan(_ item: Fixture.Case, text: String, prefix: String = "", multiline: Bool = true, secure: Bool = false, systemWeight: String? = nil, color: UInt32 = 0) -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
-            viewNodeId: "v", renderedNodeId: "r", textObjectKey: "text", textRunObjectKey: "run",
-            textName: "text", textRunName: "run", value: text, placeholder: nil, editable: true,
+            viewNodeId: "v", renderedNodeId: "r", textInputName: "native-field", value: text, placeholder: nil, editable: true,
             geometry: .init(xPath: "\(prefix)x", yPath: "\(prefix)y", widthPath: "\(prefix)w", heightPath: "\(prefix)h", rotationPath: "\(prefix)r",
                 scaleXPath: "\(prefix)sx", scaleYPath: "\(prefix)sy"),
             style: .init(fontFamily: systemWeight == nil ? "system" : "System", fontWeight: systemWeight ?? "normal", fontStyle: "normal", fontSize: item.fontSize,
-                lineHeight: item.lineHeight, letterSpacing: 0, color: 0, fontAssetUniqueName: systemWeight == nil ? "" : "system-1", textAlign: nil),
+                lineHeight: item.lineHeight, letterSpacing: 0, color: color, fontAssetUniqueName: systemWeight == nil ? "" : "system-1", textAlign: nil),
             keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "answer")
         return NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),

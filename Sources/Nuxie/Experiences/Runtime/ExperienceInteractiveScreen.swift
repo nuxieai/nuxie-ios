@@ -4,6 +4,19 @@ import Metal
 import NuxieRuntime
 import QuartzCore
 
+private func environmentMutations(reference: NuxieNativeViewModelReference,
+    reduceMotion: Bool?, safeArea: ExperienceSafeAreaInsets?) -> [NuxieNativeViewModelMutation] {
+    var mutations: [NuxieNativeViewModelMutation] = []
+    if let reduceMotion { mutations.append(.setBool(instance: reference, path: "reduceMotion", value: reduceMotion)) }
+    if let safeArea {
+        for (edge, value) in [("top", safeArea.top), ("bottom", safeArea.bottom),
+                              ("left", safeArea.left), ("right", safeArea.right)] {
+            mutations.append(.setNumber(instance: reference, path: "safeArea/" + edge, value: Float(value)))
+        }
+    }
+    return mutations
+}
+
 /// Product-owned player policy. The native wrapper receives only the resolved
 /// generic selector and never learns what a Nuxie screen means.
 enum ExperienceInteractivePlayerSelection: Equatable, Sendable {
@@ -43,6 +56,7 @@ struct ExperienceInteractiveReportedEvent: Equatable, Sendable {
     let delay: Float
     let properties: [ExperienceInteractiveField]
     var sourceRejection: String? = nil
+    var resolvedSource: ExperienceResolvedEventSource? = nil
 }
 
 enum ExperienceInteractiveViewModelValue: Equatable, Sendable {
@@ -183,8 +197,6 @@ enum ExperienceInteractiveEffectKind: Equatable, Sendable {
     case controlAction(actionId: String, event: ExperienceInteractiveReportedEvent)
     case reportedEvent(ExperienceInteractiveReportedEvent)
     case viewModelChange(ExperienceInteractiveViewModelChange)
-    case responseSet(field: String, value: ExperienceInteractiveValue)
-    case responseUnset(field: String)
     case journeyEvent(name: String, payload: ExperienceInteractiveValue)
     case hostCommand(name: String, payload: ExperienceInteractiveValue)
     case rejectedHostCommand(name: String, reason: String)
@@ -197,6 +209,7 @@ struct ExperienceInteractiveEffect: Equatable, Sendable {
     let sequence: UInt64
     let correlationID: UInt64
     let kind: ExperienceInteractiveEffectKind
+    var responseSave: ExperienceResponseSaveRequest? = nil
 }
 
 /// Serializes an async operation through its complete projection phase. An
@@ -242,6 +255,7 @@ actor ExperienceInteractiveOperationGate {
 struct ExperienceInteractiveStepResult: Equatable, Sendable {
     let keepGoing: Bool
     let pointerHits: [ExperienceInteractivePointerHit]
+    var focusState: NuxieNativeFocusState? = nil
     let effects: [ExperienceInteractiveEffect]
 }
 
@@ -395,11 +409,11 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         staged.reserveCapacity(
             reportedEvents.count + viewModelChanges.count + hostCommands.count
         )
-        staged.append(contentsOf: reportedEvents.map { event in
-            interpret(event, controlActionIds: controlActionIds)
-        })
         staged.append(contentsOf: viewModelChanges.map {
             .viewModelChange($0)
+        })
+        staged.append(contentsOf: reportedEvents.map { event in
+            interpret(event, controlActionIds: controlActionIds)
         })
         staged.append(contentsOf: hostCommands.map {
             interpret(
@@ -430,6 +444,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         _ event: ExperienceInteractiveReportedEvent,
         controlActionIds: Set<String>
     ) -> ExperienceInteractiveEffectKind {
+        if !event.url.isEmpty && event.name != "Nuxie Interaction" { return .reportedEvent(event) }
         if let reason = event.sourceRejection {
             return .rejectedHostCommand(name: event.name, reason: reason)
         }
@@ -477,25 +492,6 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         declaredEventNames: Set<String>
     ) -> ExperienceInteractiveEffectKind {
         switch command.name {
-        case JourneyResponseControlNames.responseSet:
-            guard case .string(let field) = command.payload["field"],
-                  !field.isEmpty,
-                  let value = command.payload["value"] else {
-                return .rejectedHostCommand(
-                    name: command.name,
-                    reason: "expected a non-empty string field and a value"
-                )
-            }
-            return .responseSet(field: field, value: value)
-        case JourneyResponseControlNames.responseUnset:
-            guard case .string(let field) = command.payload["field"],
-                  !field.isEmpty else {
-                return .rejectedHostCommand(
-                    name: command.name,
-                    reason: "expected a non-empty string field"
-                )
-            }
-            return .responseUnset(field: field)
         case "$navigate":
             // Screens emit events; Journey Routes are the sole navigation authority.
             return .rejectedHostCommand(
@@ -982,6 +978,7 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
     init(
         snapshot: NuxieNativeViewModelSnapshot?,
         catalog: NuxieNativeViewModelCatalog,
+        sharedExperience: Bool = false,
         preserving previous: ExperienceInteractiveReservedChangeFilter? = nil
     ) {
         guard let snapshot,
@@ -995,7 +992,8 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
         let reservedRootPropertyIndexes: Set<Int> = Set(
             catalog.properties.compactMap { property -> Int? in
                 guard property.schemaIndex == root.schemaIndex,
-                      Self.reservedRootProperties.contains(property.name) else {
+                      (Self.reservedRootProperties.contains(property.name)
+                        || (sharedExperience && property.name == "experience")) else {
                     return nil
                 }
                 return property.index
@@ -1484,13 +1482,17 @@ struct ExperienceInteractivePreparationHandle: Sendable {
 }
 
 /// Immutable authenticated source preparation shared by every screen and
-/// presentation of one release. Every opened screen receives a fresh native
-/// import bound to that session's exact Metal renderer factory domain.
+/// presentation of one release. A run supplies its native session group;
+/// standalone screen sessions receive their own renderer-bound imports.
 actor ExperienceInteractivePreparation {
     private static let generatedInteractionStateMachineNames = [
         "Generated Nuxie Pressable Interaction",
         "Generated Nuxie Interaction",
     ]
+
+    func prepareRunValues(_ values: ExperienceRunValues) async throws {
+        _ = try await values.native(in: preparedFile)
+    }
 
     private let payload: AuthenticatedRuntimePayload
     private let preparedFile: NuxieNativePreparedFile
@@ -1551,7 +1553,7 @@ actor ExperienceInteractivePreparation {
         )
         let preparedFile: NuxieNativePreparedFile
         do {
-            preparedFile = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, importMode: importMode)
+            preparedFile = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, importMode: importMode, valuePolicy: payload.valuePolicy.native)
             systemFontCache.didImport(binding.systemFonts)
         } catch {
             systemFontCache.didFailImport(binding.systemFonts)
@@ -1579,10 +1581,13 @@ actor ExperienceInteractivePreparation {
 
     func openScreen(
         screenID: String? = nil,
+        runValues: ExperienceRunValues? = nil,
         products: [StoreProduct] = [],
         player: ExperienceInteractivePlayerSelection = .defaultScene,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        initialReduceMotion: Bool? = nil,
+        initialSafeArea: ExperienceSafeAreaInsets? = nil,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
@@ -1606,12 +1611,15 @@ actor ExperienceInteractivePreparation {
             screen = try await ExperienceInteractiveScreen.openPrepared(
                 payload: payload,
                 preparedFile: preparedFile,
+                runValues: runValues,
                 imageIDsByName: imageIDsByName,
                 screenID: screenID,
                 products: products,
                 player: resolvedPlayer,
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
+                initialReduceMotion: initialReduceMotion,
+                initialSafeArea: initialSafeArea,
                 videoDecoderPool: videoDecoderPool
             )
             systemFontCache.didImport(systemFontLeases)
@@ -1640,9 +1648,12 @@ actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
     private let videoPlayback: ExperienceVideoPlayback?
     private let fontScope: ExperienceRuntimeFontScope
-    nonisolated let artboardBounds: CGRect
+    private nonisolated let layoutBounds: ExperienceLayoutBounds
+    nonisolated var artboardBounds: CGRect { layoutBounds.read() }
+    private var needsLayoutReadback = false
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
+    private let valuePolicy: JourneyReleaseValuePolicy
     private let controlActionIds: Set<String>
     private let declaredEventNames: Set<String>
     private let textInputs: [String: NativeExperienceTextInput]
@@ -1651,9 +1662,11 @@ actor ExperienceInteractiveScreen {
         [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
     private var schemaIndexByViewModel: [ExperienceInteractiveViewModelReference: Int]
     private var settableViewModels: Set<ExperienceInteractiveViewModelReference>
-    private let viewModelCatalog: NuxieNativeViewModelCatalog
+    let viewModelCatalog: NuxieNativeViewModelCatalog
     private let listIndexPathsBySchema: [Int: [String]]
     private let rootViewModelReference: ExperienceInteractiveViewModelReference?
+    private let sharedExperienceRootName: String?
+    private let environmentReference: NuxieNativeViewModelReference?
     private var snapshotTopology: ExperienceInteractiveSnapshotTopology
     private var latestSnapshot: NuxieNativeViewModelSnapshot?
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1674,6 +1687,7 @@ actor ExperienceInteractiveScreen {
         videoPlayback: ExperienceVideoPlayback?,
         fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
+        valuePolicy: JourneyReleaseValuePolicy,
         controlActionIds: Set<String>,
         declaredEventNames: Set<String>,
         textInputs: [String: NativeExperienceTextInput],
@@ -1685,6 +1699,8 @@ actor ExperienceInteractiveScreen {
         viewModelCatalog: NuxieNativeViewModelCatalog,
         listIndexPathsBySchema: [Int: [String]],
         rootViewModelReference: ExperienceInteractiveViewModelReference?,
+        sharedExperienceRootName: String?,
+        environmentReference: NuxieNativeViewModelReference?,
         snapshotTopology: ExperienceInteractiveSnapshotTopology,
         latestSnapshot: NuxieNativeViewModelSnapshot?,
         trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1692,7 +1708,8 @@ actor ExperienceInteractiveScreen {
         self.runtime = runtime
         self.videoPlayback = videoPlayback
         self.fontScope = fontScope
-        self.artboardBounds = artboardBounds
+        self.layoutBounds = ExperienceLayoutBounds(artboardBounds)
+        self.valuePolicy = valuePolicy
         self.controlActionIds = controlActionIds
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
@@ -1703,12 +1720,15 @@ actor ExperienceInteractiveScreen {
         self.viewModelCatalog = viewModelCatalog
         self.listIndexPathsBySchema = listIndexPathsBySchema
         self.rootViewModelReference = rootViewModelReference
+        self.sharedExperienceRootName = sharedExperienceRootName
+        self.environmentReference = environmentReference
         self.snapshotTopology = snapshotTopology
         self.latestSnapshot = latestSnapshot
         self.trackedLists = trackedLists
         self.reservedChangeFilter = ExperienceInteractiveReservedChangeFilter(
             snapshot: latestSnapshot,
-            catalog: viewModelCatalog
+            catalog: viewModelCatalog,
+            sharedExperience: sharedExperienceRootName != nil
         )
     }
 
@@ -1743,12 +1763,15 @@ actor ExperienceInteractiveScreen {
     fileprivate static func openPrepared(
         payload: AuthenticatedRuntimePayload,
         preparedFile: NuxieNativePreparedFile,
+        runValues: ExperienceRunValues?,
         imageIDsByName: [String: UInt64],
         screenID requestedScreenID: String?,
         products: [StoreProduct],
         player: ExperienceInteractivePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
+        initialReduceMotion: Bool?,
+        initialSafeArea: ExperienceSafeAreaInsets?,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
@@ -1770,13 +1793,19 @@ actor ExperienceInteractiveScreen {
             throw ExperienceInteractiveScreenError.journeyScreenNotFound(screenID)
         }
 
-        let runtime = try await preparedFile.openSession(
-            artboardName: manifestScreen.artboardName,
-            player: player.native,
-            pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight,
-            bindDefaultViewModel: journeyScreen.defaultViewModelName != nil
-        )
+        let shared = try await runValues?.native(in: preparedFile)
+        let runtime: NuxieNativeRuntime
+        if let shared {
+            runtime = try await shared.sessions.openSession(
+                artboardName: manifestScreen.artboardName, player: player.native,
+                pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                bindDefaultViewModel: journeyScreen.defaultViewModelName != nil)
+        } else {
+            runtime = try await preparedFile.openSession(
+                artboardName: manifestScreen.artboardName, player: player.native,
+                pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                bindDefaultViewModel: journeyScreen.defaultViewModelName != nil)
+        }
         let fontScope = ExperienceRuntimeFontScope()
         do {
             try ExperienceInteractiveExternalFontRegistration.register(
@@ -1791,6 +1820,8 @@ actor ExperienceInteractiveScreen {
         }
 
         let initialState: ExperienceInteractiveInitialState.Result
+        var sharedExperienceRootName: String?
+        let environmentReference: NuxieNativeViewModelReference?
         do {
             initialState = try await ExperienceInteractiveInitialState.apply(
                 journey: payload.journey,
@@ -1799,6 +1830,25 @@ actor ExperienceInteractiveScreen {
                 products: products,
                 runtime: runtime
             )
+            environmentReference = try await runtime.bindGlobalViewModel(named: "env")
+            if let environmentReference {
+                // Entry transitions must see host values during the initialization advance.
+                let mutations = environmentMutations(reference: environmentReference,
+                    reduceMotion: initialReduceMotion, safeArea: initialSafeArea)
+                if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
+            }
+            if let shared, let root = initialState.rootReference,
+               let schemaIndex = initialState.schemaIndexByViewModel[root],
+               initialState.catalog.properties.contains(where: {
+                   $0.schemaIndex == schemaIndex && $0.name == "experience"
+                       && $0.kind == .viewModel && $0.referencedSchemaIndex == shared.schemaIndex
+               }), let nativeRoot = NuxieNativeViewModelReference(rawValue: root.rawValue) {
+                sharedExperienceRootName = journeyScreen.defaultViewModelName
+                _ = try await runtime.mutateViewModel([
+                    .setViewModel(instance: nativeRoot, path: "experience", value: shared.reference),
+                ])
+                _ = try await runtime.step(elapsedSeconds: 0)
+            }
         } catch {
             try? await runtime.close()
             fontScope.close()
@@ -1839,7 +1889,7 @@ actor ExperienceInteractiveScreen {
         do {
             videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
                 runtime: runtime, payload: payload,
-                artboardBounds: CGRect(x: 0, y: 0, width: manifestScreen.width, height: manifestScreen.height),
+                artboardBounds: .zero,
                 decoderPool: videoDecoderPool)
         } catch {
             try? await runtime.close()
@@ -1856,6 +1906,7 @@ actor ExperienceInteractiveScreen {
                 width: manifestScreen.width,
                 height: manifestScreen.height
             ),
+            valuePolicy: payload.valuePolicy,
             controlActionIds: payload.definition
                 .flatMap { $0.controlsByScreen[screenID] }
                 .map { Set($0.keys) } ?? [],
@@ -1869,71 +1920,111 @@ actor ExperienceInteractiveScreen {
             viewModelCatalog: initialState.catalog,
             listIndexPathsBySchema: initialState.listIndexPathsBySchema,
             rootViewModelReference: initialState.rootReference,
+            sharedExperienceRootName: sharedExperienceRootName,
+            environmentReference: environmentReference,
             snapshotTopology: snapshotTopology,
             latestSnapshot: latestSnapshot,
             trackedLists: trackedLists
         )
     }
 
+    func confirmResponseSave(trigger: String) async throws -> ExperienceInteractiveStepResult {
+        guard !trigger.isEmpty else {
+            throw ExperienceInteractiveScreenError.stateContract("Missing response save continuation")
+        }
+        return try await step(elapsedSeconds: 0, confirmedResponseSaveTrigger: trigger)
+    }
+
+    func environmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
+        guard let environmentReference else { return nil }
+        return try await runtime.snapshot(environmentReference)
+    }
+
+    func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil) async throws {
+        guard let environmentReference else { return }
+        let runtime = runtime
+        let batch = environmentMutations(reference: environmentReference,
+            reduceMotion: reduceMotion, safeArea: safeArea)
+        guard !batch.isEmpty else { return }
+        try await operationGate.withLock { _ = try await runtime.mutateViewModel(batch) }
+    }
+
     func step(
         inputs: [ExperienceInteractiveInput] = [],
         pointers: [ExperienceInteractivePointerEvent] = [],
+        focusInputs: [NuxieNativeFocusInput] = [],
         elapsedSeconds: Float,
         correlationID: UInt64 = 0,
-        capturesTextLayout: Bool = false
+        capturesTextLayout: Bool = false,
+        confirmedResponseSaveTrigger: String? = nil
     ) async throws -> ExperienceInteractiveStepResult {
         let nativeInputs = inputs.map(Self.nativeInput)
         let nativePointers = pointers.map(Self.nativePointer)
         let runtime = runtime
         return try await operationGate.withLock { [self] in
-            var result = try await runtime.step(
+            if let trigger = confirmedResponseSaveTrigger {
+                let root = try await runtime.rootViewModelReference()
+                _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
+            }
+            let frame = try await runtime.stepWithSnapshot(
                 inputs: nativeInputs,
                 pointers: nativePointers,
+                focusInputs: focusInputs,
                 elapsedSeconds: elapsedSeconds,
                 correlationID: correlationID,
-                textRunNames: capturesTextLayout
-                    ? textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted() : []
+                textRunNames: []
             )
+            var result = frame.result
+            let eventSnapshot = frame.snapshot
+            try await refreshLayoutBounds()
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
                 result.keepGoing = result.keepGoing || videoActive
             }
-            await captureTextFrame(result, requested: capturesTextLayout)
             // Discover generated state on newly materialized components
             // before projecting this frame's changes. Native effects have
             // committed: a recoverable topology failure must not discard them.
-            try? await refreshTrackedTopology()
-            let eventSnapshot = result.events.contains { $0.sourceViewModelInstanceID != nil }
-                ? try? await runtime.snapshot() : nil
+            if let eventSnapshot { try? await refreshTrackedTopology(snapshot: eventSnapshot) }
+            await captureTextFrame(result, requested: capturesTextLayout, snapshot: eventSnapshot)
             return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
         }
     }
 
-    private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool) async {
+    private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool, snapshot: NuxieNativeViewModelSnapshot?) {
         guard requested else {
             pendingTextFrame = nil
             return
         }
         // Copy failure cannot discard committed step effects. A missing snapshot
         // travels with this frame so the consumer can withdraw stale editors.
-        let snapshot = try? await runtime.snapshot()
         pendingTextFrame = ExperienceInteractiveTextFrame(
             snapshot: snapshot.map(Self.projectSnapshot), geometry: result.textGeometry)
     }
 
-    private func projectStep(
+    func projectStep(
         _ result: NuxieNativePlayerStepResult,
         eventSnapshot: NuxieNativeViewModelSnapshot?,
         correlationID: UInt64
     ) -> ExperienceInteractiveStepResult {
+        let frameSnapshot = eventSnapshot.map(Self.projectSnapshot)
+        let schemaNames = result.events.isEmpty ? [:] : Dictionary(uniqueKeysWithValues: viewModelCatalog.schemas.map { ($0.index, $0.name) })
+        let liveIDs = result.events.isEmpty ? [] : Set(eventSnapshot?.instances.map(\.id) ?? [])
         let effects = router.project(
             reportedEvents: result.events.map { event in
-                ExperienceInteractiveEventSource.project(
+                var projected = ExperienceInteractiveEventSource.project(
                     Self.reportedEvent(event), nativeID: event.sourceViewModelInstanceID,
                     rootID: eventSnapshot?.rootInstanceID,
-                    liveIDs: Set(eventSnapshot?.instances.map(\.id) ?? []),
+                    liveIDs: liveIDs,
                     identities: viewModelsByIdentity
                 )
+                projected.resolvedSource = frameSnapshot.map {
+                    ExperienceResolvedEventSource(
+                        nativeID: event.sourceViewModelInstanceID ?? $0.rootInstanceID,
+                        snapshot: $0,
+                        schemaNames: schemaNames
+                    )
+                }
+                return projected
             },
             viewModelChanges: publishableViewModelChanges(result.viewModelChanges),
             hostCommands: result.hostCommands.map(Self.hostCommand),
@@ -1944,7 +2035,18 @@ actor ExperienceInteractiveScreen {
         return ExperienceInteractiveStepResult(
             keepGoing: result.keepGoing,
             pointerHits: result.pointerHits.map(Self.pointerHit),
-            effects: effects
+            focusState: result.focusState,
+            effects: effects.map { effect in
+                var captured = effect
+                do {
+                    captured.responseSave = try ExperienceResponseSaveRequest.capture(effect.kind,
+                        snapshot: eventSnapshot, catalog: viewModelCatalog, policy: valuePolicy)
+                } catch {
+                    // Never include a sheet or arbitrary event properties in diagnostic output.
+                    LogWarning("ExperienceInteractiveScreen: rejected native response save")
+                }
+                return captured
+            }
         )
     }
 
@@ -2518,6 +2620,7 @@ actor ExperienceInteractiveScreen {
     }
 
     private func refreshTrackedTopology(
+        snapshot suppliedSnapshot: NuxieNativeViewModelSnapshot? = nil,
         preferredLists:
             [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:],
         preferredViewModels:
@@ -2525,7 +2628,9 @@ actor ExperienceInteractiveScreen {
                 ExperienceInteractiveViewModelReference] = [:]
     ) async throws {
         guard let rootViewModelReference else { return }
-        let snapshot = try await runtime.snapshot()
+        let snapshot: NuxieNativeViewModelSnapshot
+        if let suppliedSnapshot { snapshot = suppliedSnapshot }
+        else { snapshot = try await runtime.snapshot() }
         trackedLists = try snapshotTopology.reconcile(
             snapshot: snapshot,
             rootReference: rootViewModelReference,
@@ -2538,6 +2643,7 @@ actor ExperienceInteractiveScreen {
         reservedChangeFilter = ExperienceInteractiveReservedChangeFilter(
             snapshot: snapshot,
             catalog: viewModelCatalog,
+            sharedExperience: sharedExperienceRootName != nil,
             preserving: reservedChangeFilter
         )
     }
@@ -2590,13 +2696,29 @@ actor ExperienceInteractiveScreen {
         try await videoPlayback.apply(action)
     }
 
+    private func screenOwnedValues(_ values: [ExperienceInteractiveStateCommand.Value])
+        -> [ExperienceInteractiveStateCommand.Value] {
+        guard let rootName = sharedExperienceRootName else { return values }
+        return values.compactMap { value in
+            guard value.viewModelName != "Experience" else { return nil }
+            guard value.viewModelName == rootName else { return value }
+            if value.path == "experience" || value.path.hasPrefix("experience/") { return nil }
+            if value.path.isEmpty, case .object(let fields) = value.value {
+                return .init(viewModelName: value.viewModelName, instanceID: value.instanceID,
+                    instanceName: value.instanceName, path: value.path,
+                    value: .object(fields.filter { $0.key != "experience" }))
+            }
+            return value
+        }
+    }
+
     private func applyStateCommandLocked(
         _ command: ExperienceInteractiveStateCommand,
         correlationID: UInt64
     ) async throws -> ExperienceInteractiveMutationResult {
         let command: ExperienceInteractiveStateCommand = switch command {
         case .snapshot(let values):
-            .snapshot(try stateCompiler.normalizeFlattenedEnvelopes(values))
+            .snapshot(try stateCompiler.normalizeFlattenedEnvelopes(screenOwnedValues(values)))
         default:
             command
         }
@@ -3437,113 +3559,61 @@ actor ExperienceInteractiveScreen {
         guard input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
-        if input.editableValueName != nil {
-            guard let ownerInstanceID else { return nil }
-            let stateCompiler = self.stateCompiler
-            return try await operationGate.withLock { [self] in
-                let current = try await runtime.fieldOwnerSnapshot(ownerInstanceID)
-                guard current.rootInstanceID == ownerInstanceID,
-                      let owner = current.instances.first(where: { $0.id == ownerInstanceID }),
-                      let reference = NuxieNativeViewModelReference(rawValue: ownerInstanceID) else {
-                    throw ExperienceInteractiveScreenError.stateContract("Native input owner is no longer present")
-                }
-                guard let paths = try stateCompiler.scriptedInputCommitPaths(
-                    nodeID: input.viewNodeId, rootSchemaIndex: owner.schemaIndex
-                ) else { return nil }
-                let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-                let result = try await runtime.mutateFieldOwner(ownerInstanceID, mutations: [
-                    .setString(instance: reference, path: paths.value, value: Data(limited.utf8)),
-                    .fireTrigger(instance: reference, path: paths.commit),
-                ])
-                return await projectMutation(result, ignoringPrefixCount: 0, correlationID: 0)
+        guard let ownerInstanceID else { return nil }
+        let stateCompiler = self.stateCompiler
+        return try await operationGate.withLock { [self] in
+            let current = try await runtime.fieldOwnerSnapshot(ownerInstanceID)
+            guard current.rootInstanceID == ownerInstanceID,
+                  let owner = current.instances.first(where: { $0.id == ownerInstanceID }),
+                  let reference = NuxieNativeViewModelReference(rawValue: ownerInstanceID) else {
+                throw ExperienceInteractiveScreenError.stateContract("Native input owner is no longer present")
             }
-        }
-        guard let root = rootViewModelReference,
-              let schema = schemaIndexByViewModel[root],
-              let paths = try stateCompiler.scriptedInputCommitPaths(
-                nodeID: input.viewNodeId, rootSchemaIndex: schema
-              ) else { return nil }
-        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-        return try await mutateState([
-            .setString(root, path: paths.value, value: Data(limited.utf8)),
-            .fireTrigger(root, path: paths.commit),
-        ])
-    }
-
-    /// Applies signed manifest text policy before mutating authored text runs.
-    @discardableResult
-    func setText(inputID: String, value: String) async throws -> Bool {
-        guard let input = textInputs[inputID] else {
-            throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
-        }
-        guard input.editable else {
-            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
-        }
-        guard input.editableValueName == nil else {
-            throw ExperienceInteractiveScreenError.stateContract("Native input requires captured occurrence ownership")
-        }
-        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-        let runtime = runtime
-        return try await operationGate.withLock {
-            try await runtime.setTextRuns([
-                NuxieNativeTextRunMutation(
-                    name: input.textRunName,
-                    text: Data(limited.utf8)
-                )
+            guard let paths = try stateCompiler.scriptedInputCommitPaths(
+                nodeID: input.viewNodeId, rootSchemaIndex: owner.schemaIndex
+            ) else { return nil }
+            let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
+            let result = try await runtime.mutateFieldOwner(ownerInstanceID, mutations: [
+                .setString(instance: reference, path: paths.value, value: Data(limited.utf8)),
+                .fireTrigger(instance: reference, path: paths.commit),
             ])
-        }
-    }
-
-    func setSemanticText(captureID: UUID, inputID: String, nodeID: UInt32? = nil, value: String) async throws -> Bool {
-        guard let input = textInputs[inputID] else {
-            throw ExperienceInteractiveScreenError.textInputNotFound(inputID)
-        }
-        guard input.editable else {
-            throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
-        }
-        let limited = ExperienceTextInputLimit.apply(value, maximum: input.maxLength)
-        let runtime = runtime
-        return try await operationGate.withLock {
-            if let name = input.editableValueName {
-                guard let nodeID else {
-                    throw ExperienceInteractiveScreenError.stateContract("Native input requires a presented occurrence")
-                }
-                return try await runtime.setFieldString(captureID: captureID,
-                    nodeID: nodeID, name: name, value: Data(limited.utf8))
-            }
-            guard nodeID == nil else {
-                throw ExperienceInteractiveScreenError.stateContract("Legacy input cannot target a native occurrence")
-            }
-            return try await runtime.setSemanticTextRun(captureID: captureID,
-                name: input.textRunName, text: Data(limited.utf8))
+            return await projectMutation(result, ignoringPrefixCount: 0, correlationID: 0)
         }
     }
 
     func setSemanticInputContentOffset(captureID: UUID, inputID: String, nodeID: UInt32, offset: CGPoint) async throws {
-        guard let input = textInputs[inputID], input.editable,
-              let name = input.editableValueName else {
+        guard let input = textInputs[inputID], input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
         let runtime = runtime
         try await operationGate.withLock {
             try await runtime.setFieldContentOffset(captureID: captureID, nodeID: nodeID,
-                name: name, x: Float(offset.x), y: Float(offset.y))
+                name: input.textInputName, x: Float(offset.x), y: Float(offset.y))
         }
     }
 
     func readSemanticText(captureID: UUID, inputID: String, nodeID: UInt32) async throws -> ExperienceTextInputSource {
-        guard let input = textInputs[inputID], input.editable,
-              let name = input.editableValueName else {
+        guard let input = textInputs[inputID], input.editable else {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
+        let runtime = runtime
+        return try await operationGate.withLock {
+            let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: input.textInputName)
+            guard let text = String(data: bytes, encoding: .utf8) else {
+                throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
+            }
+            let owner = try await runtime.fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: input.textInputName)
+            return ExperienceTextInputSource(text: text, ownerInstanceID: owner)
+        }
+    }
+
+    func readPresentedFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> String {
         let runtime = runtime
         return try await operationGate.withLock {
             let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: name)
             guard let text = String(data: bytes, encoding: .utf8) else {
                 throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
             }
-            let owner = try await runtime.fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: name)
-            return ExperienceTextInputSource(text: text, ownerInstanceID: owner)
+            return text
         }
     }
 
@@ -3551,16 +3621,33 @@ actor ExperienceInteractiveScreen {
         ExperienceInteractiveMetalDevice(value: try await runtime.metalDevice().value)
     }
 
-    func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32, layoutScaleFactor: Float) async throws
         -> ExperienceInteractiveRenderOutcome
     {
         let runtime = runtime
         return try await operationGate.withLock { [self] in
             await discardTextFrame()
+            if pixelWidth > 0, pixelHeight > 0 {
+                try await runtime.setLayoutSize(width: Float(pixelWidth) / layoutScaleFactor,
+                    height: Float(pixelHeight) / layoutScaleFactor)
+                await markLayoutReadbackPending(true)
+            } else {
+                await markLayoutReadbackPending(false)
+                try await videoPlayback?.resizeViewport(bounds: .zero)
+            }
             let outcome = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
-            try await videoPlayback?.resizeViewport(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
             return Self.renderOutcome(outcome)
         }
+    }
+
+    private func markLayoutReadbackPending(_ pending: Bool) { needsLayoutReadback = pending }
+
+    private func refreshLayoutBounds() async throws {
+        guard needsLayoutReadback else { return }
+        let size = try await runtime.layoutSize()
+        layoutBounds.update(size: size)
+        try await videoPlayback?.resizeViewport(bounds: artboardBounds)
+        needsLayoutReadback = false
     }
 
     func enableSemantics() async throws {
@@ -3587,21 +3674,24 @@ actor ExperienceInteractiveScreen {
     }
 
     func render(
+        layoutScaleFactor: Float,
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderOutcome {
-        try await renderFrame(drawable: drawable, isOccluded: isOccluded,
+        try await renderFrame(layoutScaleFactor: layoutScaleFactor, drawable: drawable, isOccluded: isOccluded,
             clearColor: clearColor, capturesSemantics: false, completion: completion).outcome
     }
 
     /// Capture and render share the occurrence lock, preventing intervening state/geometry writes.
     func renderFrame(
+        layoutScaleFactor: Float,
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
         capturesSemantics: Bool,
+        readback: NuxieNativeFrameReadback? = nil,
         capturesCaptions: Bool = false,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderedFrame {
@@ -3612,19 +3702,16 @@ actor ExperienceInteractiveScreen {
             state = isOccluded ? .occluded : .timeout
         }
         let runtime = runtime
-        let textRuns = textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted()
-        let nativeInputs = Array(Set(textInputs.values.filter(\.editable).compactMap(\.editableValueName))).sorted()
+        let nativeInputs = Array(Set(textInputs.values.filter(\.editable).map(\.textInputName))).sorted()
         return try await operationGate.withLock { [self] in
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
             let ready = try await videoPlayback?.isReadyForPresentation() ?? true
-            let outcome = try await runtime.render(drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
-            let semantics: NuxieNativeSemanticCapture?
-            if capturesSemantics, outcome.disposition == .presented {
-                semantics = try await runtime.captureSemantics(textRuns: textRuns, nativeInputs: nativeInputs)
-            } else {
-                semantics = nil
-            }
+            let frame = try await runtime.renderFrame(layoutScaleFactor: layoutScaleFactor,
+                drawable: ready ? state : .timeout, clearColor: clearColor, readback: readback,
+                capturesSemantics: capturesSemantics, nativeInputs: nativeInputs, completion: completion)
+            let outcome = frame.outcome
+            let semantics = frame.semantics
             let captions: [ExperienceInteractiveVideoCaption]?
             if capturesCaptions, outcome.disposition == .presented {
                 captions = try await videoPlayback?.captions() ?? []
@@ -3872,6 +3959,75 @@ enum StoreProductViewModelProjection {
         let instanceID: String?
         let instanceName: String?
         let parentPath: String
+    }
+
+    /// The signed table is only a product catalog. Authored state stays in the native file.
+    static func productRows(in values: [JourneyViewModelValue]) -> [JourneyViewModelValue] {
+        let productIdentities = Set(values.filter {
+            $0.path.split(separator: "/").last == "placementId" && $0.value.value is String
+        }.map(identity))
+        let productIDs = Set(values.filter { productIdentities.contains(identity($0)) }.compactMap(\.instanceId))
+        var linkedIDs = productIDs
+        func containsProduct(_ value: Any) -> Bool {
+            if let fields = value as? [String: Any] {
+                if fields["placementId"] is String { return true }
+                if let id = (fields["vmInstanceId"] ?? fields["instanceId"]) as? String, linkedIDs.contains(id) { return true }
+                return fields.values.contains(where: containsProduct)
+            }
+            return (value as? [Any])?.contains(where: containsProduct) ?? false
+        }
+        var selected = Set<Int>()
+        var linkedGroups = Set<Identity>()
+        var previousCount = -1
+        while selected.count != previousCount {
+            previousCount = selected.count
+            for value in values where value.path.contains("/") {
+                if ["vmInstanceId", "instanceId"].contains(value.path.split(separator: "/").last.map(String.init) ?? ""),
+                   let id = value.value.value as? String, linkedIDs.contains(id) {
+                    linkedGroups.insert(identity(value))
+                }
+            }
+            for (index, value) in values.enumerated() {
+                if productIdentities.contains(identity(value)) || linkedGroups.contains(identity(value))
+                    || containsProduct(value.value.value) {
+                    selected.insert(index)
+                    if let id = value.instanceId { linkedIDs.insert(id) }
+                }
+            }
+        }
+        // Null slots are internal placeholders, not signed starting values. Keep
+        // their positions so product hydration cannot shift a native plain row.
+        func productValue(_ value: Any) -> Any? {
+            if let rows = value as? [Any] {
+                guard rows.contains(where: containsProduct) else { return nil }
+                return rows.map { productValue($0) ?? NSNull() }
+            }
+            guard let fields = value as? [String: Any], containsProduct(fields) else { return nil }
+            if fields["placementId"] is String { return fields }
+            if let id = (fields["vmInstanceId"] ?? fields["instanceId"]) as? String,
+               productIDs.contains(id) { return fields }
+            var result: [String: Any] = [:]
+            for (key, child) in fields {
+                if ["vmInstanceId", "instanceId", "viewModelId", "viewModelName", "instanceName"].contains(key) {
+                    result[key] = child
+                } else if let child = productValue(child) {
+                    result[key] = child
+                }
+            }
+            return result
+        }
+        return values.enumerated().compactMap { index, row in
+            guard selected.contains(index) else { return nil }
+            if productIdentities.contains(identity(row)) { return row }
+            let leaf = row.path.split(separator: "/").last.map(String.init) ?? ""
+            if linkedGroups.contains(identity(row)),
+               ["vmInstanceId", "instanceId", "viewModelId", "viewModelName", "instanceName"].contains(leaf) {
+                return row
+            }
+            guard let value = productValue(row.value.value) else { return nil }
+            return JourneyViewModelValue(viewModelName: row.viewModelName, instanceId: row.instanceId,
+                instanceName: row.instanceName, path: row.path, value: AnyCodable(value))
+        }
     }
 
     static func apply(
@@ -4138,7 +4294,7 @@ private enum ExperienceInteractiveInitialState {
         let sourceValues = try ExperienceInteractiveStateCompiler.signedValues(
             StoreProductViewModelProjection.apply(
                 products,
-                to: journey.viewModelValues ?? []
+                to: StoreProductViewModelProjection.productRows(in: journey.viewModelValues ?? [])
             )
         )
         let listIndexPathsBySchema = Dictionary(grouping: catalog.properties.filter {
@@ -4221,7 +4377,7 @@ private enum ExperienceInteractiveInitialState {
                 order: &requestOrder
             )
             let property = try compiler.property(at: value.path, startingWith: schema.index)
-            if property.kind == .viewModel, !value.path.contains("/") {
+            if property.kind == .viewModel {
                 let referenced = try referencedInstance(
                     value.value,
                     expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4238,11 +4394,12 @@ private enum ExperienceInteractiveInitialState {
                     requests: &requests,
                     order: &requestOrder
                 )
-            } else if property.kind == .list, !value.path.contains("/") {
+            } else if property.kind == .list {
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }
                 for row in rows {
+                    if case .null = row { continue }
                     let referenced = try referencedInstance(
                         row,
                         expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4266,14 +4423,9 @@ private enum ExperienceInteractiveInitialState {
         var nativeReferences: [Selection: NuxieNativeViewModelReference] = [.root: nativeRoot]
         for selection in requestOrder where selection != .root {
             guard let request = requests[selection] else { continue }
-            let authoredIndex = try authoredInstanceIndex(
-                request.instanceName,
-                schema: request.schema,
-                catalog: catalog
-            )
             let reference = try await runtime.makeViewModel(
                 schemaIndex: request.schema.index,
-                authoredInstanceIndex: authoredIndex
+                authoredInstanceIndex: nil
             )
             nativeReferences[selection] = reference
             let identity: ExperienceInteractiveViewModelIdentity
@@ -4324,7 +4476,7 @@ private enum ExperienceInteractiveInitialState {
             }
             let property = try compiler.property(at: value.path, startingWith: schema.index)
             switch property.kind {
-            case .viewModel where !value.path.contains("/"):
+            case .viewModel:
                 let referenced = try referencedInstance(
                     value.value,
                     expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4357,16 +4509,29 @@ private enum ExperienceInteractiveInitialState {
                     schema: referenced.schema,
                     compiler: compiler
                 )
-            case .list where !value.path.contains("/"):
+            case .list:
                 guard case .list(let rows) = value.value else {
                     throw stateValue(value.path)
                 }
-                finalMutations[owner, default: []].append(.listClear(
-                    instance: reference,
-                    path: value.path
-                ))
+                let current = try await runtime.snapshot(reference)
+                let nativeIDs: [UInt64]
+                if case .list(let ids) = try nativeValue(in: current, owner: reference.rawValue,
+                    path: value.path) {
+                    nativeIDs = ids
+                } else {
+                    nativeIDs = []
+                }
                 var productRows: [ExperienceInteractiveViewModelReference] = []
+                for (index, id) in nativeIDs.enumerated() {
+                    let retained = try await runtime.acquireListItem(owner: reference, path: value.path,
+                        index: index, expectedIdentity: id)
+                    guard let item = ExperienceInteractiveViewModelReference(rawValue: retained.rawValue) else {
+                        throw stateValue(value.path)
+                    }
+                    productRows.append(item)
+                }
                 for (index, row) in rows.enumerated() {
+                    if case .null = row { continue }
                     let referenced = try referencedInstance(
                         row,
                         expectedSchemaIndex: property.referencedSchemaIndex,
@@ -4382,13 +4547,17 @@ private enum ExperienceInteractiveInitialState {
                     ) else {
                         throw ExperienceInteractiveScreenError.stateContract(value.path)
                     }
-                    productRows.append(productChild)
-                    finalMutations[owner, default: []].append(.listInsert(
-                        instance: reference,
-                        path: value.path,
-                        index: index,
-                        value: child
-                    ))
+                    if index < productRows.count {
+                        productRows[index] = productChild
+                        finalMutations[owner, default: []].append(.listSet(
+                            instance: reference, path: value.path, index: index, value: child))
+                    } else {
+                        // Never synthesize or replay a missing non-product slot.
+                        guard index == productRows.count else { throw stateValue(value.path) }
+                        productRows.append(productChild)
+                        finalMutations[owner, default: []].append(.listInsert(
+                            instance: reference, path: value.path, index: index, value: child))
+                    }
                     detachedMutations[referenced.selection, default: []]
                         += try scalarMutations(
                         referenced.values,
@@ -4516,23 +4685,6 @@ private enum ExperienceInteractiveInitialState {
         order.append(request.selection)
     }
 
-    private static func authoredInstanceIndex(
-        _ instanceName: String?,
-        schema: NuxieNativeViewModelCatalog.Schema,
-        catalog: NuxieNativeViewModelCatalog
-    ) throws -> Int? {
-        guard let instanceName else { return nil }
-        let matches = catalog.authoredInstances.filter {
-            $0.schemaIndex == schema.index && $0.name == instanceName
-        }
-        guard matches.count == 1 else {
-            throw ExperienceInteractiveScreenError.stateContract(
-                "authored instance '\(instanceName)' does not resolve exactly once"
-            )
-        }
-        return matches[0].index
-    }
-
     private static func schemaHintsByRemoteID(
         _ values: [ExperienceInteractiveStateCommand.Value],
         compiler: ExperienceInteractiveStateCompiler
@@ -4627,6 +4779,26 @@ private enum ExperienceInteractiveInitialState {
         case .listIndex(let value): .setListIndex(instance: reference, path: path, value: value)
         case .image(let value): .setImage(instance: reference, path: path, value: value)
         }
+    }
+
+    private static func nativeValue(in snapshot: NuxieNativeViewModelSnapshot,
+        owner: UInt64, path: String) throws -> NuxieNativeViewModelValue? {
+        // Match catalog resolution: prefer an exact authored property name before
+        // following slash-separated references to the native list owner.
+        if let exact = snapshot.values.first(where: { $0.ownerInstanceID == owner && $0.name == path }) {
+            return exact.value
+        }
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        var currentOwner = owner
+        for (index, segment) in segments.enumerated() {
+            guard let entry = snapshot.values.first(where: {
+                $0.ownerInstanceID == currentOwner && $0.name == segment
+            }) else { throw stateValue(path) }
+            if index == segments.count - 1 { return entry.value }
+            guard case .referencedInstance(let child) = entry.value else { throw stateValue(path) }
+            currentOwner = child
+        }
+        return nil
     }
 
     private static func stateValue(_ path: String) -> ExperienceInteractiveScreenError {

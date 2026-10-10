@@ -4,66 +4,7 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyPresentationAdmissionTests: JourneyTestCase {
-    func testSameBatchResponseChangeSatisfiesTheRoutedWait() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let base = try await authenticatedRenderedSnapshot(fixture)
-        let snapshot = renderedResponseWaitSnapshot(base)
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let completionCommitted = expectation(
-            description: "same-batch response wait completed"
-        )
-        events.addEventHandler(pattern: JourneyEvents.journeyCompleted) { _ in
-            completionCommitted.fulfill()
-        }
-        let presenter = await MainActor.run { RecordingJourneyPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
 
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        let accepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
-            invocationId: "same-batch-response-wait",
-            emissions: [
-                .init(
-                    id: "00000000-0000-7000-8000-000000000431",
-                    sequence: 0,
-                    occurredAt: "2026-08-29T12:00:00Z",
-                    name: JourneyResponseControlNames.responseSet,
-                    payload: [
-                        "field": .string("consent"),
-                        "value": .bool(true),
-                    ]
-                ),
-                .init(
-                    id: "00000000-0000-7000-8000-000000000432",
-                    sequence: 1,
-                    occurredAt: "2026-08-29T12:00:00.001Z",
-                    name: "continue",
-                    payload: [:]
-                ),
-            ]
-        ))
-        XCTAssertTrue(accepted)
-        await fulfillment(of: [completionCommitted], timeout: 2)
-        XCTAssertEqual(
-            events.routedEvents.last?.properties["outcome"] as? String,
-            "responded"
-        )
-    }
 
     func testDirectScreenRouteWinsItsCommittedSubscriberRace() async throws {
         let directory = temporaryDirectory()
@@ -193,7 +134,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(waitAccepted)
         let journal = try JourneyRunJournal(
             directory: directory,
@@ -226,7 +167,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "finish",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(routeAccepted)
         await fulfillment(of: [completionCommitted], timeout: 2)
 
@@ -239,114 +180,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         )
     }
 
-    func testLaterResponseOnlyBatchesWakeTheParkedWaitWithoutMovingItsDeadline() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let base = try await authenticatedRenderedSnapshot(fixture)
-        let snapshot = renderedResponseWaitSnapshot(base)
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let dateProvider = MockDateProvider()
-        let presenter = await MainActor.run { RecordingJourneyPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            dateProvider: dateProvider,
-            presenter: presenter
-        )
 
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        let routeAccepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
-            invocationId: "enter-response-wait",
-            emissions: [.init(
-                id: "00000000-0000-7000-8000-000000000441",
-                sequence: 0,
-                occurredAt: "2026-08-29T12:00:00Z",
-                name: "continue",
-                payload: [:]
-            )]
-        ))
-        XCTAssertTrue(routeAccepted)
-        let journal = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        for _ in 0..<100 {
-            if try await journal.runs().first?.park != nil { break }
-            await Task.yield()
-        }
-        let initiallyParkedRuns = try await journal.runs()
-        let initialPark = try XCTUnwrap(initiallyParkedRuns.first?.park)
-
-        let falseResponseAccepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
-            batchSequence: 1,
-            previousCommittedBatchSequence: 0,
-            invocationId: "false-response-update",
-            emissions: [.init(
-                id: "00000000-0000-7000-8000-000000000442",
-                sequence: 1,
-                occurredAt: "2026-08-29T12:00:00.001Z",
-                name: JourneyResponseControlNames.responseSet,
-                payload: [
-                    "field": .string("consent"),
-                    "value": .bool(false),
-                ]
-            )]
-        ))
-        XCTAssertTrue(falseResponseAccepted)
-        for _ in 0..<100 {
-            let run = try await journal.runs().first
-            if run?.park != nil,
-               case .bool(false)? = run?.context.responses["consent"] {
-                break
-            }
-            await Task.yield()
-        }
-        let reparkedRuns = try await journal.runs()
-        let reparking = try XCTUnwrap(reparkedRuns.first)
-        XCTAssertEqual(reparking.park?.anchorAt, initialPark.anchorAt)
-        XCTAssertEqual(reparking.park?.wakeAt, initialPark.wakeAt)
-
-        let completionCommitted = expectation(
-            description: "later response wait completed"
-        )
-        events.addEventHandler(pattern: JourneyEvents.journeyCompleted) { _ in
-            completionCommitted.fulfill()
-        }
-        let trueResponseAccepted = await request.onEmissionBatch(presentationBatch(
-            request: request,
-            batchSequence: 2,
-            previousCommittedBatchSequence: 1,
-            invocationId: "true-response-update",
-            emissions: [.init(
-                id: "00000000-0000-7000-8000-000000000443",
-                sequence: 2,
-                occurredAt: "2026-08-29T12:00:00.002Z",
-                name: JourneyResponseControlNames.responseSet,
-                payload: [
-                    "field": .string("consent"),
-                    "value": .bool(true),
-                ]
-            )]
-        ))
-        XCTAssertTrue(trueResponseAccepted)
-        await fulfillment(of: [completionCommitted], timeout: 2)
-        XCTAssertEqual(
-            events.routedEvents.last?.properties["outcome"] as? String,
-            "responded"
-        )
-    }
 
     func testForegroundProfileCommitDefersDuePresentedRunUntilBecameActive() async throws {
         let directory = temporaryDirectory()
@@ -446,7 +280,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(accepted)
         let journal = try JourneyRunJournal(
             directory: directory,
@@ -591,7 +425,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
         XCTAssertTrue(enteredWait)
         let journal = try JourneyRunJournal(
             directory: directory,

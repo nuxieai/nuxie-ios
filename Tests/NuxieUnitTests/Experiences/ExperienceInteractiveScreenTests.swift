@@ -12,6 +12,237 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    #if canImport(UIKit)
+    @MainActor
+    func testReservedFrameEventKeepsOnlyItsSiblingSource() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        var counts: [Int] = []
+        recorder.onBatchAsync = { sources in counts.append(sources?.drafts.count ?? -1) }
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        struct Vector: Decodable { let events: [String] }
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/events/reserved-event-filtering.json")))
+        let effects = vector.events.enumerated().map { index, name in
+            ExperienceInteractiveEffect(sequence: UInt64(index), correlationID: 1,
+                kind: .reportedEvent(.init(localIndex: index, coreType: 128, name: name,
+                    url: "", target: "", delay: 0, properties: [])))
+        }
+        await controller.deliverStep(effects: effects)
+        XCTAssertEqual(counts, [1])
+    }
+
+    @MainActor
+    func testFrameHandsOffBatchBeforeOpeningLinksAndRejectsDuplicateControlKeys() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        let duplicate = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "control", url: "", target: "", delay: 0,
+            properties: [.init(key: "value", value: .string("first")), .init(key: "value", value: .string("last"))])
+        let rejected = await controller.route(.init(sequence: 0, correlationID: 1, kind: .controlAction(actionId: "control", event: duplicate)))
+        XCTAssertNil(rejected)
+        let link = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 131, name: "", url: "https://example.test", target: "_self", delay: 0, properties: [])
+        var badSourceLink = link
+        badSourceLink.sourceRejection = "source absent"
+        let ordinary = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128, name: "sibling", url: "", target: "", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 1, kind: .reportedEvent(badSourceLink)),
+            .init(sequence: 1, correlationID: 1, kind: .reportedEvent(ordinary))])
+        for _ in 0..<100 where recorder.order.count < 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["batch", "link"])
+        recorder.order = []
+        let control = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "buy", url: "", target: "", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 2, kind: .controlAction(actionId: "buy", event: control)),
+            .init(sequence: 1, correlationID: 2, kind: .controlAction(actionId: "buy", event: control)),
+            .init(sequence: 2, correlationID: 2, kind: .reportedEvent(link))])
+        for _ in 0..<100 where recorder.order.isEmpty { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["link"])
+        var resume: CheckedContinuation<Void, Never>?
+        recorder.linkGate = { await withCheckedContinuation { resume = $0 } }
+        let delivered = expectation(description: "Frame returned while external confirmation is pending")
+        Task { @MainActor in
+            await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 3, kind: .reportedEvent(link))])
+            delivered.fulfill()
+        }
+        await fulfillment(of: [delivered], timeout: 1)
+        for _ in 0..<100 where resume == nil { await Task.yield() }
+        XCTAssertNotNil(resume)
+        resume?.resume()
+        recorder.linkGate = nil
+        recorder.order = []
+        recorder.onBatch = { controller.delegate = nil }
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 4, kind: .reportedEvent(ordinary)),
+            .init(sequence: 1, correlationID: 4, kind: .reportedEvent(link))])
+        for _ in 0..<100 where recorder.order.count < 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["batch", "link"])
+    }
+
+    @MainActor
+    func testLaterFramesDoNotWaitForPendingExternalConfirmation() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        let gate = ExperienceInteractiveOperationGate()
+        recorder.onBatchAsync = { sources in await gate.withLock { await sources?.frameLinks?.perform() } }
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        var release: CheckedContinuation<Void, Never>?
+        recorder.linkGate = { await withCheckedContinuation { release = $0 } }
+        let ordinary = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "emit", url: "", target: "", delay: 0, properties: [])
+        let href = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 131, name: "", url: "tel:123", target: "_blank", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 1, kind: .reportedEvent(ordinary)),
+            .init(sequence: 1, correlationID: 1, kind: .reportedEvent(href))])
+        for _ in 0..<100 where release == nil { await Task.yield() }
+        XCTAssertNotNil(release)
+        let returned = expectation(description: "Next frame returns while browser confirmation holds publication")
+        Task { @MainActor in
+            await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 2, kind: .reportedEvent(ordinary))])
+            returned.fulfill()
+        }
+        await fulfillment(of: [returned], timeout: 1)
+        release?.resume()
+        for _ in 0..<100 where recorder.order.filter({ $0 == "batch" }).count != 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order.filter { $0 == "link" }.count, 1)
+    }
+
+    @MainActor
+    func testSharedSourcesPublishOnlyLiveEventsWithContiguousSequences() async throws {
+        struct Fixture: Decodable {
+            struct Case: Decodable {
+                struct Alias: Decodable { let model: String; let name: String; let native: UInt64 }
+                let name: String
+                let source: UInt64?
+                let live: [UInt64]
+                let aliases: [Alias]
+                let declared: String?
+                let accepted: Bool
+                let alias: String?
+                let duplicateValue: String?
+            }
+            let cases: [Case]
+        }
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/events/runtime-event-sources.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL))
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: nil)
+        for vector in fixture.cases {
+            var properties = [ExperienceInteractiveField(key: "value", value: .string("literal"))]
+            if let duplicate = vector.duplicateValue { properties.append(.init(key: "value", value: .string(duplicate))) }
+            if let declared = vector.declared {
+                properties.append(.init(key: "instanceId", value: .string(declared)))
+            }
+            let reported = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128,
+                name: "selected", url: "", target: "", delay: 0, properties: properties)
+            let identities = Dictionary(uniqueKeysWithValues: vector.aliases.map {
+                (ExperienceInteractiveViewModelIdentity(viewModelName: $0.model, instanceID: $0.name),
+                 ExperienceInteractiveViewModelReference(rawValue: $0.native)!)
+            })
+            let projected = ExperienceInteractiveEventSource.project(reported, nativeID: vector.source,
+                rootID: 1, liveIDs: Set(vector.live), identities: identities)
+            var router = ExperienceInteractiveEffectRouter()
+            let sibling = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128,
+                name: "sibling", url: "", target: "", delay: 0, properties: [])
+            let effects = router.project(reportedEvents: [projected, sibling], viewModelChanges: [],
+                hostCommands: [], declaredEventNames: [], correlationID: 1)
+            var drafts: [ScreenEmissionDraft] = []
+            for effect in effects {
+                if case .draft(let draft, _) = await controller.route(effect) { drafts.append(draft) }
+            }
+            let dispatcher = ScreenEmissionDispatcher(createId: { UUID().uuidString },
+                now: { "2026-10-04T12:00:00.000Z" }, executeScriptAction: { _ in [] })
+            let result = await dispatcher.dispatch(
+                run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
+                    lifecycleGeneration: 0, presentationEpoch: 0),
+                source: ScreenEmissionSource(screenId: "screen", actionId: "runtime:1",
+                    componentId: nil, instanceId: vector.alias), drafts: drafts)
+            guard case .success(let batch) = result else {
+                XCTFail("Publication failed: \(vector.name)"); continue
+            }
+            XCTAssertEqual(batch.emissions.map(\.name), vector.accepted ? ["selected", "sibling"] : ["sibling"], vector.name)
+            XCTAssertEqual(batch.emissions.map(\.sequence), vector.accepted ? [0, 1] : [0], vector.name)
+            if vector.accepted {
+                XCTAssertEqual(batch.emissions[0].payload["value"], .string("literal"), vector.name)
+                XCTAssertEqual(batch.emissions[0].payload["instanceId"], vector.alias.map(ScreenEmissionValue.string), vector.name)
+            }
+        }
+    }
+
+    #endif
+
+    func testSharedFrameChangesStayOutOfEventsAndCarryTheirSettledSnapshot() async throws {
+        struct Suite: Decodable {
+            struct Vector: Decodable {
+                let name: String
+                let value: String
+                let events: [String]
+                let expectedEvents: [String]
+            }
+            let cases: [Vector]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self,
+            from: Data(contentsOf: root.appendingPathComponent("fixtures/events/runtime-frame-writes.json")))
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
+            pixelWidth: 320, pixelHeight: 100)
+        do {
+            for vector in suite.cases {
+                let value = NuxieNativeViewModelValue.bytes(Data(vector.value.utf8))
+                let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: 71,
+                    instances: [.init(id: 71, schemaIndex: 0, valueRange: 0..<1)],
+                    values: [.init(ownerInstanceID: 71, propertyIndex: 0,
+                        name: "placementId", value: value)])
+                let events = vector.events.enumerated().map { index, name in
+                    NuxieNativeEvent(localIndex: index, coreType: 128, name: name,
+                        url: "", target: "", delay: 0, properties: [], sourceViewModelInstanceID: nil)
+                }
+                let step = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [],
+                    stateChanges: [], events: events, hostCommands: [], viewModelChanges: [
+                        .init(origin: .runtime, correlationID: 77, ownerInstanceID: 71,
+                            propertyIndex: 0, value: value)
+                    ])
+                let result = await screen.projectStep(step, eventSnapshot: snapshot, correlationID: 42)
+                guard case .viewModelChange(let change) = result.effects.first?.kind else {
+                    throw ExperienceInteractiveScreenError.stateContract("Missing first frame change: \(vector.name)")
+                }
+                XCTAssertEqual(change.value, .bytes(Data(vector.value.utf8)))
+                var published: [String] = []
+                for effect in result.effects.dropFirst() {
+                    guard case .reportedEvent(let event) = effect.kind else {
+                        throw ExperienceInteractiveScreenError.stateContract("Unexpected customer effect: \(vector.name)")
+                    }
+                    published.append(event.name)
+                    XCTAssertEqual(event.resolvedSource?.string(path: VmPathRef(path: "placementId")),
+                        vector.value, vector.name)
+                }
+                XCTAssertEqual(published, vector.expectedEvents, vector.name)
+            }
+        } catch {
+            try? await screen.close()
+            throw error
+        }
+        try await screen.close()
+    }
+
+    func testRootEventUsesSnapshotRootIdentity() async throws {
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload, pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: 71, instances: [.init(id: 71, schemaIndex: 0, valueRange: 0..<0)], values: [])
+        let event = NuxieNativeEvent(localIndex: 0, coreType: 131, name: "", url: "https://example.test", target: "_self", delay: 0, properties: [], sourceViewModelInstanceID: nil)
+        let step = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [], stateChanges: [], events: [event], hostCommands: [], viewModelChanges: [])
+        let projected = await screen.projectStep(step, eventSnapshot: snapshot, correlationID: 1)
+        guard case .reportedEvent(let reported) = try XCTUnwrap(projected.effects.first).kind else { return XCTFail("Missing root event") }
+        XCTAssertEqual(reported.resolvedSource?.nativeID, snapshot.rootInstanceID)
+    }
+
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
         let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
         let payload = artifact.payload
@@ -34,13 +265,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 return event
             }
             XCTAssertEqual(controls.count, 1, "Expected exactly one purchase control: \(effects)")
+            let source = try XCTUnwrap(controls.first?.resolvedSource)
+            XCTAssertTrue(source.snapshot.instances.contains { $0.id == source.nativeID })
             XCTAssertEqual(controls.first?.properties.first { $0.key == "instanceId" }?.value,
                 .string(expected))
         }
         let selection = try await tap(240, 65)
         XCTAssertFalse(selection.contains {
             if case .controlAction = $0.kind { return true }
-            if case .responseSet = $0.kind { return true }
             return false
         })
         let snapshot = try await screen.snapshot()
@@ -51,6 +283,34 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }
             XCTAssertEqual(value?.value, .bytes(Data(expected.utf8)))
         }
+        try await screen.close()
+    }
+
+    func testNativeNestedEventCanResolveWithoutHostAliases() async throws {
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
+            pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        let down = try await screen.step(pointers: [.init(kind: .down, x: 240, y: 30)], elapsedSeconds: 0)
+        let up = try await screen.step(pointers: [.init(kind: .up, x: 240, y: 30, timestamp: 0.1)], elapsedSeconds: 0)
+        let settled = try await screen.step(elapsedSeconds: 0.016)
+        let reported = (down.effects + up.effects + settled.effects).compactMap { effect -> ExperienceInteractiveReportedEvent? in
+            guard case .controlAction(_, let event) = effect.kind else { return nil }
+            return event
+        }
+        XCTAssertEqual(reported.count, 1)
+        let event = try XCTUnwrap(reported.first)
+        let source = try XCTUnwrap(event.resolvedSource)
+        XCTAssertNotEqual(source.nativeID, source.snapshot.rootInstanceID)
+        let nativeEvent = ExperienceInteractiveReportedEvent(localIndex: event.localIndex,
+            coreType: event.coreType, name: event.name, url: event.url, target: event.target,
+            delay: event.delay, properties: event.properties.filter { $0.key != "instanceId" })
+        let unaliased = ExperienceInteractiveEventSource.project(nativeEvent, nativeID: source.nativeID,
+            rootID: source.snapshot.rootInstanceID, liveIDs: Set(source.snapshot.instances.map(\.id)), identities: [:])
+        XCTAssertNil(unaliased.sourceRejection)
+        XCTAssertFalse(unaliased.properties.contains { $0.key == "instanceId" })
+        XCTAssertEqual(source.string(path: VmPathRef(path: "placementId", isRelative: true)), "plan:annual")
         try await screen.close()
     }
 
@@ -96,7 +356,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }?.value as? ExperienceInteractiveScreen)
         }
         let initial = try interactiveScreen()
-        try await initial.resize(pixelWidth: 320, pixelHeight: 150)
+        try await initial.resize(pixelWidth: 320, pixelHeight: 150, layoutScaleFactor: 1)
         for _ in 0..<20 { _ = try await initial.step(elapsedSeconds: 0.016) }
         _ = try await initial.step(pointers: [.init(kind: .down, x: 240, y: 65)], elapsedSeconds: 0)
         _ = try await initial.step(pointers: [.init(kind: .up, x: 240, y: 65, timestamp: 0.1)], elapsedSeconds: 0)
@@ -131,7 +391,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
         try await screen.enableSemantics()
         _ = try await screen.step(elapsedSeconds: 0)
-        let skipped = try await screen.renderFrame(drawable: nil, isOccluded: true, capturesSemantics: true)
+        let skipped = try await screen.renderFrame(layoutScaleFactor: 1, drawable: nil, isOccluded: true, capturesSemantics: true)
         XCTAssertNil(skipped.semantics)
         let device = try await screen.metalDevice()
         let layer = CAMetalLayer()
@@ -140,7 +400,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         layer.framebufferOnly = true
         layer.drawableSize = CGSize(width: 64, height: 64)
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
-        let frame = try await screen.renderFrame(drawable: ExperienceInteractiveDrawable(drawable),
+        let frame = try await screen.renderFrame(layoutScaleFactor: 1, drawable: ExperienceInteractiveDrawable(drawable),
             capturesSemantics: true)
         XCTAssertEqual(frame.outcome.disposition, .presented)
         XCTAssertNotNil(frame.semantics)
@@ -195,7 +455,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         XCTAssertEqual(
             secondSnapshot.values.first(where: { $0.name == "Number" })?.value,
-            .number(23)
+            .number(0)
         )
         let metrics = await preparation.metrics()
         XCTAssertEqual(
@@ -551,7 +811,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(deliveredSteps, 1)
         XCTAssertNil(deliveredText)
 
-        let skipped = try await session.perform(.render(.occluded, completion: .init({})))
+        let skipped = try await session.perform(.render(.occluded, layoutScaleFactor: 1, completion: .init({})))
         XCTAssertFalse(skipped.hasDelivery)
         await skipped.deliver()
         XCTAssertNil(deliveredText)
@@ -563,7 +823,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         layer.drawableSize = CGSize(width: 64, height: 64)
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
         let completed = expectation(description: "native render completed")
-        let rendered = try await session.perform(.render(.available(.init(value: drawable)),
+        let rendered = try await session.perform(.render(.available(.init(value: drawable)), layoutScaleFactor: 1,
             completion: .init({ completed.fulfill() })))
         await fulfillment(of: [completed], timeout: 2)
         XCTAssertTrue(rendered.hasDelivery)
@@ -579,10 +839,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(current.values.first { $0.name == "Number" }?.value, .number(91))
         XCTAssertEqual(deliveredSteps, 1)
 
-        _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80)
+        _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80, layoutScaleFactor: 1)
         layer.drawableSize = CGSize(width: 80, height: 80)
         guard let nextDrawable = layer.nextDrawable() else { throw XCTSkip("No second drawable") }
-        let afterResize = try await screen.renderFrame(drawable: .init(nextDrawable), capturesSemantics: false)
+        let afterResize = try await screen.renderFrame(layoutScaleFactor: 1, drawable: .init(nextDrawable), capturesSemantics: false)
         XCTAssertNil(afterResize.text, "Resize retires copied geometry until another settled step")
         try await screen.close()
     }
@@ -601,6 +861,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         defer { Task { try? await screen.close() } }
 
+        let root = try await screen.rootViewModel()
+        _ = try await screen.mutateState([
+            .setString(root, path: "String", value: Data("signed-state".utf8)),
+        ])
         for _ in 0..<3 {
             _ = try await renderAndWait(screen)
             _ = try await screen.step(elapsedSeconds: 0)
@@ -697,6 +961,39 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(metrics.openedSessionCount, 2)
     }
 
+
+    func testInitialProductRowsKeepLinksButExcludeAuthoredDefaults() {
+        let values: [JourneyViewModelValue] = [
+            .init(viewModelName: "Root", instanceId: "root", path: "Number", value: AnyCodable(999)),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/vmInstanceId", value: AnyCodable("monthly")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/viewModelId", value: AnyCodable("Product")),
+            .init(viewModelName: "Root", instanceId: "root", path: "products", value: AnyCodable([["instanceId": "monthly"]])),
+            .init(viewModelName: "Product", instanceId: "monthly", path: "placementId", value: AnyCodable("paywall:monthly")),
+            .init(viewModelName: "Product", instanceId: "monthly", path: "price", value: AnyCodable("$0.00")),
+            .init(viewModelName: "Other", instanceId: "other", path: "Number", value: AnyCodable(888)),
+        ]
+        XCTAssertEqual(StoreProductViewModelProjection.productRows(in: values).map(\.path),
+            ["selected/vmInstanceId", "selected/viewModelId", "products", "placementId", "price"])
+    }
+
+    func testProductProjectionKeepsOnlyProductSlotsAndReferenceMetadata() throws {
+        let projected = StoreProductViewModelProjection.productRows(in: [
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/vmInstanceId", value: AnyCodable("monthly")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/viewModelId", value: AnyCodable("Product")),
+            .init(viewModelName: "Root", instanceId: "root", path: "selected/unrelated", value: AnyCodable(999)),
+            .init(viewModelName: "Root", instanceId: "root", path: "items", value: AnyCodable([
+                ["instanceId": "note", "values": ["count": 999]],
+                ["instanceId": "monthly", "values": ["price": "$0"]],
+            ])),
+            .init(viewModelName: "Product", instanceId: "monthly", path: "placementId", value: AnyCodable("monthly")),
+        ])
+        XCTAssertFalse(projected.contains { $0.path == "selected/unrelated" })
+        let rows = try XCTUnwrap(projected.first { $0.path == "items" }?.value.value as? [Any])
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows[0] is NSNull, "Plain slot carries no signed values")
+        let product = try XCTUnwrap(rows[1] as? [String: Any])
+        XCTAssertEqual((product["values"] as? [String: String])?["price"], "$0")
+    }
 
     func testStoreKitProductsReplaceSignedCatalogValuesBeforeRuntimeOpen() throws {
         let values = [
@@ -955,7 +1252,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
 
-    func testFactoryValidatesRootSchemaAndAtomicallyAppliesSignedSDKState() async throws {
+    func testFactoryKeepsNativeRootDefaults() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         XCTAssertEqual(payload.authenticatedKeyID, "TEST_ONLY_DEV_KEYPAIR")
         let screen = try await ExperienceInteractiveScreen.open(
@@ -970,21 +1267,109 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let resolved = try await screen.viewModel(named: "Test", instanceID: "root-sdk-id")
         let snapshot = try await screen.snapshot()
         XCTAssertEqual(root, resolved)
-        XCTAssertEqual(
-            snapshot.values.first(where: { $0.name == "Number" })?.value,
-            .number(23)
-        )
-        XCTAssertEqual(
-            snapshot.values.first(where: { $0.name == "Boolean" })?.value,
-            .bool(true)
-        )
-        XCTAssertEqual(
-            snapshot.values.first(where: { $0.name == "String" })?.value,
-            .bytes(Data("signed-state".utf8))
-        )
+        let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes)
+        let native = try await file.openSession(artboardName: payload.renderPlan.screens[0].artboardName,
+            player: .stateMachine("State Machine 1"), pixelWidth: 16, pixelHeight: 16, bindDefaultViewModel: true)
+        defer { Task { try? await native.close() } }
+        let authored = try await native.snapshot()
+        for name in ["Number", "Boolean", "String"] {
+            let actual = try XCTUnwrap(snapshot.values.first { $0.ownerInstanceID == root.rawValue && $0.name == name })
+            let expected = try XCTUnwrap(authored.values.first { $0.ownerInstanceID == authored.rootInstanceID && $0.name == name })
+            XCTAssertEqual(String(describing: actual.value), String(describing: expected.value))
+        }
     }
 
-    func testFactoryHydratesCanonicalListStateInOneSignedPayload() async throws {
+    func testProductHydrationPreservesNativePlainListRows() async throws {
+        try await verifyProductHydrationPreservesNativePlainListRows(nested: false)
+    }
+
+    func testProductHydrationPreservesNativePlainRowsAtSlashListPath() async throws {
+        try await verifyProductHydrationPreservesNativePlainListRows(nested: true)
+    }
+
+    private func verifyProductHydrationPreservesNativePlainListRows(nested: Bool) async throws {
+        // Extend the exact native list fixture with product strings. The second
+        // authored row stays at 2, distinct from instance zero and its signed value.
+        var scene = try exactComponentListFixture()
+        func replace(_ old: [UInt8], _ new: [UInt8]) throws {
+            let range = try XCTUnwrap(scene.range(of: Data(old)))
+            scene.replaceSubrange(range, with: new)
+        }
+        func stringProperty(_ name: String) -> [UInt8] {
+            [0xbb, 0x03, 0xad, 0x04, UInt8(name.utf8.count)] + Array(name.utf8) + [0]
+        }
+        func stringValue(_ index: UInt8, _ value: String) -> [UInt8] {
+            [0xb1, 0x03, 0xaa, 0x04, index, 0xb1, 0x04, UInt8(value.utf8.count)] + Array(value.utf8) + [0]
+        }
+        let property: [UInt8] = [0xaf, 0x03, 0xad, 0x04, 5] + Array("value".utf8) + [0]
+        try replace(property, property + stringProperty("placementId") + stringProperty("price"))
+        let first: [UInt8] = [0xba, 0x03, 0xbf, 0x04, 0, 0, 0x80, 0x3f, 0xaa, 0x04, 0, 0]
+        try replace(first, first + stringValue(1, "paywall:monthly") + stringValue(2, "$0"))
+        if nested {
+            // Wrap the authored list model in a root reference, matching paywall/products.
+            try replace([0xb2, 0x03, 0xad, 0x04, 5] + Array("items".utf8) + [0],
+                [0xb2, 0x03, 0xad, 0x04, 8] + Array("products".utf8) + [0])
+            let products: [UInt8] = [0xb2, 3, 0xad, 4, 8] + Array("products".utf8) + [0]
+            try replace(products, products + [0xb4, 3, 0xad, 4, 15]
+                + Array("selectedProduct".utf8) + [0xb5, 4, 0, 0])
+            let instance: [UInt8] = [0xb5, 3, 0xb6, 4, 1, 4, 8] + Array("Instance".utf8) + [0]
+            try replace(instance, instance + [0xbc, 3, 0xaa, 4, 1, 0xc1, 4, 0, 0])
+            let artboard: [UInt8] = [1, 0xc7, 4, 1, 0xc4, 1, 1]
+            var wrapper: [UInt8] = [0xb3, 3, 0xad, 4, 4] + Array("Root".utf8) + [0]
+            wrapper += [0xb4, 3, 0xad, 4, 7] + Array("paywall".utf8) + [0xb5, 4, 1, 0]
+            wrapper += [0xb5, 3, 0xb6, 4, 2, 4, 4] + Array("root".utf8) + [0]
+            wrapper += [0xbc, 3, 0xaa, 4, 0, 0xc1, 4, 0, 0]
+            try replace(artboard, wrapper + [1, 0xc7, 4, 2, 0xc4, 1, 1])
+        }
+        let model = nested ? "Root" : "Doc"
+        let payload = try await statePayload(defaultViewModelName: model, values: [
+            .init(viewModelName: model, instanceId: "root-sdk-id", path: nested ? "paywall/products" : "items", value: AnyCodable([
+                nested ? ["vmInstanceId": "monthly"] :
+                    ["vmInstanceId": "monthly", "viewModelId": "ItemVM", "values":
+                        ["placementId": "paywall:monthly", "price": "$0"]],
+                ["vmInstanceId": "note", "viewModelId": "ItemVM", "values": ["value": 999]],
+            ])),
+        ] + (nested ? [
+            .init(viewModelName: "ItemVM", instanceId: "monthly", path: "placementId", value: AnyCodable("paywall:monthly")),
+            .init(viewModelName: "ItemVM", instanceId: "monthly", path: "price", value: AnyCodable("$0")),
+            .init(viewModelName: model, instanceId: "root-sdk-id",
+                path: "paywall/selectedProduct", value: AnyCodable(["vmInstanceId": "monthly"])),
+        ] : []),
+            scene: scene, artboardName: "Main")
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let screen = try await preparation.openScreen(products: [StoreProduct(
+            productId: "monthly", placementId: "paywall:monthly", name: "Monthly", price: "$9.99",
+            period: .month, periodCount: 1, periodLabel: "month", renewalPrice: "$9.99",
+            renewalPeriod: "month", productType: .autoRenewable)],
+            player: .staticArtboard, pixelWidth: 16, pixelHeight: 16)
+        defer { Task { try? await screen.close() } }
+        let snapshot = try await screen.snapshot()
+        let root = try await screen.rootViewModel()
+        let listOwner: UInt64
+        if nested {
+            guard case .referencedInstance(let id) = snapshot.values.first(where: {
+                $0.ownerInstanceID == root.rawValue && $0.name == "paywall"
+            })?.value else { return XCTFail("Native paywall is absent") }
+            listOwner = id
+        } else { listOwner = root.rawValue }
+        guard case .list(let ids) = snapshot.values.first(where: {
+            $0.ownerInstanceID == listOwner && $0.name == (nested ? "products" : "items")
+        })?.value else { return XCTFail("Native list is absent") }
+        XCTAssertEqual(ids.count, 6, "Product hydration preserves the authored list")
+        guard ids.count >= 2 else { return }
+        func value(_ index: Int, _ name: String) -> ExperienceInteractiveViewModelValue? {
+            snapshot.values.first { $0.ownerInstanceID == ids[index] && $0.name == name }?.value
+        }
+        XCTAssertEqual(value(1, "value"), .number(2), "Plain row keeps its distinct file value")
+        XCTAssertEqual(value(0, "placementId"), .bytes(Data("paywall:monthly".utf8)))
+        XCTAssertEqual(value(0, "price"), .bytes(Data("$9.99".utf8)))
+        if nested {
+            XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == listOwner && $0.name == "selectedProduct" }?.value,
+                .referencedInstance(ids[0]), "Selection and the product list must share the hydrated child")
+        }
+    }
+
+    func testFactoryKeepsAuthoredListDespiteSignedDefaults() async throws {
         let payload = try await componentListStatePayload(values: [
             JourneyViewModelValue(
                 viewModelName: "Doc",
@@ -1006,66 +1391,22 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
 
         let root = try await screen.rootViewModel()
-        let row = try await screen.viewModel(named: "ItemVM", instanceID: "row-sdk-id")
         let snapshot = try await screen.snapshot()
         let rootValues = snapshot.values.filter { $0.ownerInstanceID == root.rawValue }
         guard case .list(let linkedRows) = rootValues.first(where: {
             $0.name == "items"
         })?.value,
         let linkedRow = linkedRows.first else {
-            return XCTFail("Expected signed list state")
+            return XCTFail("Expected the file authored list")
         }
+        XCTAssertEqual(linkedRows.count, 6)
         XCTAssertEqual(
             snapshot.values.first(where: {
                 $0.ownerInstanceID == linkedRow && $0.name == "value"
             })?.value,
-            .number(11)
+            .number(1)
         )
 
-        _ = try await screen.mutateState(
-            [.setNumber(row, path: "value", value: 22)],
-            correlationID: 92
-        )
-        let mutated = try await screen.snapshot()
-        XCTAssertEqual(
-            mutated.values.first(where: {
-                $0.ownerInstanceID == linkedRow && $0.name == "value"
-            })?.value,
-            .number(22)
-        )
-
-        do {
-            _ = try await screen.mutateState(
-                [
-                    .listRemove(root, path: "items", index: 0),
-                    .setNumber(root, path: "missing", value: 1),
-                ],
-                correlationID: 93
-            )
-            XCTFail("Expected the mixed native batch to roll back")
-        } catch {}
-        _ = try await screen.mutateState(
-            [.listRemove(root, path: "items", index: 0)],
-            correlationID: 94
-        )
-        let removed = try await screen.snapshot()
-        XCTAssertEqual(
-            removed.values.first(where: {
-                $0.ownerInstanceID == root.rawValue && $0.name == "items"
-            })?.value,
-            .list([])
-        )
-        _ = try await screen.mutateState(
-            [.listInsert(root, path: "items", index: 0, value: row)],
-            correlationID: 95
-        )
-        let reinserted = try await screen.snapshot()
-        XCTAssertEqual(
-            reinserted.values.first(where: {
-                $0.ownerInstanceID == root.rawValue && $0.name == "items"
-            })?.value,
-            .list([linkedRow])
-        )
     }
 
     func testSwiftProductStateCommandResolvesSignedIdentityAndCommitsTypedBatch() async throws {
@@ -1329,6 +1670,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
+        _ = try await screen.applyStateCommand(.snapshot(
+            ExperienceInteractiveStateCompiler.signedValues(payload.journey.viewModelValues ?? [])))
         let root = try await screen.rootViewModel()
         let rowReference = try await screen.viewModel(named: "ItemVM", instanceID: "row-sdk-id")
         let snapshot = try await screen.snapshot()
@@ -1754,7 +2097,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         }
     }
 
-    func testFactoryRejectsConflictingAuthoredSelectorsForOneRemoteIdentity() async throws {
+    func testFactoryIgnoresNonProductAuthoredSelectors() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",
             values: [
@@ -1774,23 +2117,12 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ),
             ]
         )
-        do {
-            _ = try await ExperienceInteractiveScreen.open(
-                payload: payload,
-                player: .stateMachine("State Machine 1"),
-                pixelWidth: 16,
-                pixelHeight: 16
-            )
-            XCTFail("Expected conflicting authored selectors to fail")
-        } catch {
-            guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("conflicting authored instance selectors"))
-        }
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload, player: .stateMachine("State Machine 1"), pixelWidth: 16, pixelHeight: 16)
+        try await screen.close()
     }
 
-    func testFactoryRejectsSignedReferenceWithNonObjectValues() async throws {
+    func testFactoryIgnoresNonProductReferenceValues() async throws {
         let payload = try await statePayload(
             defaultViewModelName: "Test",
             values: [JourneyViewModelValue(
@@ -1804,20 +2136,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 ]])
             )]
         )
-        do {
-            _ = try await ExperienceInteractiveScreen.open(
-                payload: payload,
-                player: .stateMachine("State Machine 1"),
-                pixelWidth: 16,
-                pixelHeight: 16
-            )
-            XCTFail("Expected malformed signed row values to fail")
-        } catch {
-            guard case .stateContract(let reason) = error as? ExperienceInteractiveScreenError else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertTrue(reason.contains("non-object values"))
-        }
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload, player: .stateMachine("State Machine 1"), pixelWidth: 16, pixelHeight: 16)
+        try await screen.close()
     }
 
     func testListIndexPlannerWritesEveryAuthoredIndexAndIgnoresOtherProperties() throws {
@@ -2695,6 +3016,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             pixelHeight: 16
         )
         defer { Task { try? await screen.close() } }
+        _ = try await screen.applyStateCommand(.snapshot(
+            ExperienceInteractiveStateCompiler.signedValues(payload.journey.viewModelValues ?? [])))
         let root = try await screen.rootViewModel()
 
         _ = try await screen.mutateState(
@@ -2903,7 +3226,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(entries, ["first", "second"])
     }
 
-    func testRouterPreservesPhaseAndCommandOrderWithExactCorrelations() {
+    func testRouterPublishesChangesBeforeEventsWithExactCorrelations() {
         var router = ExperienceInteractiveEffectRouter()
         let reported = ExperienceInteractiveReportedEvent(
             localIndex: 0,
@@ -2930,13 +3253,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
 
         XCTAssertEqual(effects.map(\.sequence), Array(0...6))
-        XCTAssertEqual(effects.map(\.correlationID), [42, 77, 42, 42, 42, 42, 42])
+        XCTAssertEqual(effects.map(\.correlationID), [77, 42, 42, 42, 42, 42, 42])
         XCTAssertEqual(
             effects.map(\.kind),
             [
-                .reportedEvent(reported),
                 .viewModelChange(change),
-                .responseSet(field: "plan", value: .string("pro")),
+                .reportedEvent(reported),
+                .hostCommand(name: "$response_set", payload: Self.object([("field", .string("plan")), ("value", .string("pro"))])),
                 .journeyEvent(name: "purchase_tapped", payload: Self.object([
                     ("placementId", .string("pro_paywall:annual")),
                 ])),
@@ -2947,10 +3270,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                     ("channel", .string("editor")),
                     ("sampled", .bool(true)),
                 ])),
-                .rejectedHostCommand(
-                    name: "$response_set",
-                    reason: "expected a non-empty string field and a value"
-                ),
+                .hostCommand(name: "$response_set", payload: Self.object([
+                    ("field", .number(42)), ("value", .string("rejected-in-swift")),
+                ])),
             ]
         )
 
@@ -3170,7 +3492,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
         assembler.appendControl(screenId: "survey", invocation: invocation)
         assembler.appendDraft(
-            .responseSet(field: "plan", value: .string("pro")),
+            .event(name: "plan_changed", payload: ["plan": .string("pro")]),
             source: source
         )
         assembler.appendDraft(
@@ -3183,7 +3505,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             screenId: "survey",
             invocation: invocation,
             additionalDrafts: [
-                .responseSet(field: "plan", value: .string("pro")),
+                .event(name: "plan_changed", payload: ["plan": .string("pro")]),
                 .event(name: "submitted", payload: ["plan": .string("pro")]),
             ]
         ))
@@ -3443,7 +3765,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         guard let drawable = layer.nextDrawable() else {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
-        return try await screen.render(
+        return try await screen.render(layoutScaleFactor: 1,
             drawable: ExperienceInteractiveDrawable(drawable),
             clearColor: 0xFF11_2233
         )
@@ -3464,7 +3786,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
         let completion = expectation(description: "native frame completion")
-        let outcome = try await screen.render(
+        let outcome = try await screen.render(layoutScaleFactor: 1,
             drawable: ExperienceInteractiveDrawable(drawable),
             clearColor: 0xFF11_2233,
             completion: { completion.fulfill() }
@@ -3658,7 +3980,7 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
     func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
-        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?) async {}
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
@@ -3669,4 +3991,21 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
         didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
 }
 #endif
+#endif
+
+#if canImport(UIKit)
+@MainActor
+private final class LinkFrameRecorder: ExperienceScreenViewControllerDelegate {
+    var order: [String] = []
+    var linkGate: (() async -> Void)?
+    var onBatch: (() -> Void)?
+    var onBatchAsync: ((ExperienceEmissionSources?) async -> Void)?
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
+    func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch"); onBatch?(); await onBatchAsync?(frameSources) }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async { order.append("link"); await linkGate?() }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
+}
 #endif

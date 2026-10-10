@@ -6,6 +6,203 @@ import XCTest
 #endif
 
 final class JourneyRunJournalTests: XCTestCase {
+    func testParkedCandidatesFromStaleObserversAreNotLost() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.transition(run.id, stepId: "wait", context: run.context,
+            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
+        let read = try await journal.runs()
+        let park = try XCTUnwrap(read.first?.park)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(), executionFence: fence, executionFenceToken: fence.token())
+        let rejected = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 101_000, properties: ["allowed": .bool(false)])
+        let accepted = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 102_000, properties: ["allowed": .bool(true)])
+        _ = try await journal.appendParkedCandidate(run.id, expectedStepId: "wait", expectedPark: park,
+            event: rejected, admission: admission)
+        _ = try await journal.appendParkedCandidate(run.id, expectedStepId: "wait", expectedPark: park,
+            event: accepted, admission: admission)
+        let after = try await journal.runs()
+        XCTAssertEqual(after.first?.park?.candidateEvents, [rejected, accepted])
+        _ = try await journal.removeParkedCandidates(run.id, expectedStepId: "wait", expectedPark: park,
+            evaluated: [rejected], admission: admission)
+        let remaining = try await journal.runs()
+        XCTAssertEqual(remaining.first?.park?.candidateEvents, [accepted])
+    }
+
+
+    func testPendingWaitEventDoesNotAcknowledgeADifferentCandidate() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        let checkpoint = JourneyControlExecutor.Checkpoint(anchorAtMillis: 100_000, wakeAtMillis: 200_000)
+        try await journal.transition(run.id, stepId: "wait", context: run.context, checkpoint: checkpoint)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        let first = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 101_000, properties: ["choice": .string("A")])
+        let second = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 102_000, properties: ["choice": .string("B")])
+        let firstAccepted = try await journal.stageParkedEvent(run.id, expectedStepId: "wait",
+            expectedCheckpoint: checkpoint, event: first, admission: admission)
+        let secondAccepted = try await journal.stageParkedEvent(run.id, expectedStepId: "wait",
+            expectedCheckpoint: checkpoint, event: second, admission: admission)
+        XCTAssertTrue(firstAccepted)
+        XCTAssertFalse(secondAccepted)
+        let stored = try await journal.runs()
+        XCTAssertEqual(stored.first?.park?.pendingEvent, first)
+    }
+
+    func testStaleResumeCannotConsumeALaterWait() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.transition(run.id, stepId: "wait", context: run.context,
+            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
+        let read = try await journal.runs()
+        let oldPark = try XCTUnwrap(read.first?.park)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        _ = try await journal.resumeParked(run.id, expectedStepId: "wait", expectedPark: oldPark, admission: admission)
+        try await journal.transition(run.id, stepId: "later", context: run.context,
+            checkpoint: .init(anchorAtMillis: 200_000, wakeAtMillis: 300_000))
+        let stale = try await journal.resumeParked(run.id, expectedStepId: "wait", expectedPark: oldPark, admission: admission)
+        XCTAssertNil(stale)
+        let retained = try await journal.runs()
+        XCTAssertEqual(retained.first?.stepId, "later")
+        XCTAssertEqual(retained.first?.park?.wakeAt, date(300))
+        XCTAssertEqual(oldPark.wakeAt, date(200))
+    }
+
+    func testRevokedSaveAdmissionCannotConsumeSequenceOrQueue() async throws {
+        for identityChange in [false, true] {
+            for queued in [false, true] {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+                let candidate = arm()
+                let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+                    executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+                    entryStepId: "step", at: date(100))
+                let run = try XCTUnwrap(admitted)
+                let identity = MockIdentityService()
+                identity.setDistinctId("anon")
+                let token = try XCTUnwrap(identity.performWithCurrentIdentityFence("anon", { _ in () }))
+                let fence = JourneyProfileFence()
+                let admission = JourneyCommitAdmission(identity: identity, identityFenceToken: token.token,
+                    executionFence: fence, executionFenceToken: fence.token())
+                if identityChange { identity.setDistinctId("signed-in") } else { _ = fence.advance() }
+                do {
+                    _ = try await journal.reserveResponseSave(run: run, formName: "feedback",
+                        answers: [:], queued: queued, admission: admission)
+                    XCTFail("Revoked save intake must not commit")
+                } catch is CancellationError { }
+                let pending = try await journal.pendingResponseSaves()
+                let display = try await journal.responseSaveDisplays(journeyId: run.journeyId)
+                XCTAssertTrue(pending.isEmpty)
+                XCTAssertTrue(display.isEmpty)
+                let next = try await journal.reserveResponseSave(run: run, formName: "feedback",
+                    answers: [:], queued: queued)
+                XCTAssertEqual(next.sequence, 1)
+            }
+        }
+    }
+
+    func testResponseSaveSequenceAndNewestSheetSurviveRunCompletionAndRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "step", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        let one = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(1)], queued: true)
+        let two = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(2)], queued: true)
+        let three = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(3)], queued: true)
+        XCTAssertEqual([one.sequence, two.sequence, three.sequence], [1, 2, 3])
+        let other = try await journal.reserveResponseSave(run: run, formName: "onboarding", answers: [:], queued: true)
+        XCTAssertEqual(other.sequence, 1)
+        try await journal.confirmResponseSave(one, storedSequence: 1)
+        try await journal.markStartedQueued(run)
+        try await journal.complete(run.id, outcome: "done", at: date(200))
+        try await journal.markCompletionQueued(run)
+        let reopened = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let pending = try await reopened.pendingResponseSaves()
+        XCTAssertEqual(pending.count, 2)
+        XCTAssertEqual(pending.first { $0.formName == "feedback" }?.answers, ["stars": .number(3)])
+        XCTAssertEqual(pending.first { $0.formName == "feedback" }?.distinctId, "anon")
+        let four = try await reopened.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: false)
+        XCTAssertEqual(four.sequence, 4)
+        let stillPending = try await reopened.pendingResponseSaves()
+        XCTAssertEqual(stillPending.first { $0.formName == "feedback" }?.sequence, 3)
+        try await reopened.confirmResponseSave(four, storedSequence: 7)
+        let next = try await reopened.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
+        XCTAssertEqual(next.sequence, 8)
+        try await reopened.confirmResponseSave(four, storedSequence: 9)
+        let afterLate = try await reopened.pendingResponseSaves()
+        XCTAssertEqual(afterLate.first { $0.formName == "feedback" }?.sequence, 8)
+        try await reopened.confirmResponseSave(next, storedSequence: JourneyResponseSave.maximumSequence - 1)
+        let last = try await reopened.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
+        XCTAssertEqual(last.sequence, 9_007_199_254_740_991)
+        try await reopened.confirmResponseSave(last, storedSequence: JourneyResponseSave.maximumSequence)
+        do {
+            _ = try await reopened.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
+            XCTFail("An exhausted sequence must not wrap or reuse an identity")
+        } catch JourneyResponseSaveError.sequenceExhausted {}
+    }
+
+    func testResponseSaveFailedPersistenceKeepsSequenceSheetAndOriginalOwner() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "step", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        let values = try ExactJSONCodec.decode(ExactJSONObject<JourneyReleaseJSONValue>.self,
+            from: Data(#"{"é":1,"e\u0301":2,"__proto__":"kept","empty":"","invalid_email":"x","null":null}"#.utf8))
+        _ = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: values, queued: true)
+        let failing = try JourneyRunJournal(directory: directory, distinctId: "anon", beforePersist: {
+            throw CocoaError(.fileWriteOutOfSpace)
+        })
+        do {
+            _ = try await failing.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
+            XCTFail("A failed journal replacement must fail the save")
+        } catch let error as CocoaError { XCTAssertEqual(error.code, .fileWriteOutOfSpace) }
+        let pending = try await journal.pendingResponseSaves()
+        XCTAssertEqual(pending.map(\.sequence), [1])
+        XCTAssertEqual(pending.first?.answers, values)
+        XCTAssertEqual(pending.first?.answers.count, 6)
+        let signedIn = try JourneyRunJournal(directory: directory, distinctId: "signed-in")
+        do {
+            _ = try await signedIn.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
+            XCTFail("The new customer's journal cannot save the old customer's run")
+        } catch JourneyResponseSaveError.wrongOwner {}
+        let next = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
+        XCTAssertEqual(next.sequence, 2)
+        XCTAssertEqual(next.distinctId, "anon")
+    }
+
     func testConversionWatchSurvivesCompletionAndReopeningWithoutReleasePin() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -210,7 +407,7 @@ final class JourneyRunJournalTests: XCTestCase {
             let admitted = try await journal.admit(arm: arm(binding: vector.binding), reentry: .init(type: .everyMatch, window: nil),
                                                    entryStepId: "step", at: date(vector.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
-            try await journal.recordResponses(run.id, values: vector.outputs.responses)
+
             try await journal.complete(run.id, outcome: vector.outcome, at: date(vector.completedAtMillis / 1000),
                                        eventOutputs: vector.outputs.event,
                                        responseOutputs: vector.outputs.responses)
@@ -468,7 +665,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 reentry: .init(type: .everyMatch, window: nil), entryStepId: "step", at: date(suite.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
             try await journal.markStartedQueued(run)
-            try await journal.recordResponses(run.id, values: vector.responses)
+
             if vector.beforeDeath == "parked" {
                 try await journal.park(run.id, stepId: "wait", until: vector.wakeAtMillis.map { date($0 / 1000) })
             } else if vector.beforeDeath == "completed" {
@@ -486,7 +683,7 @@ final class JourneyRunJournalTests: XCTestCase {
             XCTAssertEqual(recovered.generation, vector.expectedGeneration, vector.name)
             XCTAssertEqual(recovered.completion?.outcome, vector.expectedOutcome, vector.name)
             XCTAssertEqual(recovered.completion?.at, vector.expectedCompletedAtMillis.map { date($0 / 1000) }, vector.name)
-            let expected = try JSONEncoder().encode(vector.responses)
+            let expected = try JSONEncoder().encode(vector.beforeDeath == "completed" ? vector.responses : [:])
             let retainedResponses = recovered.completion == nil
                 ? recovered.context.responses
                 : recovered.outputs.responses
@@ -499,6 +696,8 @@ final class JourneyRunJournalTests: XCTestCase {
                 let fence = JourneyProfileFence()
                 _ = try await reopened.resumeParked(
                     run.id,
+                    expectedStepId: "wait",
+                    expectedPark: try XCTUnwrap(resumable.first?.park),
                     admission: .executionOnly(
                         identity: MockIdentityService(),
                         executionFence: fence,
@@ -708,6 +907,8 @@ final class JourneyRunJournalTests: XCTestCase {
 
         let resumed = try await journal.resumeParked(
             run.id,
+            expectedStepId: "wait",
+            expectedPark: .init(wakeAt: date(200)),
             admission: .executionOnly(
                 identity: MockIdentityService(),
                 executionFence: fence,
@@ -1202,18 +1403,6 @@ final class JourneyRunJournalTests: XCTestCase {
         let run = try XCTUnwrap(admitted)
         let answer = String(repeating: "y", count: 21 * 1_024 * 1_024)
 
-        try await journal.recordResponses(
-            run.id,
-            values: ["answer": .string(answer)]
-        )
-        let pendingRuns = try await journal.runs()
-        let pending = try XCTUnwrap(pendingRuns.first)
-        guard case .string(let pendingAnswer)? = pending.context.responses["answer"] else {
-            return XCTFail("Expected retained pending response")
-        }
-        XCTAssertEqual(pendingAnswer, answer)
-        XCTAssertTrue(pending.outputs.responses.isEmpty)
-
         try await journal.complete(
             run.id,
             outcome: "done",
@@ -1244,13 +1433,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.recordResponses(
-            run.id,
-            values: [
-                "declared": .string("publish"),
-                "private": .string("do-not-publish"),
-            ]
-        )
+
 
         try await journal.complete(
             run.id,
@@ -1691,7 +1874,7 @@ final class JourneyRunJournalTests: XCTestCase {
         )
     }
 
-    func testInterruptedCompletionCaptureReplaysTheSameEventAndBufferedAnswersAfterRelaunch() async throws {
+    func testInterruptedCompletionCaptureReplaysTheSameEventAndTerminalOutputsAfterRelaunch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let firstStore = SQLiteEventStore()
@@ -1700,7 +1883,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
                                                entryStepId: "survey", at: date(100))
         let run = try XCTUnwrap(admitted)
-        try await journal.recordResponses(run.id, values: ["answer": .string("yes")])
+
         try await journal.complete(
             run.id,
             outcome: "done",
@@ -1719,10 +1902,6 @@ final class JourneyRunJournalTests: XCTestCase {
         let secondLog = try await eventLog(directory: directory, store: secondStore, api: MockNuxieApiForQueue())
         let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
         try await reopened.complete(run.id, outcome: "abandoned", at: date(500))
-        do {
-            try await reopened.recordResponses(run.id, values: ["answer": .string("changed")])
-            XCTFail("A queued completion must freeze its outputs")
-        } catch JourneyJournalError.invalidState { }
         try await JourneyReporter(journal: reopened, events: secondLog).flushPending()
         let after = try await secondStore.queryEventsForUser("customer", limit: 10)
         XCTAssertEqual(Set(after.map(\.id)), Set(before.map(\.id)))
@@ -1966,7 +2145,7 @@ private extension JourneyRunJournal {
     }
 }
 
-private func testJourneyExecutionSnapshot() -> JourneyRun.ExecutionSnapshot {
+func testJourneyExecutionSnapshot() -> JourneyRun.ExecutionSnapshot {
     .init(
         delivery: .init(
             renderBaseUrl: "https://render.example.test/",
@@ -1976,7 +2155,7 @@ private func testJourneyExecutionSnapshot() -> JourneyRun.ExecutionSnapshot {
     )
 }
 
-private func testJourneyRelease(
+func testJourneyRelease(
     for reference: ArmedJourney.Reference
 ) -> JourneyReleaseProfileEntry {
     .init(

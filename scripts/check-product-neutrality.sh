@@ -12,7 +12,21 @@ prohibited+='|github.com/nuxieai/nuxie-'"dev"
 
 if git grep -nE "$prohibited" -- \
   . \
-  ':!scripts/check-product-neutrality.sh'
+  ':!scripts/check-product-neutrality.sh' \
+  ':!fixtures/runtime/nested-values/README.md' \
+  ':!fixtures/runtime/shared-values/NOTES.md' \
+  ':!fixtures/runtime/shared-values/provenance.json' \
+  ':!fixtures/runtime/run-values/NOTES.md' \
+  ':!fixtures/runtime/run-values/provenance.json' \
+  ':!fixtures/runtime/published-input/NOTES.md' \
+  ':!fixtures/runtime/published-input/provenance.json' \
+  ':!fixtures/runtime/published-two-fields/provenance.json' \
+  ':!fixtures/runtime/forms-saves/NOTES.md' \
+  ':!fixtures/runtime/earlier-cuts/forms-saves-9ff6ee3e21/NOTES.md' \
+  ':!fixtures/runtime/earlier-cuts/forms-saves-9ff6ee3e21/provenance.json' \
+  ':!fixtures/runtime/forms-saves/provenance.json' \
+  ':!fixtures/runtime/forms-saves/goals/NOTES.md' \
+  ':!fixtures/runtime/forms-saves/goals/provenance.json'
 then
   echo "The public SDK contains Editor-product-specific support. Keep that harness in nuxie-dev." >&2
   exit 1

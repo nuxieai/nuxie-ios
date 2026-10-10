@@ -2,6 +2,11 @@
 
 These JSON vectors define the contracts shared by SDK implementations.
 
+## Published runtime values
+
+- `runtime/published-input/`: F3 input and greeting from publisher `09081fd6591bb5f24c33693d0b06a7c3a207ea65`. Preserves the published text-input table, source, behavior oracle and provenance. The native input handler runs on the advance after the text changes; no authored key handler or emit is present. Native field delivery and signed release admission require separate platform proof.
+- `runtime/run-values/`: F4 tap and level screens from publisher `97d23aae674d8035ffda773cefdf936f85a1ea46`, with unchanged source, handwritten expectations and file hashes. Platform tests check native `continue` admission in a signed Journey, write-before-route ordering and the component copy's first drawn pixels. The published event has no action id; the test release keeps its control table empty.
+
 ## Journey
 
 - `journeys/planes/release.json`: signed Journey release envelopes and canonical release schema.
@@ -22,7 +27,6 @@ These JSON vectors define the contracts shared by SDK implementations.
 The signed release fixture is the only release wire shape. Tests consume it directly and never rebuild a retired runtime model.
 
 - `journeys/planes/text-input-typography.json`: native multiline font size and baseline intervals, natural line-height sentinel, contain/geometry scaling, and restyling invariants. Consumers compare actual native layout with independently configured platform controls.
-- `journeys/planes/text-input-response-capture.json`: accepted raw text versus evaluated binding-source capture, scalar types, missing-source rejection, and secure-entry boundaries.
 
 ## Events
 
@@ -39,3 +43,5 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 - `features/command-recovery.json`: persisted server cooldowns and active-session retry eligibility for durable Feature commands.
 - `purchases/outcome-commit.json`: one purchase outcome committer across StoreKit and host-delegate sources.
 - `ir/eval-vectors.json` and `ir/response-field-conformance.json`: expression and buffered-response evaluation used by Journey controls.
+
+- `runtime/forms-saves/goals/`: F5 goals from publisher `81fa73c87f0638d151d0a4082fbcab1cd61ec73c`. The unchanged source and oracle qualify ordered native list snapshot/recovery. SDK timed-wait persistence remains its own proof; this fixture has no row-remove event, forms or saves.

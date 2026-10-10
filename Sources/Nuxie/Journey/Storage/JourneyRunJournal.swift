@@ -14,19 +14,17 @@ struct JourneyRun {
     struct Park {
         let wakeAt: Date?
         let anchorAt: Date?
+        var candidateEvents: [JourneyControlExecutor.Event]? = nil
         var pendingEvent: JourneyControlExecutor.Event?
-        var pendingResponsesChanged: Bool
 
         init(
             wakeAt: Date?,
             anchorAt: Date? = nil,
-            pendingEvent: JourneyControlExecutor.Event? = nil,
-            pendingResponsesChanged: Bool = false
+            pendingEvent: JourneyControlExecutor.Event? = nil
         ) {
             self.wakeAt = wakeAt
             self.anchorAt = anchorAt
             self.pendingEvent = pendingEvent
-            self.pendingResponsesChanged = pendingResponsesChanged
         }
     }
     struct Completion {
@@ -63,8 +61,19 @@ struct JourneyRun {
         let invocationId: String
         let source: ScreenEmissionSource
         let context: ArmedJourney.Context
-        let responsesChanged: Bool
         let items: [Item]
+    }
+
+    struct PendingCommerce: Codable, Sendable {
+        let stepId: String
+        let effectId: String
+        let context: ArmedJourney.Context
+        let placementId: String?
+    }
+
+    struct PendingCommerceOutcome: Codable, Sendable {
+        let effectId: String
+        let event: JourneyControlExecutor.Event
     }
 
     let journeyId: String
@@ -80,18 +89,22 @@ struct JourneyRun {
     var startedQueued = false
     var stepId: String
     var park: Park?
+    var nativeSnapshot: ExperienceRunSnapshot? = nil
     var context: ArmedJourney.Context
     var outputs = ArmedJourney.Context(event: [:], responses: [:])
     /// Stable effect identities claimed before any host-visible side effect.
     /// A claimed effect is deliberately not a resume point: process death
     /// after this write abandons the run instead of replaying the effect.
     var effectReceipts: [String: String] = [:]
+    var pendingCommerce: PendingCommerce? = nil
+    var authoredCloseOutcome: String? = nil
+    var pendingCommerceOutcome: PendingCommerceOutcome? = nil
     /// Experiment decisions survive until a selected variant reaches a visible
     /// presentation. A stable event identity makes post-show reporting
     /// idempotent across retries and process recovery.
     var experimentExposures: [ExperimentExposure] = []
-    /// A renderer invocation first records its answers and ordinary stable
-    /// events here in one file replacement. EventLog then consumes these IDs;
+    /// A renderer invocation first records its ordinary stable events here
+    /// in one file replacement. EventLog then consumes these IDs;
     /// a crash can replay them without replaying the screen action.
     var pendingPresentationPublication: PendingPresentationPublication?
     var completion: Completion?
@@ -145,7 +158,7 @@ enum JourneyJournalError {
 }
 
 /// The leg's retry state and reentry checklist share one atomic snapshot. The
-/// existing event database remains the sole delivery queue. Nothing in this
+/// existing event database remains the sole event delivery queue. Nothing in this
 /// journal reads, migrates, or deletes event history or commerce evidence.
 struct JourneyRunJournal {
     fileprivate struct Snapshot {
@@ -155,9 +168,11 @@ struct JourneyRunJournal {
         var stateArmReceipts: Set<JourneyStateArmReceipt> = []
         var conversionWatches: [String: JourneyConversionWatch] = [:]
         var conversionReceipts: [String: Int] = [:]
+        var responseSaves: JourneyResponseSaveState?
     }
 
     let distinctId: String
+    private let saveNamespace: String
     private let root: URL
     private let file: URL
     private let releasePins: JourneyReleasePinStore
@@ -178,6 +193,7 @@ struct JourneyRunJournal {
         beforePersist: (@Sendable () throws -> Void)? = nil
     ) throws {
         self.distinctId = distinctId
+        self.saveNamespace = storageScope.conversionNamespace
         self.beforePersist = beforePersist
         let root = directory.appendingPathComponent("journey-journal-v2", isDirectory: true)
         self.root = root
@@ -387,6 +403,185 @@ struct JourneyRunJournal {
         }
     }
 
+    func reserveResponseSave(
+        run: JourneyRun,
+        formName: String,
+        answers: ExactJSONObject<JourneyReleaseJSONValue>,
+        queued: Bool,
+        admission: JourneyCommitAdmission? = nil
+    ) async throws -> JourneyResponseSave {
+        let distinctId = distinctId
+        let namespace = saveNamespace
+        let reserve: @Sendable (inout Snapshot) throws -> JourneyResponseSave = { state in
+            var saves = state.responseSaves ?? .init(namespace: namespace, distinctId: distinctId)
+            guard saves.namespace == namespace,
+                  saves.distinctId.utf16.elementsEqual(distinctId.utf16) else {
+                throw JourneyResponseSaveError.wrongOwner
+            }
+            guard state.runs[run.id]?.startedEventId == run.startedEventId
+                    || saves.journeys[run.journeyId]?[formName] != nil else {
+                throw JourneyResponseSaveError.wrongOwner
+            }
+            var forms = saves.journeys[run.journeyId] ?? [:]
+            var lane = forms[formName] ?? .init()
+            guard lane.sequence < JourneyResponseSave.maximumSequence else {
+                throw JourneyResponseSaveError.sequenceExhausted
+            }
+            lane.sequence += 1
+            let sheet = JourneyResponseSave(distinctId: distinctId, journeyId: run.journeyId,
+                experienceId: run.reference.experienceId, experienceVersionId: run.reference.versionId,
+                formName: formName, sequence: lane.sequence, answers: answers)
+            if queued { lane.pending = sheet; lane.retry = nil }
+            lane.display = .saving(sequence: sheet.sequence)
+            forms[formName] = lane
+            saves.journeys[run.journeyId] = forms
+            state.responseSaves = saves
+            return sheet
+        }
+        if let admission {
+            guard let sheet = try await updateIfCurrent(admission, reserve) else { throw CancellationError() }
+            return sheet
+        }
+        return try await update(reserve)
+    }
+
+    func pendingResponseSaves() async throws -> [JourneyResponseSave] {
+        try await read { state in
+            state.responseSaves?.journeys.values.flatMap { $0.values.compactMap(\.pending) } ?? []
+        }
+    }
+
+    func confirmResponseSave(_ sheet: JourneyResponseSave, storedSequence: Int64) async throws {
+        guard sheet.distinctId.utf16.elementsEqual(distinctId.utf16) else {
+            throw JourneyResponseSaveError.wrongOwner
+        }
+        guard sheet.sequence > 0, storedSequence >= sheet.sequence,
+              storedSequence <= JourneyResponseSave.maximumSequence else {
+            throw JourneyResponseSaveError.invalidReceipt
+        }
+        try await update { state in
+            guard var saves = state.responseSaves,
+                  var forms = saves.journeys[sheet.journeyId],
+                  var lane = forms[sheet.formName] else { throw JourneyResponseSaveError.invalidReceipt }
+            lane.sequence = max(lane.sequence, storedSequence)
+            if lane.display?.sequence == sheet.sequence {
+                lane.display?.finish(.init(code: .saved, sequence: storedSequence))
+            }
+            if let pending = lane.pending, pending.sequence <= sheet.sequence { lane.pending = nil; lane.retry = nil }
+            forms[sheet.formName] = lane
+            saves.journeys[sheet.journeyId] = forms
+            state.responseSaves = saves
+        }
+    }
+
+    func responseSaveDisplays(journeyId: String) async throws -> ExactJSONObject<JourneyResponseSaveDisplay> {
+        try await read { state in
+            var displays: ExactJSONObject<JourneyResponseSaveDisplay> = [:]
+            for (form, lane) in state.responseSaves?.journeys[journeyId] ?? [:] {
+                if let display = lane.display { displays[form] = display }
+            }
+            return displays
+        }
+    }
+
+    func recordWaitingResponseSaveReply(_ sheet: JourneyResponseSave, reply: JourneyResponseSaveReply) async throws {
+        if reply.confirmed {
+            guard let sequence = reply.sequence else { throw JourneyResponseSaveError.invalidReceipt }
+            try await confirmResponseSave(sheet, storedSequence: sequence)
+            return
+        }
+        guard sheet.distinctId.utf16.elementsEqual(distinctId.utf16) else { throw JourneyResponseSaveError.wrongOwner }
+        try await update { state in
+            guard var saves = state.responseSaves, var forms = saves.journeys[sheet.journeyId],
+                  var lane = forms[sheet.formName] else { throw JourneyResponseSaveError.invalidReceipt }
+            if lane.display?.sequence == sheet.sequence { lane.display?.finish(reply) }
+            forms[sheet.formName] = lane
+            saves.journeys[sheet.journeyId] = forms
+            state.responseSaves = saves
+        }
+    }
+
+    var responseSaveNamespace: String { saveNamespace }
+
+    static func recoverResponseSaveOwners(directory: URL, scope: JourneyStorageScope) async throws -> JourneyResponseSaveRecovery {
+        let root = directory.appendingPathComponent("journey-journal-v2", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: root.path) else { return .init(owners: [], needsRetry: false) }
+        return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
+            to: root, lockScope: CacheFilesystemLockScope(cacheRootURL: root)
+        ) {
+            var owners: [String] = []
+            var needsRetry = false
+            for file in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+                where file.pathExtension == "json" {
+                let state: Snapshot
+                do { state = try Self.load(file) }
+                catch { needsRetry = true; continue }
+                guard let saves = state.responseSaves, saves.namespace == scope.conversionNamespace,
+                      file.lastPathComponent == scope.customerDigest(distinctId: saves.distinctId) + ".json",
+                      saves.journeys.values.contains(where: { $0.values.contains { $0.pending != nil } }) else { continue }
+                owners.append(saves.distinctId)
+            }
+            return .init(owners: owners, needsRetry: needsRetry)
+        }
+    }
+
+    func responseSaveAttempts(at now: Date) async throws -> [JourneyResponseSaveAttempt] {
+        let attempts = try await read { state in
+            state.responseSaves?.journeys.values.flatMap { forms in
+                forms.values.compactMap { lane in
+                    lane.pending.map { JourneyResponseSaveAttempt(sheet: $0, retry: lane.retry) }
+                }
+            } ?? []
+        }
+        guard attempts.contains(where: { $0.retry.map { now < $0.observedAt } == true }) else { return attempts }
+        try await update { state in
+            guard var saves = state.responseSaves else { return }
+            for (journey, var forms) in saves.journeys {
+                for (form, var lane) in forms {
+                    lane.retry?.normalizeClock(at: now)
+                    forms[form] = lane
+                }
+                saves.journeys[journey] = forms
+            }
+            state.responseSaves = saves
+        }
+        return try await responseSaveAttempts(at: now)
+    }
+
+    func recordResponseSaveReply(_ sheet: JourneyResponseSave, reply: JourneyResponseSaveReply, at now: Date) async throws -> Bool {
+        if reply.confirmed {
+            guard let sequence = reply.sequence else { throw JourneyResponseSaveError.invalidReceipt }
+            try await confirmResponseSave(sheet, storedSequence: sequence)
+            return false
+        }
+        guard sheet.distinctId.utf16.elementsEqual(distinctId.utf16) else { throw JourneyResponseSaveError.wrongOwner }
+        return try await update { state in
+            guard var saves = state.responseSaves, var forms = saves.journeys[sheet.journeyId],
+                  var lane = forms[sheet.formName], lane.pending?.sequence == sheet.sequence else { return false }
+            var retry = lane.retry ?? .init(attempts: 0, observedAt: now, nextAttemptAt: now,
+                unknownFormSince: nil, lastCode: reply.code)
+            retry.normalizeClock(at: now)
+            retry.attempts = min(64, retry.attempts + 1)
+            retry.observedAt = now
+            retry.lastCode = reply.code
+            if reply.code == .unknownForm, retry.unknownFormSince == nil { retry.unknownFormSince = now }
+            let expired = reply.code == .unknownForm && retry.unknownFormSince.map { now.timeIntervalSince($0) >= 600 } == true
+            let stopped = reply.terminal || expired
+            if stopped {
+                lane.pending = nil
+                lane.retry = nil
+                if lane.display?.sequence == sheet.sequence { lane.display?.finish(reply) }
+            } else {
+                retry.nextAttemptAt = now.addingTimeInterval(min(300, 5 * pow(2, Double(min(6, retry.attempts - 1)))))
+                lane.retry = retry
+            }
+            forms[sheet.formName] = lane
+            saves.journeys[sheet.journeyId] = forms
+            state.responseSaves = saves
+            return stopped
+        }
+    }
+
     func runs() async throws -> [JourneyRun] {
         try await read { $0.runs.values.sorted { $0.startedEventId < $1.startedEventId } }
     }
@@ -497,15 +692,6 @@ struct JourneyRunJournal {
         }
     }
 
-    func recordResponses(_ id: String, values: ExactJSONObject<JourneyReleaseJSONValue>) async throws {
-        try await update { state in
-            guard var run = state.runs[id], run.completion == nil else { throw JourneyJournalError.invalidState }
-            let responses = run.context.responses.merging(values) { _, new in new }
-            run.context = .init(event: run.context.event, responses: responses)
-            state.runs[id] = run
-        }
-    }
-
     @discardableResult
     func stagePresentationPublication(
         _ id: String,
@@ -545,7 +731,6 @@ struct JourneyRunJournal {
     func clearPresentationPublication(
         _ id: String,
         invocationId: String,
-        retainingResponsesChanged: Bool = false,
         admission: JourneyCommitAdmission
     ) async throws -> Bool {
         let mutation: @Sendable (inout Snapshot) throws -> Void = { state in
@@ -557,13 +742,6 @@ struct JourneyRunJournal {
             }
             guard pending.invocationId == invocationId else {
                 throw JourneyJournalError.invalidState
-            }
-            if retainingResponsesChanged {
-                guard var park = run.park else {
-                    throw JourneyJournalError.invalidState
-                }
-                park.pendingResponsesChanged = true
-                run.park = park
             }
             run.pendingPresentationPublication = nil
             state.runs[id] = run
@@ -578,6 +756,7 @@ struct JourneyRunJournal {
         stepId: String,
         context: ArmedJourney.Context,
         checkpoint: JourneyControlExecutor.Checkpoint? = nil,
+        nativeSnapshot: ExperienceRunSnapshot? = nil,
         experimentExposure: JourneyRun.ExperimentExposure? = nil,
         clearingPresentationPublication invocationId: String? = nil,
         admission: JourneyCommitAdmission? = nil
@@ -590,7 +769,8 @@ struct JourneyRunJournal {
             // visit advances, a later loop back must claim a fresh identity.
             run.effectReceipts.removeValue(forKey: run.stepId)
             run.stepId = stepId
-            run.context = context
+            run.context = .init(event: context.event, responses: [:])
+            run.nativeSnapshot = checkpoint == nil ? nil : nativeSnapshot
             if let experimentExposure,
                !run.experimentExposures.contains(where: {
                    $0.experimentId == experimentExposure.experimentId
@@ -702,6 +882,43 @@ struct JourneyRunJournal {
         return true
     }
 
+    /// Preserve events received while restoring a timed wait's native values.
+    func appendParkedCandidate(_ id: String, expectedStepId: String,
+        expectedPark: JourneyRun.Park, event: JourneyControlExecutor.Event,
+        admission: JourneyCommitAdmission) async throws -> JourneyRun.Park? {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.completion == nil,
+                  run.stepId == expectedStepId, var park = run.park,
+                  park.wakeAt == expectedPark.wakeAt, park.anchorAt == expectedPark.anchorAt else {
+                throw JourneyJournalError.invalidState
+            }
+            var candidates = park.candidateEvents ?? []
+            if !candidates.contains(event) { candidates.append(event) }
+            park.candidateEvents = candidates
+            run.park = park
+            state.runs[id] = run
+            return park
+        }
+    }
+
+    @discardableResult
+    func removeParkedCandidates(_ id: String, expectedStepId: String,
+        expectedPark: JourneyRun.Park, evaluated: [JourneyControlExecutor.Event],
+        admission: JourneyCommitAdmission) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.completion == nil,
+                  run.stepId == expectedStepId, var park = run.park,
+                  park.wakeAt == expectedPark.wakeAt, park.anchorAt == expectedPark.anchorAt else {
+                throw JourneyJournalError.invalidState
+            }
+            let remaining = park.candidateEvents?.filter { !evaluated.contains($0) } ?? []
+            park.candidateEvents = remaining.isEmpty ? nil : remaining
+            run.park = park
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
     /// Retains the first event that satisfies a parked rendered wait while the
     /// host is backgrounded. The park remains the resumable checkpoint until
     /// foreground presentation admission opens again.
@@ -729,11 +946,10 @@ struct JourneyRunJournal {
                   park.anchorAt == expectedAnchorAt else {
                 throw JourneyJournalError.invalidState
             }
-            if park.pendingEvent == nil {
-                park.pendingEvent = event
-                run.park = park
-                state.runs[id] = run
-            }
+            if let pending = park.pendingEvent { return pending == event }
+            park.pendingEvent = event
+            run.park = park
+            state.runs[id] = run
             return true
         } ?? false
     }
@@ -760,6 +976,78 @@ struct JourneyRunJournal {
             state.runs[id] = run
             return effectId
         }
+    }
+
+    /// Detach commerce correlation before an authored route moves the cursor.
+    func retainPresentationCommerce(
+        _ id: String, stepId: String, effectId: String, placementId: String?,
+        admission: JourneyCommitAdmission
+    ) async throws -> JourneyRun? {
+        try await updateIfCurrent(admission) { state -> JourneyRun? in
+            guard var run = state.runs[id], run.completion == nil else { return nil }
+            if let pending = run.pendingCommerce {
+                return pending.effectId == effectId ? run : nil
+            }
+            guard run.stepId == stepId, run.effectReceipts[stepId] == effectId else { return nil }
+            run.pendingCommerce = .init(stepId: stepId, effectId: effectId,
+                context: .init(event: run.context.event, responses: [:]), placementId: placementId)
+            state.runs[id] = run
+            return run
+        } ?? nil
+    }
+
+    func recordAuthoredCloseWhileCommercePending(
+        _ id: String, effectId: String, outcome: String, admission: JourneyCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.completion == nil,
+                  run.pendingCommerce?.effectId == effectId else { return false }
+            run.authoredCloseOutcome = outcome
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    /// Take durable ownership before acknowledging an outcome deferred by an authored route.
+    func deferPresentationCommerceOutcome(
+        _ id: String, stepId: String, effectId: String, event: JourneyControlExecutor.Event,
+        admission: JourneyCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state -> Bool in
+            guard var run = state.runs[id], run.completion == nil else { return false }
+            guard run.pendingCommerce.map({ $0.stepId == stepId && $0.effectId == effectId })
+                ?? (run.stepId == stepId && run.effectReceipts[stepId] == effectId) else { return false }
+            if let saved = run.pendingCommerceOutcome { return saved.effectId == effectId }
+            run.pendingCommerceOutcome = .init(effectId: effectId, event: event)
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    /// Consume one correlated terminal result and restore its original route context.
+    func settlePresentationCommerce(
+        _ id: String, stepId: String, effectId: String, nextStepId: String?,
+        admission: JourneyCommitAdmission
+    ) async throws -> JourneyRun? {
+        try await updateIfCurrent(admission) { state -> JourneyRun? in
+            guard var run = state.runs[id], run.completion == nil else { return nil }
+            let pending = run.pendingCommerce
+            guard pending.map({ $0.stepId == stepId && $0.effectId == effectId })
+                ?? (run.stepId == stepId && run.effectReceipts[stepId] == effectId) else { return nil }
+            run.effectReceipts.removeValue(forKey: stepId)
+            run.pendingCommerce = nil
+            run.authoredCloseOutcome = nil
+            run.pendingCommerceOutcome = nil
+            if let nextStepId {
+                run.effectReceipts.removeValue(forKey: run.stepId)
+                run.stepId = nextStepId
+                run.context = .init(event: (pending?.context ?? run.context).event, responses: [:])
+                run.nativeSnapshot = nil
+                run.park = nil
+            }
+            state.runs[id] = run
+            return run
+        } ?? nil
     }
 
     /// Called once on process launch, before any leg executes. Expired waits
@@ -901,6 +1189,8 @@ struct JourneyRunJournal {
     /// The caller must first establish that this wait should wake now.
     func resumeParked(
         _ id: String,
+        expectedStepId: String,
+        expectedPark: JourneyRun.Park,
         admission: JourneyCommitAdmission
     ) async throws -> JourneyRun? {
         let file = file
@@ -910,10 +1200,13 @@ struct JourneyRunJournal {
             lockScope: lockScope
         ) {
             var state = try Self.load(file)
-            guard var run = state.runs[id], run.startedQueued, run.park != nil, run.completion == nil else {
-                throw JourneyJournalError.invalidState
-            }
+            guard var run = state.runs[id], run.startedQueued, run.completion == nil,
+                  run.stepId == expectedStepId, let park = run.park,
+                  park.wakeAt == expectedPark.wakeAt,
+                  park.anchorAt == expectedPark.anchorAt,
+                  park.pendingEvent == expectedPark.pendingEvent else { return nil }
             run.park = nil
+            run.nativeSnapshot = nil
             state.runs[id] = run
             guard try admission.commitJournalIfCurrent({ () -> Void in
                 try beforePersist?()
@@ -1009,7 +1302,11 @@ struct JourneyRunJournal {
         // its selected outputs. Moving rather than copying keeps a
         // maximum-size canonical context within the journal budget.
         run.context = .init(event: [:], responses: [:])
+        run.nativeSnapshot = nil
         run.pendingPresentationPublication = nil
+        run.pendingCommerce = nil
+        run.authoredCloseOutcome = nil
+        run.pendingCommerceOutcome = nil
         run.completion = .init(outcome: outcome, at: at)
     }
 
@@ -1120,9 +1417,13 @@ extension JourneyRun: Codable, Sendable {
         case startedQueued
         case stepId
         case park
+        case nativeSnapshot
         case context
         case outputs
         case effectReceipts
+        case pendingCommerce
+        case authoredCloseOutcome
+        case pendingCommerceOutcome
         case experimentExposures
         case pendingPresentationPublication
         case completion
@@ -1159,6 +1460,7 @@ extension JourneyRun: Codable, Sendable {
         startedQueued = try container.decode(Bool.self, forKey: .startedQueued)
         stepId = try container.decode(String.self, forKey: .stepId)
         park = try container.decodeIfPresent(Park.self, forKey: .park)
+        nativeSnapshot = try container.decodeIfPresent(ExperienceRunSnapshot.self, forKey: .nativeSnapshot)
         context = try container.decode(ArmedJourney.Context.self, forKey: .context)
         outputs = try container.decode(
             ArmedJourney.Context.self,
@@ -1168,6 +1470,9 @@ extension JourneyRun: Codable, Sendable {
             [String: String].self,
             forKey: .effectReceipts
         )
+        pendingCommerce = try container.decodeIfPresent(PendingCommerce.self, forKey: .pendingCommerce)
+        authoredCloseOutcome = try container.decodeIfPresent(String.self, forKey: .authoredCloseOutcome)
+        pendingCommerceOutcome = try container.decodeIfPresent(PendingCommerceOutcome.self, forKey: .pendingCommerceOutcome)
         experimentExposures = try container.decode(
             [ExperimentExposure].self,
             forKey: .experimentExposures
@@ -1197,9 +1502,13 @@ extension JourneyRun: Codable, Sendable {
         try container.encode(startedQueued, forKey: .startedQueued)
         try container.encode(stepId, forKey: .stepId)
         try container.encodeIfPresent(park, forKey: .park)
+        try container.encodeIfPresent(nativeSnapshot, forKey: .nativeSnapshot)
         try container.encode(context, forKey: .context)
         try container.encode(outputs, forKey: .outputs)
         try container.encode(effectReceipts, forKey: .effectReceipts)
+        try container.encodeIfPresent(pendingCommerce, forKey: .pendingCommerce)
+        try container.encodeIfPresent(authoredCloseOutcome, forKey: .authoredCloseOutcome)
+        try container.encodeIfPresent(pendingCommerceOutcome, forKey: .pendingCommerceOutcome)
         try container.encode(experimentExposures, forKey: .experimentExposures)
         try container.encodeIfPresent(
             pendingPresentationPublication,

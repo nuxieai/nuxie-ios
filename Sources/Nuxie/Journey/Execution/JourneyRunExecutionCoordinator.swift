@@ -67,6 +67,13 @@ struct JourneyRunExecutionCoordinator {
         self.journal = journal
     }
 
+    mutating func useNativeValues(
+        _ values: ExactJSONObject<JourneyReleaseJSONValue>,
+        formAnswers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>> = [:]
+    ) {
+        run.context = .init(event: run.context.event, responses: values, formAnswers: formAnswers)
+    }
+
     func command(at now: Date) -> Command {
         guard let step = steps[run.stepId],
               let nowMillis = JourneyTime.milliseconds(now) else {
@@ -101,13 +108,14 @@ struct JourneyRunExecutionCoordinator {
         }
     }
 
-    mutating func commit(_ command: AdvanceCommand) async throws {
-        _ = try await journal.transition(
+    mutating func commit(_ command: AdvanceCommand, admission: JourneyCommitAdmission? = nil) async throws {
+        guard try await journal.transition(
             run.id,
             stepId: command.stepId,
             context: command.context,
-            experimentExposure: command.experimentExposure
-        )
+            experimentExposure: command.experimentExposure,
+            admission: admission
+        ) else { throw JourneyJournalError.invalidState }
         run.stepId = command.stepId
         run.context = command.context
         if let exposure = command.experimentExposure {
@@ -117,12 +125,14 @@ struct JourneyRunExecutionCoordinator {
         checkpoint = nil
     }
 
-    func commit(_ command: ParkCommand) async throws {
+    func commit(_ command: ParkCommand, snapshot: ExperienceRunSnapshot?, admission: JourneyCommitAdmission) async throws {
         _ = try await journal.transition(
             run.id,
             stepId: command.stepId,
             context: run.context,
-            checkpoint: command.checkpoint
+            checkpoint: command.checkpoint,
+            nativeSnapshot: snapshot,
+            admission: admission
         )
     }
 

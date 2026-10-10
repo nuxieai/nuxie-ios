@@ -1,0 +1,93 @@
+{
+  "model": "Experience",
+  "property": "experience",
+  "screens": [
+    "tap",
+    "level",
+    "device"
+  ],
+  "startingValues": {
+    "trip_days": 23,
+    "level": 1
+  },
+  "tap": {
+    "buttonLabel": "Continue",
+    "before": 23,
+    "after": 30
+  },
+  "level": {
+    "inputDefault": 0,
+    "tickValue": 1,
+    "noTickValue": 0,
+    "tickText": "Tick",
+    "nextLabel": "Next"
+  },
+  "qualification": "Release v3 with tap, level and device. Platform first-frame rendering remains a platform check.",
+  "notYetIncluded": [
+    "the six other device values (width, height, fontScale, colorScheme, platform, locale) [D2.51], after the merge (Levi's M7)",
+    "empty screen and tips_seen (C6, C7)",
+    "Journey branches"
+  ],
+  "release": {
+    "schemaVersion": "nuxie.journey-release.v3",
+    "state": {
+      "trip_days": {
+        "type": "number"
+      },
+      "level": {
+        "type": "number"
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "markers": [
+    {
+      "model": "Experience",
+      "property": "trip_days",
+      "marker": "isset:trip_days",
+      "value": 23,
+      "present": true
+    },
+    {
+      "model": "Experience",
+      "property": "level",
+      "marker": "isset:level",
+      "value": 1,
+      "present": true
+    }
+  ],
+  "device": {
+    "global": "env",
+    "properties": [
+      "reduceMotion",
+      "safeArea"
+    ],
+    "safeAreaProperties": [
+      "top",
+      "bottom",
+      "left",
+      "right"
+    ],
+    "startingValues": {
+      "reduceMotion": false,
+      "safeArea/top": 0
+    },
+    "writes": {
+      "reduceMotion": true,
+      "safeArea/top": 59
+    },
+    "before": {
+      "topText": "0",
+      "still": false,
+      "calm": false
+    },
+    "after": {
+      "topText": "59",
+      "still": true,
+      "calm": true
+    },
+    "label": "Device",
+    "offsetDelta": 39
+  }
+}

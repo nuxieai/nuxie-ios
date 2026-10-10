@@ -180,6 +180,9 @@ struct EvalContext {
     /// Values collected by the current Journey run.
     public let responseValues: [String: ScreenEmissionValue]
 
+    /// Native form answers, separate from Experience state.
+    public let formAnswers: [String: [String: ScreenEmissionValue]]
+
     public init(
         now: Date,
         user: IRUserProps? = nil,
@@ -188,7 +191,8 @@ struct EvalContext {
         features: IRFeatureQueries? = nil,
         event: NuxieEvent? = nil,
         journeyId: String? = nil,
-        responseValues: [String: ScreenEmissionValue] = [:]
+        responseValues: [String: ScreenEmissionValue] = [:],
+        formAnswers: [String: [String: ScreenEmissionValue]] = [:]
     ) {
         self.now = now
         self.user = user
@@ -198,5 +202,6 @@ struct EvalContext {
         self.event = event
         self.journeyId = journeyId
         self.responseValues = responseValues
+        self.formAnswers = formAnswers
     }
 }

@@ -3,6 +3,57 @@ import XCTest
 @testable import Nuxie
 
 final class JourneyValuesTests: XCTestCase {
+    func testSlashLeafKeysRemainExactAndSeparateFromFormFields() {
+        let context = ArmedJourney.Context(event: [:], responses: [
+            "profile/minutes": .number(20), "profile/settings/day": .string("2026-10-10"), "top": .number(7)
+        ], formAnswers: ["onboarding": ["minutes": .number(9)]])
+        XCTAssertEqual(JourneyValues.resolve(.responseField("profile/minutes"), context: context), .number(20))
+        XCTAssertEqual(JourneyValues.evaluate(.compare(op: ">", left: .responseField("profile/minutes"), right: .number(15)), context: context), true)
+        XCTAssertEqual(JourneyValues.resolve(.responseField("profile/settings/day"), context: context), .string("2026-10-10"))
+        XCTAssertEqual(JourneyValues.resolve(.responseField("top"), context: context), .number(7))
+        XCTAssertEqual(JourneyValues.resolve(.responseField("minutes", form: "onboarding"), context: context), .number(9))
+        XCTAssertNil(JourneyValues.resolve(.responseField("profile"), context: context))
+    }
+
+    func testFormFieldWithoutAnswersDoesNotReadSameNamedState() async throws {
+        let bytes = Data(#"{"type":"Response.Field","form":"onboarding","key":"trip_days"}"#.utf8)
+        let expression = try JSONDecoder().decode(JourneyValue.self, from: bytes)
+        let context = ArmedJourney.Context(event: [:], responses: ["trip_days": .number(99)])
+        XCTAssertNil(JourneyValues.resolve(expression, context: context))
+        let ir = try JSONDecoder().decode(IRExpr.self, from: bytes)
+        let actual = try await IRInterpreter(ctx: EvalContext(now: Date(), responseValues: ["trip_days": .number(99)])).evalValue(ir)
+        XCTAssertEqual(actual, .null)
+    }
+
+    func testFormQualifiedValuesAndConditionsKeepStateSeparate() async throws {
+        let bytes = Data(#"{"type":"Response.Field","form":"onboarding","key":"trip_days"}"#.utf8)
+        let expression = try JSONDecoder().decode(JourneyValue.self, from: bytes)
+        let ir = try JSONDecoder().decode(IRExpr.self, from: bytes)
+        for (answer, expected) in [(21.0, true), (7.0, false)] {
+            let context = ArmedJourney.Context(event: [:], responses: ["trip_days": .number(99)],
+                formAnswers: ["onboarding": ["trip_days": .number(answer)]])
+            XCTAssertEqual(JourneyValues.evaluate(.compare(op: ">", left: expression, right: .number(14)), context: context), expected)
+            XCTAssertEqual(JourneyValues.resolve(.responseField("trip_days"), context: context), .number(99))
+            XCTAssertNil(JourneyValues.resolve(.responseField("trip_days", form: "unknown"), context: context))
+            let interpreter = IRInterpreter(ctx: EvalContext(now: Date(), responseValues: ["trip_days": .number(99)],
+                formAnswers: ["onboarding": ["trip_days": .number(answer)]]))
+            let actual = try await interpreter.evalValue(ir)
+            XCTAssertEqual(actual, .number(answer))
+            let state = try await interpreter.evalValue(.responseField(key: "trip_days"))
+            XCTAssertEqual(state, .number(99))
+            let missing = try await interpreter.evalValue(.responseField(key: "trip_days", form: "unknown"))
+            XCTAssertEqual(missing, .null)
+            let restored = try JSONDecoder().decode(ArmedJourney.Context.self, from: JSONEncoder().encode(context))
+            XCTAssertTrue(restored.formAnswers.isEmpty)
+            XCTAssertEqual(restored.responses, context.responses)
+        }
+        let empty = ArmedJourney.Context(event: [:], responses: [:], formAnswers: ["onboarding": [:]])
+        XCTAssertNil(JourneyValues.evaluate(.compare(op: ">", left: expression, right: .number(14)), context: empty))
+        XCTAssertEqual(try JSONDecoder().decode(JourneyValue.self, from: JSONEncoder().encode(expression)), expression)
+        let encodedIR = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ir)) as? [String: String])
+        XCTAssertEqual(encodedIR, ["type": "Response.Field", "form": "onboarding", "key": "trip_days"])
+    }
+
     func testContainsHandlesLongRepeatedPrefixes() {
         let prefix = String(repeating: "a", count: 125_000)
         let context = ArmedJourney.Context(event: [:], responses: [:])

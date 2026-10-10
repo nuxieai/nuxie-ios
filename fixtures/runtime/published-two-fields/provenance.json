@@ -1,0 +1,82 @@
+{
+  "publisherSourceCommit": "8cd72f0d43bdfa41c881580a9dc5eab4c5c1e479",
+  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
+  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
+  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
+  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
+  "sha256": "2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563",
+  "sizeBytes": 4907,
+  "publisherWasmSha256": "fd3f5e222eef4bc4483edffbdd6a009e6a793062ac3543dbea956edebefacfb1",
+  "authorityWasmSha256": "5a6e66b556f69100f55bc13d4fa9aa8b9d5ac2dbde4de253f997207825353797",
+  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+  "descriptorSha256": "954c98d426dc5dbe274d4b90a4bbbeb625aaabcaf1b8338072dbb1cb3dfac208",
+  "fonts": [
+    {
+      "location": "system",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "required": true
+    }
+  ],
+  "files": {
+    "NOTES.md": {
+      "sha256": "d58409548715b3f1bb6eeca4cb6ae5f674c5a7d4d126534d0c6a5ddde5041ee4",
+      "sizeBytes": 1952
+    },
+    "expectations.json": {
+      "sha256": "19039431f025097ccc3d9de1f0f8329aca6a4473ec2b350fe9c78613054e7e3a",
+      "sizeBytes": 220
+    },
+    "fonts.json": {
+      "sha256": "623b86599bc9104df48f0b4f14232d0523833d11e46bab5d6b25fe2638b46299",
+      "sizeBytes": 213
+    },
+    "locations.json": {
+      "sha256": "c56a501acffa78bb09f075627dbd15f16cdffcfc7c5bd0c8a0dc46d8134c7c4f",
+      "sizeBytes": 370
+    },
+    "profile.json": {
+      "sha256": "3dcf185dbf50477fa2b6ff02cbb35ea0bfae93464a9953051f3b53aebd334427",
+      "sizeBytes": 8144
+    },
+    "release-entry.json": {
+      "sha256": "16521d38d3aba3cbe9e1a7200f16b3fee311680afebde40e67c0a077a0fbec7a",
+      "sizeBytes": 7181
+    },
+    "release.json": {
+      "sha256": "bb8cd7d8675a0bb3c89bff2977bb2c507e49ab57aa23e2ef906e4bbe3ac39734",
+      "sizeBytes": 7411
+    },
+    "render.json": {
+      "sha256": "c352813cef172f7abe20b3dd789a182e1e787e143975fc5b0698335a80d7a022",
+      "sizeBytes": 3191
+    },
+    "renders/sha256/2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563.nux": {
+      "sha256": "2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563",
+      "sizeBytes": 4907
+    },
+    "screen.riv": {
+      "sha256": "2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563",
+      "sizeBytes": 4907
+    },
+    "source/experience.json": {
+      "sha256": "4719cd59cd84a6b57faf78966e20ba49fa592bdec9653875cc3bcb11d5fa144f",
+      "sizeBytes": 355
+    },
+    "source/screens/input/frame.json": {
+      "sha256": "c783391be8624324606fce86e80f70a879c6475d6e3514a0cdee1dd258926d3d",
+      "sizeBytes": 316
+    },
+    "source/screens/input/index.html": {
+      "sha256": "f29659c61ba5838bc3d4d354efb0b831c61988d3fc8aac8d878715400a18377f",
+      "sizeBytes": 529
+    },
+    "text-inputs.json": {
+      "sha256": "2f41cee3616de3eca32f4c15a09bec053ce2cf885cb6e9c9ffd423f9fc349749",
+      "sizeBytes": 2573
+    }
+  }
+}

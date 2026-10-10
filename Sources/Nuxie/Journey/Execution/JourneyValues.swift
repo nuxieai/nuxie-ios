@@ -1,6 +1,6 @@
 import Foundation
 
-/// Resolves only the leg's declared event and buffered response context. An
+/// Resolves the leg's event context and freshly read native run values. An
 /// absent field is unknown; explicit JSON null stays a known value. In
 /// particular, negation cannot turn an unavailable input into permission.
 enum JourneyValues {
@@ -11,7 +11,9 @@ enum JourneyValues {
         case .number(let value): return .number(value)
         case .string(let value): return .string(value)
         case .eventField(let key): return exactField(key, in: context.event)
-        case .responseField(let key): return exactField(key, in: context.responses)
+        case .responseField(let key, let form):
+            if let form { return context.formAnswers[form].flatMap { exactField(key, in: $0) } }
+            return exactField(key, in: context.responses)
         case .customerField(let key): return exactField(key, in: customer)
         case .array(let items):
             var result: [JourneyReleaseJSONValue] = []

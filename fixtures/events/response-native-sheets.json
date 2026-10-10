@@ -1,0 +1,16 @@
+{
+  "initial": {},
+  "feedback": {
+    "stars": 0,
+    "email": "invalid",
+    "comment": "hello",
+    "interests": [
+      "focus"
+    ]
+  },
+  "onboarding": {
+    "wants_reminder": false,
+    "italian_level": "basics"
+  },
+  "cleared": {}
+}

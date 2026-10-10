@@ -331,6 +331,17 @@ struct JourneyEffectDispatcher {
         return .outlet("next")
     }
 
+    func captureLinkOpened(_ link: ExperienceRendererOpenLinkRequest, request: JourneyDispatchRequest) async -> Bool {
+        guard await requestIsCurrent(request) else { return false }
+        var properties = legAttribution(request)
+        properties["url"] = link.urlString
+        properties["target"] = link.target
+        properties["destination"] = link.destination
+        if let screenId = link.screenId { properties["screen_id"] = screenId }
+        if let instanceId = link.instanceId { properties["instance_id"] = instanceId }
+        return await captureRider(JourneyEvents.linkOpened, properties: properties, request: request)
+    }
+
     private func captureRider(
         _ event: String,
         properties: sending [String: Any],

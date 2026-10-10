@@ -13,7 +13,8 @@ enum ExperienceRuntimeScreenEmission: Equatable, Sendable {
     case effects(source: ScreenEmissionSource, drafts: [ScreenEmissionDraft])
 }
 
-private enum ExperienceRuntimeProjectedEmission {
+enum ExperienceRuntimeProjectedEmission {
+    case link(ExperienceRendererOpenLinkRequest)
     case control(screenId: String, invocation: ScreenActionInvocation)
     case draft(ScreenEmissionDraft, source: ScreenEmissionSource)
 }
@@ -72,7 +73,8 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        frameSources: ExperienceEmissionSources?
     ) async
 
     func experienceScreenViewController(
@@ -80,10 +82,12 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     )
 
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)?
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    )
+    ) async
 
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
@@ -95,6 +99,12 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         _ controller: ExperienceScreenViewController,
         didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput
     )
+}
+
+extension ExperienceScreenViewControllerDelegate {
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)? {
+        { [self, controller] request in await experienceScreenViewController(controller, didRequestOpenLink: request) }
+    }
 }
 
 private enum ExperienceInteractiveScreenControllerError: LocalizedError {
@@ -125,19 +135,25 @@ final class ExperienceScreenViewController: UIViewController {
     private let experience: Experience
     private let artifact: LoadedExperienceArtifact
     private let screen: NativeExperienceScreen
+    private let saveDisplayObserverID = UUID()
+    private let runValues: ExperienceRunValues
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
     private let textInputOverlayBridge = ExperienceTextInputOverlayBridge()
+    private var nativeEditingTarget: ExperienceTextInputOverlayBridge.InputTarget?
+    private var nativeEditingOwnerID: UInt64?
     private let videoCaptionOverlay = ExperienceVideoCaptionOverlay()
     private let videoDecoderPool: ExperienceVideoDecoderPool?
     private var requiresSceneSemantics: Bool {
         artifact.payload.requiredCapabilities.contains("experience-accessibility") ||
             artifact.renderPlan.textInputs.contains {
-                $0.screenId == screenId && $0.editable && $0.editableValueName != nil
+                $0.screenId == screenId && $0.editable
             }
     }
     private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
 
     private var interactiveScreen: ExperienceInteractiveScreen?
+    private let usesSystemDisplayLink: Bool
+    private let acquireDrawable: @MainActor (CAMetalLayer) -> (any CAMetalDrawable)?
     private var presentationLoop: ExperienceRuntimePresentationLoop?
     private var runtimeFailure: Error?
     private var isShuttingDown = false
@@ -145,6 +161,8 @@ final class ExperienceScreenViewController: UIViewController {
     private var contentHidden = false
     private var semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
     private var controllerIsVisible = false
+    private var pressedHardwareKeys: Set<Int> = []
+    private(set) var riveFocusState = NuxieNativeFocusState(hasFocus: false, expectsKeyboardInput: false)
     private var lastPushedFontScale: Double?
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
     private var lifecycleState: ExperienceScreenLifecycleState
@@ -160,10 +178,19 @@ final class ExperienceScreenViewController: UIViewController {
     /// Terminal failures after a successful mount are surfaced here. A queued
     /// SDK mutation can be rejected without poisoning the presentation lane.
     var onRuntimeFailure: ((Error) -> Void)?
+    var onSemanticCapture: ((NuxieNativeSemanticCapture) -> Void)?
+    var hasCompletedLatestFrame: Bool { presentationLoop?.hasCompletedLatestFrame ?? false }
+    var hasDeliveredLatestSemanticFrame: Bool { presentationLoop?.hasDeliveredLatestSemanticFrame ?? false }
 
     weak var delegate: ExperienceScreenViewControllerDelegate?
 
     var screenId: String { screen.screenId }
+    var hasPresentedRuntimeFrame: Bool { didReportFirstPresentation }
+
+    func runtimeSnapshot() async throws -> ExperienceInteractiveViewModelSnapshot {
+        guard let interactiveScreen else { throw ExperienceInteractiveScreenControllerError.unavailable }
+        return try await interactiveScreen.snapshot()
+    }
     var lifecyclePhase: ExperienceScreenLifecyclePhase { lifecycleState.phase }
 
     private var journeyScreen: JourneyScreen? {
@@ -174,14 +201,20 @@ final class ExperienceScreenViewController: UIViewController {
         experience: Experience,
         artifact: LoadedExperienceArtifact,
         screen: NativeExperienceScreen,
+        runValues: ExperienceRunValues = ExperienceRunValues(),
         reduceMotion: Bool,
+        usesSystemDisplayLink: Bool = true,
+        acquireDrawable: @escaping @MainActor (CAMetalLayer) -> (any CAMetalDrawable)? = { $0.nextDrawable() },
         presentationDiagnosticsEnabled: Bool = false,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil,
         delegate: ExperienceScreenViewControllerDelegate?
     ) {
         self.experience = experience
+        self.usesSystemDisplayLink = usesSystemDisplayLink
+        self.acquireDrawable = acquireDrawable
         self.artifact = artifact
         self.screen = screen
+        self.runValues = runValues
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         self.videoDecoderPool = videoDecoderPool
         lifecycleState = ExperienceScreenLifecycleState(reduceMotion: reduceMotion)
@@ -195,6 +228,12 @@ final class ExperienceScreenViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+            name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+            name: UITextField.textDidBeginEditingNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+            name: UITextView.textDidBeginEditingNotification, object: nil)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(contentSizeCategoryDidChange),
@@ -247,13 +286,82 @@ final class ExperienceScreenViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         controllerIsVisible = true
+        if !hasNativeTextFocus(view) { becomeFirstResponder() }
         updatePresentationVisibility()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         controllerIsVisible = false
+        pressedHardwareKeys.removeAll()
         updatePresentationVisibility()
+    }
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    @objc private func clearHardwareKeys() { pressedHardwareKeys.removeAll() }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unhandled = routeHardwarePresses(presses, pressed: true)
+        if !unhandled.isEmpty { super.pressesBegan(unhandled, with: event) }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unhandled = routeHardwarePresses(presses, pressed: false)
+        if !unhandled.isEmpty { super.pressesEnded(unhandled, with: event) }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unhandled = routeHardwarePresses(presses, pressed: false)
+        if !unhandled.isEmpty { super.pressesCancelled(unhandled, with: event) }
+    }
+
+    private func routeHardwarePresses(_ presses: Set<UIPress>, pressed: Bool) -> Set<UIPress> {
+        guard controllerIsVisible else { return presses }
+        var unhandled: Set<UIPress> = []
+        for press in presses.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard let key = press.key else { unhandled.insert(press); continue }
+            let hid = key.keyCode.rawValue
+            if hasNativeTextFocus(view), hid != UIKeyboardHIDUsage.keyboardTab.rawValue {
+                pressedHardwareKeys.remove(hid)
+                unhandled.insert(press)
+                continue
+            }
+            guard pressed || pressedHardwareKeys.contains(hid) else {
+                unhandled.insert(press)
+                continue
+            }
+            let repeatPress = pressed && pressedHardwareKeys.contains(hid)
+            let modifiers = ExperienceHardwareKey.modifiers(key.modifierFlags)
+            let accepted = receiveHardwareKey(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeatPress)
+            if !accepted { unhandled.insert(press) }
+        }
+        return unhandled
+    }
+
+    @discardableResult
+    func receiveHardwareKey(hid: Int, modifiers: UInt8, pressed: Bool, repeated: Bool) -> Bool {
+        defer { if !pressed { pressedHardwareKeys.remove(hid) } }
+        let isTab = hid == UIKeyboardHIDUsage.keyboardTab.rawValue
+        guard controllerIsVisible, isTab || !hasNativeTextFocus(view),
+              hid == UIKeyboardHIDUsage.keyboardTab.rawValue || riveFocusState.hasFocus || pressedHardwareKeys.contains(hid),
+              let input = ExperienceHardwareKey.input(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeated)
+        else { return false }
+        let accepted = receiveFocusInput(input)
+        if pressed && accepted {
+            pressedHardwareKeys.insert(hid)
+            if isTab && hasNativeTextFocus(view) { becomeFirstResponder() }
+        }
+        return accepted
+    }
+
+    @discardableResult
+    func receiveFocusInput(_ input: NuxieNativeFocusInput) -> Bool {
+        presentationLoop?.enqueueFocus(input) ?? false
+    }
+
+    private func hasNativeTextFocus(_ view: UIView) -> Bool {
+        (view.isFirstResponder && view is any UITextInput) || view.subviews.contains { hasNativeTextFocus($0) }
     }
 
     override func viewDidLayoutSubviews() {
@@ -313,12 +421,21 @@ final class ExperienceScreenViewController: UIViewController {
         let preparation = try await artifact.acquired.interactivePreparation.preparation()
         let interactive = try await preparation.openScreen(
             screenID: screenId,
+            runValues: runValues,
             products: artifact.acquired.products,
             pixelWidth: initialWidth,
             pixelHeight: initialHeight,
+            initialReduceMotion: lifecycleState.snapshot.reduceMotion,
+            initialSafeArea: experienceSafeAreaInsets(for: view),
             videoDecoderPool: videoDecoderPool
         )
         interactiveScreen = interactive
+        await runValues.observeSaveDisplays(id: saveDisplayObserverID) { [weak self] in
+            guard let self, !self.isShuttingDown else { return }
+            _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
+                .work(requestsFrame: true) {}
+            })
+        }
 
         let includesTextInputSnapshot = artifact.renderPlan.textInputs.contains {
             $0.screenId == screenId && $0.editable
@@ -349,13 +466,19 @@ final class ExperienceScreenViewController: UIViewController {
             session: interactive.presentationSession(
                 onSemantics: semanticConsumer,
                 onTextFrame: textConsumer,
-                onCaptions: captionConsumer
+                onCaptions: captionConsumer,
+                onFocus: { [weak self] state in self?.riveFocusState = state }
             ) { [weak self] effects in
                 await self?.deliverStep(effects: effects)
             },
             surfaceView: surfaceView,
+            usesSystemDisplayLink: usesSystemDisplayLink,
+            acquireDrawable: acquireDrawable,
             onSessionResult: { [weak self] in
                 guard let self else { return }
+                if let bounds = self.interactiveScreen?.artboardBounds {
+                    self.textInputOverlayBridge.updateArtboardBounds(bounds)
+                }
                 self.delegate?.experienceScreenViewControllerDidAdvance(self)
             },
             onPresentedDrawable: { [weak self] drawable in
@@ -377,6 +500,10 @@ final class ExperienceScreenViewController: UIViewController {
         loop.setPresentationVisible(controllerIsVisible && !contentHidden)
 
         do {
+            let insets = experienceSafeAreaInsets(for: view)
+            try await interactive.updateEnvironment(
+                reduceMotion: lifecycleState.snapshot.reduceMotion, safeArea: insets)
+            lastPushedSafeAreaInsets = insets
             try await loop.start()
             configureTextInputCallbacks()
             bindTextInputs(to: interactive, loop: loop)
@@ -416,6 +543,7 @@ final class ExperienceScreenViewController: UIViewController {
         let task = Task<Void, Never> { @MainActor [weak self] in
             guard let self else { return }
             self.isShuttingDown = true
+            await self.runValues.removeSaveDisplayObserver(id: self.saveDisplayObserverID)
             let loop = self.presentationLoop
             self.presentationLoop = nil
             self.interactiveScreen = nil
@@ -434,6 +562,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func setContentHidden(_ hidden: Bool) {
+        if hidden { clearHardwareKeys() }
         contentHidden = hidden
         if hidden, requiresSceneSemantics { semanticContainer.setActive(false) }
         surfaceView.isHidden = hidden
@@ -548,6 +677,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func hide(reduceMotion: Bool) async {
+        clearHardwareKeys()
         presentationLoop?.setTimelineActive(false)
         let snapshot = lifecycleState.move(
             to: .hidden,
@@ -626,88 +756,18 @@ final class ExperienceScreenViewController: UIViewController {
 
     func syncSafeAreaInsets(force: Bool = false) {
         if force { lastPushedSafeAreaInsets = nil }
-        guard isViewLoaded,
-              !isShuttingDown,
-              runtimeFailure == nil,
-              let defaultViewModelName = journeyScreen?.defaultViewModelName else {
-            return
-        }
-        let viewSize = view.bounds.size
-        let artboardSize = CGSize(width: screen.width, height: screen.height)
-        guard viewSize.width > 0,
-              viewSize.height > 0,
-              artboardSize.width > 0,
-              artboardSize.height > 0 else { return }
-
-        let insets = ExperienceSafeAreaInsetMapper.artboardInsets(
-            deviceInsets: ExperienceSafeAreaInsets(view.safeAreaInsets),
-            viewSize: viewSize,
-            artboardSize: artboardSize
-        )
+        guard isViewLoaded, !isShuttingDown, runtimeFailure == nil,
+              let interactiveScreen, let presentationLoop else { return }
+        let insets = experienceSafeAreaInsets(for: view)
         guard insets != lastPushedSafeAreaInsets else { return }
-        let identity = journeyScreen?.defaultInstanceId
-        let values: [(String, Double)] = [
-            ("safeArea/top", insets.top),
-            ("safeArea/bottom", insets.bottom),
-            ("safeArea/left", insets.left),
-            ("safeArea/right", insets.right),
-        ]
-        let command = ExperienceInteractiveStateCommand.snapshot(values.map {
-            ExperienceInteractiveStateCommand.Value(
-                viewModelName: defaultViewModelName,
-                instanceID: identity,
-                instanceName: nil,
-                path: $0.0,
-                value: .number($0.1)
-            )
-        })
-        if enqueueStateCommand(command, logFailure: false) {
+        if presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+            try await interactiveScreen.updateEnvironment(safeArea: insets)
+            return .work(requestsFrame: true)
+        }, completion: { [weak self] result in
+            if case .failure(let error) = result { self?.handleTerminalFailure(error) }
+        }) {
             lastPushedSafeAreaInsets = insets
         }
-    }
-
-    nonisolated static func responseSetDraft(
-        for input: NativeExperienceTextInput,
-        text: String,
-        snapshot: ExperienceInteractiveViewModelSnapshot? = nil
-    ) throws -> ScreenEmissionDraft? {
-        guard let fieldKey = input.responseFieldKey, !fieldKey.isEmpty else { return nil }
-        guard input.responseCapture == .binding else {
-            return .responseSet(field: fieldKey, value: .string(text))
-        }
-        guard let snapshot else {
-            throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' requires an evaluated response binding")
-        }
-        var owner = snapshot.rootInstanceID
-        let path = ["response", "values", fieldKey]
-        for (index, segment) in path.enumerated() {
-            let matches = snapshot.values.filter { $0.ownerInstanceID == owner && $0.name == segment }
-            guard matches.count == 1 else {
-                throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is missing or ambiguous")
-            }
-            let value = matches[0].value
-            if index < path.count - 1 {
-                guard case .referencedInstance(let child) = value else {
-                    throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding has invalid topology")
-                }
-                owner = child
-                continue
-            }
-            let captured: ScreenEmissionValue
-            switch value {
-            case .number(let number) where number.isFinite: captured = .number(Double(number))
-            case .bool(let boolean): captured = .bool(boolean)
-            case .bytes(let bytes):
-                guard let string = String(data: bytes, encoding: .utf8) else {
-                    throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is not UTF-8")
-                }
-                captured = .string(string)
-            default:
-                throw ExperienceInteractiveScreenError.stateContract("Input '\(input.inputId)' response binding is not a supported scalar")
-            }
-            return .responseSet(field: fieldKey, value: captured)
-        }
-        return nil
     }
 
     func applyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
@@ -723,9 +783,25 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
+    /// Reads the captured field through the same serial lane as input and presentation.
+    func readPresentedFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> String {
+        guard !isShuttingDown, runtimeFailure == nil,
+              let interactiveScreen, let presentationLoop else { throw CancellationError() }
+        return try await withCheckedThrowingContinuation { continuation in
+            presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
+                let value = try await interactiveScreen.readPresentedFieldString(
+                    captureID: captureID, nodeID: nodeID, name: name)
+                return .work(requestsFrame: false) { continuation.resume(returning: value) }
+            }, completion: { result in
+                if case .failure(let error) = result { continuation.resume(throwing: error) }
+            })
+        }
+    }
+
     private func enqueueStateCommand(
         _ command: ExperienceInteractiveStateCommand,
         logFailure: Bool = true,
+        reduceMotion: Bool? = nil,
         requestsFrame: Bool = true,
         completion: (@MainActor @Sendable (Result<Void, Error>) -> Void)? = nil
     ) -> Bool {
@@ -735,6 +811,7 @@ final class ExperienceScreenViewController: UIViewController {
               let presentationLoop else { return false }
         return presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
+                try await interactiveScreen.updateEnvironment(reduceMotion: reduceMotion)
                 let result = try await interactiveScreen.applyStateCommand(command)
                 return .work(requestsFrame: requestsFrame) { [weak self] in
                     await self?.deliverStep(effects: result.effects)
@@ -764,9 +841,10 @@ final class ExperienceScreenViewController: UIViewController {
     private func applySemantics(_ capture: NuxieNativeSemanticCapture) {
         guard !isShuttingDown, !contentHidden, controllerIsVisible,
               let interactiveScreen, let presentationLoop,
-              let transform = ExperienceContainCenterTransform(
+              let transform = ExperienceLayoutTransform(
                 artboardBounds: interactiveScreen.artboardBounds,
                 viewportBounds: surfaceView.bounds) else { return }
+        onSemanticCapture?(capture)
         let nativeControls = textInputOverlayBridge.applySemantics(capture)
         semanticContainer.update(capture: capture, nativeControls: nativeControls, project: { [weak self] node in
             guard let self, let role = NuxieNativeSemanticRole(rawValue: node.role), role != .none else { return nil }
@@ -795,55 +873,17 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func configureTextInputCallbacks() {
-        textInputOverlayBridge.onAcceptedTextChange = { [weak self] input, text in
-            guard let self,
-                  let interactiveScreen = self.interactiveScreen,
+        textInputOverlayBridge.onAcceptedTextChange = { [weak self] _, _ in
+            guard let self, let screen = self.interactiveScreen,
                   let loop = self.presentationLoop else { return }
-            let originatingRun = self.delegate?.screenEmissionRun(for: self)
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
-                // Accepted text reaches the native target before this queued work.
-                // Settle its reverse binding before reading the authoritative source.
-                let step = input.responseCapture == .binding
-                    ? try await interactiveScreen.step(elapsedSeconds: 0) : nil
-                let draftResult: Result<ScreenEmissionDraft?, Error>
-                do {
-                    let snapshot = input.responseCapture == .binding
-                        ? try await interactiveScreen.snapshot() : nil
-                    draftResult = .success(try Self.responseSetDraft(for: input, text: text, snapshot: snapshot))
-                } catch {
-                    draftResult = .failure(error)
-                }
-                return .work(requestsFrame: step != nil) { [weak self] in
-                    guard let self else { return }
-                    if let step { await self.deliverStep(effects: step.effects) }
-                    guard self.semanticInputIsEligible else { return }
-                    let draft: ScreenEmissionDraft?
-                    switch draftResult {
-                    case .success(let value): draft = value
-                    case .failure(let error): self.handleTerminalFailure(error); return
-                    }
-                    guard let draft else { return }
-                    await self.delegate?.experienceScreenViewController(
-                        self,
-                        didEmitScreenEmission: .effects(
-                            source: ScreenEmissionSource(
-                                screenId: input.screenId,
-                                actionId: "text_input:\(input.inputId)",
-                                componentId: input.inputId,
-                                instanceId: nil
-                            ),
-                            drafts: [draft]
-                        ),
-                        originatingRun: originatingRun
-                    )
+                let step = try await screen.step(elapsedSeconds: 0)
+                return .work(requestsFrame: true) { [weak self] in
+                    await self?.deliverStep(effects: step.effects)
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
-                if case .failure(let error) = result {
-                    if input.responseCapture == .binding, !(error is CancellationError) {
-                        self?.handleTerminalFailure(error)
-                    } else {
-                        self?.logRejectedState(error)
-                    }
+                if case .failure(let error) = result, !(error is CancellationError) {
+                    self?.handleTerminalFailure(error)
                 }
             })
         }
@@ -868,7 +908,8 @@ final class ExperienceScreenViewController: UIViewController {
                                 invocation: invocation,
                                 additionalDrafts: []
                             ),
-                            originatingRun: originatingRun
+                            originatingRun: originatingRun,
+                            frameSources: nil
                         )
                     }
                 }
@@ -883,17 +924,82 @@ final class ExperienceScreenViewController: UIViewController {
             && ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView)
     }
 
+    /// Runs only inside the presentation loop's serialized interaction work.
+    private func performNativeEditing(
+        screen: ExperienceInteractiveScreen, loop: ExperienceRuntimePresentationLoop,
+        captureID: UUID?, target: ExperienceTextInputOverlayBridge.InputTarget,
+        point: CGPoint?, text: String? = nil, ending: Bool = false, ownerID: UInt64? = nil
+    ) async throws {
+        func apply(_ step: ExperienceInteractiveStepResult) async {
+            if let state = step.focusState { riveFocusState = state }
+            await deliverStep(effects: step.effects)
+        }
+        if ending {
+            if nativeEditingTarget == target && nativeEditingOwnerID == ownerID {
+                nativeEditingTarget = nil
+                await apply(try await screen.step(focusInputs: [.clear], elapsedSeconds: 0))
+            }
+            return
+        }
+        guard let captureID, let nodeID = target.nodeID else { throw CancellationError() }
+        // Validate the exact presented occurrence before any tap or text input.
+        let source = try await screen.readSemanticText(captureID: captureID, inputID: target.inputID, nodeID: nodeID)
+        if text == nil || nativeEditingTarget != target || nativeEditingOwnerID != source.ownerInstanceID || !riveFocusState.hasFocus || !riveFocusState.expectsKeyboardInput {
+            guard let point else { throw CancellationError() }
+            nativeEditingTarget = nil
+            for pointers in loop.takeNativeEditingTap(at: point) {
+                guard semanticInputIsEligible else { throw CancellationError() }
+                await apply(try await screen.step(pointers: pointers, elapsedSeconds: 0))
+            }
+            guard riveFocusState.hasFocus && riveFocusState.expectsKeyboardInput else { throw CancellationError() }
+            nativeEditingTarget = target
+            nativeEditingOwnerID = source.ownerInstanceID
+        }
+        if let text {
+            let input = artifact.renderPlan.textInputs.first { $0.inputId == target.inputID }
+            let text = ExperienceTextInputLimit.apply(text, maximum: input?.maxLength)
+            var inputs = ExperienceFocusInputQueue()
+            inputs.append(.key(code: 65, modifiers: 8, pressed: true, repeated: false))
+            inputs.append(.key(code: 65, modifiers: 8, pressed: false, repeated: false))
+            if text.isEmpty {
+                inputs.append(.key(code: 259, modifiers: 0, pressed: true, repeated: false))
+                inputs.append(.key(code: 259, modifiers: 0, pressed: false, repeated: false))
+            } else { inputs.append(.text(text)) }
+            while !inputs.isEmpty {
+                guard semanticInputIsEligible else { throw CancellationError() }
+                await apply(try await screen.step(focusInputs: inputs.takeBatch(), elapsedSeconds: 0))
+            }
+        }
+    }
+
     private func bindTextInputs(
         to interactiveScreen: ExperienceInteractiveScreen,
         loop: ExperienceRuntimePresentationLoop
     ) {
+        nativeEditingTarget = nil
+        textInputOverlayBridge.onNativeEditing = { [weak self] captureID, target, point, editing, ownerID, completion in
+            loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork { [weak self] in
+                guard let self else { throw CancellationError() }
+                do {
+                    try await self.performNativeEditing(screen: interactiveScreen, loop: loop,
+                        captureID: captureID, target: target, point: point, ending: !editing, ownerID: ownerID)
+                    return .work(requestsFrame: true) { completion(.accepted) }
+                } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .handleMismatch {
+                    return .work(requestsFrame: true) { completion(.staleCapture) }
+                }
+            }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { result in
+                if case .failure = result { completion(.rejected) }
+            })
+        }
         let semanticWriter: ExperienceTextInputOverlayBridge.SemanticTextWriter? = requiresSceneSemantics
             ? { [weak self] captureID, target, text, completion in
-                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                let point = self?.textInputOverlayBridge.editingPoint(for: target)
+                loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork { [weak self] in
+                    guard let self else { throw CancellationError() }
                     do {
-                        let changed = try await interactiveScreen.setSemanticText(
-                            captureID: captureID, inputID: target.inputID, nodeID: target.nodeID, value: text)
-                        return .work(requestsFrame: changed) { completion(.accepted) }
+                        try await self.performNativeEditing(screen: interactiveScreen, loop: loop,
+                            captureID: captureID, target: target, point: point, text: text)
+                        return .work(requestsFrame: true) { completion(.accepted) }
                     } catch NuxieNativeRuntimeError.callFailed(let diagnostic)
                         where diagnostic.status == .handleMismatch {
                         return .work(requestsFrame: true) { completion(.staleCapture) }
@@ -909,12 +1015,7 @@ final class ExperienceScreenViewController: UIViewController {
             screenID: screenId,
             renderPlan: artifact.renderPlan,
             surfaceView: surfaceView,
-            artboardBounds: CGRect(
-                x: 0,
-                y: 0,
-                width: screen.width,
-                height: screen.height
-            ),
+            artboardBounds: interactiveScreen.artboardBounds,
             semanticTextWriter: semanticWriter,
             semanticContentOffsetWriter: { [weak self] captureID, target, offset, completion in
                 loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
@@ -957,18 +1058,6 @@ final class ExperienceScreenViewController: UIViewController {
                 }, completion: { result in
                     if case .failure(let error) = result { completion(.failure(error)) }
                 })
-            },
-            textWriter: { inputID, text, completion in
-                loop.enqueue(
-                    ExperienceRuntimePresentationQueuedWork {
-                        let didWrite = try await interactiveScreen.setText(
-                            inputID: inputID,
-                            value: text
-                        )
-                        return .work(requestsFrame: didWrite)
-                    },
-                    completion: completion
-                )
             }
         )
     }
@@ -982,44 +1071,103 @@ final class ExperienceScreenViewController: UIViewController {
         })
     }
 
-    private func deliverStep(effects: [ExperienceInteractiveEffect]) async {
+    private var pendingFramePublications = 0
+
+    func deliverStep(effects: [ExperienceInteractiveEffect]) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
+        let openLink = delegate?.captureLinkHandler(for: self)
         var assembler = ExperienceRuntimeScreenEmissionAssembler()
+        var frameSources = ExperienceEmissionSources()
+        var links: [ExperienceRendererOpenLinkRequest] = []
         for effect in effects {
             guard !isShuttingDown, runtimeFailure == nil else { return }
+            if let request = effect.responseSave {
+                frameSources.saves.append(ExperienceFrameSave(request: request, screenID: screenId,
+                    onConfirmed: { [weak self] in
+                        guard let self, let originatingRun,
+                              self.delegate?.screenEmissionRun(for: self) == originatingRun,
+                              !self.isShuttingDown, self.runtimeFailure == nil,
+                              let interactive = self.interactiveScreen,
+                              let path = request.awaitTrigger else { return }
+                        _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
+                            let step = try await interactive.confirmResponseSave(trigger: path)
+                            return .work(requestsFrame: true) { [weak self] in
+                                await self?.deliverStep(effects: step.effects)
+                            }
+                        })
+                    }))
+                continue
+            }
             guard let projected = await route(effect) else { continue }
             switch projected {
+            case .link(let request):
+                links.append(request)
             case .control(let screenId, let invocation):
+                if case .controlAction(_, let event) = effect.kind {
+                    frameSources.control = event.resolvedSource
+                }
                 assembler.appendControl(screenId: screenId, invocation: invocation)
             case .draft(let draft, let draftSource):
+                guard !draft.isReservedEvent else { continue }
+                if case .reportedEvent(let event) = effect.kind {
+                    frameSources.drafts.append(event.resolvedSource)
+                } else {
+                    frameSources.drafts.append(nil)
+                }
                 assembler.appendDraft(draft, source: draftSource)
             }
         }
-        let emission: ExperienceRuntimeScreenEmission?
+        var emission: ExperienceRuntimeScreenEmission?
         switch assembler.assembled() {
         case .failure:
             LogWarning(
                 "ExperienceScreenViewController: rejected native transaction with multiple controls"
             )
-            return
+            emission = nil
         case .success(let assembled):
             emission = assembled
         }
-        if let emission {
-            await delegate?.experienceScreenViewController(
-                self,
-                didEmitScreenEmission: emission,
-                originatingRun: originatingRun
-            )
+        if emission == nil && !frameSources.saves.isEmpty {
+            emission = .effects(source: ScreenEmissionSource(screenId: screenId,
+                actionId: "runtime-save", componentId: nil, instanceId: nil), drafts: [])
+        }
+        let frameLinks = ExperienceFrameLinks {
+            for link in links { await openLink?(link) }
+        }
+        frameSources.frameLinks = frameLinks
+        let publish = { @MainActor [self, delegate, frameSources] in
+            if let emission {
+                await delegate?.experienceScreenViewController(
+                    self,
+                    didEmitScreenEmission: emission,
+                    originatingRun: originatingRun,
+                    frameSources: frameSources
+                )
+            }
+            // JourneyService consumes these before continuing an accepted batch.
+            // Rejected and link-only frames still own their independent links.
+            await frameLinks.perform()
+        }
+        // A link-bearing frame returns before its emission publishes.
+        // The publication gate preserves emission order across frames.
+        if links.isEmpty && pendingFramePublications == 0 {
+            await publish()
+        } else {
+            pendingFramePublications += 1
+            Task { @MainActor in
+                defer { pendingFramePublications -= 1 }
+                await publish()
+            }
         }
     }
 
-    private func route(
+    func route(
         _ effect: ExperienceInteractiveEffect
     ) async -> ExperienceRuntimeProjectedEmission? {
         switch effect.kind {
         case .controlAction(let actionId, let event):
+            guard Set(event.properties.map(\.key)).count == event.properties.count else { return nil }
             let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
             })
@@ -1044,27 +1192,24 @@ final class ExperienceScreenViewController: UIViewController {
             )
         case .reportedEvent(let event):
             resolveExitWaiters(eventName: event.name)
-            let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
+            let properties = Dictionary(event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
-            })
+            }, uniquingKeysWith: { first, _ in first })
             let eventScreenID = Self.stringProperty(
                 ["screenId", "screen_id"],
                 in: properties
             ) ?? screenId
-            let instanceID = Self.stringProperty(
+            let instanceID = event.sourceRejection == nil ? Self.stringProperty(
                 ["instanceId", "instance_id"],
                 in: properties
-            )
+            ) : nil
             if !event.url.isEmpty {
-                delegate?.experienceScreenViewController(
-                    self,
-                    didRequestOpenLink: ExperienceRendererOpenLinkRequest(
-                        urlString: event.url,
-                        target: event.target.isEmpty ? nil : event.target,
-                        screenId: eventScreenID,
-                        instanceId: instanceID
-                    )
-                )
+                return .link(ExperienceRendererOpenLinkRequest(
+                    urlString: event.url,
+                    target: event.target,
+                    screenId: screenId,
+                    instanceId: instanceID
+                ))
             } else if !event.name.isEmpty {
                 return .draft(
                     .event(name: event.name, payload: properties.mapValues(
@@ -1104,19 +1249,6 @@ final class ExperienceScreenViewController: UIViewController {
                 handleTerminalFailure(error)
             }
             return nil
-        case .responseSet(let field, let value):
-            return .draft(
-                .responseSet(
-                    field: field,
-                    value: ScreenEmissionValue(rendererValue: Self.rendererValue(value))
-                ),
-                source: runtimeEmissionSource(for: effect)
-            )
-        case .responseUnset(let field):
-            return .draft(
-                .responseUnset(field: field),
-                source: runtimeEmissionSource(for: effect)
-            )
         case .journeyEvent(let name, let payload),
              .hostCommand(let name, let payload):
             let properties = Self.rendererProperties(payload)
@@ -1195,24 +1327,16 @@ final class ExperienceScreenViewController: UIViewController {
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
-        guard let defaultViewModelName = journeyScreen?.defaultViewModelName else {
-            // Screens without a root ViewModel have no native lifecycle fields
-            // to acknowledge. Their host lifecycle still owns semantic focus.
-            guard interactiveScreen != nil, !isShuttingDown,
-                  semanticFocusLifecycle.completeWrite(write, succeeded: true) else { return nil }
-            updatePresentationVisibility()
-            return write
-        }
         guard !lifecycleWritesUnavailable else { return nil }
-        let instanceID = journeyScreen?.defaultInstanceId
-        let command = snapshot.stateCommand(
-            viewModelName: defaultViewModelName,
-            instanceID: instanceID
-        )
+        // Rootless screens still receive the file's global device values.
+        let command = journeyScreen?.defaultViewModelName.map {
+            snapshot.stateCommand(viewModelName: $0, instanceID: journeyScreen?.defaultInstanceId)
+        } ?? .snapshot([])
         let result: Result<Void, Error> = await withCheckedContinuation { continuation in
             let accepted = enqueueStateCommand(
                 command,
                 logFailure: false,
+                reduceMotion: snapshot.reduceMotion,
                 requestsFrame: false,
                 completion: { continuation.resume(returning: $0) }
             )

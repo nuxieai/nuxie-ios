@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+@testable import NuxieRuntime
 import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
@@ -7,12 +8,377 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testSignedV3NestedObjectPolicyAuthenticatesExactMetadata() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        let url = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("nested-values/state.json")
+        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        root["state"] = state
+        XCTAssertEqual(root["schemaVersion"] as? String, "nuxie.journey-release.v3")
+        let release = try authenticate(sign(JSONSerialization.data(withJSONObject: root)),
+            key: signingKey.publicKey.rawRepresentation, identity: fixture.identity)
+        let carried = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(release.descriptor.state)) as? NSDictionary)
+        XCTAssertEqual(carried, state as NSDictionary)
+    }
+
+    func testSignedFormQualifiedConditionAuthenticates() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+        leg["entryStepId"] = "read-form"
+        leg["steps"] = try JSONSerialization.jsonObject(with: Data(#"""
+        [{"kind":"action","id":"read-form","action":{"type":"condition","branches":[{"id":"long","condition":{"type":"Compare","op":">","left":{"type":"Response.Field","form":"onboarding","key":"trip_days"},"right":{"type":"Number","value":14}}}]},"outlets":{"long":"done","default":"done"}},{"kind":"complete","id":"done","outcome":"continue"}]
+        """#.utf8))
+        leg["routes"] = []
+        root["leg"] = leg
+        let release = try authenticate(sign(JSONSerialization.data(withJSONObject: root)),
+            key: signingKey.publicKey.rawRepresentation, identity: fixture.identity)
+        XCTAssertEqual(release.descriptor.leg.entryStepId, "read-form")
+    }
+
+    func testFormSelectorRejectsMalformedNamesAndOtherFieldKinds() throws {
+        func validate(_ field: [String: Any]) throws {
+            try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(
+                ["type": "send_event", "eventName": "trip", "payload": ["days": field]],
+                path: "action", screenIDs: [], placementIDs: [])
+        }
+        XCTAssertNoThrow(try validate(["type": "Response.Field", "key": "trip_days", "form": "onboarding"]))
+        for form in [NSNull(), 12, "", "bad-form", "form\n", "é"] as [Any] {
+            XCTAssertThrowsError(try validate(["type": "Response.Field", "key": "trip_days", "form": form]))
+        }
+        for form in ["7_form", "true", String(repeating: "x", count: 257)] {
+            XCTAssertNoThrow(try validate(["type": "Response.Field", "key": "trip_days", "form": form]))
+        }
+        for type in ["Event.Field", "Customer.Field"] {
+            XCTAssertThrowsError(try validate(["type": type, "key": "trip_days", "form": "onboarding"]))
+        }
+    }
+
+    func testPublishedF5AuthenticatesExactResponsePolicy() throws {
+        let directory = PublishedRunValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("profile-entry.json")))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        // Qualify these fixture bytes on the locally staged runtime without moving its release pin.
+        let supported = JourneyReleaseSupportedRuntime(
+            currentSdkVersion: "0.1.0",
+            supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+            supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+            sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+            timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+            timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+            supportedCapabilities: ["system-fonts"])
+        let release = try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(entry.envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+        XCTAssertEqual(release.exactDescriptorBytes, bytes)
+        let oracle = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: directory.appendingPathComponent("expectations.json"))) as? [String: Any])
+        let expected = try XCTUnwrap(oracle["release"] as? [String: Any])
+        for name in ["state", "responses", "ruleGroups"] {
+            let actualBytes = try JSONSerialization.data(withJSONObject: XCTUnwrap(root[name]), options: [.sortedKeys])
+            let expectedBytes = try JSONSerialization.data(withJSONObject: XCTUnwrap(expected[name]), options: [.sortedKeys])
+            XCTAssertEqual(actualBytes, expectedBytes, name)
+        }
+    }
+
+    // Opening the published F5 feedback screen prepares its System font, which the
+    // SDK provides only where UIKit does (macOS refuses with unavailableFace).
+    #if canImport(UIKit)
+    func testPublishedF5AwaitSaveCapturesFrameBeforeContinuation() async throws {
+        let directory = PublishedRunValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("profile-entry.json")))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        // Qualify these fixture bytes on the locally staged runtime without moving its release pin.
+        let supported = JourneyReleaseSupportedRuntime(
+            currentSdkVersion: "0.1.0",
+            supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+            supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+            sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+            timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+            timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+            supportedCapabilities: ["system-fonts"])
+        let release = try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(entry.envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("f5-save-\(UUID())")
+        addTeardownBlock { StubURLProtocol.reset(); try? FileManager.default.removeItem(at: cache) }
+        StubURLProtocol.register(matcher: { $0.url?.host == "f5-save.nuxie.test" }) { request in
+            let url = try XCTUnwrap(request.url)
+            let data = try Data(contentsOf: directory.appendingPathComponent(String(url.path.dropFirst())))
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Length": String(data.count),
+                    "Content-Type": url.pathExtension == "otf" ? "font/otf" : "application/vnd.nuxie.scene"])), data)
+        }
+        let store = JourneyReleaseAcquisitionStore(cacheDirectory: cache,
+            urlSession: TestURLSessionProvider.createTestSession())
+        let presentation = try await store.preparePresentation(release: release,
+            delivery: .init(renderBaseUrl: "https://f5-save.nuxie.test/", assetBaseUrl: "https://f5-save.nuxie.test/"),
+            productResolver: { _ in [] })
+        let artifact = try await presentation.artifactLoader(presentation.experience, nil, "scr_screens_sfeedback")
+        let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let screen = try await prepared.openScreen(screenID: "scr_screens_sfeedback", runValues: run,
+            pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await screen.close() }
+        let rootReference = try await screen.rootViewModel()
+        _ = try await screen.mutateState([
+            .setNumber(rootReference, path: "experience/responses:feedback/stars", value: 4),
+        ])
+        _ = try await screen.step(elapsedSeconds: 0)
+        var save: ExperienceResponseSaveRequest?
+        var emittedSent = false
+        // Exercise the published listener. No synthetic save event or host-side confirmation.
+        search: for y in stride(from: Float(1), to: Float(screen.artboardBounds.height), by: 8) {
+            for x in stride(from: Float(1), to: Float(screen.artboardBounds.width), by: 8) {
+                let down = try await screen.step(pointers: [.init(kind: .down, x: x, y: y)], elapsedSeconds: 0)
+                let up = try await screen.step(pointers: [.init(kind: .up, x: x, y: y)], elapsedSeconds: 0)
+                for effect in down.effects + up.effects {
+                    if case .reportedEvent(let event) = effect.kind, event.name == "sent" { emittedSent = true }
+                    if let captured = effect.responseSave, captured.awaitTrigger != nil {
+                        save = captured
+                        break search
+                    }
+                }
+            }
+        }
+        let request = try XCTUnwrap(save, "Published Send must request an awaited save")
+        XCTAssertEqual(request.form, "feedback")
+        XCTAssertEqual(request.answers, ["stars": .number(4)])
+        XCTAssertFalse(emittedSent, "The publisher holds its emit until confirmation")
+        func sentCount(_ effects: [ExperienceInteractiveEffect]) -> Int {
+            effects.filter { effect in
+                if case .reportedEvent(let event) = effect.kind { return event.name == "sent" }
+                return false
+            }.count
+        }
+        for _ in 0..<3 {
+            let idle = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(sentCount(idle.effects), 0)
+        }
+        let confirmed = try await screen.confirmResponseSave(trigger: XCTUnwrap(request.awaitTrigger))
+        var sent = sentCount(confirmed.effects)
+        for _ in 0..<3 {
+            let next = try await screen.step(elapsedSeconds: 0)
+            sent += sentCount(next.effects)
+        }
+        XCTAssertEqual(sent, 1, "Only the confirmed listener continues")
+
+    }
+    #endif
+
+    func testPublishedF4AuthenticatesExactVersionThreePolicy() async throws {
+        try await verifyPublishedF4(disagreeingRow: false)
+    }
+
+    func testSignedNonProductDefaultsCannotOverrideNativeFile() async throws {
+        try await verifyPublishedF4(disagreeingRow: true)
+    }
+
+    private func verifyPublishedF4(disagreeingRow: Bool) async throws {
+        let directory = PublishedRunValuesFixture.directory
+        var bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("profile-entry.json")))
+        if disagreeingRow {
+            var changed = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            changed["viewModelValues"] = [["viewModelName": "Experience", "instanceId": "vmi_experience",
+                "instanceName": "Experience", "path": "trip_days", "value": 999]]
+            bytes = try JSONSerialization.data(withJSONObject: changed, options: [.sortedKeys])
+        }
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        // Qualify these fixture bytes on the locally staged runtime without moving its release pin.
+        let supported = JourneyReleaseSupportedRuntime(
+            currentSdkVersion: "0.1.0",
+            supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+            supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+            sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+            timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+            timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+            supportedCapabilities: ["system-fonts"])
+        let release = try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(disagreeingRow ? sign(bytes) : entry.envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+        XCTAssertEqual(release.exactDescriptorBytes, bytes)
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("f4-release-\(UUID())")
+        defer { StubURLProtocol.reset(); try? FileManager.default.removeItem(at: cache) }
+        StubURLProtocol.register(matcher: { $0.url?.host == "f4.nuxie.test" }) { request in
+            let url = try XCTUnwrap(request.url)
+            let data = try Data(contentsOf: directory.appendingPathComponent(String(url.path.dropFirst())))
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/vnd.nuxie.scene", "Content-Length": String(data.count)])), data)
+        }
+        let store = JourneyReleaseAcquisitionStore(cacheDirectory: cache,
+            urlSession: TestURLSessionProvider.createTestSession())
+        let presentation = try await store.preparePresentation(release: release,
+            delivery: .init(renderBaseUrl: "https://f4.nuxie.test/", assetBaseUrl: "https://f4.nuxie.test/"),
+            productResolver: { _ in [] })
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        for declared in release.descriptor.leg.screens {
+            let artifact = try await presentation.artifactLoader(presentation.experience, nil, declared.id)
+            XCTAssertEqual(artifact.payload.valuePolicy.state.mapValues(\.type),
+                ["trip_days": "number", "level": "number"])
+            // Preparing F4's screens includes its System font, which the SDK provides
+            // only where UIKit does (macOS refuses with unavailableFace).
+            #if canImport(UIKit)
+            let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+            try await prepared.prepareRunValues(run)
+            let values = try await run.journeyValues()
+            XCTAssertEqual(values["trip_days"], .number(23))
+            XCTAssertEqual(values["level"], .number(1))
+            let screen = try await prepared.openScreen(screenID: declared.id, runValues: run,
+                pixelWidth: 393, pixelHeight: 852)
+            _ = try await screen.step(elapsedSeconds: 0)
+            try await screen.close()
+            #endif
+        }
+        XCTAssertEqual(release.descriptor.state.mapValues(\.type), ["trip_days": "number", "level": "number"])
+        XCTAssertTrue(release.descriptor.responses.isEmpty)
+        XCTAssertTrue(release.descriptor.ruleGroups.isEmpty)
+        XCTAssertEqual(Set(release.descriptor.leg.screens.map(\.id)),
+            ["scr_screens_stap", "scr_screens_slevel", "scr_screens_sdevice"])
+        XCTAssertTrue(release.descriptor.leg.routes.contains { $0.eventName == "continue" })
+    }
+
+    func testVersionThreeRequiresValuePolicySections() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        root["state"] = ["days": ["type": "number"], "goals": ["type": "list", "items": ["title": ["type": "string"]]]]
+        root["responses"] = [String: Any]()
+        root["ruleGroups"] = [Any]()
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        for key in ["state", "responses", "ruleGroups"] {
+            var missing = root
+            missing.removeValue(forKey: key)
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(missing), key)
+        }
+        root["state"] = ["days": ["type": "number", "rules": []]]
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+    }
+
+    func testVersionThreeResponsePolicyRecordsAreStrict() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        let rule: [String: Any] = ["model": "Responses:feedback", "property": "stars", "kind": 1,
+            "mode": 0, "number_bound": 1, "text": "", "values": [], "value_count": 0,
+            "picked_property": "", "bound_flags": 0, "minimum": 0, "maximum": 0,
+            "code": "min", "message": "At least one"]
+        let member: [String: Any] = ["property": "stars", "errors_path": "errors/stars",
+            "item_model": "ResponseError", "code_property": "rule", "message_property": "message"]
+        root["state"] = [String: Any]()
+        root["responses"] = ["feedback": ["title": "Feedback", "model": "Responses:feedback",
+            "fields": [["key": "stars", "label": "Stars", "type": "number", "rules": [rule]]]]]
+        root["ruleGroups"] = [["model": "Responses:feedback", "valid": "valid", "member_count": 1, "members": [member]]]
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        var invalid = root
+        invalid["ruleGroups"] = []
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(invalid))
+        for (key, value) in [("mode", 1), ("value_count", 1), ("minimum", -1), ("maximum", 4_294_967_296)] {
+            var wrong = rule
+            wrong[key] = value
+            invalid = root
+            invalid["responses"] = ["feedback": ["title": "Feedback", "model": "Responses:feedback",
+                "fields": [["key": "stars", "label": "Stars", "type": "number", "rules": [wrong]]]]]
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(invalid), key)
+        }
+    }
+
     func testRejectsRetiredReleaseWireVersion() throws {
         let fixture = try golden()
         let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         root["schemaVersion"] = "nuxie.journey-release.v1"
         XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+    }
+
+    func testVersionThreeSignatureDomainHardCut() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        root["schemaVersion"] = "nuxie.journey-release.v3"
+        let bytes = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys, .withoutEscapingSlashes])
+        let current = try sign(bytes, domain: "nuxie.journey-release.v3\u{0}")
+        XCTAssertNoThrow(try authenticate(current, key: signingKey.publicKey.rawRepresentation, identity: fixture.identity))
+        let retired = try sign(bytes, domain: "nuxie.journey-release.v2\u{0}")
+        XCTAssertThrowsError(try authenticate(retired, key: signingKey.publicKey.rawRepresentation, identity: fixture.identity))
+    }
+
+    func testVersionThreeNativeInputHardCut() throws {
+        let fixture = try golden(entryKey: "renderedEntry", file: "text-input-navigation.json")
+        let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        root["schemaVersion"] = "nuxie.journey-release.v3"
+        var render = try XCTUnwrap(root["render"] as? [String: Any])
+        var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
+        let removed = ["textObjectKey", "textRunObjectKey", "textName", "textRunName", "editableValueName"]
+        for index in inputs.indices {
+            for field in removed { inputs[index].removeValue(forKey: field) }
+            inputs[index]["textInputName"] = "Email editable value"
+        }
+        render["textInputs"] = inputs
+        root["render"] = render
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        var retired = root
+        retired["schemaVersion"] = "nuxie.journey-release.v2"
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(retired))
+        for field in removed {
+            var invalidInputs = inputs
+            invalidInputs[0][field] = "retired"
+            render["textInputs"] = invalidInputs
+            root["render"] = render
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), field)
+        }
+        var missingInputs = inputs
+        missingInputs[0].removeValue(forKey: "textInputName")
+        render["textInputs"] = missingInputs
+        root["render"] = render
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+        var boundedInputs = inputs
+        boundedInputs[0]["textInputName"] = String(repeating: "x", count: 256)
+        render["textInputs"] = boundedInputs
+        root["render"] = render
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/native-input-admission.json")
+        let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
+            var candidateInputs = inputs
+            candidateInputs[0]["textInputName"] = item["value"]
+            render["textInputs"] = candidateInputs
+            root["render"] = render
+            let name = try XCTUnwrap(item["name"] as? String)
+            if item["valid"] as? Bool == true {
+                XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name)
+            }
+        }
     }
 
     func testSharedNuxOnlySceneAdmission() throws {
@@ -217,12 +583,12 @@ final class JourneyReleaseTests: XCTestCase {
             (["actionEvent": "return"], true),
             (["declarativeActionId": "capture-duration"], true),
             (["actionEvent": "return", "declarativeActionId": "capture-duration"], true),
-            (["editableValueName": "duration-input"], true),
-            (["editableValueName": String(repeating: "a", count: 256)], true),
-            (["editableValueName": ""], false),
-            (["editableValueName": String(repeating: "a", count: 257)], false),
-            (["editableValueName": 1], false),
-            (["editableValueName": NSNull()], false),
+            (["textInputName": "duration-input"], true),
+            (["textInputName": String(repeating: "a", count: 256)], true),
+            (["textInputName": ""], false),
+            (["textInputName": String(repeating: "a", count: 257)], false),
+            (["textInputName": 1], false),
+            (["textInputName": NSNull()], false),
             (["actionEvent": "change"], false),
             (["actionEvent": 1], false),
             (["actionEvent": NSNull()], false),
@@ -265,7 +631,7 @@ final class JourneyReleaseTests: XCTestCase {
             var root = source
             var render = try XCTUnwrap(root["render"] as? [String: Any])
             var inputs = try XCTUnwrap(render["textInputs"] as? [[String: Any]])
-            inputs[0]["editableValueName"] = "duration-input"
+            inputs[0]["textInputName"] = "duration-input"
             inputs[0]["secureTextEntry"] = secure
             render["textInputs"] = inputs
             render["assets"] = []
@@ -298,7 +664,7 @@ final class JourneyReleaseTests: XCTestCase {
             let screenID = try XCTUnwrap(inputs[0]["screenId"] as? String)
             let artifact = try await presentation.artifactLoader(presentation.experience, nil, screenID)
             let input = try XCTUnwrap(artifact.payload.renderPlan.textInputs.first)
-            XCTAssertEqual(input.editableValueName, "duration-input")
+            XCTAssertEqual(input.textInputName, "duration-input")
             XCTAssertEqual(input.secureTextEntry, secure)
             XCTAssertEqual(artifact.sceneBytes, scene)
         }
@@ -340,6 +706,23 @@ final class JourneyReleaseTests: XCTestCase {
         ]]
         root["leg"] = leg
         XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+    }
+
+    func testAcceptsOpenLinkAfterHostDismissalAndWithoutScreens() throws {
+        for entry in ["entry", "renderedEntry"] {
+            let fixture = try golden(entryKey: entry)
+            let bytes = try XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))
+            var root = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+            leg["entryStepId"] = "link"
+            leg["steps"] = [
+                ["kind": "action", "id": "link", "action": ["type": "open_link", "url": ["type": "String", "value": "https://example.test"], "target": "in_app"], "outlets": ["next": "done"]],
+                ["kind": "complete", "id": "done", "outcome": "continue"]
+            ]
+            leg["routes"] = [["host": ["kind": "journey"], "eventName": "host_dismissed", "entryStepId": "link"]]
+            root["leg"] = leg
+            XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        }
     }
 
     func testRejectsPresentationActionInScreenlessLeg() throws {

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://nuxie.com/schema/experience/1.json",
+  "entry": {
+    "steps": [
+      {
+        "type": "navigate",
+        "screen": "screens/tap"
+      }
+    ],
+    "trigger": {
+      "type": "event",
+      "eventName": "$app_opened"
+    },
+    "frequency": {
+      "type": "every_match"
+    }
+  },
+  "state": {
+    "trip_days": {
+      "type": "number",
+      "default": 23
+    },
+    "level": {
+      "type": "number",
+      "default": 1
+    }
+  },
+  "journey": [
+    {
+      "screen": "screens/tap",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/level"
+        }
+      ]
+    },
+    {
+      "screen": "screens/level",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/device"
+        }
+      ]
+    }
+  ]
+}

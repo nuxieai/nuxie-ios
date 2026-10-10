@@ -1,0 +1,10 @@
+{
+  "$schema": "https://nuxie.com/schema/frame/1.json",
+  "isComponent": true,
+  "props": {
+    "picked": {
+      "type": "number",
+      "default": 0
+    }
+  }
+}

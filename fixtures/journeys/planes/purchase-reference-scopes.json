@@ -74,29 +74,6 @@
       "instanceId": "secondary"
     },
     {
-      "name": "explicit relative uses occurrence",
-      "reference": {
-        "ref": {
-          "kind": "path",
-          "path": "product.placementId",
-          "isRelative": true
-        }
-      },
-      "expected": "golden:secondary",
-      "instanceId": "secondary"
-    },
-    {
-      "name": "explicit relative requires occurrence",
-      "reference": {
-        "ref": {
-          "kind": "path",
-          "path": "product.placementId",
-          "isRelative": true
-        }
-      },
-      "expected": null
-    },
-    {
       "name": "explicit absolute without occurrence",
       "reference": {
         "ref": {
@@ -106,31 +83,6 @@
         }
       },
       "expected": "golden:monthly"
-    },
-    {
-      "name": "relative rejects detached occurrence",
-      "reference": {
-        "ref": {
-          "kind": "path",
-          "path": "product.placementId",
-          "isRelative": true
-        }
-      },
-      "instanceId": "retired",
-      "expected": null
-    },
-    {
-      "name": "relative rejects conflicting model",
-      "reference": {
-        "ref": {
-          "kind": "path",
-          "path": "product.placementId",
-          "isRelative": true,
-          "viewModelName": "OtherModel"
-        }
-      },
-      "instanceId": "secondary",
-      "expected": null
     }
   ]
 }

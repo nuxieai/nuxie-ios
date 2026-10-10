@@ -1,4 +1,8 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+import SafariServices
+#endif
 
 /// Host control for the single Journey-owned presentation surface.
 protocol ExperiencePresentationServiceProtocol: AnyObject, Sendable {
@@ -98,8 +102,20 @@ final class ExperiencePresentationService {
     
     private let experienceService: ExperienceServiceProtocol
     private let eventLog: EventCapturing
+    private let identity: IdentityServiceProtocol
     private let windowProvider: WindowProviderProtocol
     
+    #if canImport(UIKit)
+    typealias LinkHandoff = @MainActor @Sendable (URL, UIViewController?) async -> Bool
+    var linkHandoff: LinkHandoff = { url, controller in
+        if let controller {
+            controller.present(SFSafariViewController(url: url), animated: true)
+            return true
+        }
+        return await UIApplication.shared.open(url, options: [:])
+    }
+    #endif
+
     // MARK: - State
     
     internal var currentWindow: PresentationWindowProtocol?
@@ -144,13 +160,55 @@ final class ExperiencePresentationService {
     nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
         experiences: ExperienceServiceProtocol,
-        eventLog: EventCapturing
+        eventLog: EventCapturing,
+        identity: IdentityServiceProtocol
     ) {
         self.windowProvider = windowProvider ?? DefaultWindowProvider()
         self.experienceService = experiences
         self.eventLog = eventLog
+        self.identity = identity
     }
     
+    /// Derive lifecycle state at handoff, including retirement during batch admission.
+    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest? {
+        await openJourneyLink(owner: owner, request: request, originatingController: nil)
+    }
+
+    private func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest,
+                                 originatingController: ExperienceViewController?) async -> ExperienceRendererOpenLinkRequest? {
+        let screenId = request.screenId ?? (ownsJourneyPresentation(owner: owner)
+            ? (currentRuntimeDelegate as? JourneyRuntimeDelegate)?.activeScreenId : nil)
+        var state = ExperienceLinkRouting.State.closed
+        #if canImport(UIKit)
+        var host: UIViewController?
+        if appIsForeground && UIApplication.shared.activeWindowScene != nil {
+            if identity.getDistinctId() == owner.distinctId,
+               let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
+               delegate.presentationFences.isCurrent(identity: identity),
+               ownsJourneyPresentation(owner: owner), let controller = currentExperienceViewController,
+               originatingController == nil || originatingController === controller,
+               let id = currentPresentationID, !presentationTeardownIDs.contains(id),
+               !controller.linkPresentationIsClosing, controller.viewIfLoaded?.window != nil,
+               !controller.isBeingPresented, !controller.isBeingDismissed {
+                var top: UIViewController = controller
+                while let presented = top.presentedViewController { top = presented }
+                if !top.isBeingPresented && !top.isBeingDismissed, top.viewIfLoaded?.window != nil {
+                    state = .settled
+                    host = top
+                }
+            }
+        } else { state = .background }
+        guard let route = ExperienceLinkRouting.route(urlString: request.urlString, target: request.target, state: state),
+              await linkHandoff(route.url, route.destination == "in_app" ? host : nil) else { return nil }
+        #else
+        state = appIsForeground ? .closed : .background
+        guard let route = ExperienceLinkRouting.route(urlString: request.urlString, target: request.target, state: state),
+              await ExperienceLinkRouting.openExternal(request.urlString) else { return nil }
+        #endif
+        return .init(urlString: request.urlString, target: request.target, screenId: screenId,
+                     instanceId: request.instanceId, effectId: request.effectId, destination: route.destination)
+    }
+
     // MARK: - Public API
     
     var isExperiencePresented: Bool {
@@ -425,7 +483,9 @@ final class ExperiencePresentationService {
             return .declined
         }
         defer { reservation?.release() }
-        let runtimeDelegate = JourneyRuntimeDelegate(request: request)
+        let runtimeDelegate = JourneyRuntimeDelegate(request: request, openLink: { [weak self] controller, link in
+            await self?.openJourneyLink(owner: request.owner, request: link, originatingController: controller)
+        })
         do {
             _ = try await presentJourneyExperience(
                 request.release.descriptor.identity.experienceVersionId,
@@ -514,7 +574,8 @@ final class ExperiencePresentationService {
     func resolveJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        source: ScreenEmissionSource?
+        source: ScreenEmissionSource?,
+        eventSource: ExperienceResolvedEventSource?
     ) -> [String: JourneyReleaseJSONValue]? {
         guard ownsCurrentJourneyPresentation(owner),
               let type = JourneyActionType(action: action) else {
@@ -525,7 +586,8 @@ final class ExperiencePresentationService {
               let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
               let placementId = delegate.resolvePresentationString(
                 placementValue,
-                source: source
+                source: source,
+                eventSource: eventSource
               ), !placementId.isEmpty else {
             return nil
         }
@@ -652,18 +714,14 @@ final class ExperiencePresentationService {
                 )
             )
 
-        case .openLink:
-            guard case .string(let url)? = action["url"],
-                  !url.isEmpty,
-                  case .string(let target)? = action["target"] else {
-                return .failed
-            }
-            controller.performOpenLink(urlString: url, target: target)
-            result = .advanced(outlet: "next")
-
         case .dismiss:
-            controller.performDismiss(reason: .userDismissed)
-            result = .handled
+            // The executor persists authored completion before tearing down the
+            // screen. A user-close callback must not replace that outcome.
+            if case .string(let reason)? = action["reason"], !reason.isEmpty {
+                result = .completed(outcome: reason)
+            } else {
+                result = .completed(outcome: "completed")
+            }
 
         default:
             return .failed

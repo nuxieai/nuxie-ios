@@ -94,8 +94,6 @@ enum DeclarativeScreenAction: Equatable, Sendable {
         eventName: String,
         payload: [String: DeclarativeScreenValueSource]
     )
-    case responseSet(field: String, value: DeclarativeScreenValueSource)
-    case responseUnset(field: String)
 }
 
 enum ScreenControlActionBinding: Equatable, Sendable {
@@ -110,8 +108,11 @@ struct ScreenControlActionDefinition: Equatable, Sendable {
 
 enum ScreenEmissionDraft: Equatable, Sendable {
     case event(name: String, payload: [String: ScreenEmissionValue])
-    case responseSet(field: String, value: ScreenEmissionValue)
-    case responseUnset(field: String)
+
+    var isReservedEvent: Bool {
+        if case .event(let name, _) = self { return name.hasPrefix("$") }
+        return false
+    }
 }
 
 struct ScreenScriptActionInput: Equatable, Sendable {
@@ -168,7 +169,6 @@ enum ScreenEmissionDispatchError: Error, Equatable, Sendable {
     case actionIdentityMismatch(expected: String, received: String)
     case declarativeSourceMissing(source: String)
     case invalidEventName(eventName: String)
-    case reservedEventName(eventName: String)
     case scriptActionMissing(actionId: String)
     case scriptExecutionFailed(message: String)
 }
@@ -310,7 +310,11 @@ private actor ScreenEmissionDispatcherState {
             let actionDrafts: [ScreenEmissionDraft]
             switch definition.binding {
             case .declarative(let actions):
-                actionDrafts = try executeDeclarative(actions, invocation: invocation)
+                do {
+                    actionDrafts = try executeDeclarative(actions, invocation: invocation)
+                } catch ScreenEmissionDispatchError.declarativeSourceMissing(let source) where source == "instance_id" {
+                    actionDrafts = []
+                }
             case .script:
                 actionDrafts = try await executeScriptAction(ScreenScriptActionInput(
                     screenId: screenId,
@@ -318,7 +322,7 @@ private actor ScreenEmissionDispatcherState {
                     invocation: invocation
                 ))
             }
-            drafts = actionDrafts + additionalDrafts
+            drafts = (actionDrafts + additionalDrafts).filter { !$0.isReservedEvent }
             try validate(drafts)
         } catch let error as ScreenEmissionDispatchError {
             return .failure(error)
@@ -347,6 +351,7 @@ private actor ScreenEmissionDispatcherState {
         source: ScreenEmissionSource,
         drafts: [ScreenEmissionDraft]
     ) -> Result<ScreenEmissionBatch, ScreenEmissionDispatchError> {
+        let drafts = drafts.filter { !$0.isReservedEvent }
         let batchSequence = nextBatchSequence[run.journeyId, default: 0]
         nextBatchSequence[run.journeyId] = batchSequence + 1
         do {
@@ -417,22 +422,16 @@ private actor ScreenEmissionDispatcherState {
         _ actions: [DeclarativeScreenAction],
         invocation: ScreenActionInvocation
     ) throws -> [ScreenEmissionDraft] {
-        try actions.map { action in
+        try actions.compactMap { action in
             switch action {
             case .emit(let eventName, let payload):
+                guard !eventName.hasPrefix("$") else { return nil }
                 return .event(
                     name: eventName,
                     payload: try payload.mapValues {
                         try resolve($0, invocation: invocation)
                     }
                 )
-            case .responseSet(let field, let source):
-                return .responseSet(
-                    field: field,
-                    value: try resolve(source, invocation: invocation)
-                )
-            case .responseUnset(let field):
-                return .responseUnset(field: field)
             }
         }
     }
@@ -473,9 +472,6 @@ private actor ScreenEmissionDispatcherState {
                 if name.isEmpty {
                     throw ScreenEmissionDispatchError.invalidEventName(eventName: name)
                 }
-                if name.hasPrefix("$") {
-                    throw ScreenEmissionDispatchError.reservedEventName(eventName: name)
-                }
             }
         }
     }
@@ -490,12 +486,6 @@ private actor ScreenEmissionDispatcherState {
         case .event(let eventName, let eventPayload):
             name = eventName
             payload = eventPayload
-        case .responseSet(let field, let value):
-            name = JourneyResponseControlNames.responseSet
-            payload = ["field": .string(field), "value": value]
-        case .responseUnset(let field):
-            name = JourneyResponseControlNames.responseUnset
-            payload = ["field": .string(field)]
         }
         return ScreenEmission(
             id: createId(),

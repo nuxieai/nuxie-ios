@@ -88,12 +88,15 @@ final class ExperienceRuntimePackageSmokeTests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.tap()
 
-        let field = app.textFields["nuxie-text-input-text-input/screen_1/email_input"]
+        let fields = app.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@",
+            "nuxie-text-input-text-input/screen_1/email_input-"))
+        let field = fields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 20), app.debugDescription)
-        XCTAssertEqual(field.value as? String, "levi@nuxie.dev")
+        XCTAssertEqual(fields.count, 1)
+        XCTAssertEqual(field.value as? String, "Ada")
         field.tap()
         field.typeText("x")
-        XCTAssertEqual(field.value as? String, "levi@nuxie.devx")
+        XCTAssertEqual(field.value as? String, "Adax")
         XCTAssertFalse(app.otherElements.matching(NSPredicate(format: "label == %@", "screen_1")).firstMatch.exists)
     }
 

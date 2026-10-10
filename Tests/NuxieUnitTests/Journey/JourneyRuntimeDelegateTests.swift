@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
@@ -18,7 +21,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             startedAt: Date(timeIntervalSince1970: 10),
             startedAtMonotonicTime: 100
         )
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -31,7 +34,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 attempt: attempt,
                 recorder: recorder
             ),
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -112,7 +115,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -121,7 +124,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer-authority"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -148,7 +151,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let reveals = JourneyRevealRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -158,7 +161,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onScreenChanged: { _ in true },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onPresentationRevealed: { _ in
                 await reveals.record()
             },
@@ -220,7 +223,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let gate = JourneyScreenCommitGate()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -229,7 +232,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer-reveal-join"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onPresentationRevealed: { _ in
                 await gate.suspend()
             },
@@ -255,6 +258,16 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertTrue(completion.isCompleted)
     }
 
+    private func frameSource(model: String, value: String, nested: Bool) -> ExperienceResolvedEventSource {
+        let values: [ExperienceInteractiveViewModelSnapshot.Value] = nested
+            ? [.init(ownerInstanceID: 2, propertyIndex: 0, name: "product", value: .referencedInstance(3)),
+               .init(ownerInstanceID: 3, propertyIndex: 0, name: "placementId", value: .bytes(Data(value.utf8)))]
+            : [.init(ownerInstanceID: 2, propertyIndex: 0, name: "placementId", value: .bytes(Data(value.utf8)))]
+        return ExperienceResolvedEventSource(nativeID: 2, snapshot: .init(rootInstanceID: 1,
+            instances: [1, 2, 3].map { .init(id: $0, schemaIndex: 0, valueRange: 0..<0) },
+            values: values), schemaNames: [0: model])
+    }
+
     func testSignedPurchaseScopeChoosesTheDeclaredInstance() async throws {
         for (directory, expected) in [("rendered-purchase-scopes", "plan:lifetime"),
                                       ("rendered-purchase-absolute", "plan:monthly")] {
@@ -263,9 +276,9 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
             let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
             let reference = try XCTUnwrap(release.descriptor.leg.steps.first { $0.id == "purchase" }?.action?["placementId"])
-            let request = JourneyPresentationRequest(release: release, delivery: snapshot.profile.delivery,
+            let request = JourneyPresentationRequest(fences: testPresentationFences(), release: release, delivery: snapshot.profile.delivery,
                 screenId: "screen", owner: .init(journeyId: "journey", distinctId: "customer"),
-                reservation: nil, onEmissionBatch: { _ in true }, onOutcome: { _, _ in true })
+                reservation: nil, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
             let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
             let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
             await delegate.experienceViewController(controller, didChangeScreen: "screen")
@@ -274,8 +287,14 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                     value: "plan:lifetime", source: "runtime", screenId: "screen",
                     instanceId: "plan.second", isTrigger: false))
             let selected = await delegate.resolvePresentationString(reference, source:
-                ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"))
+                ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"),
+                eventSource: frameSource(model: "Plan", value: "plan:lifetime", nested: false))
             XCTAssertEqual(selected, expected, directory)
+            if directory == "rendered-purchase-scopes" {
+                let withoutFrame = await delegate.resolvePresentationString(reference,
+                    source: ScreenEmissionSource(screenId: "screen", actionId: "buy", componentId: "buy", instanceId: "plan.second"))
+                XCTAssertNil(withoutFrame)
+            }
             let ambiguous = JourneyReleaseJSONValue.object(["ref": .object([
                 "kind": .string("path"), "path": .string("placementId"),
                 "viewModelName": .string("Plan"), "isRelative": .bool(false),
@@ -309,7 +328,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -318,7 +337,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -378,14 +397,38 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
-    func testRuntimeDelegateForwardsRendererOpenLinksFromTheActiveScreen() async throws {
+    func testOnlySuccessfulOpensReachTheRunRecorder() async throws {
+        let snapshot = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let recorded = OpenedLinkRecorder()
+        let request = JourneyPresentationRequest(fences: testPresentationFences(), release: release, delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
+            reservation: nil, onLinkOpened: { recorded.append($0) }, onEmissionBatch: { _, _ in true },
+            onOutcome: { _, _ in true })
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request, openLink: { _, link in
+                guard ExperienceLinkRouting.destination(urlString: link.urlString, target: link.target) != nil else { return nil }
+                return link
+            }) }
+        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+        await delegate.experienceViewController(controller, didChangeScreen: "screen_welcome")
+        for url in ["https://example.test/account", "not a url"] {
+            await delegate.experienceViewController(controller, didRequestOpenLink: .init(urlString: url,
+                target: "_self", screenId: "screen_welcome", instanceId: nil))
+        }
+        XCTAssertEqual(recorded.values().map(\.urlString), ["https://example.test/account"])
+        XCTAssertEqual(recorded.values().first?.screenId, "screen_welcome")
+    }
+
+    func testRuntimeDelegateForwardsRendererOpenLinksToTheStateRouter() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)
         let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let recorded = OpenedLinkRecorder()
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -394,11 +437,15 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onLinkOpened: { recorded.append($0) },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
-            JourneyRuntimeDelegate(request: request)
+            JourneyRuntimeDelegate(request: request, openLink: { _, link in
+                guard ExperienceLinkRouting.destination(urlString: link.urlString, target: link.target) != nil else { return nil }
+                return link
+            })
         }
         let controller = await MainActor.run {
             MockExperienceViewController(mockExperienceVersionId: "version_golden")
@@ -427,8 +474,8 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             )
         )
 
-        let links = await MainActor.run { controller.performedOpenLinks }
-        XCTAssertEqual(links.count, 1)
+        let links = recorded.values()
+        XCTAssertEqual(links.count, 2)
         XCTAssertEqual(links.first?.urlString, "https://example.com/account")
         XCTAssertEqual(links.first?.target, "in_app")
     }
@@ -551,7 +598,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -560,7 +607,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -600,7 +647,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         ])
         let screenDismissals = JourneyOutcomeCallRecorder()
         let outcomes = JourneyOutcomeCallRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -616,7 +663,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 )
                 return .completed
             },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, screenId in
                 await outcomes.record(outcome: outcome, screenId: screenId)
                 return true
@@ -660,7 +707,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         ])
         let gate = JourneyScreenCommitGate()
         let calls = JourneyOutcomeCallRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -669,7 +716,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 distinctId: "customer"
             ),
             reservation: nil,
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, screenId in
                 await calls.record(outcome: outcome, screenId: screenId)
                 await gate.suspend()
@@ -715,7 +762,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         ])
         let screenDismissals = JourneyOutcomeCallRecorder()
         let outcomes = JourneyOutcomeCallRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -731,7 +778,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 )
                 return .handled
             },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, screenId in
                 await outcomes.record(outcome: outcome, screenId: screenId)
                 return true
@@ -774,7 +821,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let gate = JourneyScreenCommitGate()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -787,7 +834,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
                 await gate.suspend()
                 return true
             },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         )
         let delegate = await MainActor.run {
@@ -827,7 +874,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             arm.reference.descriptorSha256
         ])
         let recorder = JourneyEmissionBatchRecorder()
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -837,7 +884,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onScreenChanged: { _ in true },
-            onEmissionBatch: { batch in
+            onEmissionBatch: { batch, _ in
                 await recorder.accept(batch)
             },
             onOutcome: { _, _ in true }
@@ -895,7 +942,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -905,7 +952,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onScreenChanged: { _ in false },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, _ in outcome == .abandoned }
         )
         let delegate = await MainActor.run {
@@ -934,7 +981,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         let release = try XCTUnwrap(snapshot.releasesByDigest[
             arm.reference.descriptorSha256
         ])
-        let request = JourneyPresentationRequest(
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: "screen_welcome",
@@ -944,7 +991,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             ),
             reservation: nil,
             onProductsUnavailable: { _ in .rejected },
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { outcome, _ in outcome == .abandoned }
         )
         let delegate = await MainActor.run {
@@ -1053,3 +1100,18 @@ private struct PurchaseReferenceScopes: Decodable {
         let expected: String?
     }
 }
+
+private final class OpenedLinkRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var links: [ExperienceRendererOpenLinkRequest] = []
+    func append(_ link: ExperienceRendererOpenLinkRequest) { lock.withLock { links.append(link) } }
+    func values() -> [ExperienceRendererOpenLinkRequest] { lock.withLock { links } }
+}
+
+#if canImport(UIKit)
+@MainActor
+private final class OccupiedLinkController: MockExperienceViewController {
+    private let occupied = UIViewController()
+    override var presentedViewController: UIViewController? { occupied }
+}
+#endif

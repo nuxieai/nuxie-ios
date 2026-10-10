@@ -29,6 +29,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private weak var hostViewController: UIViewController?
     private let experience: Experience
     private let artifact: LoadedExperienceArtifact
+    private let runValues: ExperienceRunValues
     private let initialScreenID: String
     private let presentationDiagnosticsEnabled: Bool
     private weak var screenDelegate: ExperienceScreenViewControllerDelegate?
@@ -81,6 +82,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     init(
         experience: Experience,
         artifact: LoadedExperienceArtifact,
+        runValues: ExperienceRunValues = ExperienceRunValues(),
         initialScreenID: String? = nil,
         presentationDiagnosticsEnabled: Bool = false,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil,
@@ -101,6 +103,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     ) {
         self.experience = experience
         self.artifact = artifact
+        self.runValues = runValues
         self.initialScreenID = initialScreenID ?? artifact.renderPlan.entry.screenId
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         self.videoDecoderPool = videoDecoderPool
@@ -753,6 +756,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             experience: experience,
             artifact: screenArtifact,
             screen: screen,
+            runValues: runValues,
             reduceMotion: reduceMotionEnabled,
             presentationDiagnosticsEnabled: presentationDiagnosticsEnabled,
             videoDecoderPool: videoDecoderPool,

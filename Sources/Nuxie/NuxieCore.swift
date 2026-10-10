@@ -195,7 +195,8 @@ final class NuxieCore: @unchecked Sendable {
     let defaultExperiencePresentation = ExperiencePresentationService(
       windowProvider: nil,
       experiences: experiences,
-      eventLog: eventLog
+      eventLog: eventLog,
+      identity: identity
     )
     let experiencePresentation = overrides.experiencePresentation
       ?? defaultExperiencePresentation
@@ -214,6 +215,9 @@ final class NuxieCore: @unchecked Sendable {
         // The profile transport supplies the stable authenticated app scope.
         // The publishable key is rotatable and must not address durable runs.
         storageScope: nil,
+        responseSaveDelivery: releasePaths.admission.map {
+          JourneyResponseSaveDelivery(directory: $0, transport: api, clock: dateProvider, sleeper: sleepProvider)
+        },
         featureAccess: { featureId in
           await builtFeatureService.get().getForJourney(featureId: featureId, resolveUnknown: false)
         },
@@ -230,6 +234,9 @@ final class NuxieCore: @unchecked Sendable {
           appActionHandler: appActionHandler
         ),
         presenter: journeyPresentation,
+        prepareNativeValues: { values, release, delivery, artifacts in
+          try await releaseStore.prepareRunValues(values, release: release, delivery: delivery, pinnedArtifacts: artifacts)
+        },
         presentationTrace: journeyPresentationTrace,
         pinnedReleaseAuthenticator: { entry, reference in
           try await journeyProfiles.authenticatePinnedRelease(

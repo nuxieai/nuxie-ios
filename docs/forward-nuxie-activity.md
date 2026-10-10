@@ -55,6 +55,7 @@ These fields do not change the flat activity name or properties.
 | Internal source | Public activity |
 | --- | --- |
 | `$experience_shown` | `experienceShown` |
+| `$link_opened` | `linkOpened` |
 | `$experience_dismissed` | `experienceDismissed` |
 | `$experience_errored` | `experienceErrored` |
 | `$journey_leg_started` | `journeyStarted` |
@@ -93,3 +94,18 @@ stable completion report and are omitted from the flat activity view.
 `beforeSend` governs every event path, including stable Journey reports. Returning `nil` suppresses the wire event, history row, and activity callback together. Renaming an event does not change its typed public activity case.
 
 Pending wire delivery may retry after restart, but retries do not replay `nuxieDidEmit`. A process exit between durable capture and callback can lose the callback, which is why the contract is at most once rather than guaranteed delivery.
+
+`$link_opened` forwards as `linkOpened` (`link_opened`), with URL, actual destination, optional original target, optional screen/source alias, and the same Journey leg attribution as the lifecycle activities.
+
+The link record includes `destination` (`in_app` or `external`) and retains the authored `target` separately. A Journey link with no owned Experience opens externally. Invalid step inputs and unavailable handlers advance `next` without opening or recording.
+
+Links use the same state table for runtime hrefs and Journey steps. A settled, owned
+Experience opens web links in-app from its topmost controller for an omitted target,
+`_self`, `_parent`, `_top`, or `in_app`. `_blank` and `external` use the browser.
+Closing, closed, and screenless Experiences use the browser or system for every link.
+Background apps open and record nothing. Non-web schemes go to the system only when
+available. Broken Journey link steps advance without opening, recording, or dismissing.
+`$link_opened` and the public `linkOpened` activity include the actual `destination`
+(`in_app` or `external`) and the original optional `target`. Successful Journey links
+record under the step identity before `$journey_leg_completed`.
+A link already in flight still opens externally after identity change or current-customer profile clear, but its revoked run records no event.

@@ -1,0 +1,44 @@
+{
+  "suite": "events/runtime-relative-values",
+  "version": 1,
+  "root": 1,
+  "rows": [
+    2,
+    3,
+    4
+  ],
+  "values": {
+    "1": "root-placement",
+    "2": "first-placement",
+    "3": "second-placement",
+    "4": "third-placement"
+  },
+  "cases": [
+    {
+      "name": "second row",
+      "source": 3,
+      "expected": "second-placement",
+      "viewModelName": "Row"
+    },
+    {
+      "name": "root-only frame",
+      "source": 1,
+      "expected": "root-placement",
+      "viewModelName": "Root"
+    },
+    {
+      "name": "absent native source",
+      "source": 99,
+      "expected": null,
+      "viewModelName": "Row"
+    },
+    {
+      "name": "conflicting model",
+      "source": 3,
+      "viewModelName": "OtherModel",
+      "expected": null
+    }
+  ],
+  "rootModelName": "Root",
+  "rowModelName": "Row"
+}

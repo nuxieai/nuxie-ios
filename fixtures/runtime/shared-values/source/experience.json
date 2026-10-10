@@ -1,0 +1,37 @@
+{
+  "$schema": "https://nuxie.com/schema/experience/1.json",
+  "entry": {
+    "steps": [
+      {
+        "type": "navigate",
+        "screen": "screens/first"
+      }
+    ]
+  },
+  "state": {
+    "trip": {
+      "type": "string",
+      "default": "two weeks"
+    },
+    "trip_days": {
+      "type": "number",
+      "default": 23
+    },
+    "wants_reminder": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "journey": [
+    {
+      "screen": "screens/first",
+      "on": "continue",
+      "steps": [
+        {
+          "type": "navigate",
+          "screen": "screens/long"
+        }
+      ]
+    }
+  ]
+}

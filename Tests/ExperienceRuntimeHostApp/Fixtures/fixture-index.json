@@ -51,6 +51,13 @@
         "video.playback.v1",
         "accessible-captions"
       ]
+    },
+    {
+      "id": "published-two-fields",
+      "experienceId": "experience_two_fields",
+      "capabilities": [
+        "native-text-input"
+      ]
     }
   ]
 }

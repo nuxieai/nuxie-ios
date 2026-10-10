@@ -47,15 +47,18 @@ struct ExperienceRuntimePresentationRenderOutcome: Equatable, Sendable {
 struct ExperienceRuntimePresentationStep: Equatable, Sendable {
     let elapsedSeconds: Float
     let pointers: [ExperienceInteractivePointerEvent]
+    let focusInputs: [NuxieNativeFocusInput]
     let requestsRender: Bool
 
     init(
         elapsedSeconds: Float,
         pointers: [ExperienceInteractivePointerEvent],
+        focusInputs: [NuxieNativeFocusInput] = [],
         requestsRender: Bool = true
     ) {
         self.elapsedSeconds = elapsedSeconds
         self.pointers = pointers
+        self.focusInputs = focusInputs
         self.requestsRender = requestsRender
     }
 }
@@ -97,8 +100,18 @@ private struct ExperienceRuntimePresentationPointerQueue {
         }
     }
 
-    mutating func takeBatch() -> [ExperienceInteractivePointerEvent] {
-        let count = min(events.count, ExperienceRuntimePointerInputRouter.maximumActivePointers)
+    mutating func takeNativeTap(at point: CGPoint) -> [ExperienceInteractivePointerEvent] {
+        // Already queued native editing owns this reserved two-event slot.
+        // Later scene pointers stay queued until their ordinary frame.
+        events.insert(contentsOf: [
+            .init(kind: .down, x: Float(point.x), y: Float(point.y), pointerID: 0),
+            .init(kind: .up, x: Float(point.x), y: Float(point.y), pointerID: 0),
+        ], at: 0)
+        return takeBatch(maximumCount: 2)
+    }
+
+    mutating func takeBatch(maximumCount: Int = ExperienceRuntimePointerInputRouter.maximumActivePointers) -> [ExperienceInteractivePointerEvent] {
+        let count = min(events.count, maximumCount)
         let batch = Array(events.prefix(count))
         events.removeFirst(count)
         return batch
@@ -282,6 +295,7 @@ enum ExperienceRuntimePresentationSessionOperation: @unchecked Sendable {
     /// render reached native code and therefore never synthesizes completion.
     case render(
         ExperienceRuntimePresentationDrawableState,
+        layoutScaleFactor: Float,
         completion: ExperienceRuntimePresentationFrameCompletion
     )
     case queued(ExperienceRuntimePresentationQueuedWork)
@@ -348,12 +362,12 @@ struct ExperienceRuntimePresentationSession: Sendable {
         ExperienceRuntimePresentationSessionOperation
     ) async throws -> ExperienceRuntimePresentationSessionResult
 
-    let artboardBounds: CGRect
+    let artboardBounds: @Sendable () -> CGRect
     let observesEveryPresentation: Bool
     private let performOperation: Perform
 
     init(
-        artboardBounds: CGRect = .zero,
+        artboardBounds: @escaping @Sendable () -> CGRect = { .zero },
         observesEveryPresentation: Bool = false,
         perform: @escaping Perform
     ) {
@@ -378,10 +392,11 @@ extension ExperienceInteractiveScreen {
         onSemantics: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)? = nil,
         onTextFrame: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)? = nil,
         onCaptions: (@MainActor @Sendable ([ExperienceInteractiveVideoCaption]) -> Void)? = nil,
+        onFocus: (@MainActor @Sendable (NuxieNativeFocusState) -> Void)? = nil,
         onStep: @escaping @MainActor @Sendable ([ExperienceInteractiveEffect]) async -> Void
     ) -> ExperienceRuntimePresentationSession {
         let screen = self
-        return ExperienceRuntimePresentationSession(artboardBounds: artboardBounds,
+        return ExperienceRuntimePresentationSession(artboardBounds: { screen.artboardBounds },
             observesEveryPresentation: onSemantics != nil || onTextFrame != nil || onCaptions != nil) { operation in
             switch operation {
             case .copyMetalDevice:
@@ -393,18 +408,21 @@ extension ExperienceInteractiveScreen {
             case .step(let step):
                 let result = try await screen.step(
                     pointers: step.pointers,
+                    focusInputs: step.focusInputs,
                     elapsedSeconds: step.elapsedSeconds,
                     capturesTextLayout: onTextFrame != nil
                 )
                 return .session {
+                    if let state = result.focusState { onFocus?(state) }
                     await onStep(result.effects)
                 }
             case .resize(let size):
                 return .renderer(Self.presentationOutcome(try await screen.resize(
                     pixelWidth: size.pixelWidth,
-                    pixelHeight: size.pixelHeight
+                    pixelHeight: size.pixelHeight,
+                    layoutScaleFactor: size.layoutScaleFactor
                 )))
-            case .render(let drawableState, let completion):
+            case .render(let drawableState, let layoutScaleFactor, let completion):
                 let drawable: ExperienceInteractiveDrawable?
                 let isOccluded: Bool
                 switch drawableState {
@@ -419,6 +437,7 @@ extension ExperienceInteractiveScreen {
                     isOccluded = true
                 }
                 let frame = try await screen.renderFrame(
+                    layoutScaleFactor: layoutScaleFactor,
                     drawable: drawable,
                     isOccluded: isOccluded,
                     capturesSemantics: onSemantics != nil,
@@ -529,6 +548,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var frameClock = ExperienceRuntimeFrameClock()
     private var pointerInput = ExperienceRuntimePointerInputRouter()
     private var pendingPointers = ExperienceRuntimePresentationPointerQueue()
+    private var pendingFocus = ExperienceFocusInputQueue()
     private var pendingWork: [PendingWork] = []
     private var inFlightWork: PendingWork?
     private nonisolated(unsafe) var displayLink: CADisplayLink?
@@ -561,6 +581,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var lifecycleGeneration: UInt64 = 0
     private var semanticPresentationEpoch: UInt64 = 0
     private var lastSemanticFrame: UInt64 = 0
+    private var semanticDeliveriesInFlight = 0
     private var inFlightFrameIDs: Set<UInt64> = []
     private var terminalError: Error?
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
@@ -691,6 +712,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         zeroDeltaGenerationByFrameID.removeAll()
         pendingRender = false
         pendingPointers.removeAll()
+        pendingFocus.removeAll()
         pointerInput.reset()
         cancelPendingWork(with: CancellationError())
         invalidateDisplayLink()
@@ -764,6 +786,24 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }, completion: completion)
     }
 
+    /// Called within serialized native editing work, before later scene input.
+    func takeNativeEditingTap(at point: CGPoint) -> [[ExperienceInteractivePointerEvent]] {
+        [pendingPointers.takeNativeTap(at: point)]
+    }
+
+    @discardableResult
+    func enqueueFocus(_ input: NuxieNativeFocusInput) -> Bool {
+        guard shouldPresent, terminalError == nil else { return false }
+        pendingFocus.append(input)
+        return true
+    }
+
+    private func takeFocusBatch() -> [NuxieNativeFocusInput] {
+        let batch = pendingFocus.takeBatch()
+        if !pendingFocus.isEmpty { pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime() }
+        return batch
+    }
+
     func displayLinkDidFire(at timestamp: TimeInterval) {
         guard shouldAdvance else {
             reconcile()
@@ -776,6 +816,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setPresentationVisible(_ visible: Bool) {
         guard isPresentationVisible != visible else { return }
         isPresentationVisible = visible
+        if !visible { pendingFocus.removeAll() }
         semanticPresentationEpoch &+= 1
         if visible, isTimelineActive {
             frameClock.reset()
@@ -792,6 +833,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setTimelineActive(_ active: Bool) {
         guard isTimelineActive != active else { return }
         isTimelineActive = active
+        if !active { pendingFocus.removeAll() }
         semanticPresentationEpoch &+= 1
         pendingTimestamp = nil
         frameClock.reset()
@@ -800,6 +842,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             pendingZeroDeltaFrame = true
         }
         reconcile()
+    }
+
+    var hasCompletedLatestFrame: Bool {
+        !operationInFlight && !pendingRender && !pendingZeroDeltaFrame &&
+            pendingTimestamp == nil && pendingWork.isEmpty && pendingFocus.isEmpty &&
+            inFlightFrameIDs.isEmpty && frameSequence > 0
+    }
+
+    /// Includes semantic delivery, which can follow native frame completion.
+    var hasDeliveredLatestSemanticFrame: Bool {
+        hasCompletedLatestFrame && lastSemanticFrame == frameSequence && semanticDeliveriesInFlight == 0
     }
 
     func advanceZeroDelta() async throws {
@@ -892,8 +945,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return nil
         }
 
-        // Every accepted step gets an explicit render outcome before lifecycle
-        // work, even when visibility changed while the step was in flight.
+        if shouldPresent {
+            let size = surfaceSize(for: surfaceView)
+            if size != lastAppliedSize {
+                pendingRender = false
+                submittedPresentationContext = nil
+                return .resize(size)
+            }
+        }
+
+        // Render settled geometry before lifecycle work, including visibility
+        // changes that arrived while the step was in flight.
         if pendingRender {
             pendingRender = false
             return makeRenderOperation(for: surfaceView)
@@ -941,8 +1003,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             ))
         }
 
-        let size = surfaceSize(for: surfaceView)
-        if size != lastAppliedSize { return .resize(size) }
         if !pendingWork.isEmpty { return takeNextQueuedOperation() }
         if pendingZeroDeltaFrame {
             pendingZeroDeltaFrame = false
@@ -951,6 +1011,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return .step(ExperienceRuntimePresentationStep(
                 elapsedSeconds: Float(frame.delta),
                 pointers: [],
+                focusInputs: takeFocusBatch(),
                 requestsRender: true
             ))
         }
@@ -961,6 +1022,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         return .step(ExperienceRuntimePresentationStep(
             elapsedSeconds: Float(frameClock.frame(at: timestamp).delta),
             pointers: pointers,
+            focusInputs: takeFocusBatch(),
             requestsRender: true
         ))
     }
@@ -979,7 +1041,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         case (.resize(let size), .renderer(let outcome)):
             try requireHealthy(outcome)
             lastAppliedSize = size
-            pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+            pendingTimestamp = nil
+            pendingZeroDeltaFrame = true
         case (.setMediaVisible(let visible), .none):
             appliedMediaVisibility = visible
         case (.step(let step), .session):
@@ -1001,7 +1064,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     )
                 }
             }
-        case (.render(_, let completion), .renderer(let outcome)):
+        case (.render(_, _, let completion), .renderer(let outcome)):
             if result.hasDelivery {
                 completion.recordPresentedWork { [weak self] in
                     Task { @MainActor [weak self] in
@@ -1010,6 +1073,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                               self.semanticPresentationEpoch == semanticEpoch,
                               frame > self.lastSemanticFrame else { return }
                         self.lastSemanticFrame = frame
+                        self.semanticDeliveriesInFlight += 1
+                        defer { self.semanticDeliveriesInFlight -= 1 }
                         await result.deliver()
                     }
                 }
@@ -1052,7 +1117,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private func makeRenderOperation(
         for surfaceView: ExperienceRuntimeSurfaceView
-    ) -> ExperienceRuntimePresentationSessionOperation {
+    ) -> ExperienceRuntimePresentationSessionOperation? {
+        guard let size = lastAppliedSize else {
+            reportTerminal(ExperienceRuntimePresentationLoopError.unexpectedSessionResult)
+            return nil
+        }
+        let scale = size.layoutScaleFactor
         frameSequence &+= 1
         let frameID = frameSequence
         if let generation = zeroDeltaRenderGeneration {
@@ -1067,17 +1137,16 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             }
         }
         guard shouldPresent else {
-            return .render(.occluded, completion: completion)
+            return .render(.occluded, layoutScaleFactor: scale, completion: completion)
         }
-        guard let size = lastAppliedSize,
-              size.pixelWidth > 0,
+        guard size.pixelWidth > 0,
               size.pixelHeight > 0,
               let permit = drawableGate.tryAcquire() else {
-            return .render(.timeout, completion: completion)
+            return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
         guard let drawable = acquireDrawable(surfaceView.metalLayer) else {
             permit.release()
-            return .render(.timeout, completion: completion)
+            return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
         let firstPresentedDrawableGate = firstPresentedDrawableGate
         let shouldObservePresentation = session.observesEveryPresentation || !firstPresentedDrawableGate.isClaimed
@@ -1113,6 +1182,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
         return .render(
             .available(ExperienceRuntimePresentationDrawable(value: drawable)),
+            layoutScaleFactor: scale,
             completion: wrappedCompletion
         )
     }
@@ -1143,8 +1213,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private func surfaceSize(
         for surfaceView: ExperienceRuntimeSurfaceView
     ) -> ExperienceRuntimeSurfaceSize {
-        let scale = surfaceView.window?.screen.scale ?? surfaceView.contentScaleFactor
-        surfaceView.metalLayer.contentsScale = scale
+        let scale = surfaceView.runtimeDisplayScale
+        if scale.isFinite, scale > 0 { surfaceView.metalLayer.contentsScale = scale }
         let size = ExperienceRuntimeSurfaceSizing.pixels(
             width: surfaceView.bounds.width,
             height: surfaceView.bounds.height,
@@ -1174,6 +1244,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         guard shouldAdvance,
               isPresentationVisible,
               let surfaceView,
+              surfaceView.runtimeDisplayScale.isFinite,
+              surfaceView.runtimeDisplayScale > 0,
               surfaceViewIsEffectivelyVisible(surfaceView) else { return false }
         return true
     }
@@ -1338,6 +1410,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         zeroDeltaGenerationByFrameID.removeAll()
         pendingRender = false
         pendingPointers.removeAll()
+        pendingFocus.removeAll()
         pointerInput.reset()
         displayLink?.isPaused = true
         onError(error)
@@ -1388,8 +1461,8 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
               !isShuttingDown,
               terminalError == nil,
               let surfaceView,
-              let transform = ExperienceContainCenterTransform(
-                  artboardBounds: session.artboardBounds,
+              let transform = ExperienceLayoutTransform(
+                  artboardBounds: session.artboardBounds(),
                   viewportBounds: surfaceView.bounds
               ) else { return }
         let projected = pointerInput.runtimeEvents(for: events, transform: transform)
