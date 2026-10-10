@@ -71,6 +71,23 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
     }
 
     @MainActor
+    func testCompletedRunDuringDeferralDoesNotParkRealEventRouting() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true,
+            holdClosePublication: true, realEventRouting: true, deferralRace: "completed")
+    }
+
+    @MainActor
+    func testMovedRunDuringDeferralDoesNotParkRealEventRouting() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true,
+            holdClosePublication: true, realEventRouting: true, deferralRace: "moved")
+    }
+
+    @MainActor
+    func testDurableCompletionReleasesScreenWhenReportJournalWriteFails() async throws {
+        try await checkDismissal(commerce: "purchase", failReportJournalWrite: true)
+    }
+
+    @MainActor
     func testDeclinedCommerceFrameKeepsSaveAndAwaitedConfirmation() async throws {
         try await checkDismissal(commerce: "purchase", saveInDeclinedFrame: true)
     }
@@ -95,7 +112,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
 
     @MainActor
     private func checkDismissal(commerce: String?, retryOutcome: String? = nil, pendingClose: Bool = false,
-        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false, secondPurchase: Bool = false, realEventRouting: Bool = false) async throws {
+        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false, secondPurchase: Bool = false, realEventRouting: Bool = false, failReportJournalWrite: Bool = false, deferralRace: String? = nil) async throws {
         struct Corpus: Decodable {
             struct Vector: Decodable { let name, outcome: String; let reports: Int }
             let cases: [Vector]
@@ -199,6 +216,12 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         let saveTransport = PendingCommerceSaveTransport()
         let saveDelivery = JourneyResponseSaveDelivery(directory: directory, transport: saveTransport,
             clock: SystemDateProvider(), sleeper: SystemSleepProvider())
+        let reportPersistence = JourneyJournalPersistenceFailures()
+        if failReportJournalWrite {
+            events.routedCaptureHandler = { name, _ in
+                if name == JourneyEvents.journeyCompleted { reportPersistence.failNext(1) }
+            }
+        }
         let completionFailure = PendingCommerceReadFailure()
         if failCompletionOnce && holdClosePublication {
             controller.onPreparedDismissal = { await completionFailure.arm() }
@@ -219,6 +242,23 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             }, pinnedReleaseAuthenticator: { _, _ in
                 if holdReleaseLookup { await releaseGate.intercept(event: "release") }
                 return release
+            }, journalBeforePersist: { try reportPersistence.beforePersist() },
+            beforeCommerceOutcomeDeferral: { runId in
+                guard let deferralRace else { return }
+                let competing = try JourneyRunJournal(directory: directory, distinctId: "customer")
+                if deferralRace == "completed" {
+                    try await competing.complete(runId, outcome: "abandoned", at: Date())
+                } else {
+                    let latestRuns = try await competing.runs()
+                    let run = try XCTUnwrap(latestRuns.first { $0.id == runId })
+                    let pending = try XCTUnwrap(run.pendingCommerce)
+                    let token = try XCTUnwrap(identity.performWithCurrentIdentityFence("customer", { _ in () }))
+                    let fence = JourneyProfileFence()
+                    let admission = JourneyCommitAdmission(identity: identity, identityFenceToken: token.token,
+                        executionFence: fence, executionFenceToken: fence.token())
+                    _ = try await competing.settlePresentationCommerce(runId, stepId: pending.stepId,
+                        effectId: pending.effectId, nextStepId: "dismiss", admission: admission)
+                }
             })
         let terminalRouted = realEventRouting ? expectation(description: "terminal delivered while authored publication is held") : nil
         let routeLog: EventLog? = realEventRouting ? EventLog(identity: identity, dateProvider: MockDateProvider(),
@@ -382,6 +422,23 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     }
                     XCTAssertTrue(accepted, "A durably deferred commerce result must not block event routing")
                     let deferred = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+                    if deferralRace != nil {
+                        XCTAssertNil(deferred.first?.pendingCommerceOutcome)
+                        if deferralRace == "completed" { XCTAssertEqual(deferred.first?.completion?.outcome, "abandoned") }
+                        else { XCTAssertEqual(deferred.first?.stepId, "dismiss") }
+                        await publicationGate.release()
+                        _ = await closeTask.value
+                        let later = expectation(description: "event after refused deferral routes")
+                        if let routeLog {
+                            await routeLog.subscribeCommitted(where: { $0.name == "after_deferral" }) { _ in later.fulfill() }
+                            routeLog.track("after_deferral")
+                            let drained = await routeLog.drainCommittedRouting()
+                            XCTAssertTrue(drained, "A stale outcome must not park later events")
+                            await fulfillment(of: [later], timeout: 2)
+                        }
+                        await journeys.shutdown()
+                        return
+                    }
                     XCTAssertEqual(deferred.first?.pendingCommerceOutcome?.effectId, correlation.eventId)
                     XCTAssertNil(deferred.first?.completion)
                     await publicationGate.release()
@@ -466,6 +523,11 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         XCTAssertEqual(completed.first?.properties["journey_id"] as? String, journeyID)
         XCTAssertEqual(completed.first?.properties["outcome"] as? String, pendingClose ? pendingExpected.outcome : expected.outcome)
         XCTAssertFalse(presentations.isExperiencePresented)
+        if failReportJournalWrite {
+            let persisted = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+            XCTAssertEqual(persisted.first?.completion?.outcome, "completed")
+            XCTAssertEqual(persisted.count, 1, "The failed report write retains the completed run for recovery")
+        }
         if pendingClose, let correlation = controller.correlation {
             await journeys.handleEvent(NuxieEvent(id: correlation.eventId, name: SystemEventNames.purchaseCompleted,
                 distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
