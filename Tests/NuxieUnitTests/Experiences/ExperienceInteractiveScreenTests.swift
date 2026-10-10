@@ -14,6 +14,28 @@ import XCTest
 final class ExperienceInteractiveScreenTests: XCTestCase {
     #if canImport(UIKit)
     @MainActor
+    func testReservedFrameEventKeepsOnlyItsSiblingSource() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        var counts: [Int] = []
+        recorder.onBatchAsync = { sources in counts.append(sources?.drafts.count ?? -1) }
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        struct Vector: Decodable { let events: [String] }
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/events/reserved-event-filtering.json")))
+        let effects = vector.events.enumerated().map { index, name in
+            ExperienceInteractiveEffect(sequence: UInt64(index), correlationID: 1,
+                kind: .reportedEvent(.init(localIndex: index, coreType: 128, name: name,
+                    url: "", target: "", delay: 0, properties: [])))
+        }
+        await controller.deliverStep(effects: effects)
+        XCTAssertEqual(counts, [1])
+    }
+
+    @MainActor
     func testFrameHandsOffBatchBeforeOpeningLinksAndRejectsDuplicateControlKeys() async throws {
         let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
         let recorder = LinkFrameRecorder()
@@ -152,6 +174,62 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     #endif
+
+    func testSharedFrameChangesStayOutOfEventsAndCarryTheirSettledSnapshot() async throws {
+        struct Suite: Decodable {
+            struct Vector: Decodable {
+                let name: String
+                let value: String
+                let events: [String]
+                let expectedEvents: [String]
+            }
+            let cases: [Vector]
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let suite = try JSONDecoder().decode(Suite.self,
+            from: Data(contentsOf: root.appendingPathComponent("fixtures/events/runtime-frame-writes.json")))
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
+            pixelWidth: 320, pixelHeight: 100)
+        do {
+            for vector in suite.cases {
+                let value = NuxieNativeViewModelValue.bytes(Data(vector.value.utf8))
+                let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: 71,
+                    instances: [.init(id: 71, schemaIndex: 0, valueRange: 0..<1)],
+                    values: [.init(ownerInstanceID: 71, propertyIndex: 0,
+                        name: "placementId", value: value)])
+                let events = vector.events.enumerated().map { index, name in
+                    NuxieNativeEvent(localIndex: index, coreType: 128, name: name,
+                        url: "", target: "", delay: 0, properties: [], sourceViewModelInstanceID: nil)
+                }
+                let step = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [],
+                    stateChanges: [], events: events, hostCommands: [], viewModelChanges: [
+                        .init(origin: .runtime, correlationID: 77, ownerInstanceID: 71,
+                            propertyIndex: 0, value: value)
+                    ])
+                let result = await screen.projectStep(step, eventSnapshot: snapshot, correlationID: 42)
+                guard case .viewModelChange(let change) = result.effects.first?.kind else {
+                    throw ExperienceInteractiveScreenError.stateContract("Missing first frame change: \(vector.name)")
+                }
+                XCTAssertEqual(change.value, .bytes(Data(vector.value.utf8)))
+                var published: [String] = []
+                for effect in result.effects.dropFirst() {
+                    guard case .reportedEvent(let event) = effect.kind else {
+                        throw ExperienceInteractiveScreenError.stateContract("Unexpected customer effect: \(vector.name)")
+                    }
+                    published.append(event.name)
+                    XCTAssertEqual(event.resolvedSource?.string(path: VmPathRef(path: "placementId")),
+                        vector.value, vector.name)
+                }
+                XCTAssertEqual(published, vector.expectedEvents, vector.name)
+            }
+        } catch {
+            try? await screen.close()
+            throw error
+        }
+        try await screen.close()
+    }
 
     func testRootEventUsesSnapshotRootIdentity() async throws {
         let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
@@ -3086,7 +3164,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(entries, ["first", "second"])
     }
 
-    func testRouterPreservesPhaseAndCommandOrderWithExactCorrelations() {
+    func testRouterPublishesChangesBeforeEventsWithExactCorrelations() {
         var router = ExperienceInteractiveEffectRouter()
         let reported = ExperienceInteractiveReportedEvent(
             localIndex: 0,
@@ -3113,12 +3191,12 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
 
         XCTAssertEqual(effects.map(\.sequence), Array(0...6))
-        XCTAssertEqual(effects.map(\.correlationID), [42, 77, 42, 42, 42, 42, 42])
+        XCTAssertEqual(effects.map(\.correlationID), [77, 42, 42, 42, 42, 42, 42])
         XCTAssertEqual(
             effects.map(\.kind),
             [
-                .reportedEvent(reported),
                 .viewModelChange(change),
+                .reportedEvent(reported),
                 .responseSet(field: "plan", value: .string("pro")),
                 .journeyEvent(name: "purchase_tapped", payload: Self.object([
                     ("placementId", .string("pro_paywall:annual")),

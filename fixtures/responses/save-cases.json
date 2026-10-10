@@ -1,0 +1,404 @@
+{
+  "schemaVersion": 1,
+  "request": {
+    "apiKey": "test-key",
+    "distinct_id": "anon",
+    "journey_id": "01900000-0000-7000-8000-000000000001",
+    "experience_id": "experience-1",
+    "experience_version_id": "version-1",
+    "form_name": "feedback",
+    "sequence": 1,
+    "answers": {
+      "stars": 2,
+      "email": "not an email",
+      "enabled": false,
+      "comment": "",
+      "interests": []
+    }
+  },
+  "replies": [
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 1
+      },
+      "httpStatus": 503,
+      "expected": "confirmed"
+    },
+    {
+      "body": {
+        "status": "replayed",
+        "sequence": 7
+      },
+      "httpStatus": 409,
+      "expected": "confirmed"
+    },
+    {
+      "body": {
+        "status": "stale",
+        "sequence": 9
+      },
+      "httpStatus": 400,
+      "expected": "confirmed"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "merge_in_progress"
+      },
+      "httpStatus": 409,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "customer_unavailable"
+      },
+      "httpStatus": 503,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "customer_redirect_loop"
+      },
+      "httpStatus": 503,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "save_unavailable"
+      },
+      "httpStatus": 503,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "unknown_form"
+      },
+      "httpStatus": 404,
+      "expected": "retry_until_deadline"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "invalid_request"
+      },
+      "httpStatus": 400,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "authentication_failed"
+      },
+      "httpStatus": 401,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "unknown_experience_version"
+      },
+      "httpStatus": 404,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "pinned_version_mismatch"
+      },
+      "httpStatus": 409,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "sequence_conflict"
+      },
+      "httpStatus": 409,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "customer_deleted"
+      },
+      "httpStatus": 410,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "unexpected_gateway_code"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {},
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 0
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "sequence": null,
+        "code": "customer_deleted"
+      },
+      "httpStatus": 410,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "error",
+        "sequence": null,
+        "code": "save_unavailable"
+      },
+      "httpStatus": 503,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": null
+      },
+      "httpStatus": 503,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "something_new"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "saved",
+        "sequence": 1
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "replayed",
+        "sequence": 1
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "stale",
+        "sequence": 1
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "no_answer"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": 42
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": {}
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": []
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "customer_deleted"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "customer_deleted",
+        "sequence": "5"
+      },
+      "httpStatus": 410,
+      "expected": "stopped"
+    },
+    {
+      "body": {
+        "status": "error",
+        "code": "unknown_form",
+        "sequence": "5"
+      },
+      "httpStatus": 404,
+      "expected": "retry_until_deadline"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": "5"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 1.5
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 9007199254740992
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": null
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "replayed",
+        "sequence": "5"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "replayed",
+        "sequence": 1.5
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "replayed",
+        "sequence": 9007199254740992
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "replayed",
+        "sequence": null
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "replayed"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "stale",
+        "sequence": "5"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "stale",
+        "sequence": 1.5
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "stale",
+        "sequence": 9007199254740992
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "stale",
+        "sequence": null
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "stale"
+      },
+      "httpStatus": 200,
+      "expected": "retry"
+    },
+    {
+      "body": {
+        "status": "saved",
+        "sequence": 1,
+        "code": {}
+      },
+      "httpStatus": 200,
+      "expected": "confirmed"
+    }
+  ]
+}

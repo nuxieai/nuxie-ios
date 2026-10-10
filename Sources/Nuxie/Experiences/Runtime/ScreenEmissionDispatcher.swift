@@ -112,6 +112,11 @@ enum ScreenEmissionDraft: Equatable, Sendable {
     case event(name: String, payload: [String: ScreenEmissionValue])
     case responseSet(field: String, value: ScreenEmissionValue)
     case responseUnset(field: String)
+
+    var isReservedEvent: Bool {
+        if case .event(let name, _) = self { return name.hasPrefix("$") }
+        return false
+    }
 }
 
 struct ScreenScriptActionInput: Equatable, Sendable {
@@ -168,7 +173,6 @@ enum ScreenEmissionDispatchError: Error, Equatable, Sendable {
     case actionIdentityMismatch(expected: String, received: String)
     case declarativeSourceMissing(source: String)
     case invalidEventName(eventName: String)
-    case reservedEventName(eventName: String)
     case scriptActionMissing(actionId: String)
     case scriptExecutionFailed(message: String)
 }
@@ -322,7 +326,7 @@ private actor ScreenEmissionDispatcherState {
                     invocation: invocation
                 ))
             }
-            drafts = actionDrafts + additionalDrafts
+            drafts = (actionDrafts + additionalDrafts).filter { !$0.isReservedEvent }
             try validate(drafts)
         } catch let error as ScreenEmissionDispatchError {
             return .failure(error)
@@ -351,6 +355,7 @@ private actor ScreenEmissionDispatcherState {
         source: ScreenEmissionSource,
         drafts: [ScreenEmissionDraft]
     ) -> Result<ScreenEmissionBatch, ScreenEmissionDispatchError> {
+        let drafts = drafts.filter { !$0.isReservedEvent }
         let batchSequence = nextBatchSequence[run.journeyId, default: 0]
         nextBatchSequence[run.journeyId] = batchSequence + 1
         do {
@@ -421,9 +426,10 @@ private actor ScreenEmissionDispatcherState {
         _ actions: [DeclarativeScreenAction],
         invocation: ScreenActionInvocation
     ) throws -> [ScreenEmissionDraft] {
-        try actions.map { action in
+        try actions.compactMap { action in
             switch action {
             case .emit(let eventName, let payload):
+                guard !eventName.hasPrefix("$") else { return nil }
                 return .event(
                     name: eventName,
                     payload: try payload.mapValues {
@@ -476,9 +482,6 @@ private actor ScreenEmissionDispatcherState {
             if case .event(let name, _) = draft {
                 if name.isEmpty {
                     throw ScreenEmissionDispatchError.invalidEventName(eventName: name)
-                }
-                if name.hasPrefix("$") {
-                    throw ScreenEmissionDispatchError.reservedEventName(eventName: name)
                 }
             }
         }

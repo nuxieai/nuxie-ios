@@ -4,6 +4,46 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyRendererPublicationTests: JourneyTestCase {
+    func testKilledScreenRunAbandonsOnRelaunchWithoutPresentingAgain() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        do {
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let events = MockEventLog()
+            events.identity = identity
+            let presenter = await MainActor.run { RecordingJourneyPresenter() }
+            let service = makeService(identity: identity, events: events,
+                directory: directory, presenter: presenter)
+            await service.initialize()
+            await service.profileDidCommit(snapshot, distinctId: "customer")
+            let request = await MainActor.run { presenter.request }
+            XCTAssertEqual(request?.screenId, "screen_welcome")
+            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let rows = try await journal.runs()
+            let run = try XCTUnwrap(rows.first)
+            XCTAssertNil(run.park)
+            XCTAssertNil(run.completion)
+            XCTAssertNil(run.pendingPresentationPublication)
+        }
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = await MainActor.run { RecordingJourneyPresenter() }
+        let service = makeService(identity: identity, events: events,
+            directory: directory, presenter: presenter)
+        await service.initialize()
+        let completions = events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }
+        XCTAssertEqual(completions.count, 1)
+        XCTAssertEqual(completions.first?.properties["outcome"] as? String, "abandoned")
+        let request = await MainActor.run { presenter.request }
+        XCTAssertNil(request)
+        await service.shutdown()
+    }
+
     func testRenderedArmPresentsItsAuthenticatedScreenWithoutParking() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }

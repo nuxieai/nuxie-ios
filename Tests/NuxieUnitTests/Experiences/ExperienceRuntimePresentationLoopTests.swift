@@ -3,8 +3,134 @@ import Metal
 import QuartzCore
 import XCTest
 @testable import Nuxie
+@testable import NuxieRuntime
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
+    @MainActor
+    func testFocusQueueKeepsInputOrderAcrossStepLimits() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface(size: CGSize(width: 200, height: 100))
+        let loop = makeLoop(recorder: recorder, view: view)
+        XCTAssertFalse(loop.enqueueFocus(.next))
+        await recorder.holdNextStep()
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let entered = await recorder.waitForOperation(named: "step")
+        XCTAssertTrue(entered)
+        let keys = (0..<5_000).map { NuxieNativeFocusInput.key(code: UInt16($0), modifiers: 0, pressed: true, repeated: false) }
+        for key in keys { XCTAssertTrue(loop.enqueueFocus(key)) }
+        loop.displayLinkDidFire(at: 10)
+        await recorder.releaseStep()
+        let drained = await recorder.waitForStepCount(3)
+        XCTAssertTrue(drained)
+        let inputs = await recorder.steps().map(\.focusInputs).filter { !$0.isEmpty }
+        XCTAssertEqual(inputs, [Array(keys.prefix(4_096)), Array(keys.suffix(904))])
+        await loop.shutdown()
+        XCTAssertFalse(loop.enqueueFocus(.next))
+        _ = window
+    }
+
+    @MainActor
+    func testLargePasteReachesThePlayerAsBoundedOrderedItems() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface(size: CGSize(width: 200, height: 100))
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        try await loop.advanceZeroDelta()
+        let before = await recorder.steps().count
+        XCTAssertTrue(loop.enqueueFocus(.text(String(repeating: "🙂", count: 786_432))))
+        loop.displayLinkDidFire(at: 1)
+        let stepped = await recorder.waitForStepCount(before + 1)
+        XCTAssertTrue(stepped)
+        let inputs = await recorder.steps().flatMap(\.focusInputs)
+        let chunk = String(repeating: "🙂", count: 262_144)
+        XCTAssertEqual(inputs, [.text(chunk), .text(chunk), .text(chunk)])
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testTemporaryDeactivationKeepsAcceptedFocusInput() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let notifications = NotificationCenter()
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view, notificationCenter: notifications)
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let rendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(rendered)
+        let initialDeadline = Date().addingTimeInterval(2)
+        while !loop.hasCompletedLatestFrame, Date() < initialDeadline { await Task.yield() }
+        XCTAssertTrue(loop.hasCompletedLatestFrame)
+        XCTAssertTrue(loop.enqueueFocus(.text("kept")))
+        notifications.post(name: UIApplication.willResignActiveNotification, object: nil)
+        let suspended = await recorder.waitForMediaVisibility(false)
+        XCTAssertTrue(suspended)
+        XCTAssertFalse(loop.enqueueFocus(.text("not accepted")))
+        let beforeResume = await recorder.steps().flatMap(\.focusInputs)
+        XCTAssertEqual(beforeResume, [])
+        notifications.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        let deadline = Date().addingTimeInterval(2)
+        var inputs = await recorder.steps().flatMap(\.focusInputs)
+        while inputs.isEmpty, Date() < deadline {
+            await Task.yield()
+            inputs = await recorder.steps().flatMap(\.focusInputs)
+        }
+        XCTAssertEqual(inputs, [.text("kept")])
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testHiddenScreenDiscardsInputThatHasNotStepped() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface(size: CGSize(width: 200, height: 100))
+        let loop = makeLoop(recorder: recorder, view: view)
+        await recorder.holdNextStep()
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let entered = await recorder.waitForOperation(named: "step")
+        XCTAssertTrue(entered)
+        XCTAssertTrue(loop.enqueueFocus(.text("closing")))
+        loop.setPresentationVisible(false)
+        XCTAssertFalse(loop.enqueueFocus(.text("hidden")))
+        await recorder.releaseStep()
+        loop.setPresentationVisible(true)
+        try await loop.advanceZeroDelta()
+        await loop.shutdown()
+        let focus = await recorder.steps().flatMap(\.focusInputs)
+        XCTAssertEqual(focus, [])
+        _ = window
+    }
+    @MainActor
+    func testResizeKeepsQueuedTypingForTheFollowingStep() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface(size: CGSize(width: 200, height: 100))
+        let loop = makeLoop(recorder: recorder, view: view)
+        await recorder.holdNextStep()
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let entered = await recorder.waitForOperation(named: "step")
+        XCTAssertTrue(entered)
+        XCTAssertTrue(loop.enqueueFocus(.text("日本🙂")))
+        view.bounds.size = CGSize(width: 100, height: 200)
+        loop.runtimeSurfaceViewGeometryDidChange()
+        await recorder.releaseStep()
+        try await loop.advanceZeroDelta()
+        await loop.shutdown()
+        let focus = await recorder.steps().flatMap(\.focusInputs)
+        XCTAssertEqual(focus, [.text("日本🙂")])
+        let sizes = await recorder.resizeSizes()
+        XCTAssertEqual(sizes.count, 2)
+        _ = window
+    }
+
+
     @MainActor
     func testHiddenPresentationSuspendsMediaWithoutAnotherDisplayTick() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
@@ -24,6 +150,46 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         loop.setTimelineActive(false)
         let suspended = await recorder.waitForMediaVisibility(false)
         XCTAssertTrue(suspended, "Timeline suspension must also stop media")
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testPresentationIdleWaitsForLatestSemanticFrame() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        var deliveries = 0
+        var resumeLatest: CheckedContinuation<Void, Never>?
+        let recorder = PresentationSessionRecorder(device: device) {
+            deliveries += 1
+            if deliveries == 2 { await withCheckedContinuation { resumeLatest = $0 } }
+        }
+        let (window, view) = makePresentationSurface()
+        var observations: [@Sendable (TimeInterval, ExperienceRuntimePresentedDrawable.Provenance) -> Void] = []
+        let loop = makeLoop(recorder: recorder, view: view, observesEveryPresentation: true,
+            observeDrawablePresentation: { _, handler in observations.append(handler) },
+            nativeCompletionPresentationFallback: nil)
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let first = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(first)
+        loop.displayLinkDidFire(at: 2)
+        let second = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(second)
+        XCTAssertEqual(observations.count, 2)
+        guard observations.count == 2 else { await loop.shutdown(); return }
+        observations[0](1, .injectedTestObserver)
+        let deadline = Date().addingTimeInterval(2)
+        while deliveries < 1, Date() < deadline { await Task.yield() }
+        XCTAssertEqual(deliveries, 1)
+        XCTAssertFalse(loop.hasDeliveredLatestSemanticFrame, "A delayed preceding capture cannot settle the next edit")
+        observations[1](2, .injectedTestObserver)
+        while resumeLatest == nil, Date() < deadline { await Task.yield() }
+        XCTAssertNotNil(resumeLatest)
+        XCTAssertFalse(loop.hasDeliveredLatestSemanticFrame, "Delivery must finish, not merely start")
+        resumeLatest?.resume()
+        while !loop.hasDeliveredLatestSemanticFrame, Date() < deadline { await Task.yield() }
+        XCTAssertTrue(loop.hasDeliveredLatestSemanticFrame)
+        XCTAssertEqual(deliveries, 2)
         await loop.shutdown()
         _ = window
     }

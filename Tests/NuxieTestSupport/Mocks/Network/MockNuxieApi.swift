@@ -3,6 +3,10 @@ import Foundation
 
 /// Mock implementation of NuxieApi for testing
 public actor MockNuxieApi: NuxieApiProtocol {
+    public func sendResponseSave(_ sheet: JourneyResponseSave) async throws -> JourneyResponseSaveReply {
+        throw URLError(.notConnectedToInternet)
+    }
+
     public func consumeFeature(_ request: FeatureConsumeRequest) async throws -> EventResponse {
         var properties: [String: Any] = ["feature_extId": request.featureId, "value": request.quantity]
         if request.mode == "set_usage" { properties["setUsage"] = true }
