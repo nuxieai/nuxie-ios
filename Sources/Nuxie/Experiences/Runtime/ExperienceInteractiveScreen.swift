@@ -43,6 +43,7 @@ struct ExperienceInteractiveReportedEvent: Equatable, Sendable {
     let delay: Float
     let properties: [ExperienceInteractiveField]
     var sourceRejection: String? = nil
+    var resolvedSource: ExperienceResolvedEventSource? = nil
 }
 
 enum ExperienceInteractiveViewModelValue: Equatable, Sendable {
@@ -430,6 +431,7 @@ struct ExperienceInteractiveEffectRouter: Sendable {
         _ event: ExperienceInteractiveReportedEvent,
         controlActionIds: Set<String>
     ) -> ExperienceInteractiveEffectKind {
+        if !event.url.isEmpty && event.name != "Nuxie Interaction" { return .reportedEvent(event) }
         if let reason = event.sourceRejection {
             return .rejectedHostCommand(name: event.name, reason: reason)
         }
@@ -1640,7 +1642,9 @@ actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
     private let videoPlayback: ExperienceVideoPlayback?
     private let fontScope: ExperienceRuntimeFontScope
-    nonisolated let artboardBounds: CGRect
+    private nonisolated let layoutBounds: ExperienceLayoutBounds
+    nonisolated var artboardBounds: CGRect { layoutBounds.read() }
+    private var needsLayoutReadback = false
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
     private let controlActionIds: Set<String>
@@ -1692,7 +1696,7 @@ actor ExperienceInteractiveScreen {
         self.runtime = runtime
         self.videoPlayback = videoPlayback
         self.fontScope = fontScope
-        self.artboardBounds = artboardBounds
+        self.layoutBounds = ExperienceLayoutBounds(artboardBounds)
         self.controlActionIds = controlActionIds
         self.declaredEventNames = declaredEventNames
         self.textInputs = textInputs
@@ -1839,7 +1843,7 @@ actor ExperienceInteractiveScreen {
         do {
             videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
                 runtime: runtime, payload: payload,
-                artboardBounds: CGRect(x: 0, y: 0, width: manifestScreen.width, height: manifestScreen.height),
+                artboardBounds: .zero,
                 decoderPool: videoDecoderPool)
         } catch {
             try? await runtime.close()
@@ -1894,46 +1898,56 @@ actor ExperienceInteractiveScreen {
                 textRunNames: capturesTextLayout
                     ? textInputs.values.filter { $0.editable && $0.editableValueName == nil }.map(\.textRunName).sorted() : []
             )
+            try await refreshLayoutBounds()
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
                 result.keepGoing = result.keepGoing || videoActive
             }
-            await captureTextFrame(result, requested: capturesTextLayout)
             // Discover generated state on newly materialized components
             // before projecting this frame's changes. Native effects have
             // committed: a recoverable topology failure must not discard them.
-            try? await refreshTrackedTopology()
-            let eventSnapshot = result.events.contains { $0.sourceViewModelInstanceID != nil }
-                ? try? await runtime.snapshot() : nil
+            let eventSnapshot = try? await runtime.snapshot()
+            if let eventSnapshot { try? await refreshTrackedTopology(snapshot: eventSnapshot) }
+            await captureTextFrame(result, requested: capturesTextLayout, snapshot: eventSnapshot)
             return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
         }
     }
 
-    private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool) async {
+    private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool, snapshot: NuxieNativeViewModelSnapshot?) {
         guard requested else {
             pendingTextFrame = nil
             return
         }
         // Copy failure cannot discard committed step effects. A missing snapshot
         // travels with this frame so the consumer can withdraw stale editors.
-        let snapshot = try? await runtime.snapshot()
         pendingTextFrame = ExperienceInteractiveTextFrame(
             snapshot: snapshot.map(Self.projectSnapshot), geometry: result.textGeometry)
     }
 
-    private func projectStep(
+    func projectStep(
         _ result: NuxieNativePlayerStepResult,
         eventSnapshot: NuxieNativeViewModelSnapshot?,
         correlationID: UInt64
     ) -> ExperienceInteractiveStepResult {
+        let frameSnapshot = eventSnapshot.map(Self.projectSnapshot)
+        let schemaNames = result.events.isEmpty ? [:] : Dictionary(uniqueKeysWithValues: viewModelCatalog.schemas.map { ($0.index, $0.name) })
+        let liveIDs = result.events.isEmpty ? [] : Set(eventSnapshot?.instances.map(\.id) ?? [])
         let effects = router.project(
             reportedEvents: result.events.map { event in
-                ExperienceInteractiveEventSource.project(
+                var projected = ExperienceInteractiveEventSource.project(
                     Self.reportedEvent(event), nativeID: event.sourceViewModelInstanceID,
                     rootID: eventSnapshot?.rootInstanceID,
-                    liveIDs: Set(eventSnapshot?.instances.map(\.id) ?? []),
+                    liveIDs: liveIDs,
                     identities: viewModelsByIdentity
                 )
+                projected.resolvedSource = frameSnapshot.map {
+                    ExperienceResolvedEventSource(
+                        nativeID: event.sourceViewModelInstanceID ?? $0.rootInstanceID,
+                        snapshot: $0,
+                        schemaNames: schemaNames
+                    )
+                }
+                return projected
             },
             viewModelChanges: publishableViewModelChanges(result.viewModelChanges),
             hostCommands: result.hostCommands.map(Self.hostCommand),
@@ -2518,6 +2532,7 @@ actor ExperienceInteractiveScreen {
     }
 
     private func refreshTrackedTopology(
+        snapshot suppliedSnapshot: NuxieNativeViewModelSnapshot? = nil,
         preferredLists:
             [ExperienceInteractiveListIdentity: [ExperienceInteractiveViewModelReference]] = [:],
         preferredViewModels:
@@ -2525,7 +2540,9 @@ actor ExperienceInteractiveScreen {
                 ExperienceInteractiveViewModelReference] = [:]
     ) async throws {
         guard let rootViewModelReference else { return }
-        let snapshot = try await runtime.snapshot()
+        let snapshot: NuxieNativeViewModelSnapshot
+        if let suppliedSnapshot { snapshot = suppliedSnapshot }
+        else { snapshot = try await runtime.snapshot() }
         trackedLists = try snapshotTopology.reconcile(
             snapshot: snapshot,
             rootReference: rootViewModelReference,
@@ -3551,16 +3568,33 @@ actor ExperienceInteractiveScreen {
         ExperienceInteractiveMetalDevice(value: try await runtime.metalDevice().value)
     }
 
-    func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32, layoutScaleFactor: Float) async throws
         -> ExperienceInteractiveRenderOutcome
     {
         let runtime = runtime
         return try await operationGate.withLock { [self] in
             await discardTextFrame()
+            if pixelWidth > 0, pixelHeight > 0 {
+                try await runtime.setLayoutSize(width: Float(pixelWidth) / layoutScaleFactor,
+                    height: Float(pixelHeight) / layoutScaleFactor)
+                await markLayoutReadbackPending(true)
+            } else {
+                await markLayoutReadbackPending(false)
+                try await videoPlayback?.resizeViewport(bounds: .zero)
+            }
             let outcome = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
-            try await videoPlayback?.resizeViewport(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
             return Self.renderOutcome(outcome)
         }
+    }
+
+    private func markLayoutReadbackPending(_ pending: Bool) { needsLayoutReadback = pending }
+
+    private func refreshLayoutBounds() async throws {
+        guard needsLayoutReadback else { return }
+        let size = try await runtime.layoutSize()
+        layoutBounds.update(size: size)
+        try await videoPlayback?.resizeViewport(bounds: artboardBounds)
+        needsLayoutReadback = false
     }
 
     func enableSemantics() async throws {
@@ -3587,17 +3621,19 @@ actor ExperienceInteractiveScreen {
     }
 
     func render(
+        layoutScaleFactor: Float,
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
         completion: (@Sendable () -> Void)? = nil
     ) async throws -> ExperienceInteractiveRenderOutcome {
-        try await renderFrame(drawable: drawable, isOccluded: isOccluded,
+        try await renderFrame(layoutScaleFactor: layoutScaleFactor, drawable: drawable, isOccluded: isOccluded,
             clearColor: clearColor, capturesSemantics: false, completion: completion).outcome
     }
 
     /// Capture and render share the occurrence lock, preventing intervening state/geometry writes.
     func renderFrame(
+        layoutScaleFactor: Float,
         drawable: ExperienceInteractiveDrawable?,
         isOccluded: Bool = false,
         clearColor: UInt32 = 0,
@@ -3618,7 +3654,7 @@ actor ExperienceInteractiveScreen {
             try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
             let text = await pendingTextFrame
             let ready = try await videoPlayback?.isReadyForPresentation() ?? true
-            let outcome = try await runtime.render(drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
+            let outcome = try await runtime.render(layoutScaleFactor: layoutScaleFactor, drawable: ready ? state : .timeout, clearColor: clearColor, completion: completion)
             let semantics: NuxieNativeSemanticCapture?
             if capturesSemantics, outcome.disposition == .presented {
                 semantics = try await runtime.captureSemantics(textRuns: textRuns, nativeInputs: nativeInputs)

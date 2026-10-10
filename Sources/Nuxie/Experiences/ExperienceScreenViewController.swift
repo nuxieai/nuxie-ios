@@ -13,7 +13,8 @@ enum ExperienceRuntimeScreenEmission: Equatable, Sendable {
     case effects(source: ScreenEmissionSource, drafts: [ScreenEmissionDraft])
 }
 
-private enum ExperienceRuntimeProjectedEmission {
+enum ExperienceRuntimeProjectedEmission {
+    case link(ExperienceRendererOpenLinkRequest)
     case control(screenId: String, invocation: ScreenActionInvocation)
     case draft(ScreenEmissionDraft, source: ScreenEmissionSource)
 }
@@ -72,7 +73,8 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        frameSources: ExperienceEmissionSources?
     ) async
 
     func experienceScreenViewController(
@@ -80,10 +82,12 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     )
 
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)?
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    )
+    ) async
 
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
@@ -95,6 +99,12 @@ protocol ExperienceScreenViewControllerDelegate: AnyObject {
         _ controller: ExperienceScreenViewController,
         didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput
     )
+}
+
+extension ExperienceScreenViewControllerDelegate {
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)? {
+        { [self, controller] request in await experienceScreenViewController(controller, didRequestOpenLink: request) }
+    }
 }
 
 private enum ExperienceInteractiveScreenControllerError: LocalizedError {
@@ -356,6 +366,9 @@ final class ExperienceScreenViewController: UIViewController {
             surfaceView: surfaceView,
             onSessionResult: { [weak self] in
                 guard let self else { return }
+                if let bounds = self.interactiveScreen?.artboardBounds {
+                    self.textInputOverlayBridge.updateArtboardBounds(bounds)
+                }
                 self.delegate?.experienceScreenViewControllerDidAdvance(self)
             },
             onPresentedDrawable: { [weak self] drawable in
@@ -632,18 +645,7 @@ final class ExperienceScreenViewController: UIViewController {
               let defaultViewModelName = journeyScreen?.defaultViewModelName else {
             return
         }
-        let viewSize = view.bounds.size
-        let artboardSize = CGSize(width: screen.width, height: screen.height)
-        guard viewSize.width > 0,
-              viewSize.height > 0,
-              artboardSize.width > 0,
-              artboardSize.height > 0 else { return }
-
-        let insets = ExperienceSafeAreaInsetMapper.artboardInsets(
-            deviceInsets: ExperienceSafeAreaInsets(view.safeAreaInsets),
-            viewSize: viewSize,
-            artboardSize: artboardSize
-        )
+        let insets = experienceSafeAreaInsets(for: view)
         guard insets != lastPushedSafeAreaInsets else { return }
         let identity = journeyScreen?.defaultInstanceId
         let values: [(String, Double)] = [
@@ -764,7 +766,7 @@ final class ExperienceScreenViewController: UIViewController {
     private func applySemantics(_ capture: NuxieNativeSemanticCapture) {
         guard !isShuttingDown, !contentHidden, controllerIsVisible,
               let interactiveScreen, let presentationLoop,
-              let transform = ExperienceContainCenterTransform(
+              let transform = ExperienceLayoutTransform(
                 artboardBounds: interactiveScreen.artboardBounds,
                 viewportBounds: surfaceView.bounds) else { return }
         let nativeControls = textInputOverlayBridge.applySemantics(capture)
@@ -834,7 +836,8 @@ final class ExperienceScreenViewController: UIViewController {
                             ),
                             drafts: [draft]
                         ),
-                        originatingRun: originatingRun
+                        originatingRun: originatingRun,
+                        frameSources: nil
                     )
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
@@ -868,7 +871,8 @@ final class ExperienceScreenViewController: UIViewController {
                                 invocation: invocation,
                                 additionalDrafts: []
                             ),
-                            originatingRun: originatingRun
+                            originatingRun: originatingRun,
+                            frameSources: nil
                         )
                     }
                 }
@@ -909,12 +913,7 @@ final class ExperienceScreenViewController: UIViewController {
             screenID: screenId,
             renderPlan: artifact.renderPlan,
             surfaceView: surfaceView,
-            artboardBounds: CGRect(
-                x: 0,
-                y: 0,
-                width: screen.width,
-                height: screen.height
-            ),
+            artboardBounds: interactiveScreen.artboardBounds,
             semanticTextWriter: semanticWriter,
             semanticContentOffsetWriter: { [weak self] captureID, target, offset, completion in
                 loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
@@ -982,17 +981,32 @@ final class ExperienceScreenViewController: UIViewController {
         })
     }
 
-    private func deliverStep(effects: [ExperienceInteractiveEffect]) async {
+    private var pendingFramePublications = 0
+
+    func deliverStep(effects: [ExperienceInteractiveEffect]) async {
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
+        let openLink = delegate?.captureLinkHandler(for: self)
         var assembler = ExperienceRuntimeScreenEmissionAssembler()
+        var frameSources = ExperienceEmissionSources()
+        var links: [ExperienceRendererOpenLinkRequest] = []
         for effect in effects {
             guard !isShuttingDown, runtimeFailure == nil else { return }
             guard let projected = await route(effect) else { continue }
             switch projected {
+            case .link(let request):
+                links.append(request)
             case .control(let screenId, let invocation):
+                if case .controlAction(_, let event) = effect.kind {
+                    frameSources.control = event.resolvedSource
+                }
                 assembler.appendControl(screenId: screenId, invocation: invocation)
             case .draft(let draft, let draftSource):
+                if case .reportedEvent(let event) = effect.kind {
+                    frameSources.drafts.append(event.resolvedSource)
+                } else {
+                    frameSources.drafts.append(nil)
+                }
                 assembler.appendDraft(draft, source: draftSource)
             }
         }
@@ -1002,24 +1016,46 @@ final class ExperienceScreenViewController: UIViewController {
             LogWarning(
                 "ExperienceScreenViewController: rejected native transaction with multiple controls"
             )
-            return
+            emission = nil
         case .success(let assembled):
             emission = assembled
         }
-        if let emission {
-            await delegate?.experienceScreenViewController(
-                self,
-                didEmitScreenEmission: emission,
-                originatingRun: originatingRun
-            )
+        let frameLinks = ExperienceFrameLinks {
+            for link in links { await openLink?(link) }
+        }
+        frameSources.frameLinks = frameLinks
+        let publish = { @MainActor [self, delegate, frameSources] in
+            if let emission {
+                await delegate?.experienceScreenViewController(
+                    self,
+                    didEmitScreenEmission: emission,
+                    originatingRun: originatingRun,
+                    frameSources: frameSources
+                )
+            }
+            // JourneyService consumes these before continuing an accepted batch.
+            // Rejected and link-only frames still own their independent links.
+            await frameLinks.perform()
+        }
+        // A link-bearing frame returns before its emission publishes.
+        // The publication gate preserves emission order across frames.
+        if links.isEmpty && pendingFramePublications == 0 {
+            await publish()
+        } else {
+            pendingFramePublications += 1
+            Task { @MainActor in
+                defer { pendingFramePublications -= 1 }
+                await publish()
+            }
         }
     }
 
-    private func route(
+    func route(
         _ effect: ExperienceInteractiveEffect
     ) async -> ExperienceRuntimeProjectedEmission? {
         switch effect.kind {
         case .controlAction(let actionId, let event):
+            guard Set(event.properties.map(\.key)).count == event.properties.count else { return nil }
             let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
             })
@@ -1044,27 +1080,24 @@ final class ExperienceScreenViewController: UIViewController {
             )
         case .reportedEvent(let event):
             resolveExitWaiters(eventName: event.name)
-            let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
+            let properties = Dictionary(event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
-            })
+            }, uniquingKeysWith: { first, _ in first })
             let eventScreenID = Self.stringProperty(
                 ["screenId", "screen_id"],
                 in: properties
             ) ?? screenId
-            let instanceID = Self.stringProperty(
+            let instanceID = event.sourceRejection == nil ? Self.stringProperty(
                 ["instanceId", "instance_id"],
                 in: properties
-            )
+            ) : nil
             if !event.url.isEmpty {
-                delegate?.experienceScreenViewController(
-                    self,
-                    didRequestOpenLink: ExperienceRendererOpenLinkRequest(
-                        urlString: event.url,
-                        target: event.target.isEmpty ? nil : event.target,
-                        screenId: eventScreenID,
-                        instanceId: instanceID
-                    )
-                )
+                return .link(ExperienceRendererOpenLinkRequest(
+                    urlString: event.url,
+                    target: event.target,
+                    screenId: screenId,
+                    instanceId: instanceID
+                ))
             } else if !event.name.isEmpty {
                 return .draft(
                     .event(name: event.name, payload: properties.mapValues(

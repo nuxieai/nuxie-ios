@@ -49,7 +49,20 @@ extension ScreenEmissionValue {
     }
 }
 
+struct JourneyPresentationFences: Sendable {
+    let identityToken: IdentityFenceToken
+    let executionFence: JourneyProfileFence
+    let executionToken: JourneyProfileFenceToken
+
+    func isCurrent(identity: IdentityServiceProtocol) -> Bool {
+        executionFence.performIfCurrent(executionToken) {
+            identity.performIfCurrentIdentityFenceToken(identityToken) { true } == true
+        } == true
+    }
+}
+
 struct JourneyPresentationRequest: Sendable {
+    let fences: JourneyPresentationFences
     let release: AuthenticatedJourneyRelease
     let delivery: JourneyReleaseDelivery
     let pinnedArtifacts: JourneyPinnedReleaseArtifacts?
@@ -65,8 +78,9 @@ struct JourneyPresentationRequest: Sendable {
             -> JourneyScreenDismissalResult
     let onProductsUnavailable:
         @MainActor @Sendable (String) async -> JourneyProductFailureResult
+    let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) async -> Void
     let onEmissionBatch:
-        @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
+        @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
     let onPermissionEvent:
         @Sendable (
             String,
@@ -80,6 +94,7 @@ struct JourneyPresentationRequest: Sendable {
         @MainActor @Sendable () -> Void
 
     init(
+        fences: JourneyPresentationFences,
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,
         pinnedArtifacts: JourneyPinnedReleaseArtifacts? = nil,
@@ -99,8 +114,9 @@ struct JourneyPresentationRequest: Sendable {
             @escaping @MainActor @Sendable (String) async -> JourneyProductFailureResult = {
                 _ in .rejected
             },
+        onLinkOpened: @escaping @Sendable (ExperienceRendererOpenLinkRequest) async -> Void = { _ in },
         onEmissionBatch:
-            @escaping @MainActor @Sendable (ScreenEmissionBatch) async -> Bool,
+            @escaping @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool,
         onPermissionEvent:
             @escaping @Sendable (
                 String,
@@ -113,6 +129,7 @@ struct JourneyPresentationRequest: Sendable {
         onPresentationFinished:
             @escaping @MainActor @Sendable () -> Void = {}
     ) {
+        self.fences = fences
         self.release = release
         self.delivery = delivery
         self.responseValues = responseValues
@@ -124,6 +141,7 @@ struct JourneyPresentationRequest: Sendable {
         self.onScreenChanged = onScreenChanged
         self.onScreenDismissed = onScreenDismissed
         self.onProductsUnavailable = onProductsUnavailable
+        self.onLinkOpened = onLinkOpened
         self.onEmissionBatch = onEmissionBatch
         self.onPermissionEvent = onPermissionEvent
         self.onPresentationRevealed = onPresentationRevealed
@@ -168,6 +186,9 @@ enum JourneyPresentationActionResult: Equatable, Sendable {
 }
 
 protocol JourneyPresenting: AnyObject, Sendable {
+    @MainActor
+    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?
+
     /// Re-opens presentation admission after foreground profile authority and
     /// its dependent projections are current.
     @MainActor
@@ -207,7 +228,8 @@ protocol JourneyPresenting: AnyObject, Sendable {
     func resolveJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        source: ScreenEmissionSource?
+        source: ScreenEmissionSource?,
+        eventSource: ExperienceResolvedEventSource?
     ) -> [String: JourneyReleaseJSONValue]?
 
     @MainActor
@@ -228,14 +250,17 @@ protocol JourneyPresenting: AnyObject, Sendable {
 
 @MainActor
 final class JourneyRuntimeDelegate {
+    let presentationFences: JourneyPresentationFences
     nonisolated let introEligibilityAuthorizationContext:
         IntroEligibilityAuthorizationContext
     nonisolated private let journeyId: String
     private(set) var presentationTraceContext:
         ExperiencePresentationTraceContext?
     private let presentationTraceToken: ExperiencePresentationTraceToken?
+    private let openLinkHandler: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)?
+    private let onLinkOpened: @Sendable (ExperienceRendererOpenLinkRequest) async -> Void
     private let onEmissionBatch:
-        @MainActor @Sendable (ScreenEmissionBatch) async -> Bool
+        @MainActor @Sendable (ScreenEmissionBatch, ExperienceEmissionSources?) async -> Bool
     nonisolated private let onPermissionEvent:
         @Sendable (
             String,
@@ -257,7 +282,7 @@ final class JourneyRuntimeDelegate {
     private let viewModelState: ExperienceViewModelStateCoordinator?
     private var responseProjection: JourneyResponseViewModelProjection
     private let initialScreenId: String
-    private var activeScreenId: String?
+    private(set) var activeScreenId: String?
     private var navigationHistory: [String] = []
     private var pendingBackNavigation: (target: String, history: [String])?
     private var dismissedSurfaceScreenId: String?
@@ -269,7 +294,10 @@ final class JourneyRuntimeDelegate {
     private var resolved = false
     private var resolutionWaiters: [CheckedContinuation<Bool, Never>]?
 
-    init(request: JourneyPresentationRequest) {
+    init(request: JourneyPresentationRequest,
+         openLink: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)? = nil) {
+        presentationFences = request.fences
+        openLinkHandler = openLink
         introEligibilityAuthorizationContext = .init(
             distinctId: request.owner.distinctId,
             journeyId: request.owner.journeyId,
@@ -291,6 +319,7 @@ final class JourneyRuntimeDelegate {
         onScreenDismissed = request.onScreenDismissed
         onProductsUnavailable = request.onProductsUnavailable
         onPresentationRevealed = request.onPresentationRevealed
+        onLinkOpened = request.onLinkOpened
         onEmissionBatch = request.onEmissionBatch
         onPermissionEvent = request.onPermissionEvent
         onOutcome = request.onOutcome
@@ -418,7 +447,8 @@ final class JourneyRuntimeDelegate {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch,
+        frameSources: ExperienceEmissionSources? = nil
     ) async -> Bool {
         guard !resolved,
               batch.journeyId == journeyId,
@@ -426,7 +456,7 @@ final class JourneyRuntimeDelegate {
               batch.presentationEpoch == presentationEpoch else {
             return false
         }
-        guard await onEmissionBatch(batch) else { return false }
+        guard await onEmissionBatch(batch, frameSources) else { return false }
         let changed = responseProjection.accept(batch.emissions)
         if !resolved, let activeScreenId {
             projectResponses(into: controller, screenID: activeScreenId, fields: changed)
@@ -461,15 +491,15 @@ final class JourneyRuntimeDelegate {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    ) {
-        guard !resolved,
-              request.screenId == nil || request.screenId == activeScreenId else {
-            return
-        }
-        controller.performOpenLink(
-            urlString: request.urlString,
-            target: request.target
-        )
+    ) async {
+        _ = await openLink(controller, request: request)
+    }
+
+    @discardableResult
+    func openLink(_ controller: ExperienceViewController, request: ExperienceRendererOpenLinkRequest) async -> Bool {
+        guard let opened = await openLinkHandler?(controller, request) else { return false }
+        await onLinkOpened(opened)
+        return true
     }
 
     nonisolated func experienceViewController(
@@ -642,7 +672,8 @@ final class JourneyRuntimeDelegate {
 
     func resolvePresentationString(
         _ value: JourneyReleaseJSONValue,
-        source: ScreenEmissionSource? = nil
+        source: ScreenEmissionSource? = nil,
+        eventSource: ExperienceResolvedEventSource? = nil
     ) -> String? {
         let screenId = source?.screenId ?? activeScreenId
         let instanceId = source?.instanceId
@@ -650,7 +681,10 @@ final class JourneyRuntimeDelegate {
             payload: nil,
             context: nil,
             lookup: { [viewModelState] path in
-                viewModelState?.getPurchaseValue(
+                if path.isRelative == true {
+                    return eventSource?.string(path: path)
+                }
+                return viewModelState?.getPurchaseValue(
                     path: path,
                     screenId: screenId,
                     instanceId: instanceId

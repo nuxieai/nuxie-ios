@@ -5,9 +5,7 @@ import Foundation
 import UIKit
 #endif
 
-/// Safe-area insets for a rectangular surface, expressed in that surface's
-/// own coordinate space (points for a UIKit view or artboard units for a
-/// runtime surface).
+/// The screen view's safe-area insets in points, published as they are.
 struct ExperienceSafeAreaInsets: Equatable {
     var top: Double
     var bottom: Double
@@ -30,47 +28,9 @@ extension ExperienceSafeAreaInsets {
 }
 #endif
 
-/// Maps device-point safe-area insets into artboard units for a runtime
-/// artboard rendered with fit `.contain` and alignment `.center`.
-///
-/// With `.contain` the artboard is uniformly scaled to fit inside the view
-/// and centered, which letterboxes (or pillarboxes) the remainder. A device
-/// inset that falls entirely inside the letterbox band never overlaps the
-/// artboard, so the corresponding artboard inset clamps to zero; an inset
-/// that reaches past the band is divided by the scale factor to land in
-/// artboard units.
-enum ExperienceSafeAreaInsetMapper {
-    static func artboardInsets(
-        deviceInsets: ExperienceSafeAreaInsets,
-        viewSize: CGSize,
-        artboardSize: CGSize
-    ) -> ExperienceSafeAreaInsets {
-        guard viewSize.width > 0, viewSize.height > 0,
-              artboardSize.width > 0, artboardSize.height > 0
-        else {
-            return .zero
-        }
-
-        let scale = min(
-            Double(viewSize.width) / Double(artboardSize.width),
-            Double(viewSize.height) / Double(artboardSize.height)
-        )
-        guard scale > 0 else {
-            return .zero
-        }
-
-        let letterboxX = (Double(viewSize.width) - Double(artboardSize.width) * scale) / 2
-        let letterboxY = (Double(viewSize.height) - Double(artboardSize.height) * scale) / 2
-
-        func corrected(_ deviceInset: Double, letterbox: Double) -> Double {
-            max(0, (deviceInset - letterbox) / scale)
-        }
-
-        return ExperienceSafeAreaInsets(
-            top: corrected(deviceInsets.top, letterbox: letterboxY),
-            bottom: corrected(deviceInsets.bottom, letterbox: letterboxY),
-            left: corrected(deviceInsets.left, letterbox: letterboxX),
-            right: corrected(deviceInsets.right, letterbox: letterboxX)
-        )
-    }
+#if canImport(UIKit)
+@MainActor
+func experienceSafeAreaInsets(for view: UIView) -> ExperienceSafeAreaInsets {
+    ExperienceSafeAreaInsets(view.safeAreaInsets)
 }
+#endif

@@ -14,7 +14,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             let name: String
             let fontSize: Double
             let lineHeight: Double
-            let containScale: Double
+            let viewSizeScale: Double
             let geometryScale: Double
             let expectedFontSize: Double
             let expectedBaselineDistance: Double?
@@ -28,7 +28,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             let bridge = ExperienceTextInputOverlayBridge()
             defer { bridge.clear() }
             let surface = UIView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
-            let item = Fixture.Case(name: weight, fontSize: 23, lineHeight: -1, containScale: 1,
+            let item = Fixture.Case(name: weight, fontSize: 23, lineHeight: -1, viewSizeScale: 1,
                 geometryScale: 1, expectedFontSize: 23, expectedBaselineDistance: nil)
             bridge.bind(screenID: "screen", renderPlan: plan(item, text: "System input", systemWeight: weight),
                 surfaceView: surface, artboardBounds: surface.bounds,
@@ -56,7 +56,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         for item in fixture.cases {
             let bridge = ExperienceTextInputOverlayBridge()
             defer { bridge.clear() }
-            let size = 400 * item.containScale
+            let size = 400 * item.viewSizeScale
             let surface = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
             var writes = 0
             var commits = 0
@@ -86,7 +86,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             oracle.attributedText = NSAttributedString(string: fixture.text, attributes: [
                 .font: UIFont.systemFont(ofSize: item.fontSize), .paragraphStyle: paragraph,
             ])
-            let projectionScale = item.containScale * item.geometryScale
+            let projectionScale = item.geometryScale
             XCTAssertEqual(try XCTUnwrap(editor.font).pointSize, item.fontSize, accuracy: 0.01, item.name)
             let unitOrigin = editor.convert(CGPoint.zero, to: surface)
             let unitEnd = editor.convert(CGPoint(x: 0, y: 1), to: surface)
@@ -144,7 +144,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
     }
 
     func testEffectiveMetricsRestyleAnUnchangedFrameWithoutTextTransactions() throws {
-        let item = Fixture.Case(name: "effective", fontSize: 18, lineHeight: 24, containScale: 1,
+        let item = Fixture.Case(name: "effective", fontSize: 18, lineHeight: 24, viewSizeScale: 1,
             geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
         let text = "Alpha\nBravo\nCharlie"
         let bridge = ExperienceTextInputOverlayBridge()
@@ -231,7 +231,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
     }
 
     func testPresentedAffineGeometryPreservesEditingAndRejectsUnavailableFields() throws {
-        let item = Fixture.Case(name: "affine", fontSize: 18, lineHeight: 24, containScale: 1,
+        let item = Fixture.Case(name: "affine", fontSize: 18, lineHeight: 24, viewSizeScale: 1,
             geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
         let text = "Alpha\nBravo\nCharlie"
         let bridge = ExperienceTextInputOverlayBridge()
@@ -426,7 +426,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
             lastSnapshot = snapshot
             guard let drawable = layer.nextDrawable() else { throw XCTSkip("No Metal drawable") }
             let completed = expectation(description: "published frame completed")
-            let outcome = try await runtime.render(drawable: .available(.init(drawable)), completion: { completed.fulfill() })
+            let outcome = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)), completion: { completed.fulfill() })
             await fulfillment(of: [completed], timeout: 2)
             XCTAssertEqual(outcome.disposition, .presented)
             bridge.update(frame: .init(snapshot: snapshot, geometry: step.textGeometry))
@@ -555,7 +555,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
         XCTAssertTrue(blankGeometry.values.allSatisfy { $0.firstBaseline == nil })
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("No blank drawable") }
         let blankCompleted = expectation(description: "blank frame completed")
-        _ = try await runtime.render(drawable: .available(.init(drawable)), completion: { blankCompleted.fulfill() })
+        _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)), completion: { blankCompleted.fulfill() })
         await fulfillment(of: [blankCompleted], timeout: 2)
         bridge.update(frame: .init(snapshot: try XCTUnwrap(lastSnapshot), geometry: blank.textGeometry))
         if let editor {
@@ -582,7 +582,7 @@ final class ExperienceTextInputTypographyTests: XCTestCase {
     }
 
     func testSingleLineAndSecureFieldsUseCapturedFirstBaseline() throws {
-        let item = Fixture.Case(name: "single-line", fontSize: 18, lineHeight: 24, containScale: 1,
+        let item = Fixture.Case(name: "single-line", fontSize: 18, lineHeight: 24, viewSizeScale: 1,
             geometryScale: 1, expectedFontSize: 18, expectedBaselineDistance: 24)
         var ordinaryCarets: [CGRect] = []
         for secure in [false, true] {

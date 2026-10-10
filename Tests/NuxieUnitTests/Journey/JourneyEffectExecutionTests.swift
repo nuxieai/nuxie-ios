@@ -4,6 +4,44 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyEffectExecutionTests: JourneyTestCase {
+    func testOpenedLinkUsesTheSharedRunRecord() async throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/events/runtime-link-opened.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let record = try XCTUnwrap(fixture["record"] as? [String: Any])
+        let properties = try XCTUnwrap(record["properties"] as? [String: Any])
+        let snapshot = try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load())
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(identity.performWithCurrentIdentityFence("customer", { _ in () }))
+        let fence = JourneyProfileFence()
+        let events = MockEventLog()
+        let dispatcher = JourneyEffectDispatcher(identity: identity, events: events)
+        let request = JourneyDispatchRequest(runId: "run", journeyId: "journey", generation: 2,
+            reference: .init(experienceId: "experience", versionId: "version", legId: "leg",
+                descriptorSha256: arm.reference.descriptorSha256), release: release, stepId: "open",
+            action: [:], context: .init(event: [:], responses: [:]), effectId: UUID().uuidString,
+            distinctId: "customer", identityFence: identityFence.token, executionFence: fence,
+            executionFenceToken: fence.token())
+        let link = ExperienceRendererOpenLinkRequest(urlString: try XCTUnwrap(properties["url"] as? String),
+            target: properties["target"] as? String, screenId: properties["screen_id"] as? String,
+            instanceId: properties["instance_id"] as? String, destination: try XCTUnwrap(properties["destination"] as? String))
+        let captured = await dispatcher.captureLinkOpened(link, request: request)
+        XCTAssertTrue(captured)
+        XCTAssertEqual(events.routedEvents.count, 1)
+        let event = try XCTUnwrap(events.routedEvents.first)
+        XCTAssertEqual(event.name, record["name"] as? String)
+        XCTAssertEqual(NSDictionary(dictionary: event.properties), NSDictionary(dictionary: properties))
+        let activity = try XCTUnwrap(ActivityCuration.activity(internalName: event.name, properties: event.properties))
+        XCTAssertEqual(activity.wireName, "link_opened")
+        XCTAssertEqual(activity.wireProperties["destination"], .string("in_app"))
+        XCTAssertEqual(activity.wireProperties["url"], .string(link.urlString))
+    }
+
     func testBufferedStartupEventWaitsForJournalRecovery() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

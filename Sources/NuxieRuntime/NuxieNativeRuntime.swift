@@ -898,6 +898,25 @@ package actor NuxieNativeRuntime {
         }
     }
 
+    package func setLayoutSize(width: Float, height: Float) async throws {
+        let state = try requireState()
+        try await executor.call {
+            try requireOK(nux_player_layout_size_set(try state.player.require(), width, height),
+                operation: "set player layout size")
+        }
+    }
+
+    package func layoutSize() async throws -> CGSize {
+        let state = try requireState()
+        return try await executor.call {
+            var size = NuxPlayerLayoutSize()
+            size.struct_size = UInt32(MemoryLayout<NuxPlayerLayoutSize>.size)
+            try requireOK(nux_player_layout_size(try state.player.require(), &size),
+                operation: "read player layout size")
+            return CGSize(width: CGFloat(size.width), height: CGFloat(size.height))
+        }
+    }
+
     package func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws
         -> NuxieNativeRendererOutcome
     {
@@ -908,6 +927,7 @@ package actor NuxieNativeRuntime {
     }
 
     package func render(
+        layoutScaleFactor: Float,
         drawable: NuxieNativeDrawableState,
         clearColor: UInt32 = 0,
         readback: NuxieNativeFrameReadback? = nil,
@@ -927,6 +947,7 @@ package actor NuxieNativeRuntime {
         return try await executor.call {
             try state.renderer.render(
                 player: state.player,
+                layoutScaleFactor: layoutScaleFactor,
                 drawable: drawable,
                 clearColor: clearColor,
                 readback: readback,
@@ -2884,6 +2905,7 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
 
     func render(
         player: NuxieNativePlayerHandle,
+        layoutScaleFactor: Float,
         drawable: NuxieNativeDrawableState,
         clearColor: UInt32,
         readback: NuxieNativeFrameReadback?,
@@ -2903,7 +2925,8 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
             operation.drawable_state = UInt32(NUX_METAL_DRAWABLE_STATE_OCCLUDED)
         }
         operation.clear_color = clearColor
-        operation.fit = UInt32(NUX_RENDERER_FIT_CONTAIN_CENTER)
+        operation.fit = UInt32(NUX_RENDERER_FIT_LAYOUT)
+        operation.layout_scale_factor = layoutScaleFactor
         if let readback {
             operation.readback_buffer = Unmanaged.passUnretained(readback.buffer as AnyObject).toOpaque()
             operation.readback_bytes_per_row = readback.bytesPerRow
@@ -3304,7 +3327,7 @@ private final class NuxieVideoActionCollector {
 
 extension NuxieNativeRuntime {
     /// Query all requested occurrences on the runtime lane after scene advance.
-    /// The viewport is in root-artboard coordinates, including any letterboxing.
+    /// The viewport is the visible view bounds in root-artboard points.
     package func visibleVideoIDs(_ componentIDs: [Int], viewport: CGRect) async throws -> Set<Int> {
         let state = try requireState()
         return try await executor.call {

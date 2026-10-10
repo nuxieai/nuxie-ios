@@ -282,6 +282,7 @@ enum ExperienceRuntimePresentationSessionOperation: @unchecked Sendable {
     /// render reached native code and therefore never synthesizes completion.
     case render(
         ExperienceRuntimePresentationDrawableState,
+        layoutScaleFactor: Float,
         completion: ExperienceRuntimePresentationFrameCompletion
     )
     case queued(ExperienceRuntimePresentationQueuedWork)
@@ -348,12 +349,12 @@ struct ExperienceRuntimePresentationSession: Sendable {
         ExperienceRuntimePresentationSessionOperation
     ) async throws -> ExperienceRuntimePresentationSessionResult
 
-    let artboardBounds: CGRect
+    let artboardBounds: @Sendable () -> CGRect
     let observesEveryPresentation: Bool
     private let performOperation: Perform
 
     init(
-        artboardBounds: CGRect = .zero,
+        artboardBounds: @escaping @Sendable () -> CGRect = { .zero },
         observesEveryPresentation: Bool = false,
         perform: @escaping Perform
     ) {
@@ -381,7 +382,7 @@ extension ExperienceInteractiveScreen {
         onStep: @escaping @MainActor @Sendable ([ExperienceInteractiveEffect]) async -> Void
     ) -> ExperienceRuntimePresentationSession {
         let screen = self
-        return ExperienceRuntimePresentationSession(artboardBounds: artboardBounds,
+        return ExperienceRuntimePresentationSession(artboardBounds: { screen.artboardBounds },
             observesEveryPresentation: onSemantics != nil || onTextFrame != nil || onCaptions != nil) { operation in
             switch operation {
             case .copyMetalDevice:
@@ -402,9 +403,10 @@ extension ExperienceInteractiveScreen {
             case .resize(let size):
                 return .renderer(Self.presentationOutcome(try await screen.resize(
                     pixelWidth: size.pixelWidth,
-                    pixelHeight: size.pixelHeight
+                    pixelHeight: size.pixelHeight,
+                    layoutScaleFactor: size.layoutScaleFactor
                 )))
-            case .render(let drawableState, let completion):
+            case .render(let drawableState, let layoutScaleFactor, let completion):
                 let drawable: ExperienceInteractiveDrawable?
                 let isOccluded: Bool
                 switch drawableState {
@@ -419,6 +421,7 @@ extension ExperienceInteractiveScreen {
                     isOccluded = true
                 }
                 let frame = try await screen.renderFrame(
+                    layoutScaleFactor: layoutScaleFactor,
                     drawable: drawable,
                     isOccluded: isOccluded,
                     capturesSemantics: onSemantics != nil,
@@ -892,8 +895,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return nil
         }
 
-        // Every accepted step gets an explicit render outcome before lifecycle
-        // work, even when visibility changed while the step was in flight.
+        if shouldPresent {
+            let size = surfaceSize(for: surfaceView)
+            if size != lastAppliedSize {
+                pendingRender = false
+                submittedPresentationContext = nil
+                return .resize(size)
+            }
+        }
+
+        // Render settled geometry before lifecycle work, including visibility
+        // changes that arrived while the step was in flight.
         if pendingRender {
             pendingRender = false
             return makeRenderOperation(for: surfaceView)
@@ -941,8 +953,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             ))
         }
 
-        let size = surfaceSize(for: surfaceView)
-        if size != lastAppliedSize { return .resize(size) }
         if !pendingWork.isEmpty { return takeNextQueuedOperation() }
         if pendingZeroDeltaFrame {
             pendingZeroDeltaFrame = false
@@ -979,7 +989,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         case (.resize(let size), .renderer(let outcome)):
             try requireHealthy(outcome)
             lastAppliedSize = size
-            pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+            pendingTimestamp = nil
+            pendingZeroDeltaFrame = true
         case (.setMediaVisible(let visible), .none):
             appliedMediaVisibility = visible
         case (.step(let step), .session):
@@ -1001,7 +1012,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     )
                 }
             }
-        case (.render(_, let completion), .renderer(let outcome)):
+        case (.render(_, _, let completion), .renderer(let outcome)):
             if result.hasDelivery {
                 completion.recordPresentedWork { [weak self] in
                     Task { @MainActor [weak self] in
@@ -1052,7 +1063,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private func makeRenderOperation(
         for surfaceView: ExperienceRuntimeSurfaceView
-    ) -> ExperienceRuntimePresentationSessionOperation {
+    ) -> ExperienceRuntimePresentationSessionOperation? {
+        guard let size = lastAppliedSize else {
+            reportTerminal(ExperienceRuntimePresentationLoopError.unexpectedSessionResult)
+            return nil
+        }
+        let scale = size.layoutScaleFactor
         frameSequence &+= 1
         let frameID = frameSequence
         if let generation = zeroDeltaRenderGeneration {
@@ -1067,17 +1083,16 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             }
         }
         guard shouldPresent else {
-            return .render(.occluded, completion: completion)
+            return .render(.occluded, layoutScaleFactor: scale, completion: completion)
         }
-        guard let size = lastAppliedSize,
-              size.pixelWidth > 0,
+        guard size.pixelWidth > 0,
               size.pixelHeight > 0,
               let permit = drawableGate.tryAcquire() else {
-            return .render(.timeout, completion: completion)
+            return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
         guard let drawable = acquireDrawable(surfaceView.metalLayer) else {
             permit.release()
-            return .render(.timeout, completion: completion)
+            return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
         let firstPresentedDrawableGate = firstPresentedDrawableGate
         let shouldObservePresentation = session.observesEveryPresentation || !firstPresentedDrawableGate.isClaimed
@@ -1113,6 +1128,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
         return .render(
             .available(ExperienceRuntimePresentationDrawable(value: drawable)),
+            layoutScaleFactor: scale,
             completion: wrappedCompletion
         )
     }
@@ -1143,8 +1159,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private func surfaceSize(
         for surfaceView: ExperienceRuntimeSurfaceView
     ) -> ExperienceRuntimeSurfaceSize {
-        let scale = surfaceView.window?.screen.scale ?? surfaceView.contentScaleFactor
-        surfaceView.metalLayer.contentsScale = scale
+        let scale = surfaceView.runtimeDisplayScale
+        if scale.isFinite, scale > 0 { surfaceView.metalLayer.contentsScale = scale }
         let size = ExperienceRuntimeSurfaceSizing.pixels(
             width: surfaceView.bounds.width,
             height: surfaceView.bounds.height,
@@ -1174,6 +1190,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         guard shouldAdvance,
               isPresentationVisible,
               let surfaceView,
+              surfaceView.runtimeDisplayScale.isFinite,
+              surfaceView.runtimeDisplayScale > 0,
               surfaceViewIsEffectivelyVisible(surfaceView) else { return false }
         return true
     }
@@ -1388,8 +1406,8 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
               !isShuttingDown,
               terminalError == nil,
               let surfaceView,
-              let transform = ExperienceContainCenterTransform(
-                  artboardBounds: session.artboardBounds,
+              let transform = ExperienceLayoutTransform(
+                  artboardBounds: session.artboardBounds(),
                   viewportBounds: surfaceView.bounds
               ) else { return }
         let projected = pointerInput.runtimeEvents(for: events, transform: transform)

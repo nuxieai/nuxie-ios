@@ -14,6 +14,7 @@ enum ActivityCuration {
     SystemEventNames.featureUsed,
     JourneyEvents.journeyStarted,
     JourneyEvents.journeyCompleted,
+    JourneyEvents.linkOpened,
     SystemEventNames.notificationsDenied,
     SystemEventNames.notificationsEnabled,
     SystemEventNames.permissionDenied,
@@ -74,6 +75,18 @@ enum ActivityCuration {
     case JourneyEvents.experienceErrored:
       guard let ref = experienceRef(properties) else { return missing(internalName) }
       return .experienceErrored(ref, message: string(properties, "error_message") ?? "")
+    case JourneyEvents.linkOpened:
+      guard let ref = experienceRef(properties, requireVersion: true), ref.journeyId != nil,
+            let legId = nonemptyString(properties, "leg_id"),
+            let number = properties["leg_generation"] as? NSNumber,
+            CFGetTypeID(number) != CFBooleanGetTypeID(),
+            number.doubleValue >= 0, number.doubleValue <= 9_007_199_254_740_991,
+            number.doubleValue.rounded() == number.doubleValue,
+            let url = nonemptyString(properties, "url"),
+            let destination = string(properties, "destination"),
+            ["in_app", "external"].contains(destination) else { return missing(internalName) }
+      return .linkOpened(ref, legId: legId, generation: number.intValue, url: url, target: string(properties, "target"), destination: destination,
+          screenId: nonemptyString(properties, "screen_id"), instanceId: nonemptyString(properties, "instance_id"))
     case JourneyEvents.journeyStarted, JourneyEvents.journeyCompleted:
       guard let ref = experienceRef(properties, requireVersion: true), ref.journeyId != nil,
             let legId = nonemptyString(properties, "leg_id"),

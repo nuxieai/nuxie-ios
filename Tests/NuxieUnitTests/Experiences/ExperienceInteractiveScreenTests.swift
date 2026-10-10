@@ -12,6 +12,159 @@ import XCTest
 #endif
 
 final class ExperienceInteractiveScreenTests: XCTestCase {
+    #if canImport(UIKit)
+    @MainActor
+    func testFrameHandsOffBatchBeforeOpeningLinksAndRejectsDuplicateControlKeys() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        let duplicate = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "control", url: "", target: "", delay: 0,
+            properties: [.init(key: "value", value: .string("first")), .init(key: "value", value: .string("last"))])
+        let rejected = await controller.route(.init(sequence: 0, correlationID: 1, kind: .controlAction(actionId: "control", event: duplicate)))
+        XCTAssertNil(rejected)
+        let link = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 131, name: "", url: "https://example.test", target: "_self", delay: 0, properties: [])
+        var badSourceLink = link
+        badSourceLink.sourceRejection = "source absent"
+        let ordinary = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128, name: "sibling", url: "", target: "", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 1, kind: .reportedEvent(badSourceLink)),
+            .init(sequence: 1, correlationID: 1, kind: .reportedEvent(ordinary))])
+        for _ in 0..<100 where recorder.order.count < 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["batch", "link"])
+        recorder.order = []
+        let control = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "buy", url: "", target: "", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 2, kind: .controlAction(actionId: "buy", event: control)),
+            .init(sequence: 1, correlationID: 2, kind: .controlAction(actionId: "buy", event: control)),
+            .init(sequence: 2, correlationID: 2, kind: .reportedEvent(link))])
+        for _ in 0..<100 where recorder.order.isEmpty { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["link"])
+        var resume: CheckedContinuation<Void, Never>?
+        recorder.linkGate = { await withCheckedContinuation { resume = $0 } }
+        let delivered = expectation(description: "Frame returned while external confirmation is pending")
+        Task { @MainActor in
+            await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 3, kind: .reportedEvent(link))])
+            delivered.fulfill()
+        }
+        await fulfillment(of: [delivered], timeout: 1)
+        for _ in 0..<100 where resume == nil { await Task.yield() }
+        XCTAssertNotNil(resume)
+        resume?.resume()
+        recorder.linkGate = nil
+        recorder.order = []
+        recorder.onBatch = { controller.delegate = nil }
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 4, kind: .reportedEvent(ordinary)),
+            .init(sequence: 1, correlationID: 4, kind: .reportedEvent(link))])
+        for _ in 0..<100 where recorder.order.count < 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order, ["batch", "link"])
+    }
+
+    @MainActor
+    func testLaterFramesDoNotWaitForPendingExternalConfirmation() async throws {
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let recorder = LinkFrameRecorder()
+        let gate = ExperienceInteractiveOperationGate()
+        recorder.onBatchAsync = { sources in await gate.withLock { await sources?.frameLinks?.perform() } }
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: recorder)
+        var release: CheckedContinuation<Void, Never>?
+        recorder.linkGate = { await withCheckedContinuation { release = $0 } }
+        let ordinary = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128, name: "emit", url: "", target: "", delay: 0, properties: [])
+        let href = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 131, name: "", url: "tel:123", target: "_blank", delay: 0, properties: [])
+        await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 1, kind: .reportedEvent(ordinary)),
+            .init(sequence: 1, correlationID: 1, kind: .reportedEvent(href))])
+        for _ in 0..<100 where release == nil { await Task.yield() }
+        XCTAssertNotNil(release)
+        let returned = expectation(description: "Next frame returns while browser confirmation holds publication")
+        Task { @MainActor in
+            await controller.deliverStep(effects: [.init(sequence: 0, correlationID: 2, kind: .reportedEvent(ordinary))])
+            returned.fulfill()
+        }
+        await fulfillment(of: [returned], timeout: 1)
+        release?.resume()
+        for _ in 0..<100 where recorder.order.filter({ $0 == "batch" }).count != 2 { await Task.yield() }
+        XCTAssertEqual(recorder.order.filter { $0 == "link" }.count, 1)
+    }
+
+    @MainActor
+    func testSharedSourcesPublishOnlyLiveEventsWithContiguousSequences() async throws {
+        struct Fixture: Decodable {
+            struct Case: Decodable {
+                struct Alias: Decodable { let model: String; let name: String; let native: UInt64 }
+                let name: String
+                let source: UInt64?
+                let live: [UInt64]
+                let aliases: [Alias]
+                let declared: String?
+                let accepted: Bool
+                let alias: String?
+                let duplicateValue: String?
+            }
+            let cases: [Case]
+        }
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/events/runtime-event-sources.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL))
+        let (experience, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: nil)
+        for vector in fixture.cases {
+            var properties = [ExperienceInteractiveField(key: "value", value: .string("literal"))]
+            if let duplicate = vector.duplicateValue { properties.append(.init(key: "value", value: .string(duplicate))) }
+            if let declared = vector.declared {
+                properties.append(.init(key: "instanceId", value: .string(declared)))
+            }
+            let reported = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128,
+                name: "selected", url: "", target: "", delay: 0, properties: properties)
+            let identities = Dictionary(uniqueKeysWithValues: vector.aliases.map {
+                (ExperienceInteractiveViewModelIdentity(viewModelName: $0.model, instanceID: $0.name),
+                 ExperienceInteractiveViewModelReference(rawValue: $0.native)!)
+            })
+            let projected = ExperienceInteractiveEventSource.project(reported, nativeID: vector.source,
+                rootID: 1, liveIDs: Set(vector.live), identities: identities)
+            var router = ExperienceInteractiveEffectRouter()
+            let sibling = ExperienceInteractiveReportedEvent(localIndex: 1, coreType: 128,
+                name: "sibling", url: "", target: "", delay: 0, properties: [])
+            let effects = router.project(reportedEvents: [projected, sibling], viewModelChanges: [],
+                hostCommands: [], declaredEventNames: [], correlationID: 1)
+            var drafts: [ScreenEmissionDraft] = []
+            for effect in effects {
+                if case .draft(let draft, _) = await controller.route(effect) { drafts.append(draft) }
+            }
+            let dispatcher = ScreenEmissionDispatcher(createId: { UUID().uuidString },
+                now: { "2026-10-04T12:00:00.000Z" }, executeScriptAction: { _ in [] })
+            let result = await dispatcher.dispatch(
+                run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
+                    lifecycleGeneration: 0, presentationEpoch: 0),
+                source: ScreenEmissionSource(screenId: "screen", actionId: "runtime:1",
+                    componentId: nil, instanceId: vector.alias), drafts: drafts)
+            guard case .success(let batch) = result else {
+                XCTFail("Publication failed: \(vector.name)"); continue
+            }
+            XCTAssertEqual(batch.emissions.map(\.name), vector.accepted ? ["selected", "sibling"] : ["sibling"], vector.name)
+            XCTAssertEqual(batch.emissions.map(\.sequence), vector.accepted ? [0, 1] : [0], vector.name)
+            if vector.accepted {
+                XCTAssertEqual(batch.emissions[0].payload["value"], .string("literal"), vector.name)
+                XCTAssertEqual(batch.emissions[0].payload["instanceId"], vector.alias.map(ScreenEmissionValue.string), vector.name)
+            }
+        }
+    }
+
+    #endif
+
+    func testRootEventUsesSnapshotRootIdentity() async throws {
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload, pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: 71, instances: [.init(id: 71, schemaIndex: 0, valueRange: 0..<0)], values: [])
+        let event = NuxieNativeEvent(localIndex: 0, coreType: 131, name: "", url: "https://example.test", target: "_self", delay: 0, properties: [], sourceViewModelInstanceID: nil)
+        let step = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [], stateChanges: [], events: [event], hostCommands: [], viewModelChanges: [])
+        let projected = await screen.projectStep(step, eventSnapshot: snapshot, correlationID: 1)
+        guard case .reportedEvent(let reported) = try XCTUnwrap(projected.effects.first).kind else { return XCTFail("Missing root event") }
+        XCTAssertEqual(reported.resolvedSource?.nativeID, snapshot.rootInstanceID)
+    }
+
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
         let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
         let payload = artifact.payload
@@ -34,6 +187,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 return event
             }
             XCTAssertEqual(controls.count, 1, "Expected exactly one purchase control: \(effects)")
+            let source = try XCTUnwrap(controls.first?.resolvedSource)
+            XCTAssertTrue(source.snapshot.instances.contains { $0.id == source.nativeID })
             XCTAssertEqual(controls.first?.properties.first { $0.key == "instanceId" }?.value,
                 .string(expected))
         }
@@ -51,6 +206,34 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }
             XCTAssertEqual(value?.value, .bytes(Data(expected.utf8)))
         }
+        try await screen.close()
+    }
+
+    func testNativeNestedEventCanResolveWithoutHostAliases() async throws {
+        let (_, artifact) = try await purchaseFixtureArtifact(navigation: false)
+        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
+            pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        let down = try await screen.step(pointers: [.init(kind: .down, x: 240, y: 30)], elapsedSeconds: 0)
+        let up = try await screen.step(pointers: [.init(kind: .up, x: 240, y: 30, timestamp: 0.1)], elapsedSeconds: 0)
+        let settled = try await screen.step(elapsedSeconds: 0.016)
+        let reported = (down.effects + up.effects + settled.effects).compactMap { effect -> ExperienceInteractiveReportedEvent? in
+            guard case .controlAction(_, let event) = effect.kind else { return nil }
+            return event
+        }
+        XCTAssertEqual(reported.count, 1)
+        let event = try XCTUnwrap(reported.first)
+        let source = try XCTUnwrap(event.resolvedSource)
+        XCTAssertNotEqual(source.nativeID, source.snapshot.rootInstanceID)
+        let nativeEvent = ExperienceInteractiveReportedEvent(localIndex: event.localIndex,
+            coreType: event.coreType, name: event.name, url: event.url, target: event.target,
+            delay: event.delay, properties: event.properties.filter { $0.key != "instanceId" })
+        let unaliased = ExperienceInteractiveEventSource.project(nativeEvent, nativeID: source.nativeID,
+            rootID: source.snapshot.rootInstanceID, liveIDs: Set(source.snapshot.instances.map(\.id)), identities: [:])
+        XCTAssertNil(unaliased.sourceRejection)
+        XCTAssertFalse(unaliased.properties.contains { $0.key == "instanceId" })
+        XCTAssertEqual(source.string(path: VmPathRef(path: "placementId", isRelative: true)), "plan:annual")
         try await screen.close()
     }
 
@@ -96,7 +279,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             }?.value as? ExperienceInteractiveScreen)
         }
         let initial = try interactiveScreen()
-        try await initial.resize(pixelWidth: 320, pixelHeight: 150)
+        try await initial.resize(pixelWidth: 320, pixelHeight: 150, layoutScaleFactor: 1)
         for _ in 0..<20 { _ = try await initial.step(elapsedSeconds: 0.016) }
         _ = try await initial.step(pointers: [.init(kind: .down, x: 240, y: 65)], elapsedSeconds: 0)
         _ = try await initial.step(pointers: [.init(kind: .up, x: 240, y: 65, timestamp: 0.1)], elapsedSeconds: 0)
@@ -131,7 +314,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         defer { Task { try? await screen.close() } }
         try await screen.enableSemantics()
         _ = try await screen.step(elapsedSeconds: 0)
-        let skipped = try await screen.renderFrame(drawable: nil, isOccluded: true, capturesSemantics: true)
+        let skipped = try await screen.renderFrame(layoutScaleFactor: 1, drawable: nil, isOccluded: true, capturesSemantics: true)
         XCTAssertNil(skipped.semantics)
         let device = try await screen.metalDevice()
         let layer = CAMetalLayer()
@@ -140,7 +323,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         layer.framebufferOnly = true
         layer.drawableSize = CGSize(width: 64, height: 64)
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
-        let frame = try await screen.renderFrame(drawable: ExperienceInteractiveDrawable(drawable),
+        let frame = try await screen.renderFrame(layoutScaleFactor: 1, drawable: ExperienceInteractiveDrawable(drawable),
             capturesSemantics: true)
         XCTAssertEqual(frame.outcome.disposition, .presented)
         XCTAssertNotNil(frame.semantics)
@@ -551,7 +734,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(deliveredSteps, 1)
         XCTAssertNil(deliveredText)
 
-        let skipped = try await session.perform(.render(.occluded, completion: .init({})))
+        let skipped = try await session.perform(.render(.occluded, layoutScaleFactor: 1, completion: .init({})))
         XCTAssertFalse(skipped.hasDelivery)
         await skipped.deliver()
         XCTAssertNil(deliveredText)
@@ -563,7 +746,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         layer.drawableSize = CGSize(width: 64, height: 64)
         guard let drawable = layer.nextDrawable() else { throw XCTSkip("This host cannot vend a CAMetalDrawable") }
         let completed = expectation(description: "native render completed")
-        let rendered = try await session.perform(.render(.available(.init(value: drawable)),
+        let rendered = try await session.perform(.render(.available(.init(value: drawable)), layoutScaleFactor: 1,
             completion: .init({ completed.fulfill() })))
         await fulfillment(of: [completed], timeout: 2)
         XCTAssertTrue(rendered.hasDelivery)
@@ -579,10 +762,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual(current.values.first { $0.name == "Number" }?.value, .number(91))
         XCTAssertEqual(deliveredSteps, 1)
 
-        _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80)
+        _ = try await screen.resize(pixelWidth: 80, pixelHeight: 80, layoutScaleFactor: 1)
         layer.drawableSize = CGSize(width: 80, height: 80)
         guard let nextDrawable = layer.nextDrawable() else { throw XCTSkip("No second drawable") }
-        let afterResize = try await screen.renderFrame(drawable: .init(nextDrawable), capturesSemantics: false)
+        let afterResize = try await screen.renderFrame(layoutScaleFactor: 1, drawable: .init(nextDrawable), capturesSemantics: false)
         XCTAssertNil(afterResize.text, "Resize retires copied geometry until another settled step")
         try await screen.close()
     }
@@ -3443,7 +3626,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         guard let drawable = layer.nextDrawable() else {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
-        return try await screen.render(
+        return try await screen.render(layoutScaleFactor: 1,
             drawable: ExperienceInteractiveDrawable(drawable),
             clearColor: 0xFF11_2233
         )
@@ -3464,7 +3647,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             throw XCTSkip("This host cannot vend a CAMetalDrawable")
         }
         let completion = expectation(description: "native frame completion")
-        let outcome = try await screen.render(
+        let outcome = try await screen.render(layoutScaleFactor: 1,
             drawable: ExperienceInteractiveDrawable(drawable),
             clearColor: 0xFF11_2233,
             completion: { completion.fulfill() }
@@ -3658,7 +3841,7 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
     func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
-        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?) async {}
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController,
@@ -3669,4 +3852,21 @@ private final class PurchaseNavigationDelegate: ExperienceScreenViewControllerDe
         didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
 }
 #endif
+#endif
+
+#if canImport(UIKit)
+@MainActor
+private final class LinkFrameRecorder: ExperienceScreenViewControllerDelegate {
+    var order: [String] = []
+    var linkGate: (() async -> Void)?
+    var onBatch: (() -> Void)?
+    var onBatchAsync: ((ExperienceEmissionSources?) async -> Void)?
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {}
+    func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async { order.append("batch"); onBatch?(); await onBatchAsync?(frameSources) }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async { order.append("link"); await linkGate?() }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
+}
 #endif

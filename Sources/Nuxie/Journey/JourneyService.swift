@@ -187,6 +187,7 @@ actor JourneyService {
     /// instance before starting commerce. Keep that exact value with the
     /// claimed run so only its matching SDK outcome can advance the cursor.
     private var pendingPresentationPurchasePlacements: [String: String] = [:]
+    private let onPresentationContinuationFinished: (@Sendable () -> Void)?
     private var wakeTask: Task<Void, Never>?
     private var wakeGeneration: UInt64 = 0
 
@@ -208,8 +209,10 @@ actor JourneyService {
         pinnedReleaseAuthenticator: @escaping PinnedReleaseAuthenticator,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone = .current,
-        journalBeforePersist: (@Sendable () throws -> Void)? = nil
+        journalBeforePersist: (@Sendable () throws -> Void)? = nil,
+        onPresentationContinuationFinished: (@Sendable () -> Void)? = nil
     ) {
+        self.onPresentationContinuationFinished = onPresentationContinuationFinished
         self.identity = identity
         self.events = events
         let executionFence = JourneyProfileFence()
@@ -1590,6 +1593,7 @@ private extension JourneyService {
 private extension JourneyService {
     private func handlePresentationBatch(
         _ batch: ScreenEmissionBatch,
+        eventSource: ExperienceEmissionSources? = nil,
         runId: String,
         release: AuthenticatedJourneyRelease,
         executionFenceToken: JourneyProfileFenceToken
@@ -1631,6 +1635,7 @@ private extension JourneyService {
             in: journal,
             executionFenceToken: executionFenceToken
         )
+        await eventSource?.frameLinks?.perform()
         switch disposition {
         case .rejected:
             return false
@@ -1638,13 +1643,16 @@ private extension JourneyService {
             return true
         case .continueExecution(let continuation):
             Task { [weak self] in
-                await self?.continuePresentedRun(
+                guard let self else { return }
+                defer { self.onPresentationContinuationFinished?() }
+                await self.continuePresentedRun(
                     continuation.run,
                     release: release,
                     executionFenceToken: executionFenceToken,
                     signal: continuation.signal,
                     checkpoint: continuation.checkpoint,
                     presentationSource: batch.source,
+                    eventSource: eventSource?.source(eventID: continuation.eventID),
                     journal: journal
                 )
             }
@@ -1659,6 +1667,19 @@ private extension JourneyService {
                 executionFenceToken: executionFenceToken
             )
         }
+    }
+
+    private func handlePresentationLinkOpened(_ link: ExperienceRendererOpenLinkRequest,
+        run: JourneyRun, release: AuthenticatedJourneyRelease,
+        identityFenceToken: IdentityFenceToken, executionFenceToken: JourneyProfileFenceToken) async {
+        guard let journal, executionFence.isCurrent(executionFenceToken),
+              await isCurrentIdentity(identityFenceToken, journal: journal) else { return }
+        _ = await JourneyEffectDispatcher(identity: identity, events: events).captureLinkOpened(link,
+            request: .init(runId: run.id, journeyId: run.journeyId, generation: run.generation,
+                reference: run.reference, release: release, stepId: run.stepId, action: [:],
+                context: run.context, effectId: link.effectId ?? UUID.v7().uuidString, distinctId: journal.distinctId,
+                identityFence: identityFenceToken, executionFence: executionFence,
+                executionFenceToken: executionFenceToken))
     }
 
     private func handlePresentationPermissionEvent(
@@ -2143,6 +2164,7 @@ private extension JourneyService {
         signal: JourneyControlExecutor.Signal,
         checkpoint: JourneyControlExecutor.Checkpoint? = nil,
         presentationSource: ScreenEmissionSource? = nil,
+        eventSource: ExperienceResolvedEventSource? = nil,
         dismissPresentationOnCompletion: Bool = true,
         journal: JourneyRunJournal
     ) async {
@@ -2164,6 +2186,7 @@ private extension JourneyService {
             checkpoint: checkpoint,
             journal: journal,
             presentationSource: presentationSource,
+            eventSource: eventSource,
             dismissPresentationOnCompletion: dismissPresentationOnCompletion
         )
     }
@@ -2197,6 +2220,7 @@ private extension JourneyService {
         checkpoint initialCheckpoint: JourneyControlExecutor.Checkpoint?,
         journal: JourneyRunJournal,
         presentationSource: ScreenEmissionSource? = nil,
+        eventSource: ExperienceResolvedEventSource? = nil,
         dismissPresentationOnCompletion: Bool = true,
         presentationReservation initialPresentationReservation:
             (any JourneyPresentationReservation)? = nil
@@ -2432,6 +2456,8 @@ private extension JourneyService {
                             at: .now(wallClock: dateProvider.now())
                         )
                     let result = await presenter.presentJourney(.init(
+                        fences: .init(identityToken: presentationIdentityFenceToken,
+                            executionFence: executionFence, executionToken: executionFenceToken),
                         release: release,
                         delivery: executionSnapshot.delivery,
                         pinnedArtifacts: pinnedArtifacts,
@@ -2473,10 +2499,16 @@ private extension JourneyService {
                                 executionFenceToken: executionFenceToken
                             )
                         },
-                        onEmissionBatch: { [weak self] batch in
+                        onLinkOpened: { [weak self] link in
+                            await self?.handlePresentationLinkOpened(link, run: presentedRun,
+                                release: release, identityFenceToken: presentationIdentityFenceToken,
+                                executionFenceToken: executionFenceToken)
+                        },
+                        onEmissionBatch: { [weak self] batch, frameSources in
                             guard let self else { return false }
                             return await self.handlePresentationBatch(
                                 batch,
+                                eventSource: frameSources,
                                 runId: presentedRun.id,
                                 release: release,
                                 executionFenceToken: executionFenceToken
@@ -2549,7 +2581,19 @@ private extension JourneyService {
                 }
                 let result: JourneyDispatchResult
                 var presentationSignal: JourneyControlExecutor.Signal?
-                if let presenter,
+                if JourneyActionType(action: action) == .openLink {
+                    let owner = JourneyPresentationOwner(journeyId: run.journeyId, distinctId: journal.distinctId)
+                    if let resolved = resolvedPresentationAction(action, context: run.context),
+                       case .string(let url)? = resolved["url"], !url.isEmpty,
+                       case .string(let target)? = resolved["target"] {
+                        if let presenter, let opened = await presenter.openJourneyLink(owner: owner,
+                            request: .init(urlString: url, target: target, screenId: nil, instanceId: nil, effectId: effectId)) {
+                            await handlePresentationLinkOpened(opened, run: run, release: release,
+                                identityFenceToken: identityFence.token, executionFenceToken: executionFenceToken)
+                        }
+                    }
+                    result = .outlet("next")
+                } else if let presenter,
                    let actionType = JourneyActionType(action: action),
                    actionType.isPresentationOwned,
                    await presenter.ownsJourneyPresentation(
@@ -2568,7 +2612,8 @@ private extension JourneyService {
                                 distinctId: journal.distinctId
                             ),
                             action: contextResolvedAction,
-                            source: presentationSource
+                            source: presentationSource,
+                            eventSource: eventSource
                         )
                     else {
                         await finish(

@@ -322,7 +322,8 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             ExperiencePresentationService(
                 windowProvider: windowProvider,
                 experiences: experiences,
-                eventLog: eventLog
+                eventLog: eventLog,
+                identity: identity
             )
         }
         let journeys = ForegroundPresentationAdmissionProbe(
@@ -394,7 +395,8 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             ExperiencePresentationService(
                 windowProvider: MockWindowProvider(),
                 experiences: experiences,
-                eventLog: eventLog
+                eventLog: eventLog,
+                identity: identity
             )
         }
         let features = FeatureService(
@@ -490,7 +492,8 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             ExperiencePresentationService(
                 windowProvider: MockWindowProvider(),
                 experiences: MockExperienceService(),
-                eventLog: eventLog
+                eventLog: eventLog,
+                identity: identity
             )
         }
         let journeys = ForegroundPresentationAdmissionProbe(presenter: presenter)

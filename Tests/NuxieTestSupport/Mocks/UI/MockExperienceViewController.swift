@@ -9,6 +9,7 @@ class MockExperienceViewController: ExperienceViewController {
     private(set) var navigationScreenIds: [String] = []
     private(set) var navigationTransitions: [Any?] = []
     private(set) var performDismissReasons: [CloseReason] = []
+    var canOpenLink = true
     private(set) var performedOpenLinks: [(urlString: String, target: String?)] = []
     private(set) var notificationPermissionResolutionCount = 0
     private(set) var requestPermissionResolutionTypes: [String] = []
@@ -192,8 +193,10 @@ class MockExperienceViewController: ExperienceViewController {
         super.performDismiss(reason: reason)
     }
 
-    override func performOpenLink(urlString: String, target: String? = nil) {
+    func performOpenLink(urlString: String, target: String? = nil) async -> Bool {
+        guard canOpenLink, ExperienceLinkRouting.destination(urlString: urlString, target: target) != nil else { return false }
         performedOpenLinks.append((urlString, target))
+        return true
     }
     
     // MARK: - Test Helper Methods

@@ -1,6 +1,6 @@
 {
   "platform": "android",
-  "contract": "Window system bar and cutout insets are intersected with the rendering view before shared artboard projection. IME is not a safe-area source. Size arrays are width,height; view is left,top,width,height; inset arrays are top,bottom,left,right.",
+  "contract": "Window system bar and cutout insets are intersected with the rendering view. The local insets are published in dp at density 1. IME is not a safe-area source. Size arrays are width,height; view is left,top,width,height; inset arrays are top,bottom,left,right.",
   "cases": [
     {
       "name": "edge-to-edge",

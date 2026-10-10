@@ -45,11 +45,13 @@ struct ExperienceRendererViewModelChange: @unchecked Sendable {
     let isTrigger: Bool
 }
 
-struct ExperienceRendererOpenLinkRequest {
+struct ExperienceRendererOpenLinkRequest: Equatable, Sendable {
     let urlString: String
     let target: String?
     let screenId: String?
     let instanceId: String?
+    var effectId: String? = nil
+    var destination: String = "external"
 }
 
 /// Invoked by the MainActor-isolated ExperienceViewController.
@@ -97,7 +99,8 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch,
+        frameSources: ExperienceEmissionSources?
     ) async -> Bool
 
     func experienceViewController(
@@ -108,7 +111,7 @@ protocol ExperienceRuntimeDelegate: AnyObject {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    )
+    ) async
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -211,7 +214,8 @@ extension ExperienceRuntimeDelegate {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
-        didEmitScreenEmissionBatch batch: ScreenEmissionBatch
+        didEmitScreenEmissionBatch batch: ScreenEmissionBatch,
+        frameSources: ExperienceEmissionSources?
     ) async -> Bool { false }
 
     func experienceViewController(
@@ -222,7 +226,7 @@ extension ExperienceRuntimeDelegate {
     func experienceViewController(
         _ controller: ExperienceViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    ) {}
+    ) async {}
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -1030,28 +1034,8 @@ class ExperienceViewController: NuxiePlatformViewController {
         return false
     }
 
-    func performOpenLink(urlString: String, target: String? = nil) {
-        guard let url = URL(string: urlString) else { return }
-        let normalizedTarget = target?.lowercased()
-
-        if normalizedTarget == "in_app" {
-            let scheme = url.scheme?.lowercased()
-            guard scheme == "http" || scheme == "https" else { return }
-            #if canImport(UIKit)
-            let safariViewController = SFSafariViewController(url: url)
-            present(safariViewController, animated: true)
-            #elseif canImport(AppKit)
-            NSWorkspace.shared.open(url)
-            #endif
-            return
-        }
-
-        #if canImport(UIKit)
-        guard UIApplication.shared.canOpenURL(url) else { return }
-        UIApplication.shared.open(url)
-        #elseif canImport(AppKit)
-        NSWorkspace.shared.open(url)
-        #endif
+    var linkPresentationIsClosing: Bool {
+        hostDismissalRequested || dismissalTask != nil || didInvokeClose
     }
 
     func applyViewModelSnapshot(_ snapshot: ExperienceViewModelSnapshot, screenId: String? = nil) {
@@ -2125,20 +2109,23 @@ extension ExperienceViewController {
     @discardableResult
     func publishScreenInput(
         _ input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        eventSource: ExperienceEmissionSources? = nil
     ) async -> ScreenEmissionPublicationDisposition {
         return await screenEmissionPublicationGate.withLock { [weak self] in
             guard let self else { return .rejected }
             return await self.publishScreenInputSerially(
                 input,
-                originatingRun: originatingRun
+                originatingRun: originatingRun,
+                eventSource: eventSource
             )
         }
     }
 
     private func publishScreenInputSerially(
         _ input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        eventSource: ExperienceEmissionSources? = nil
     ) async -> ScreenEmissionPublicationDisposition {
         await applyPendingScreenEmissionRunScope()
         guard let run = screenEmissionRun,
@@ -2186,7 +2173,8 @@ extension ExperienceViewController {
             await joinPresentationRevealNotification()
             let published = await runtimeDelegate?.experienceViewController(
                 self,
-                didEmitScreenEmissionBatch: batch
+                didEmitScreenEmissionBatch: batch,
+                frameSources: eventSource?.bound(to: batch)
             ) ?? false
             if !published {
                 _ = await screenEmissionDispatcher.rollbackUnpublishedBatch(batch)
@@ -2214,10 +2202,12 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didEmitScreenEmission input: ExperienceRuntimeScreenEmission,
-        originatingRun: ScreenEmissionRun?
+        originatingRun: ScreenEmissionRun?,
+        frameSources: ExperienceEmissionSources?
     ) async {
         guard acceptsRuntimeCallback(from: controller) else { return }
-        await publishScreenInput(input, originatingRun: originatingRun)
+        await publishScreenInput(input, originatingRun: originatingRun,
+            eventSource: frameSources)
     }
 
     func experienceScreenViewController(
@@ -2228,12 +2218,19 @@ extension ExperienceViewController: ExperienceScreenViewControllerDelegate {
         runtimeDelegate?.experienceViewController(self, didEmitViewModelChange: change)
     }
 
+    func captureLinkHandler(for controller: ExperienceScreenViewController) -> (@MainActor (ExperienceRendererOpenLinkRequest) async -> Void)? {
+        guard acceptsRuntimeCallback(from: controller), let runtimeDelegate else { return nil }
+        // Keep the accepted frame's owner alive across batch-triggered dismissal.
+        return { [self, runtimeDelegate] request in
+            await runtimeDelegate.experienceViewController(self, didRequestOpenLink: request)
+        }
+    }
+
     func experienceScreenViewController(
         _ controller: ExperienceScreenViewController,
         didRequestOpenLink request: ExperienceRendererOpenLinkRequest
-    ) {
-        guard acceptsRuntimeCallback(from: controller) else { return }
-        runtimeDelegate?.experienceViewController(self, didRequestOpenLink: request)
+    ) async {
+        await captureLinkHandler(for: controller)?(request)
     }
 
     func experienceScreenViewController(

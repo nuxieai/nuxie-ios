@@ -6,7 +6,7 @@
       "name": "natural",
       "fontSize": 16,
       "lineHeight": -1,
-      "containScale": 1,
+      "viewSizeScale": 1,
       "geometryScale": 1,
       "expectedFontSize": 16,
       "expectedBaselineDistance": null
@@ -15,7 +15,7 @@
       "name": "explicit",
       "fontSize": 16,
       "lineHeight": 32,
-      "containScale": 1,
+      "viewSizeScale": 1,
       "geometryScale": 1,
       "expectedFontSize": 16,
       "expectedBaselineDistance": 32
@@ -24,7 +24,7 @@
       "name": "tight",
       "fontSize": 16,
       "lineHeight": 12,
-      "containScale": 1,
+      "viewSizeScale": 1,
       "geometryScale": 1,
       "expectedFontSize": 16,
       "expectedBaselineDistance": 12
@@ -33,7 +33,7 @@
       "name": "natural-scaled",
       "fontSize": 16,
       "lineHeight": -1,
-      "containScale": 1,
+      "viewSizeScale": 1,
       "geometryScale": 1.5,
       "expectedFontSize": 24.0,
       "expectedBaselineDistance": null
@@ -42,28 +42,28 @@
       "name": "explicit-scaled",
       "fontSize": 16,
       "lineHeight": 32,
-      "containScale": 1,
+      "viewSizeScale": 1,
       "geometryScale": 1.5,
       "expectedFontSize": 24.0,
       "expectedBaselineDistance": 48.0
     },
     {
-      "name": "natural-contained",
+      "name": "natural-smaller-view",
       "fontSize": 16,
       "lineHeight": -1,
-      "containScale": 0.75,
+      "viewSizeScale": 0.75,
       "geometryScale": 2,
-      "expectedFontSize": 24.0,
+      "expectedFontSize": 32,
       "expectedBaselineDistance": null
     },
     {
-      "name": "explicit-contained",
+      "name": "explicit-smaller-view",
       "fontSize": 16,
       "lineHeight": 32,
-      "containScale": 0.75,
+      "viewSizeScale": 0.75,
       "geometryScale": 2,
-      "expectedFontSize": 24.0,
-      "expectedBaselineDistance": 48.0
+      "expectedFontSize": 32,
+      "expectedBaselineDistance": 64
     }
   ],
   "lineHeightAdmission": [

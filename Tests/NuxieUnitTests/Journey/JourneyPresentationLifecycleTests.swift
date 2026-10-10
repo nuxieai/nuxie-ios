@@ -4,6 +4,170 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyPresentationLifecycleTests: JourneyTestCase {
+    func testSharedBrokenLinkStatesThroughJourneyServiceAndRealPresenter() async throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/events/link-open-states.json")
+        let document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let vectors = try XCTUnwrap(document["cases"] as? [[String: Any]])
+        var count = 0
+        for vector in vectors {
+            let link = try XCTUnwrap(vector["link"] as? [String: Any])
+            let expected = try XCTUnwrap(vector["expected"] as? [String: Any])
+            guard link["kind"] as? String == "journey", expected["opened"] as? Bool == false else { continue }
+            let value = try ExactJSONCodec.decode(JourneyReleaseJSONValue.self,
+                from: JSONSerialization.data(withJSONObject: link["url"] ?? NSNull(), options: .fragmentsAllowed))
+            try await assertLinkStep(url: value, target: link["target"] as? String, opens: false, realPresenter: true)
+            count += 1
+        }
+        XCTAssertEqual(count, 5)
+    }
+
+    func testUnresolvedLinkAdvancesWithoutDismissal() async throws {
+        try await assertLinkStep(url: .object(["type": .string("Event.Field"), "key": .string("absent")]), target: "external", opens: false)
+    }
+    func testEmptyLinkAdvancesWithoutDismissal() async throws {
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("")]), target: "external", opens: false)
+    }
+    func testMissingLinkAdvancesWithoutDismissal() async throws {
+        try await assertLinkStep(url: nil, target: "external", opens: false)
+    }
+    func testNonStringLinkAdvancesWithoutDismissal() async throws {
+        try await assertLinkStep(url: .bool(true), target: "external", opens: false)
+    }
+    func testMissingTargetAdvancesWithoutDismissal() async throws {
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: nil, opens: false)
+    }
+    func testExternalLinkWithoutPresentationOpensAndAdvances() async throws {
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "external", opens: true)
+    }
+    func testInAppLinkWithoutPresentationUsesExternalDestination() async throws {
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "in_app", opens: true)
+    }
+    func testLinkRecordPrecedesCompletionAndUsesStepEffectID() async throws {
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "external", opens: true, complete: true)
+    }
+
+    func testPresentedLinkRecordPrecedesCompletionAndUsesStepEffectID() async throws {
+        try await assertLinkStep(url: .object(["type": .string("String"), "value": .string("https://example.test")]), target: "in_app", opens: true, complete: true, owned: true)
+    }
+
+    private func assertLinkStep(url: JourneyReleaseJSONValue?, target: String?, opens: Bool, complete: Bool = false, owned: Bool = false, realPresenter: Bool = false) async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let base = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
+        var action: [String: JourneyReleaseJSONValue] = ["type": .string("open_link")]
+        action["url"] = url
+        action["target"] = target.map(JourneyReleaseJSONValue.string)
+        let next = realPresenter
+            ? Journey.Step(kind: .action, id: "next", action: ["type": .string("delay"), "durationMs": .number(60_000)], outlets: [:], outcome: nil)
+            : complete
+            ? Journey.Step(kind: .complete, id: "next", action: nil, outlets: nil, outcome: "completed")
+            : Journey.Step(kind: .action, id: "next", action: ["type": .string("navigate"), "screenId": .string("screen_welcome")], outlets: [:], outcome: nil)
+        let snapshot = replacing(base, entryStepId: owned ? "present" : "link", steps: [
+            .init(kind: .action, id: "present", action: ["type": .string("navigate"), "screenId": .string("screen_welcome")], outlets: [:], outcome: nil),
+            .init(kind: .action, id: "link", action: action, outlets: ["next": "next"], outcome: nil), next
+        ], routes: owned ? [.init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "open", entryStepId: "link")] : [],
+           screens: realPresenter ? [] : nil)
+        let identity = MockIdentityService(); identity.setDistinctId("customer")
+        let events = MockEventLog(); events.identity = identity
+        let presenter = await MainActor.run { RecordingJourneyPresenter() }
+        let recorder = LinkStepProbe()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let actualPresenter = await MainActor.run {
+            ExperiencePresentationService(experiences: MockExperienceService(), eventLog: events, identity: identity)
+        }
+        let observedPresenter = await MainActor.run { ObservedLinkPresenter(base: actualPresenter) }
+        let service = makeService(identity: identity, events: events, directory: directory,
+            presenter: realPresenter ? observedPresenter : presenter)
+        if !owned {
+            await MainActor.run {
+                presenter.linkHandler = { _, link in
+                    let runs = try? await journal.runs()
+                    await recorder.open(link.urlString, effectID: runs?.first?.effectReceipts["link"])
+                    var opened = link
+                    opened.destination = "external"
+                    return opened
+                }
+            }
+        }
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        if owned {
+            let request = await MainActor.run { presenter.recordsOpenedLinks = true; return presenter.request }
+            let batch = presentationBatch(request: try XCTUnwrap(request), invocationId: "open-link",
+                emissions: [.init(id: "00000000-0000-7000-8000-000000000922", sequence: 0, occurredAt: "2026-08-29T12:00:00Z", name: "open", payload: [:])])
+            _ = await request?.onEmissionBatch(batch, nil)
+            for _ in 0..<200 where !events.routedEvents.contains(where: { $0.name == JourneyEvents.journeyCompleted }) {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }
+        if realPresenter {
+            let attempts = await MainActor.run { observedPresenter.attempts }
+            XCTAssertEqual(attempts, [], "Broken steps must not reach any presentation or link operation")
+        }
+        let records = events.routedEvents.filter { $0.name == JourneyEvents.linkOpened }
+        let calls = await recorder.calls
+        XCTAssertEqual(calls.count, opens && !owned ? 1 : 0)
+        XCTAssertEqual(records.count, opens ? 1 : 0)
+        if let event = records.first {
+            let effectID = owned ? await MainActor.run { presenter.presentationActions.first?.effectId } : calls.first?.1
+            XCTAssertEqual(event.id, effectID)
+            XCTAssertEqual(event.properties["destination"] as? String, owned ? "in_app" : "external")
+            XCTAssertEqual(event.properties["target"] as? String, target)
+        }
+        if complete {
+            let names = events.routedEvents.map(\.name)
+            if opens {
+                XCTAssertLessThan(try XCTUnwrap(names.firstIndex(of: JourneyEvents.linkOpened)), try XCTUnwrap(names.firstIndex(of: JourneyEvents.journeyCompleted)))
+            } else {
+                let completed = try XCTUnwrap(events.routedEvents.first { $0.name == JourneyEvents.journeyCompleted })
+                XCTAssertEqual(completed.properties["outcome"] as? String, "completed")
+            }
+        } else {
+            let runs = try await journal.runs()
+            XCTAssertEqual(runs.first?.stepId, "next")
+            let finishes = await MainActor.run { presenter.finishedOwners.count }
+            XCTAssertEqual(finishes, 0)
+        }
+    }
+
+    func testSecondRowFrameReachesRelativePurchaseThroughBatchAdmission() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let base = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
+        let snapshot = try addingPurchaseOffer(replacing(base, entryStepId: "present", steps: [
+            .init(kind: .action, id: "present", action: ["type": .string("navigate"), "screenId": .string("screen_welcome")], outlets: [:], outcome: nil),
+            .init(kind: .action, id: "purchase", action: ["type": .string("purchase"), "placementId": .object(["ref": .object(["kind": .string("path"), "path": .string("placementId"), "isRelative": .bool(true)])])], outlets: ["completed": "done"], outcome: nil),
+            .init(kind: .complete, id: "done", action: nil, outlets: nil, outcome: "purchased")
+        ], routes: [.init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "buy", entryStepId: "purchase")],
+        screens: [.init(id: "screen_welcome", defaultViewModelName: "WelcomeModel", defaultInstanceId: "welcome", responseCaptures: [])]))
+        let identity = MockIdentityService(); identity.setDistinctId("customer")
+        let events = MockEventLog(); events.identity = identity
+        let presenter = await MainActor.run {
+            let presenter = RecordingJourneyPresenter()
+            presenter.resolvesFrameValues = true
+            presenter.actionResult = .awaitingOutcome
+            return presenter
+        }
+        let service = makeService(identity: identity, events: events, directory: directory, featureAccess: { _ in .notFound }, presenter: presenter)
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presented = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presented)
+        let frame = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1,
+            instances: (1...4).map { .init(id: UInt64($0), schemaIndex: 0, valueRange: 0..<0) },
+            values: [.init(ownerInstanceID: 1, propertyIndex: 0, name: "rows", value: .list([2, 3, 4]))] +
+                [(2, "first"), (3, "golden:monthly"), (4, "third")].map { .init(ownerInstanceID: UInt64($0.0), propertyIndex: 0, name: "placementId", value: .bytes(Data($0.1.utf8))) })
+        let source = ExperienceResolvedEventSource(nativeID: 3, snapshot: frame, schemaNames: [0: "Row"])
+        let batch = presentationBatch(request: request, invocationId: "row-purchase", emissions: [.init(id: "00000000-0000-7000-8000-000000000911", sequence: 0,
+            occurredAt: "2026-08-29T12:00:00Z", name: "buy", payload: [:])])
+        let accepted = await request.onEmissionBatch(batch, ExperienceEmissionSources(drafts: [source]).bound(to: batch))
+        XCTAssertTrue(accepted)
+        await waitForPresentationActions(1, presenter: presenter)
+        let placement = await MainActor.run { presenter.presentationActions.first?.action["placementId"] }
+        XCTAssertEqual(placement, .string("golden:monthly"))
+    }
+
     func testHostDismissalAcknowledgesAnAlreadyRetiredJourney() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
@@ -462,7 +626,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [navigated], timeout: 2)
@@ -566,7 +730,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await fulfillment(of: [completed], timeout: 2)
@@ -630,7 +794,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         for _ in 0..<100 {
@@ -778,7 +942,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     name: "continue",
                     payload: [:]
                 )]
-            ))
+            ), nil)
 
             XCTAssertTrue(accepted, actionFixture.type)
             await waitForPresentationActions(1, presenter: presenter)
@@ -804,58 +968,6 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             let genericRequest = await dispatcher.onlyRequest()
             XCTAssertNil(genericRequest, actionFixture.type)
         }
-    }
-
-    func testScreenlessPresentationActionIsRejectedBeforeAdmission() async throws {
-        let directory = temporaryDirectory()
-        defer { removeTemporaryDirectoryIfPresent(directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load(
-            entryKey: "renderedEntry"
-        )
-        let base = try await authenticatedRenderedSnapshot(fixture)
-        let actionStep = Journey.Step(
-            kind: .action,
-            id: "open_link",
-            action: [
-                "type": .string("open_link"),
-                "url": .string("https://example.com/account"),
-                "target": .string("external"),
-            ],
-            outlets: ["next": "done"],
-            outcome: nil
-        )
-        let snapshot = replacing(
-            base,
-            entryStepId: actionStep.id,
-            steps: [actionStep],
-            routes: [],
-            screens: []
-        )
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let presenter = await MainActor.run { RecordingJourneyPresenter() }
-        let service = makeService(
-            identity: identity,
-            events: events,
-            directory: directory,
-            presenter: presenter
-        )
-
-        await service.initialize()
-        await service.profileDidCommit(snapshot, distinctId: "customer")
-
-        let journal = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let runs = try await journal.runs()
-        XCTAssertTrue(runs.isEmpty)
-        let presentationActions = await MainActor.run {
-            presenter.presentationActions
-        }
-        XCTAssertTrue(presentationActions.isEmpty)
     }
 
     func testImmediatePermissionResolutionFeedsTheClaimedCursorAfterTransition() async throws {
@@ -981,7 +1093,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 name: "continue",
                 payload: [:]
             )]
-        ))
+        ), nil)
 
         XCTAssertTrue(accepted)
         await waitForPresentationActions(1, presenter: presenter)
@@ -1200,7 +1312,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     name: "continue",
                     payload: [:]
                 )]
-            ))
+            ), nil)
             XCTAssertTrue(batchAccepted)
             await waitForPresentationActions(1, presenter: presenter)
             let resolvedSource = await MainActor.run {
@@ -1248,7 +1360,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                         payload: [:]
                     )]
                 )
-            )
+            , nil)
             XCTAssertFalse(repeatedInputAccepted)
             let actionsAfterRepeatedInput = await MainActor.run {
                 presenter.presentationActions
@@ -1338,7 +1450,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                             payload: ["placement_id": .string("golden:monthly")]
                         )]
                     )
-                )
+                , nil)
                 XCTAssertFalse(failedBatchAccepted)
                 events.stableCaptureBatchFailureIndex = nil
 
@@ -1413,7 +1525,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 invocationId: "back-offer-\(decision)",
                 emissions: [.init(id: "00000000-0000-7000-8000-000000000901", sequence: 0,
                     occurredAt: "2026-08-29T12:00:00Z", name: "go_back", payload: [:])]
-            ))
+            ), nil)
             XCTAssertTrue(accepted)
             for _ in 0..<200 {
                 let settled = await MainActor.run {
@@ -1461,4 +1573,49 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         )
     }
 
+}
+
+private actor LinkStepProbe {
+    var calls: [(String, String?)] = []
+    func open(_ url: String, effectID: String?) { calls.append((url, effectID)) }
+}
+
+/// Observes entry into the real presenter, before foreground gating could hide an invalid dispatch.
+@MainActor
+private final class ObservedLinkPresenter: JourneyPresenting {
+    let base: ExperiencePresentationService
+    var attempts: [String] = []
+    init(base: ExperiencePresentationService) { self.base = base }
+    func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest? {
+        attempts.append("open")
+        return await base.openJourneyLink(owner: owner, request: request)
+    }
+    func journeyProfileRefreshDidComplete() { base.journeyProfileRefreshDidComplete() }
+    func setJourneyPresentationAvailabilityHandler(_ handler: (@MainActor @Sendable () -> Void)?) { base.setJourneyPresentationAvailabilityHandler(handler) }
+    func reserveJourneyPresentation(ownerDistinctId: String) -> (any JourneyPresentationReservation)? { base.reserveJourneyPresentation(ownerDistinctId: ownerDistinctId) }
+    func ownsJourneyPresentation(owner: JourneyPresentationOwner) -> Bool { base.ownsJourneyPresentation(owner: owner) }
+    func presentJourney(_ request: JourneyPresentationRequest) async -> JourneyPresentationResult {
+        attempts.append("present")
+        return await base.presentJourney(request)
+    }
+    func navigateJourneyPresentation(owner: JourneyPresentationOwner, screenId: String, transition: JourneyReleaseJSONValue?) async -> JourneyPresentationNavigationResult {
+        attempts.append("navigate")
+        return await base.navigateJourneyPresentation(owner: owner, screenId: screenId, transition: transition)
+    }
+    func cancelJourneyBackNavigation(owner: JourneyPresentationOwner) { base.cancelJourneyBackNavigation(owner: owner) }
+    func resolveJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], source: ScreenEmissionSource?, eventSource: ExperienceResolvedEventSource?) -> [String: JourneyReleaseJSONValue]? {
+        base.resolveJourneyPresentationAction(owner: owner, action: action, source: source, eventSource: eventSource)
+    }
+    func dispatchJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], effectId: String) async -> JourneyPresentationActionResult {
+        attempts.append("dispatch")
+        return await base.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: effectId)
+    }
+    func finishJourneyPresentation(owner: JourneyPresentationOwner) async {
+        attempts.append("finish")
+        await base.finishJourneyPresentation(owner: owner)
+    }
+    func shutdownJourneyPresentation(ownerDistinctId: String) async {
+        attempts.append("shutdown")
+        await base.shutdownJourneyPresentation(ownerDistinctId: ownerDistinctId)
+    }
 }

@@ -21,11 +21,11 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
 
     func testDetachedReboundUnknownAndAmbiguousSourcesCannotPublishPurchases() {
         var rebound = bindings()
-        rebound[.init(viewModelName: "Plan", instanceID: "plan.first")] = second
+        rebound[.init(viewModelName: "OtherPlan", instanceID: "plan.first")] = second
         var ambiguous = bindings()
         ambiguous[.init(viewModelName: "Plan", instanceID: "another")] = first
         let cases: [(Set<UInt64>, [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference])] = [
-            ([10, 30], bindings()), ([10, 20, 30], rebound), ([10, 20], [:]), ([10, 20, 30], ambiguous),
+            ([10, 30], bindings()), ([10, 20, 30], rebound), ([10, 20, 30], ambiguous),
         ]
         for (liveIDs, identities) in cases {
             let rejected = ExperienceInteractiveEventSource.project(event, nativeID: 20,
@@ -63,6 +63,55 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
             rootID: 10, liveIDs: [10], identities: [:]), event)
         XCTAssertEqual(ExperienceInteractiveEventSource.project(event, nativeID: nil,
             rootID: nil, liveIDs: [], identities: [:]), event)
+    }
+
+    func testSharedRelativeValuesReadTheEventFrame() throws {
+        struct Fixture: Decodable {
+            struct Case: Decodable { let name: String; let source: UInt64?; let expected: String?; let viewModelName: String? }
+            let rootModelName: String
+            let rowModelName: String
+            let root: UInt64
+            let rows: [UInt64]
+            let values: [String: String]
+            let cases: [Case]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/events/runtime-relative-values.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        let instances = ([fixture.root] + fixture.rows).map {
+            ExperienceInteractiveViewModelSnapshot.Instance(id: $0, schemaIndex: $0 == fixture.root ? 0 : 1, valueRange: 0..<0)
+        }
+        let values = fixture.values.map {
+            ExperienceInteractiveViewModelSnapshot.Value(ownerInstanceID: UInt64($0.key)!,
+                propertyIndex: 0, name: "placementId", value: .bytes(Data($0.value.utf8)))
+        } + [.init(ownerInstanceID: fixture.root, propertyIndex: 1, name: "rows", value: .list(fixture.rows))]
+        let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: fixture.root, instances: instances, values: values)
+        let path = VmPathRef(path: "placementId", isRelative: true)
+        for vector in fixture.cases {
+            let source = vector.source.map { ExperienceResolvedEventSource(nativeID: $0,
+                snapshot: snapshot, schemaNames: [0: fixture.rootModelName, 1: fixture.rowModelName]) }
+            XCTAssertEqual(source?.string(path: VmPathRef(viewModelName: vector.viewModelName, path: path.path, isRelative: true)), vector.expected, vector.name)
+        }
+    }
+
+    func testLaterRoutedEmissionRetainsItsOwnFrameSource() async throws {
+        let snapshot = ExperienceInteractiveViewModelSnapshot(rootInstanceID: 1, instances: [], values: [])
+        let first = ExperienceResolvedEventSource(nativeID: 2, snapshot: snapshot, schemaNames: [:])
+        let second = ExperienceResolvedEventSource(nativeID: 3, snapshot: snapshot, schemaNames: [:])
+        let dispatcher = ScreenEmissionDispatcher(createId: { UUID().uuidString },
+            now: { "2026-10-04T12:00:00.000Z" }, executeScriptAction: { _ in [] })
+        let result = await dispatcher.dispatch(
+            run: ScreenEmissionRun(journeyId: "journey", executionOwnershipEpoch: 0,
+                lifecycleGeneration: 0, presentationEpoch: 0),
+            source: ScreenEmissionSource(screenId: "screen", actionId: "frame", componentId: nil, instanceId: nil),
+            drafts: [.event(name: "unrouted", payload: [:]), .event(name: "selected", payload: [:])])
+        guard case .success(let batch) = result else { return XCTFail("Expected batch") }
+        let sources = ExperienceEmissionSources(drafts: [first, second]).bound(to: batch)
+        XCTAssertEqual(sources.source(eventID: batch.emissions[1].id)?.nativeID, 3)
+        XCTAssertEqual(sources.source(eventID: batch.emissions[0].id)?.nativeID, 2)
+        XCTAssertNil(sources.source(eventID: "missing"))
     }
 
     private func bindings() -> [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference] {

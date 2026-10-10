@@ -15,6 +15,7 @@ final class JourneyEvents: Sendable {
 
     static let customerUpdated = "$customer_updated"
     static let appActionRequested = "$app_action_requested"
+    static let linkOpened = "$link_opened"
     static let experimentExposure = "$experiment_exposure"
 
     static func experienceArtifactLoadSucceededProperties(

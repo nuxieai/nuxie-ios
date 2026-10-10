@@ -11,19 +11,19 @@ struct ExperienceTextInputPlacement: Equatable {
     let firstBaseline: CGPoint?
     let textOrigin: CGPoint
 
-    init?(geometry: NuxieNativeTextRunGeometry, viewport: ExperienceContainCenterTransform) {
+    init?(geometry: NuxieNativeTextRunGeometry, viewport: ExperienceLayoutTransform) {
         self.init(renderRevision: geometry.renderRevision, layout: geometry.layout,
             contentTransform: geometry.contentTransform, firstBaseline: geometry.firstBaseline, viewport: viewport)
     }
 
-    init?(nativeInput geometry: NuxieNativeTextInputGeometry, viewport: ExperienceContainCenterTransform) {
+    init?(nativeInput geometry: NuxieNativeTextInputGeometry, viewport: ExperienceLayoutTransform) {
         self.init(renderRevision: geometry.renderRevision, layout: geometry.layout,
             contentTransform: geometry.worldTransform, firstBaseline: geometry.firstBaseline, viewport: viewport)
     }
 
     private init?(renderRevision: UInt64, layout: NuxieNativeTextLayout?,
                   contentTransform: CGAffineTransform, firstBaseline: CGFloat?,
-                  viewport: ExperienceContainCenterTransform) {
+                  viewport: ExperienceLayoutTransform) {
         guard renderRevision != 0, let layout,
               layout.bounds.width > 0, layout.bounds.height > 0,
               Self.isFinite(layout.transform), Self.isFinite(contentTransform),
@@ -709,9 +709,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         layout()
     }
 
+    func updateArtboardBounds(_ bounds: CGRect) { artboardBounds = bounds }
+
     func layout() {
         guard let surfaceView,
-              let transform = ExperienceContainCenterTransform(
+              let transform = ExperienceLayoutTransform(
                   artboardBounds: artboardBounds,
                   viewportBounds: surfaceView.bounds
               ) else {
