@@ -873,7 +873,8 @@ extension JourneyTestCase {
         pinnedReleaseAuthenticator: @escaping JourneyService.PinnedReleaseAuthenticator = {
             _, _ in throw JourneyJournalError.invalidState
         },
-        journalBeforePersist: (@Sendable () throws -> Void)? = nil
+        journalBeforePersist: (@Sendable () throws -> Void)? = nil,
+        beforeCommerceOutcomeDeferral: (@Sendable (String) async throws -> Void)? = nil
     ) -> JourneyService {
         JourneyService(
             identity: identity,
@@ -895,7 +896,8 @@ extension JourneyTestCase {
             pinnedReleaseAuthenticator: pinnedReleaseAuthenticator,
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!,
-            journalBeforePersist: journalBeforePersist
+            journalBeforePersist: journalBeforePersist,
+            beforeCommerceOutcomeDeferral: beforeCommerceOutcomeDeferral
         )
     }
 

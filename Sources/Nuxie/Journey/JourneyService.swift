@@ -123,6 +123,7 @@ actor JourneyService {
     private let sleepProvider: SleepProviderProtocol
     private let journalDirectory: URL?
     private let responseSaveDelivery: JourneyResponseSaveDelivery?
+    private let beforeCommerceOutcomeDeferral: (@Sendable (String) async throws -> Void)?
     private let journalBeforePersist: (@Sendable () throws -> Void)?
     /// Production starts without a journal namespace and installs one only
     /// after profile transport authenticates the configured Nuxie app. Tests
@@ -230,6 +231,7 @@ actor JourneyService {
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone = .current,
         journalBeforePersist: (@Sendable () throws -> Void)? = nil,
+        beforeCommerceOutcomeDeferral: (@Sendable (String) async throws -> Void)? = nil,
         onPresentationContinuationFinished: (@Sendable () -> Void)? = nil
     ) {
         self.onPresentationContinuationFinished = onPresentationContinuationFinished
@@ -251,6 +253,7 @@ actor JourneyService {
         self.journalDirectory = journalDirectory
         self.responseSaveDelivery = responseSaveDelivery
         self.journalBeforePersist = journalBeforePersist
+        self.beforeCommerceOutcomeDeferral = beforeCommerceOutcomeDeferral
         self.storageScope = storageScope
         acceptsProfileAuthorityScope = storageScope == nil
         self.featureAccess = featureAccess
@@ -775,10 +778,26 @@ private extension JourneyService {
             // renderer publication are suspended. Its release drains this result.
             let executionKey = RunExecutionKey(runID: candidate.id, owner: journal.distinctId, generation: token.generation)
             if activeRunExecutions[executionKey, default: 0] > 0 {
-                guard let controlEvent = controlEvent(event),
-                      let admission = journalCommitAdmission(journal: journal, executionFenceToken: token),
-                      (try? await journal.deferPresentationCommerceOutcome(candidate.id, stepId: step.id,
-                        effectId: effectId, event: controlEvent, admission: admission)) == true else { return false }
+                do { try await beforeCommerceOutcomeDeferral?(candidate.id) } catch { return false }
+                guard let controlEvent = controlEvent(event) else { return false }
+                guard let admission = journalCommitAdmission(journal: journal, executionFenceToken: token) else { continue }
+                do {
+                    let deferred = try await journal.deferPresentationCommerceOutcome(candidate.id, stepId: step.id,
+                        effectId: effectId, event: controlEvent, admission: admission)
+                    if !deferred {
+                        // A concurrent finish or cursor move is not a delivery failure.
+                        let latestRuns = try await journal.runs()
+                        guard executionFence.isCurrent(token), isCurrentIdentity(journal: journal),
+                              let latest = latestRuns.first(where: { $0.id == candidate.id && $0.completion == nil }),
+                              latest.pendingCommerce.map({ $0.stepId == step.id && $0.effectId == effectId })
+                                ?? (latest.stepId == step.id && latest.effectReceipts[step.id] == effectId)
+                        else { continue }
+                        return false
+                    }
+                } catch {
+                    LogWarning("JourneyService: failed to defer presentation commerce outcome: \(error)")
+                    return false
+                }
                 if deferredCommerceOutcomes[executionKey] == nil { deferredCommerceOutcomes[executionKey] = event }
                 // The authored route may have finished while the journal write suspended.
                 if activeRunExecutions[executionKey, default: 0] == 0 { endRunExecution(executionKey) }
@@ -3365,6 +3384,7 @@ private extension JourneyService {
         dismissPresentation: Bool
     ) async -> Bool {
         await retireNativeValues(runID: run.id)
+        var reportsSettled = true
         do {
             _ = try await experimentExposures.flushPending(
                 in: journal,
@@ -3374,8 +3394,7 @@ private extension JourneyService {
                 .flushPending()
         } catch {
             LogWarning("JourneyService: failed to settle Journey completion: \(error)")
-            await scheduleNextWake()
-            return false
+            reportsSettled = false
         }
         pendingPresentationDismissalContinuations.removeValue(forKey: run.id)
         pendingPresentationPurchasePlacements.removeValue(forKey: run.id)
@@ -3388,7 +3407,7 @@ private extension JourneyService {
             )
         }
         await scheduleNextWake()
-        return true
+        return reportsSettled
     }
 
     private func finishAfterAuthorityLoss(
