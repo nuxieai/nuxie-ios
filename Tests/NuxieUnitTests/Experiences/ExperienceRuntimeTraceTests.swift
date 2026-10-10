@@ -176,13 +176,25 @@ final class ExperienceRuntimeTraceTests: AsyncSpec {
         expect(committed).to(beTrue())
         await experiences.waitForPreparationIdle()
 
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let identityFence = try XCTUnwrap(
+            identity.performWithCurrentIdentityFence("customer") { _ in () }
+        )
+        let executionFence = JourneyProfileFence()
         let service = ExperiencePresentationService(
             windowProvider: MockWindowProvider(),
             experiences: experiences,
-            eventLog: eventLog
+            eventLog: eventLog,
+            identity: identity
         )
         let recorder = InMemoryExperiencePresentationTrace()
         let result = await service.presentJourney(JourneyPresentationRequest(
+            fences: .init(
+                identityToken: identityFence.token,
+                executionFence: executionFence,
+                executionToken: executionFence.token()
+            ),
             release: release,
             delivery: snapshot.profile.delivery,
             screenId: screenID,
@@ -197,7 +209,7 @@ final class ExperienceRuntimeTraceTests: AsyncSpec {
                 ),
                 recorder: recorder
             ),
-            onEmissionBatch: { _ in true },
+            onEmissionBatch: { _, _ in true },
             onOutcome: { _, _ in true }
         ))
         expect(result).to(equal(.shown))
