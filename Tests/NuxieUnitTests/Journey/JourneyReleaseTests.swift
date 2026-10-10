@@ -8,6 +8,19 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testSignedV3NestedObjectPolicyAuthenticatesExactMetadata() throws {
+        let fixture = try golden()
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
+        let url = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("nested-values/state.json")
+        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        root["state"] = state
+        XCTAssertEqual(root["schemaVersion"] as? String, "nuxie.journey-release.v3")
+        let release = try authenticate(sign(JSONSerialization.data(withJSONObject: root)),
+            key: signingKey.publicKey.rawRepresentation, identity: fixture.identity)
+        let carried = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(release.descriptor.state)) as? NSDictionary)
+        XCTAssertEqual(carried, state as NSDictionary)
+    }
+
     func testSignedFormQualifiedConditionAuthenticates() throws {
         let fixture = try golden()
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])
@@ -76,6 +89,9 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    // Opening the published F5 feedback screen prepares its System font, which the
+    // SDK provides only where UIKit does (macOS refuses with unavailableFace).
+    #if canImport(UIKit)
     func testPublishedF5AwaitSaveCapturesFrameBeforeContinuation() async throws {
         let directory = PublishedRunValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))
@@ -165,6 +181,7 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertEqual(sent, 1, "Only the confirmed listener continues")
 
     }
+    #endif
 
     func testPublishedF4AuthenticatesExactVersionThreePolicy() async throws {
         try await verifyPublishedF4(disagreeingRow: false)
@@ -224,6 +241,9 @@ final class JourneyReleaseTests: XCTestCase {
             let artifact = try await presentation.artifactLoader(presentation.experience, nil, declared.id)
             XCTAssertEqual(artifact.payload.valuePolicy.state.mapValues(\.type),
                 ["trip_days": "number", "level": "number"])
+            // Preparing F4's screens includes its System font, which the SDK provides
+            // only where UIKit does (macOS refuses with unavailableFace).
+            #if canImport(UIKit)
             let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
             try await prepared.prepareRunValues(run)
             let values = try await run.journeyValues()
@@ -233,6 +253,7 @@ final class JourneyReleaseTests: XCTestCase {
                 pixelWidth: 393, pixelHeight: 852)
             _ = try await screen.step(elapsedSeconds: 0)
             try await screen.close()
+            #endif
         }
         XCTAssertEqual(release.descriptor.state.mapValues(\.type), ["trip_days": "number", "level": "number"])
         XCTAssertTrue(release.descriptor.responses.isEmpty)

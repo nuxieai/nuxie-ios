@@ -64,6 +64,18 @@ struct JourneyRun {
         let items: [Item]
     }
 
+    struct PendingCommerce: Codable, Sendable {
+        let stepId: String
+        let effectId: String
+        let context: ArmedJourney.Context
+        let placementId: String?
+    }
+
+    struct PendingCommerceOutcome: Codable, Sendable {
+        let effectId: String
+        let event: JourneyControlExecutor.Event
+    }
+
     let journeyId: String
     let generation: Int
     let reference: ArmedJourney.Reference
@@ -84,6 +96,9 @@ struct JourneyRun {
     /// A claimed effect is deliberately not a resume point: process death
     /// after this write abandons the run instead of replaying the effect.
     var effectReceipts: [String: String] = [:]
+    var pendingCommerce: PendingCommerce? = nil
+    var authoredCloseOutcome: String? = nil
+    var pendingCommerceOutcome: PendingCommerceOutcome? = nil
     /// Experiment decisions survive until a selected variant reaches a visible
     /// presentation. A stable event identity makes post-show reporting
     /// idempotent across retries and process recovery.
@@ -963,6 +978,78 @@ struct JourneyRunJournal {
         }
     }
 
+    /// Detach commerce correlation before an authored route moves the cursor.
+    func retainPresentationCommerce(
+        _ id: String, stepId: String, effectId: String, placementId: String?,
+        admission: JourneyCommitAdmission
+    ) async throws -> JourneyRun? {
+        try await updateIfCurrent(admission) { state -> JourneyRun? in
+            guard var run = state.runs[id], run.completion == nil else { return nil }
+            if let pending = run.pendingCommerce {
+                return pending.effectId == effectId ? run : nil
+            }
+            guard run.stepId == stepId, run.effectReceipts[stepId] == effectId else { return nil }
+            run.pendingCommerce = .init(stepId: stepId, effectId: effectId,
+                context: .init(event: run.context.event, responses: [:]), placementId: placementId)
+            state.runs[id] = run
+            return run
+        } ?? nil
+    }
+
+    func recordAuthoredCloseWhileCommercePending(
+        _ id: String, effectId: String, outcome: String, admission: JourneyCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state in
+            guard var run = state.runs[id], run.completion == nil,
+                  run.pendingCommerce?.effectId == effectId else { return false }
+            run.authoredCloseOutcome = outcome
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    /// Take durable ownership before acknowledging an outcome deferred by an authored route.
+    func deferPresentationCommerceOutcome(
+        _ id: String, stepId: String, effectId: String, event: JourneyControlExecutor.Event,
+        admission: JourneyCommitAdmission
+    ) async throws -> Bool {
+        try await updateIfCurrent(admission) { state -> Bool in
+            guard var run = state.runs[id], run.completion == nil else { return false }
+            guard run.pendingCommerce.map({ $0.stepId == stepId && $0.effectId == effectId })
+                ?? (run.stepId == stepId && run.effectReceipts[stepId] == effectId) else { return false }
+            if let saved = run.pendingCommerceOutcome { return saved.effectId == effectId }
+            run.pendingCommerceOutcome = .init(effectId: effectId, event: event)
+            state.runs[id] = run
+            return true
+        } ?? false
+    }
+
+    /// Consume one correlated terminal result and restore its original route context.
+    func settlePresentationCommerce(
+        _ id: String, stepId: String, effectId: String, nextStepId: String?,
+        admission: JourneyCommitAdmission
+    ) async throws -> JourneyRun? {
+        try await updateIfCurrent(admission) { state -> JourneyRun? in
+            guard var run = state.runs[id], run.completion == nil else { return nil }
+            let pending = run.pendingCommerce
+            guard pending.map({ $0.stepId == stepId && $0.effectId == effectId })
+                ?? (run.stepId == stepId && run.effectReceipts[stepId] == effectId) else { return nil }
+            run.effectReceipts.removeValue(forKey: stepId)
+            run.pendingCommerce = nil
+            run.authoredCloseOutcome = nil
+            run.pendingCommerceOutcome = nil
+            if let nextStepId {
+                run.effectReceipts.removeValue(forKey: run.stepId)
+                run.stepId = nextStepId
+                run.context = .init(event: (pending?.context ?? run.context).event, responses: [:])
+                run.nativeSnapshot = nil
+                run.park = nil
+            }
+            state.runs[id] = run
+            return run
+        } ?? nil
+    }
+
     /// Called once on process launch, before any leg executes. Expired waits
     /// remain parked so the executor can evaluate them against current facts.
     func recover(at: Date) async throws -> [JourneyRun] {
@@ -1217,6 +1304,9 @@ struct JourneyRunJournal {
         run.context = .init(event: [:], responses: [:])
         run.nativeSnapshot = nil
         run.pendingPresentationPublication = nil
+        run.pendingCommerce = nil
+        run.authoredCloseOutcome = nil
+        run.pendingCommerceOutcome = nil
         run.completion = .init(outcome: outcome, at: at)
     }
 
@@ -1331,6 +1421,9 @@ extension JourneyRun: Codable, Sendable {
         case context
         case outputs
         case effectReceipts
+        case pendingCommerce
+        case authoredCloseOutcome
+        case pendingCommerceOutcome
         case experimentExposures
         case pendingPresentationPublication
         case completion
@@ -1377,6 +1470,9 @@ extension JourneyRun: Codable, Sendable {
             [String: String].self,
             forKey: .effectReceipts
         )
+        pendingCommerce = try container.decodeIfPresent(PendingCommerce.self, forKey: .pendingCommerce)
+        authoredCloseOutcome = try container.decodeIfPresent(String.self, forKey: .authoredCloseOutcome)
+        pendingCommerceOutcome = try container.decodeIfPresent(PendingCommerceOutcome.self, forKey: .pendingCommerceOutcome)
         experimentExposures = try container.decode(
             [ExperimentExposure].self,
             forKey: .experimentExposures
@@ -1410,6 +1506,9 @@ extension JourneyRun: Codable, Sendable {
         try container.encode(context, forKey: .context)
         try container.encode(outputs, forKey: .outputs)
         try container.encode(effectReceipts, forKey: .effectReceipts)
+        try container.encodeIfPresent(pendingCommerce, forKey: .pendingCommerce)
+        try container.encodeIfPresent(authoredCloseOutcome, forKey: .authoredCloseOutcome)
+        try container.encodeIfPresent(pendingCommerceOutcome, forKey: .pendingCommerceOutcome)
         try container.encode(experimentExposures, forKey: .experimentExposures)
         try container.encodeIfPresent(
             pendingPresentationPublication,

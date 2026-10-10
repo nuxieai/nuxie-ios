@@ -8,6 +8,7 @@ struct JourneyReleaseValuePolicy: Codable, Sendable {
         let values: [String]?
         let multiple: Bool?
         let items: [String: State]?
+        let fields: [String: State]?
     }
     struct Rule: Codable, Sendable {
         let model, property: String
@@ -148,17 +149,25 @@ struct JourneyReleaseValuePolicy: Codable, Sendable {
     }
 
     private static func validateState(_ value: State) throws {
-        guard ["string", "number", "boolean", "color", "enum", "date", "list", "trigger", "image"].contains(value.type),
+        guard ["string", "number", "boolean", "color", "enum", "date", "list", "trigger", "image", "object"].contains(value.type),
               (value.type == "enum") == (value.values != nil), (value.type == "list") == (value.items != nil),
+              (value.type == "object") == (value.fields != nil),
               value.multiple == nil || (value.multiple == true && value.type == "enum") else { throw invalid }
         try choices(value.values)
+        if let fields = value.fields {
+            guard !fields.isEmpty else { throw invalid }
+            for field in fields.values { try validateState(field) }
+        }
         if let items = value.items { for item in items.values { try validateState(item) } }
     }
     private static func choices(_ values: [String]?) throws {
         if let values, Set(values).count != values.count { throw invalid }
     }
     private static func stateShape(_ value: Any) throws {
-        let state = try shape(value, ["type"], ["values", "multiple", "items"])
+        let state = try shape(value, ["type"], ["values", "multiple", "items", "fields"])
+        if let fields = state["fields"] {
+            for (key, field) in try object(fields) { try name(key); try stateShape(field) }
+        }
         if let items = state["items"] {
             for (key, item) in try object(items) { try name(key); try stateShape(item) }
         }

@@ -861,6 +861,7 @@ extension JourneyTestCase {
         events: MockEventLog,
         directory: URL,
         storageScope: JourneyStorageScope? = .testFixture,
+        responseSaveDelivery: JourneyResponseSaveDelivery? = nil,
         dateProvider: DateProviderProtocol = MockDateProvider(),
         sleepProvider: SleepProviderProtocol = MockSleepProvider(),
         featureAccess: @escaping JourneyService.FeatureAccessLookup = { _ in nil },
@@ -872,7 +873,8 @@ extension JourneyTestCase {
         pinnedReleaseAuthenticator: @escaping JourneyService.PinnedReleaseAuthenticator = {
             _, _ in throw JourneyJournalError.invalidState
         },
-        journalBeforePersist: (@Sendable () throws -> Void)? = nil
+        journalBeforePersist: (@Sendable () throws -> Void)? = nil,
+        beforeCommerceOutcomeDeferral: (@Sendable (String) async throws -> Void)? = nil
     ) -> JourneyService {
         JourneyService(
             identity: identity,
@@ -881,6 +883,7 @@ extension JourneyTestCase {
             sleepProvider: sleepProvider,
             journalDirectory: directory,
             storageScope: storageScope,
+            responseSaveDelivery: responseSaveDelivery,
             featureAccess: featureAccess,
             storeEntitlements: storeEntitlements,
             dispatcher: dispatcher ?? JourneyEffectDispatcher(
@@ -893,7 +896,8 @@ extension JourneyTestCase {
             pinnedReleaseAuthenticator: pinnedReleaseAuthenticator,
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!,
-            journalBeforePersist: journalBeforePersist
+            journalBeforePersist: journalBeforePersist,
+            beforeCommerceOutcomeDeferral: beforeCommerceOutcomeDeferral
         )
     }
 
@@ -930,6 +934,7 @@ extension JourneyTestCase {
         factReferences: JourneyFactReferences? = nil,
         facts: JourneyFactTable? = nil,
         viewModelValues: [[String: JourneyReleaseJSONValue]]? = nil,
+        responses: [String: JourneyReleaseValuePolicy.Form]? = nil,
         armContext: ArmedJourney.Context? = nil
     ) -> JourneyProfileCatalog.Snapshot {
         let originalArm = snapshot.profile.armedLegs[0]
@@ -962,7 +967,7 @@ extension JourneyTestCase {
             outputs: originalLeg.outputs,
             completionOutputs: completionOutputs ?? originalLeg.completionOutputs
         )
-        let descriptor = JourneyReleaseDescriptor(state: originalDescriptor.state, responses: originalDescriptor.responses, ruleGroups: originalDescriptor.ruleGroups,
+        let descriptor = JourneyReleaseDescriptor(state: originalDescriptor.state, responses: responses ?? originalDescriptor.responses, ruleGroups: originalDescriptor.ruleGroups,
             schemaVersion: originalDescriptor.schemaVersion,
             identity: originalDescriptor.identity,
             metadata: originalDescriptor.metadata,

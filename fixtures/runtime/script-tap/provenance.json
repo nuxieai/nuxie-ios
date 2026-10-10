@@ -1,0 +1,73 @@
+{
+  "sourceCommit": "4afef8c1ed8e218f2fd8850896fbbd34b604b17f",
+  "compilerBaseCommit": "70cf77be5bc5cb43c6af667bebff5a7552874819",
+  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
+  "worktree": "/Users/levi/dev/nuxie-codex/codex-f6-script-tap-fixture",
+  "target": "/Users/levi/dev/nuxie-codex/codex-f6-script-tap-fixture/target-f6",
+  "publisherWasm": {
+    "sha256": "6950fae7a0015a7211d1e60be888403d4341b164e9c5d829efb9af0344964ef3",
+    "sizeBytes": 17608811
+  },
+  "authorityWasm": {
+    "sha256": "d2a65238dda342d417aabfa4de5f5cc1ac0aafa13280719ee6fa79d6d94062d5",
+    "sizeBytes": 25111114
+  },
+  "scriptCompilerWasm": {
+    "sha256": "1ef55d14306a7a0be53a9c2558a6966e26b24c551035fedc5c8a1cb7cfc02646",
+    "sizeBytes": 1878974
+  },
+  "fonts": [
+    {
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "authoredAssetId": 0,
+      "family": "System",
+      "kind": "font",
+      "location": "system",
+      "required": true,
+      "style": "normal",
+      "weight": "400"
+    }
+  ],
+  "files": {
+    "NOTES.md": {
+      "sha256": "c6cf79b119fe358b954211ed63ce58b4312ae53afd35939dd58552c74ad987fd",
+      "sizeBytes": 1901
+    },
+    "expectations.json": {
+      "sha256": "906e08f7dc155014ae86c665a393ced9a68ddf6b10caf9c38f5c11349d68e5fe",
+      "sizeBytes": 685
+    },
+    "profile-entry.json": {
+      "sha256": "e16e9c6cefef091c0711443c1b2648840e61330ac83f8641940c7a2577719fc9",
+      "sizeBytes": 6609
+    },
+    "release.json": {
+      "sha256": "96680aa483a8009c20c467d2d90f30f42cbbc29da35f040fa2635f4ae3dbe98a",
+      "sizeBytes": 4308
+    },
+    "renders/sha256/300bf3d156dacf42096106aab4336827bed799ad9d5237358e46d19b6308214b.nux": {
+      "sha256": "300bf3d156dacf42096106aab4336827bed799ad9d5237358e46d19b6308214b",
+      "sizeBytes": 3605
+    },
+    "screen.riv": {
+      "sha256": "300bf3d156dacf42096106aab4336827bed799ad9d5237358e46d19b6308214b",
+      "sizeBytes": 3605
+    },
+    "source/experience.json": {
+      "sha256": "57d65673f6dfee40dd0ea32dbdfa7c37848cde654ebb24ef47613a67f7715794",
+      "sizeBytes": 402
+    },
+    "source/screens/tap/frame.json": {
+      "sha256": "a44a59c6e24b84f861de7224c036b815596b11a716c02ec7936a7d352b207fa0",
+      "sizeBytes": 191
+    },
+    "source/screens/tap/index.html": {
+      "sha256": "18c28cd74d1b22701a62c31b65162dea7afb14a942afcfc299155f52a8511fce",
+      "sizeBytes": 476
+    },
+    "source/scripts/increment.luau": {
+      "sha256": "2d12554093c9e4c06436e85cfde24e09c48598b510951ef4fa8803bdf2a9820b",
+      "sizeBytes": 242
+    }
+  }
+}

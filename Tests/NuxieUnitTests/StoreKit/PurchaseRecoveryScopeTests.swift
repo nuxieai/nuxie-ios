@@ -552,6 +552,164 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
     }
 
+    func testOrdinaryRestoreRefreshesAlreadySyncedCurrentSubscription() async throws {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("restore-owner")
+        let scope = PurchaseStorageScope.testFixture
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "restore-test"))
+        let features = FeatureService(api: mocks.nuxieApi, identity: identity,
+            profile: mocks.profileService, dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(), cacheTTL: 300)
+        let evidence = StoredTransactionEvidence(scope: scope, transactionJws: "",
+            transactionId: "retained-subscription", originalTransactionId: "original-subscription",
+            productId: "store-product-1", distinctId: "restore-owner",
+            recordedAt: mocks.dateProvider.now(), isRevoked: false,
+            commercialContext: { var context = commercialContext(); context.journeyId = "completed-journey"; return context }(),
+            completionDeliveredAt: mocks.dateProvider.now(),
+            backendSyncedAt: mocks.dateProvider.now().addingTimeInterval(-600))
+        let store = ControlledTransactionEvidenceStore(entries: [evidence.transactionId: evidence], saveSucceeds: true)
+        let api = RestoreRefreshAPI()
+        let sink = RecoveryEventSink()
+        let adapter = MockNativeStoreKitPurchaseAdapter()
+        adapter.restoreResult = .restored
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(api: api, features: features, identity: identity,
+            settings: settings, eventSink: sink, transactionServiceProvider: { box.get() },
+            evidenceStore: store, purchaseStorageScope: scope, dateProvider: mocks.dateProvider,
+            unfinishedRecoveryTransactions: { [] }, currentEntitlementRecoveryTransactions: {
+                [StoreTransactionRecoveryItem(update: VerifiedStoreTransactionUpdate(
+                    transactionId: "retained-subscription", originalTransactionId: "original-subscription",
+                    productId: "store-product-1", appAccountToken: scope.appAccountToken(distinctId: "restore-owner"),
+                    isRevoked: false, isUpgraded: false, finish: {}), jwsRepresentation: "current-verified-jws")]
+            })
+        let service = TransactionService(productService: mocks.productService, transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(), dateProvider: mocks.dateProvider,
+            settings: settings, eventSink: sink, purchaseStorageScope: scope, identityService: identity,
+            nativePurchaseAdapter: adapter, featureService: features)
+        box.set(service)
+        addTeardownBlock { await observer.stopListening() }
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?[evidence.transactionId]?.backendSyncedAt)
+        // The previous backend grant is absent, but StoreKit still verifies ownership.
+        let before = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertNotEqual(before?.allowed, true)
+        _ = try await service.restore()
+        XCTAssertEqual(api.calls, 1)
+        let refreshed = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertEqual(refreshed?.allowed, true)
+        // Another ordinary restore also refreshes after the in-memory sync marker exists.
+        await features.clearCache()
+        _ = try await service.restore()
+        XCTAssertEqual(api.calls, 2)
+        XCTAssertEqual(api.requests, [
+            .init(jwt: "current-verified-jws", distinctId: "restore-owner"),
+            .init(jwt: "current-verified-jws", distinctId: "restore-owner")
+        ])
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 0)
+        XCTAssertEqual(sink.routedCaptureCount, 0)
+        let refreshedAgain = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertEqual(refreshedAgain?.allowed, true)
+        XCTAssertTrue(adapter.purchasedProducts.isEmpty)
+        XCTAssertEqual(adapter.restoreCallCount, 2)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.restoreCompleted }.count, 2)
+        identity.setDistinctId("another-owner")
+        await features.handleUserChange(from: "restore-owner", to: "another-owner")
+        _ = try await service.restore()
+        XCTAssertEqual(api.calls, 2, "Cached completion must not authorize another customer's receipt refresh")
+        let otherOwnerAccess = await features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertNotEqual(otherOwnerAccess?.allowed, true)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+    }
+
+    func testAlreadyOwnedCheckoutRefreshesSyncedReceiptWithoutRepeatingSyncEvent() async throws {
+        let api = RestoreRefreshAPI()
+        let harness = makeRestoreRefreshHarness(api: api)
+        harness.adapter.configureAlreadyOwned()
+        let native = MockStoreProduct(id: "store-product-1", displayName: "Subscription",
+            description: "Subscription", price: 9.99, displayPrice: "$9.99")
+        var product = StoreProduct(productId: "product-1", storeProductId: native.id,
+            placementId: "placement-1", name: native.displayName, description: native.description,
+            price: native.displayPrice, period: nil, productType: native.productType, appStoreProduct: native)
+        product.purchaseContext = commercialContext()
+        _ = try await harness.service.purchase(product)
+        XCTAssertEqual(api.requests, [.init(jwt: "current-jws-1", distinctId: "restore-owner")])
+        let feature = await harness.features.getCached(featureId: "feature-1", entityId: nil)
+        XCTAssertEqual(feature?.allowed, true)
+        XCTAssertEqual(harness.adapter.purchasedProducts.count, 1)
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 0)
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+    }
+
+    func testProfileReadyDoesNotRefreshAlreadySyncedReceipt() async {
+        let api = RestoreRefreshAPI()
+        let harness = makeRestoreRefreshHarness(api: api)
+        await harness.observer.retryAfterProfileReady()
+        XCTAssertEqual(api.requests, [])
+        // The second scan also covers the in-memory marker after retained evidence drains.
+        await harness.observer.retryAfterProfileReady()
+        XCTAssertEqual(api.requests, [])
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 0)
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+        XCTAssertEqual(harness.sink.routedCaptureCount, 0)
+    }
+
+    func testRestoreStartsEveryRefreshBeforeWaitingForBackendResponses() async throws {
+        let entered = expectation(description: "both receipt refreshes started")
+        entered.expectedFulfillmentCount = 2
+        let api = HeldRestoreRefreshAPI(onCall: { entered.fulfill() })
+        let harness = makeRestoreRefreshHarness(api: api, count: 2)
+        let restore = Task { try await harness.service.restore() }
+        await fulfillment(of: [entered], timeout: 2)
+        let callsBeforeRelease = await api.requests
+        XCTAssertEqual(Set(callsBeforeRelease), Set(["current-jws-1:restore-owner", "current-jws-2:restore-owner"]))
+        // Release even on failure so the original serial implementation cannot strand this test.
+        await api.release()
+        _ = try await restore.value
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.restoreCompleted }.count, 1)
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+    }
+
+    private func makeRestoreRefreshHarness(api: any PurchaseSynchronizing, count: Int = 1)
+        -> (service: TransactionService, observer: TransactionObserver, adapter: MockNativeStoreKitPurchaseAdapter,
+            sink: RecoveryEventSink, features: FeatureService) {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("restore-owner")
+        let scope = PurchaseStorageScope.testFixture
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "restore-test"))
+        let features = FeatureService(api: mocks.nuxieApi, identity: identity, profile: mocks.profileService,
+            dateProvider: mocks.dateProvider, featureInfo: FeatureInfo(), cacheTTL: 300)
+        var context = commercialContext()
+        context.journeyId = "completed-journey"
+        let rows = (1...count).map { index in StoredTransactionEvidence(scope: scope, transactionJws: "",
+            transactionId: "retained-\(index)", originalTransactionId: "original-\(index)",
+            productId: "store-product-\(index)", distinctId: "restore-owner", recordedAt: mocks.dateProvider.now(),
+            isRevoked: false, commercialContext: context, completionDeliveredAt: mocks.dateProvider.now(),
+            backendSyncedAt: mocks.dateProvider.now().addingTimeInterval(-600)) }
+        let store = ControlledTransactionEvidenceStore(entries: Dictionary(uniqueKeysWithValues: rows.map { ($0.transactionId, $0) }), saveSucceeds: true)
+        let sink = RecoveryEventSink()
+        let adapter = MockNativeStoreKitPurchaseAdapter()
+        adapter.restoreResult = .restored
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(api: api, features: features, identity: identity, settings: settings,
+            eventSink: sink, transactionServiceProvider: { box.get() }, evidenceStore: store,
+            purchaseStorageScope: scope, dateProvider: mocks.dateProvider, unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: {
+                (1...count).map { index in StoreTransactionRecoveryItem(update: VerifiedStoreTransactionUpdate(
+                    transactionId: "retained-\(index)", originalTransactionId: "original-\(index)",
+                    productId: "store-product-\(index)", appAccountToken: scope.appAccountToken(distinctId: "restore-owner"),
+                    isRevoked: false, isUpgraded: false, finish: {}), jwsRepresentation: "current-jws-\(index)") }
+            })
+        let service = TransactionService(productService: mocks.productService, transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(), dateProvider: mocks.dateProvider,
+            settings: settings, eventSink: sink, purchaseStorageScope: scope, identityService: identity,
+            nativePurchaseAdapter: adapter, featureService: features)
+        box.set(service)
+        addTeardownBlock { await observer.stopListening() }
+        return (service, observer, adapter, sink, features)
+    }
+
     func testPurchaseCompletionEventIdentityIsScopedAcrossAppEnvironmentAndStore() async {
         let mocks = MockFactory.shared
         let configuration = NuxieConfiguration(apiKey: "scope-test")
@@ -3011,5 +3169,39 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await observer.retryStoredEvidence()
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         XCTAssertTrue(api.recordedCustomers.isEmpty)
+    }
+}
+
+private final class RestoreRefreshAPI: PurchaseSynchronizing, @unchecked Sendable {
+    private let lock = NSLock()
+    struct Request: Equatable { let jwt: String; let distinctId: String }
+    private var storage: [Request] = []
+    var calls: Int { lock.withLock { storage.count } }
+    var requests: [Request] { lock.withLock { storage } }
+    func syncTransaction(transactionJwt: String, distinctId: String) async throws -> PurchaseResponse {
+        lock.withLock { storage.append(.init(jwt: transactionJwt, distinctId: distinctId)) }
+        return PurchaseResponse(success: true, customerId: distinctId,
+            features: [PurchaseFeature(id: "feature-1", extId: "pro", type: .boolean,
+                allowed: true, balance: nil, unlimited: false)], error: nil)
+    }
+}
+
+private actor HeldRestoreRefreshAPI: PurchaseSynchronizing {
+    let onCall: @Sendable () -> Void
+    private(set) var requests: [String] = []
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    init(onCall: @escaping @Sendable () -> Void) { self.onCall = onCall }
+    func syncTransaction(transactionJwt: String, distinctId: String) async throws -> PurchaseResponse {
+        requests.append("\(transactionJwt):\(distinctId)")
+        onCall()
+        if !released { await withCheckedContinuation { waiters.append($0) } }
+        return PurchaseResponse(success: true, customerId: distinctId, features: [], error: nil)
+    }
+    func release() {
+        released = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }

@@ -5,6 +5,52 @@ import XCTest
 @testable import NuxieRuntime
 
 final class ExperienceRunSnapshotTests: XCTestCase {
+    func testPublishedNestedCheckpointRestoresLeavesMarkersAndChoices() async throws {
+        let bytes = try Data(contentsOf: SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("nested-values/screen.riv"))
+        let prepared = try await NuxieNativePreparedFile.prepare(bytes: bytes)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let result = try await run.native(in: prepared)
+        let native = try XCTUnwrap(result)
+        let initial = try await run.snapshot()
+        XCTAssertEqual(initial?.journeyValues["profile/minutes"], .number(10))
+        XCTAssertEqual(initial?.journeyValues["profile/settings/minutes"], .number(12))
+        XCTAssertEqual(initial?.journeyValues["profile/isset:empty"], .bool(false))
+        _ = try await native.sessions.mutate([
+            .setNumber(instance: native.reference, path: "profile/minutes", value: 20),
+            .setNumber(instance: native.reference, path: "profile/settings/minutes", value: 25),
+            .setString(instance: native.reference, path: "profile/settings/day", value: Data("2026-10-10".utf8)),
+        ])
+        let beforeChoices = try await native.sessions.snapshot(native.reference)
+        let topics = try XCTUnwrap(beforeChoices.values.first { $0.name == "options" })
+        guard case .list(let choiceIDs) = topics.value else { return XCTFail("Expected published choices") }
+        let picked = try await native.sessions.acquireListItem(owner: native.reference, path: "profile/topics/options", index: 0, expectedIdentity: choiceIDs[0])
+        _ = try await native.sessions.mutate([.setBool(instance: picked, path: "picked", value: true)])
+        let captured = try await run.snapshot()
+        let saved = try XCTUnwrap(captured)
+        let encoded = try JSONEncoder().encode(saved)
+        let decoded = try JSONDecoder().decode(ExperienceRunSnapshot.self, from: encoded)
+        XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("ownerInstanceID"))
+        let restored = ExperienceRunValues(snapshot: decoded)
+        addTeardownBlock { await restored.retire() }
+        let fresh = try await NuxieNativePreparedFile.prepare(bytes: bytes)
+        _ = try await restored.native(in: fresh)
+        let restoredSnapshot = try await restored.snapshot()
+        let values = try XCTUnwrap(restoredSnapshot).journeyValues
+        XCTAssertEqual(values["profile/minutes"], .number(20))
+        XCTAssertEqual(values["profile/settings/minutes"], .number(25))
+        XCTAssertEqual(values["profile/settings/day"], .string("2026-10-10"))
+        XCTAssertEqual(values["profile/name"], .string("Ana"))
+        XCTAssertEqual(values["top"], .number(7))
+        XCTAssertEqual(values["profile/isset:minutes"], .bool(true))
+        XCTAssertEqual(values["profile/isset:empty"], .bool(false))
+        XCTAssertEqual(values["profile/topics/options"], .array([
+            .object(["value": .string("Reading, writing"), "picked": .bool(true)]),
+            .object(["value": .string("Travel"), "picked": .bool(true)]),
+        ]))
+    }
+
     func testPublishedGoalsCheckpointKeepsChangedOrder() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("forms-saves/goals")

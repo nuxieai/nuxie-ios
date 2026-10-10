@@ -149,6 +149,8 @@ final class ExperienceHardwareInputTests: XCTestCase {
         controller.view.layoutIfNeeded()
         do {
             try await controller.mountInteractiveScreen()
+            XCTAssertTrue(controller.applyValue(path: .init(viewModelName: "KeyboardInputVM", path: "children"),
+                value: children, screenId: nil, instanceId: "root-sdk-id"))
             await controller.enter(reduceMotion: true)
             await controller.activate(reduceMotion: true)
             var time: TimeInterval = 0
@@ -375,6 +377,8 @@ final class ExperienceHardwareInputTests: XCTestCase {
         controller.view.layoutIfNeeded()
         do {
             try await controller.mountInteractiveScreen()
+            XCTAssertTrue(controller.applyValue(path: .init(viewModelName: "KeyboardInputVM", path: "children"),
+                value: children, screenId: nil, instanceId: "root-sdk-id"))
             await controller.enter(reduceMotion: true)
             await controller.activate(reduceMotion: true)
             controller.pressesBegan([HardwarePress(HardwareKey(.keyboardTab), time: 1)], with: nil)

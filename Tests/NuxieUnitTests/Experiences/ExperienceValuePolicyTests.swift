@@ -5,6 +5,99 @@ import XCTest
 @testable import NuxieRuntime
 
 final class ExperienceValuePolicyTests: XCTestCase {
+    func testGroupInstallationKeepsUnconstrainedAnswers() async throws {
+        try await checkUnconstrainedGroup(requiredEmail: true)
+    }
+
+    func testGroupInstallationRetainsAnEmptyNativeGroup() async throws {
+        try await checkUnconstrainedGroup(requiredEmail: false)
+    }
+
+    private func checkUnconstrainedGroup(requiredEmail: Bool) async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("rule-group-install")
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: directory.appendingPathComponent("policy.json"))) as? [String: Any])
+        if !requiredEmail {
+            var forms = try XCTUnwrap(root["responses"] as? [String: Any])
+            var form = try XCTUnwrap(forms["profile"] as? [String: Any])
+            var fields = try XCTUnwrap(form["fields"] as? [[String: Any]])
+            fields[0]["rules"] = []
+            form["fields"] = fields; forms["profile"] = form; root["responses"] = forms
+        }
+        try JourneyReleaseValuePolicy.validate(root)
+        let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self,
+            from: JSONSerialization.data(withJSONObject: root))
+        XCTAssertEqual(policy.ruleGroups.first?.members.map(\.property), ["email", "name"],
+            "The canonical group still lists every declared field")
+        let file = try await NuxieNativePreparedFile.prepare(
+            bytes: Data(contentsOf: directory.appendingPathComponent("screen.riv")), valuePolicy: policy.native)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        func member(_ snapshot: NuxieNativeViewModelSnapshot, _ path: [String]) throws -> NuxieNativeViewModelValue? {
+            var owner = snapshot.rootInstanceID
+            for name in path.dropLast() {
+                guard case .referencedInstance(let next) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == owner && $0.name == name
+                })?.value else { throw CocoaError(.coderInvalidValue) }
+                owner = next
+            }
+            return snapshot.values.first { $0.ownerInstanceID == owner && $0.name == path.last }?.value
+        }
+        _ = try await native.sessions.mutate([
+            .setString(instance: native.reference, path: "responses:profile/email", value: Data("person@example.test".utf8)),
+            .setString(instance: native.reference, path: "responses:profile/name", value: Data("Ada".utf8)),
+        ])
+        let valid = try await native.sessions.snapshot(native.reference)
+        XCTAssertEqual(try member(valid, ["responses:profile", "valid"]), .bool(true))
+        XCTAssertEqual(try member(valid, ["responses:profile", "errors", "name"]), .list([]))
+        let request = try XCTUnwrap(ExperienceResponseSaveRequest.capture(
+            .hostCommand(name: "$nuxie.response.save", payload: .object([.init(key: "form", value: .string("profile"))])),
+            snapshot: valid, catalog: native.catalog, policy: policy))
+        XCTAssertEqual(request.answers, ["email": .string("person@example.test"), "name": .string("Ada")])
+        let answers = try await run.responseAnswers(form: "profile", policy: policy)
+        XCTAssertEqual(answers, request.answers)
+        _ = try await native.sessions.mutate([
+            .setString(instance: native.reference, path: "responses:profile/email", value: Data()),
+        ])
+        let cleared = try await native.sessions.snapshot(native.reference)
+        XCTAssertEqual(try member(cleared, ["responses:profile", "valid"]), .bool(!requiredEmail))
+        XCTAssertEqual(try member(cleared, ["responses:profile", "errors", "name"]), .list([]))
+    }
+
+    func testNestedObjectDeclarationsKeepStrictShapes() throws {
+        let state = try JSONSerialization.jsonObject(with: Data(#"{"profile":{"type":"object","fields":{"name":{"type":"string"},"minutes":{"type":"number"},"topics":{"type":"enum","values":["Reading, writing","Travel"],"multiple":true},"settings":{"type":"object","fields":{"day":{"type":"date"}}}}}}"#.utf8))
+        func validate(_ value: Any) throws {
+            try JourneyReleaseValuePolicy.validate(["state": value, "responses": [:], "ruleGroups": []])
+        }
+        XCTAssertNoThrow(try validate(state))
+        let invalid = [
+            #"{"profile":{"type":"object"}}"#,
+            #"{"profile":{"type":"object","fields":{}}}"#,
+            #"{"profile":{"type":"list","items":{"x":{"type":"number"}},"fields":{"x":{"type":"number"}}}}"#,
+            #"{"profile":{"type":"object","items":{"x":{"type":"number"}},"fields":{"x":{"type":"number"}}}}"#,
+            #"{"profile":{"type":"number","fields":{"x":{"type":"number"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"name":{"type":"string","extra":true}}}}"#,
+            #"{"profile":{"type":"object","fields":{"name":{"type":"string","default":"Ana"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"isset:name":{"type":"boolean"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"enum","values":["a","a"]}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"number","multiple":true}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"list"}}}}"#,
+            #"{"profile":{"type":"object","fields":{"x":{"type":"date","fields":{}}}}}"#,
+        ]
+        for text in invalid {
+            XCTAssertThrowsError(try validate(JSONSerialization.jsonObject(with: Data(text.utf8))), text) {
+                XCTAssertEqual($0 as? JourneyReleaseAuthenticationError, .invalidDescriptor)
+            }
+        }
+        XCTAssertThrowsError(try JourneyReleaseValuePolicy.validate([
+            "state": [:], "responses": ["form": ["title": "Form", "model": "Responses:form",
+                "fields": [["key": "profile", "label": "Profile", "type": "object", "fields": ["x": ["type": "number"]], "rules": []]]]], "ruleGroups": []
+        ]))
+    }
+
     func testPublishedF5InstallsResponseRulesBeforeFirstMutation() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let bytes = try Data(contentsOf: directory.appendingPathComponent("release.json"))

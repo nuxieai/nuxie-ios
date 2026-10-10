@@ -145,11 +145,18 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         func settle() async throws {
             controller.advance(delta: 0.016)
             let deadline = Date().addingTimeInterval(5)
-            while !controller.hasCompletedLatestFrame, Date() < deadline {
+            // Delivery can enqueue native editing work. This predicate also waits
+            // for that work and its next presented frame to drain.
+            while !controller.hasDeliveredLatestSemanticFrame, Date() < deadline {
+                if controller.hasCompletedLatestFrame {
+                    controller.advance(delta: 0.016)
+                }
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
             if let failure = probe.failure { throw failure }
             XCTAssertTrue(controller.hasCompletedLatestFrame)
+            XCTAssertTrue(controller.hasDeliveredLatestSemanticFrame,
+                "Read only after semantic delivery and its queued editing work have settled")
         }
         func findField(_ view: UIView) -> UITextField? {
             (view as? UITextField) ?? view.subviews.lazy.compactMap { findField($0) }.first
@@ -158,27 +165,53 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             try await settle()
             let field = try XCTUnwrap(findField(controller.view))
             XCTAssertEqual(field.text, "Ada")
+            // The programmatic composition below stands in for an IME. A composing
+            // keyboard (the gate simulator's last-used Japanese Romaji) keeps its own
+            // intermediate text and can assert it over a programmatic composition when
+            // an earlier candidate cycle completes (-[_UIKeyboardStateManager
+            // assertIntermediateText:]). Settle that before focus: an ASCII keyboard
+            // composes nothing itself, so only the SDK can change the composition.
+            // Real IME composition is proven by JapaneseKeyboardTests.
+            field.keyboardType = .asciiCapable
             XCTAssertTrue(field.becomeFirstResponder())
             try await settle()
+            XCTContext.runActivity(named: "Keyboard input mode: \(field.textInputMode?.primaryLanguage ?? "none")") { _ in }
             XCTAssertTrue(controller.riveFocusState.hasFocus, "Native begin editing must focus Rive")
             XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
             let focusedSnapshot = try await controller.runtimeSnapshot()
             XCTAssertEqual(focusedSnapshot.values.first { $0.name == "focused" }?.value, .number(1))
             XCTAssertEqual(focusedSnapshot.values.first { $0.name == "typed" }?.value, .number(0))
             var callbacks: [String] = []
+            // Any editing change that drops the held composition while it is being
+            // mirrored fails the proof; nothing is retried.
+            var heldComposition: String?
+            var compositionLost = false
             field.addAction(UIAction { _ in
                 callbacks.append("text=\(field.text ?? ""), marked=\(field.markedTextRange != nil)")
+                if let held = heldComposition, field.markedTextRange.flatMap({ field.text(in: $0) }) != held {
+                    compositionLost = true
+                }
             }, for: .editingChanged)
-            func verify(_ expected: String) async throws {
+            struct MirroredText {
+                let runtime: ExperienceInteractiveViewModelValue?
+                let presented: String
+                let native: String?
+            }
+            func mirror() async throws -> MirroredText {
                 try await settle()
                 let snapshot = try await controller.runtimeSnapshot()
-                XCTAssertEqual(snapshot.values.first { $0.name == "name" }?.value, .bytes(Data(expected.utf8)))
                 let capture = try XCTUnwrap(latestCapture)
                 let occurrence = try XCTUnwrap(capture.nativeInputs[input.textInputName]?.first)
-                let actual = try await controller.readPresentedFieldString(captureID: capture.id,
+                let presented = try await controller.readPresentedFieldString(captureID: capture.id,
                     nodeID: occurrence.nodeID, name: input.textInputName)
-                XCTAssertEqual(actual, expected)
-                XCTAssertEqual(field.text, expected)
+                return MirroredText(runtime: snapshot.values.first { $0.name == "name" }?.value,
+                    presented: presented, native: field.text)
+            }
+            func verify(_ expected: String) async throws {
+                let observed = try await mirror()
+                XCTAssertEqual(observed.runtime, .bytes(Data(expected.utf8)))
+                XCTAssertEqual(observed.presented, expected)
+                XCTAssertEqual(observed.native, expected)
             }
             field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
             field.insertText("Grace")
@@ -190,8 +223,18 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             try await verify("👍🏽")
             field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
             field.setMarkedText("ぐれ", selectedRange: NSRange(location: 2, length: 0))
+            let marked = try XCTUnwrap(field.markedTextRange, "The native editor must hold the composition UIKit forwarded")
+            XCTAssertEqual(field.text(in: marked), "ぐれ")
+            heldComposition = "ぐれ"
             field.sendActions(for: .editingChanged)
-            try await verify("ぐれ")
+            let composed = try await mirror()
+            heldComposition = nil
+            XCTAssertFalse(compositionLost, "Nothing may drop the forwarded composition while it is mirrored")
+            XCTAssertEqual(composed.runtime, .bytes(Data("ぐれ".utf8)))
+            XCTAssertEqual(composed.presented, "ぐれ")
+            XCTAssertEqual(composed.native, "ぐれ")
+            XCTAssertEqual(field.markedTextRange.flatMap { field.text(in: $0) }, "ぐれ",
+                "Mirroring the composition must leave it marked in the native editor")
             XCTContext.runActivity(named: "A0 native composition decorations, nonsecure") { activity in
                 let image = UIGraphicsImageRenderer(bounds: field.bounds).image { _ in
                     field.drawHierarchy(in: field.bounds, afterScreenUpdates: true)
@@ -220,6 +263,87 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             throw error
         }
         await controller.shutdownInteractiveScreen()
+    }
+
+    func testSiblingEnvironmentWriteCannotOvertakeFrameSemanticCapture() async throws {
+        let directory = PublishedInputFixture.directory.deletingLastPathComponent()
+            .appendingPathComponent("forms-saves")
+        let geometryPath = "nuxieTextInputs/input_scr_screens_sfeedback_v2_3f92b591"
+        let input = NativeExperienceTextInput(inputId: "comment", screenId: "feedback", artboardId: "feedback",
+            viewNodeId: "scr_screens_sfeedback::v2", renderedNodeId: "scr_screens_sfeedback::v2",
+            textInputName: "scr_screens_sfeedback::v2 editable value", value: "", placeholder: nil, editable: true,
+            geometry: .init(xPath: "\(geometryPath)/x", yPath: "\(geometryPath)/y", widthPath: "\(geometryPath)/width",
+                heightPath: "\(geometryPath)/height", rotationPath: "\(geometryPath)/rotation",
+                scaleXPath: "\(geometryPath)/scaleX", scaleYPath: "\(geometryPath)/scaleY"),
+            style: .init(fontFamily: "System", fontWeight: "400", fontStyle: "normal", fontSize: 16,
+                lineHeight: -1, letterSpacing: 0, color: 0xFF111827,
+                fontAssetUniqueName: "font-system-400-normal-6cda3de3-0", textAlign: "left"),
+            keyboardType: nil, secureTextEntry: false, multiline: false, maxLength: nil, responseFieldKey: nil)
+        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
+        let base = try SharedValuesFixture.payload(directory: directory, screens: ["feedback"], textInputs: [input])
+        let payload = AuthenticatedRuntimePayload(valuePolicy: release.valuePolicy,
+            authenticatedKeyID: base.authenticatedKeyID, requiredCapabilities: base.requiredCapabilities,
+            renderPlan: base.renderPlan, journey: base.journey, sceneBytes: base.sceneBytes, assets: base.assets)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let first = try await preparation.openScreen(runValues: run, pixelWidth: 393, pixelHeight: 852)
+        let second = try await preparation.openScreen(runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await first.close(); try await second.close() }
+        let firstEnv = try await first.environmentSnapshot()
+        let secondEnv = try await second.environmentSnapshot()
+        let firstEnvironment = try XCTUnwrap(firstEnv)
+        let secondEnvironment = try XCTUnwrap(secondEnv)
+        XCTAssertEqual(firstEnvironment.rootInstanceID, secondEnvironment.rootInstanceID)
+        try await first.updateEnvironment(reduceMotion: false)
+        try await first.enableSemantics()
+        let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, valuePolicy: payload.valuePolicy.native)
+        let prepared = try await run.native(in: file)
+        let native = try XCTUnwrap(prepared)
+        let layer = CAMetalLayer()
+        layer.device = try await first.metalDevice().value
+        layer.pixelFormat = .bgra8Unorm
+        layer.drawableSize = CGSize(width: 393, height: 852)
+        let drawable = try XCTUnwrap(layer.nextDrawable())
+        let entered = expectation(description: "Shared executor held before rendering")
+        let releaseLane = DispatchSemaphore(value: 0)
+        await native.sessions.enqueueForTesting { entered.fulfill(); releaseLane.wait() }
+        defer { releaseLane.signal() }
+        await fulfillment(of: [entered], timeout: 2)
+        func waitForQueuedJobs(_ count: Int) async throws {
+            let deadline = Date().addingTimeInterval(2)
+            while await native.sessions.queuedJobCountForTesting < count {
+                guard Date() < deadline else { throw CocoaError(.coderInvalidValue) }
+                await Task.yield()
+            }
+        }
+        let rendering = Task { try await first.renderFrame(layoutScaleFactor: 1,
+            drawable: ExperienceInteractiveDrawable(drawable), capturesSemantics: true) }
+        try await waitForQueuedJobs(1)
+        let updating = Task { try await second.updateEnvironment(reduceMotion: true) }
+        try await waitForQueuedJobs(2)
+        releaseLane.signal()
+        let frame = try await rendering.value
+        try await updating.value
+        XCTAssertEqual(frame.outcome.disposition, .presented)
+        let capture = try XCTUnwrap(frame.semantics)
+        // F5 authors comment, email and stars; this proof requests the comment occurrence.
+        XCTAssertEqual(capture.tree.nodes.filter { $0.role == NuxieNativeSemanticRole.textField.rawValue }.count, 3)
+        XCTAssertEqual(capture.nativeInputs[input.textInputName]?.count, 1)
+        let changed = try await first.environmentSnapshot()
+        XCTAssertEqual(changed?.values.first { $0.name == "reduceMotion" }?.value, .bool(true))
+        _ = try await first.step(elapsedSeconds: 0)
+        let nextDrawable = try XCTUnwrap(layer.nextDrawable())
+        let next = try await first.renderFrame(layoutScaleFactor: 1,
+            drawable: ExperienceInteractiveDrawable(nextDrawable), capturesSemantics: true)
+        XCTAssertEqual(next.outcome.disposition, .presented)
+        let nextCapture = try XCTUnwrap(next.semantics)
+        XCTAssertEqual(nextCapture.tree.nodes.filter {
+            $0.role == NuxieNativeSemanticRole.textField.rawValue
+        }.count, 3)
+        XCTAssertEqual(nextCapture.nativeInputs[input.textInputName]?.count, 1)
+        XCTAssertGreaterThan(nextCapture.tree.renderRevision, capture.tree.renderRevision)
     }
 
     func testNativeEditingSecondPublishedFieldKeepsFirstValue() async throws {

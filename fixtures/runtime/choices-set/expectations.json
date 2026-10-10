@@ -1,0 +1,126 @@
+{
+  "initialPicked": [
+    true,
+    false,
+    false
+  ],
+  "optionRecords": [
+    "option:picks:61",
+    "option:picks:62",
+    "option:picks:63"
+  ],
+  "taps": [
+    {
+      "command": {
+        "name": "checked",
+        "payload": {
+          "ok": false,
+          "rule": "maxItems"
+        }
+      },
+      "picked": [
+        true,
+        false,
+        false
+      ],
+      "errors": [
+        {
+          "rule": "maxItems",
+          "message": "Choose fewer options."
+        }
+      ],
+      "recordCount": 3
+    },
+    {
+      "command": {
+        "name": "checked",
+        "payload": {
+          "ok": true
+        }
+      },
+      "picked": [
+        false,
+        true,
+        false
+      ],
+      "errors": [],
+      "recordCount": 3
+    },
+    {
+      "command": {
+        "name": "checked",
+        "payload": {
+          "ok": true
+        }
+      },
+      "picked": [
+        false,
+        false,
+        false
+      ],
+      "errors": [],
+      "recordCount": 3
+    }
+  ],
+  "entryEvent": "$app_installed",
+  "requiredScripts": [
+    "scripts/save.luau"
+  ],
+  "release": {
+    "schemaVersion": "nuxie.journey-release.v3",
+    "state": {},
+    "responses": {
+      "signup": {
+        "title": "Signup",
+        "model": "Responses:signup",
+        "fields": [
+          {
+            "key": "picks",
+            "label": "Picks",
+            "type": "enum",
+            "multiple": true,
+            "values": [
+              "a",
+              "b",
+              "c"
+            ],
+            "rules": [
+              {
+                "model": "Responses:signup",
+                "property": "picks",
+                "kind": 7,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "picked",
+                "bound_flags": 2,
+                "minimum": 0,
+                "maximum": 1,
+                "code": "maxItems",
+                "message": "Choose fewer options."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "ruleGroups": [
+      {
+        "model": "Responses:signup",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "picks",
+            "errors_path": "errors/picks",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 1
+      }
+    ]
+  }
+}

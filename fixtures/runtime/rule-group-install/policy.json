@@ -1,0 +1,63 @@
+{
+  "state": {},
+  "responses": {
+    "profile": {
+      "title": "Profile",
+      "model": "Responses:profile",
+      "fields": [
+        {
+          "key": "email",
+          "label": "Email",
+          "type": "string",
+          "rules": [
+            {
+              "model": "Responses:profile",
+              "property": "email",
+              "kind": 10,
+              "mode": 0,
+              "number_bound": 0,
+              "text": "",
+              "values": [],
+              "value_count": 0,
+              "picked_property": "",
+              "bound_flags": 0,
+              "minimum": 0,
+              "maximum": 0,
+              "code": "required",
+              "message": "Email is required"
+            }
+          ]
+        },
+        {
+          "key": "name",
+          "label": "Name",
+          "type": "string",
+          "rules": []
+        }
+      ]
+    }
+  },
+  "ruleGroups": [
+    {
+      "model": "Responses:profile",
+      "valid": "valid",
+      "member_count": 2,
+      "members": [
+        {
+          "property": "email",
+          "errors_path": "errors/email",
+          "item_model": "ResponseError",
+          "code_property": "rule",
+          "message_property": "message"
+        },
+        {
+          "property": "name",
+          "errors_path": "errors/name",
+          "item_model": "ResponseError",
+          "code_property": "rule",
+          "message_property": "message"
+        }
+      ]
+    }
+  ]
+}
