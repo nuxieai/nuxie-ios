@@ -1,6 +1,7 @@
 .PHONY: test-video test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
+.DEFAULT_GOAL := help
 XCODEGEN_INPUTS := .xcodegen.inputs
 XCODEPROJ := NuxieSDK.xcodeproj
 SCHEME_UNIT := NuxieSDKUnitTests
@@ -42,6 +43,27 @@ RUNTIME_ARTIFACT_METADATA := Runtime/artifact.json
 DOWNLOADED_RUNTIME_ARCHIVE := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework.zip
 NUXIE_RUNTIME_REFERENCE_APP := $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/NuxieExperienceRuntimeReference.app
 NUXIE_FRAMEWORK ?= $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/Nuxie.framework
+BAZEL_SDK_OUTPUT ?= $(CURDIR)/.bazel-artifacts/sdk
+
+.PHONY: bazel-build-ios-simulator bazel-build-ios-device bazel-build-macos bazel-test bazel-prepare bazel-contract-test
+
+bazel-build-ios-simulator:
+	@scripts/bazel/sdk.sh build --platform ios-simulator
+
+bazel-build-ios-device:
+	@scripts/bazel/sdk.sh build --platform ios-device --configuration Release
+
+bazel-build-macos:
+	@scripts/bazel/sdk.sh build --platform macos
+
+bazel-test:
+	@scripts/bazel/sdk.sh test
+
+bazel-prepare:
+	@scripts/bazel/sdk.sh prepare --output "$(BAZEL_SDK_OUTPUT)"
+
+bazel-contract-test:
+	@python3 -B -m unittest discover -s scripts/bazel -p 'test_*.py'
 
 # Default target
 help:

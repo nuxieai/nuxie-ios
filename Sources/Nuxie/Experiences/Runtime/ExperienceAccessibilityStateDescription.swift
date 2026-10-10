@@ -3,7 +3,7 @@ import NuxieRuntime
 
 /// Platform-owned state words supplement authored values without changing runtime meaning.
 enum ExperienceAccessibilityStateDescription {
-    #if SWIFT_PACKAGE
+    #if SWIFT_PACKAGE || NUXIE_BAZEL
     static let resourceBundle = Bundle.module
     #else
     static let resourceBundle = Bundle(for: ResourceToken.self)

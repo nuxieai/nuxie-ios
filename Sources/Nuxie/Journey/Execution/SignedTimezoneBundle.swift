@@ -122,7 +122,7 @@ struct SignedTimezoneBundle: Sendable {
     }
 }
 
-#if SWIFT_PACKAGE
+#if SWIFT_PACKAGE || NUXIE_BAZEL
 private let resourceBundle = Bundle.module
 #else
 private let resourceBundle = Bundle(for: ResourceToken.self)
