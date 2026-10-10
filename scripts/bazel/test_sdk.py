@@ -293,6 +293,7 @@ class NativeCommandSelectionTests(unittest.TestCase):
     def command(self, argv):
         with patch("sys.argv", ["sdk.py", *argv]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
                 patch.object(sdk, "run") as run, patch.object(sdk, "publish_build"), \
+                patch.object(sdk, "verify_test_results"), \
                 patch.object(sdk.platform, "machine", return_value="arm64"):
             sdk.main()
             return run.call_args.args[0]
@@ -317,21 +318,22 @@ class NativeCommandSelectionTests(unittest.TestCase):
     def test_focused_runtime_suite_preserves_all_three_native_classes(self):
         command = self.command(["test", "--suite", "native-runtime"])
         selector = next(arg for arg in command if arg.startswith("--test_filter="))
-        self.assertEqual(selector, "--test_filter=NuxieSDKUnitTests/NuxieNativeRuntimeTests,"
-                         "NuxieSDKUnitTests/ExperienceInteractiveScreenTests,"
-                         "NuxieSDKUnitTests/ExperienceRuntimePresentationLoopTests")
+        self.assertEqual(selector, "--test_filter=NuxieSDKUnitTests.NuxieNativeRuntimeTests,"
+                         "NuxieSDKUnitTests.ExperienceInteractiveScreenTests,"
+                         "NuxieSDKUnitTests.ExperienceRuntimePresentationLoopTests")
 
     def test_make_scheme_and_xcode_selector_preserve_destination_and_filter(self):
         command = self.command(["test", "--scheme", "NuxieSDKUnitTests",
                                 "--destination", "platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5",
                                 "--xcodebuild-test-flags=-quiet -only-testing:NuxieSDKUnitTests/NuxieNativeRuntimeTests"])
         self.assertEqual(command[-1], "//:NuxieSDKUnitTests")
-        self.assertIn("--test_filter=NuxieSDKUnitTests/NuxieNativeRuntimeTests", command)
+        self.assertIn("--test_filter=NuxieSDKUnitTests.NuxieNativeRuntimeTests", command)
         self.assertIn("--ios_simulator_device=iPhone 17 Pro", command)
         self.assertIn("--ios_simulator_version=26.5", command)
 
     def test_all_suites_keep_macos_compilation_separate_from_ios(self):
         with patch("sys.argv", ["sdk.py", "test"]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
+                patch.object(sdk, "verify_test_results"), \
                 patch.object(sdk, "run") as run, patch.object(sdk.platform, "machine", return_value="arm64"):
             sdk.main()
         commands = [call.args[0] for call in run.call_args_list]
@@ -339,6 +341,28 @@ class NativeCommandSelectionTests(unittest.TestCase):
         self.assertTrue(all("--platforms=@apple_support//platforms:ios_sim_arm64" in command for command in commands[:4]))
         self.assertIn("--platforms=@apple_support//platforms:macos_arm64", commands[4])
         self.assertEqual(commands[4][-1], "//:NuxieSDKMacUnitTests")
+
+    def test_xcode_method_selectors_use_the_swift_runtime_class_identifier(self):
+        command = self.command(["test", "--suite", "unit", "--test-filter",
+                                "NuxieSDKUnitTests/ConformanceVectorTests/testCanonicalFixture"])
+        self.assertIn("--test_filter=NuxieSDKUnitTests.ConformanceVectorTests/testCanonicalFixture", command)
+
+    def test_xctest_zero_case_result_is_rejected_even_when_bazel_succeeds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "NuxieSDKUnitTests/test.log"
+            log.parent.mkdir()
+            log.write_text("Test Suite 'Selected tests' passed.\n"
+                           "Executed 0 tests, with 0 failures (0 unexpected) in 0.000 seconds\n")
+            with patch.object(sdk, "run", return_value=str(root)):
+                with self.assertRaisesRegex(ValueError, "executed no XCTest cases"):
+                    sdk.verify_test_results(["//:NuxieSDKUnitTests"])
+                log.write_text("Test Suite 'ConformanceVectorTests' passed.\n"
+                               "Executed 3 tests, with 0 failures (0 unexpected) in 0.001 seconds\n")
+                sdk.verify_test_results(["//:NuxieSDKUnitTests"])
+                log.unlink()
+                with self.assertRaisesRegex(ValueError, "test log is missing"):
+                    sdk.verify_test_results(["//:NuxieSDKUnitTests"])
 
     def test_ci_uses_owned_output_root_batch_mode_and_standalone_launcher(self):
         with patch.dict("os.environ", {"CI": "1", "NUXIE_BAZEL_OUTPUT_USER_ROOT": "/tmp/owned CI"}, clear=True), \

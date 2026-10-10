@@ -40,8 +40,10 @@ scripts/bazel/sdk.sh test --suite macos-unit
 `test` defaults to iOS unit, hosted input, integration, and macOS unit. The
 focused native-runtime selector retains all three existing runtime classes.
 StoreKit, video, runtime/reference UI, and E2E suites are separate selectors.
-Use `--test-filter Module/Class[/method]` for a targeted run and
+Use `--test-filter Module/Class[/method]` for a targeted run (the frontend
+converts Xcode selectors to XCTest's Swift `Module.Class[/method]` identifiers) and
 `--simulator-device` / `--simulator-os` to select an installed simulator. The
+frontend rejects successful runner exits that execute zero XCTest cases. The
 StoreKit suite requires native StoreKitTest availability; unavailable execution
 cannot count as qualification.
 
