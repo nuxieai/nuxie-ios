@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 protocol JourneyProfileConsuming: AnyObject, Sendable {
     func profileDidCommit(
@@ -2462,6 +2463,44 @@ private extension JourneyService {
 
 }
 
+extension JourneyService {
+    /// Observes only an existing run. Never prepares native state or creates a map entry.
+    func liveFormAnswersJSON(runID: String, owner: String) async throws -> Data? {
+        let generation = executionFence.token().generation
+        guard identity.getDistinctId() == owner,
+              let entry = nativeValuesByRun[runID], entry.owner == owner else { return nil }
+        guard await entry.values.isPrepared else { return nil }
+        let answers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>
+        do {
+            answers = try await entry.values.formAnswers(policy: entry.policy)
+        } catch {
+            try Task.checkCancellation()
+            switch error {
+            case is CancellationError,
+                 ExperienceInteractiveScreenError.stateContract("Response forms are unavailable"):
+                return nil
+            #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+            case NuxieNativeRuntimeError.closed,
+                 NuxieNativeRuntimeError.missingHandle("shared view model"),
+                 NuxieRuntimeExecutorError.closed:
+                return nil
+            #endif
+            default:
+                throw error
+            }
+        }
+        guard identity.getDistinctId() == owner,
+              executionFence.token().generation == generation,
+              let current = nativeValuesByRun[runID], current.owner == owner,
+              current.values === entry.values else { return nil }
+        return try JSONEncoder().encode(answers)
+    }
+
+    func hasNativeValuesForTesting(runID: String) -> Bool {
+        nativeValuesByRun[runID] != nil
+    }
+}
+
 // MARK: - Durable execution
 
 private extension JourneyService {
@@ -2480,27 +2519,6 @@ private extension JourneyService {
 
     func retireNativeValues(owner: String) async {
         for value in takeNativeValues(owner: owner) { await value.retire() }
-    }
-
-    /// Observes only an existing run. Never prepares native state or creates a map entry.
-    internal func liveFormAnswersJSON(runID: String, owner: String) async throws -> Data? {
-        let generation = executionFence.token().generation
-        guard identity.getDistinctId() == owner,
-              let entry = nativeValuesByRun[runID], entry.owner == owner else { return nil }
-        guard await entry.values.isPrepared else { return nil }
-        let answers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>
-        do {
-            answers = try await entry.values.formAnswers(policy: entry.policy)
-        } catch {
-            // A retired or failed native read has no live observation.
-            try Task.checkCancellation()
-            return nil
-        }
-        guard identity.getDistinctId() == owner,
-              executionFence.token().generation == generation,
-              let current = nativeValuesByRun[runID], current.owner == owner,
-              current.values === entry.values else { return nil }
-        return try JSONEncoder().encode(answers)
     }
 
     func nativeValues(for runID: String, owner: String, policy: JourneyReleaseValuePolicy, snapshot: ExperienceRunSnapshot? = nil) -> ExperienceRunValues {
