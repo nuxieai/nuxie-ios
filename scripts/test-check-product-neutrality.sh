@@ -16,6 +16,26 @@ printf '%s\n' "public SDK fixture" >"${temporary}/sdk/README.md"
 git -C "${temporary}/sdk" add README.md scripts/check-product-neutrality.sh
 "${temporary}/sdk/scripts/check-product-neutrality.sh" >/dev/null
 
+for fixture in shared-values run-values published-input forms-saves/goals; do
+  mkdir -p "${temporary}/sdk/fixtures/runtime/${fixture}"
+  for metadata in NOTES.md provenance.json; do
+    printf '%s%s\n' "tools/nuxie-" "editor" \
+      >"${temporary}/sdk/fixtures/runtime/${fixture}/${metadata}"
+  done
+done
+git -C "${temporary}/sdk" add fixtures/runtime
+"${temporary}/sdk/scripts/check-product-neutrality.sh" >/dev/null
+
+printf '%s%s\n' "final class EditorNative" "ArtifactFixture {}" \
+  >"${temporary}/sdk/fixtures/runtime/run-values/support.swift"
+git -C "${temporary}/sdk" add fixtures/runtime/run-values/support.swift
+if "${temporary}/sdk/scripts/check-product-neutrality.sh" >"${temporary}/fixture-failure.log" 2>&1; then
+  echo "Product-neutrality guard exempted code beside fixture metadata" >&2
+  exit 1
+fi
+grep -F "fixtures/runtime/run-values/support.swift" "${temporary}/fixture-failure.log" >/dev/null
+git -C "${temporary}/sdk" rm -q -f fixtures/runtime/run-values/support.swift
+
 printf '%s%s\n' "final class EditorNative" "ArtifactFixture {}" \
   >"${temporary}/sdk/ProductSpecific.swift"
 git -C "${temporary}/sdk" add ProductSpecific.swift

@@ -1,0 +1,11 @@
+[
+  {
+    "location": "system",
+    "family": "System",
+    "weight": "400",
+    "style": "normal",
+    "authoredAssetId": 0,
+    "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+    "required": true
+  }
+]

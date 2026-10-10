@@ -892,13 +892,6 @@ enum JourneyReleaseSchemaPrimitives {
                 _ = try object(action, required: ["type", "eventName"], optional: ["payload"], path: "\(path)[\(index)]")
                 try identifier(action["eventName"], path: "\(path)[\(index)].eventName")
                 if let payload = action["payload"] { try validateDeclarativePayload(payload, path: "\(path)[\(index)].payload") }
-            case "response_set":
-                _ = try object(action, required: ["type", "field", "value"], path: "\(path)[\(index)]")
-                try identifier(action["field"], path: "\(path)[\(index)].field")
-                try validateDeclarativeValueSource(action["value"], path: "\(path)[\(index)].value")
-            case "response_unset":
-                _ = try object(action, required: ["type", "field"], path: "\(path)[\(index)]")
-                try identifier(action["field"], path: "\(path)[\(index)].field")
             default: try invalid("\(path)[\(index)].type")
             }
         }
@@ -1031,20 +1024,15 @@ enum JourneyReleaseSchemaPrimitives {
                 item,
                 required: [
                     "id", "screenId", "artboardId", "viewNodeId", "renderedNodeId",
-                    "textObjectKey", "textRunObjectKey", "textName",
-                    "textRunName", "value", "editable", "geometry", "style",
+                    "textInputName", "value", "editable", "geometry", "style",
                     "secureTextEntry", "multiline",
                 ],
-                optional: ["responseFieldKey", "responseCapture", "placeholder", "keyboardType", "maxLength", "actionEvent", "declarativeActionId", "editableValueName"],
+                optional: ["responseFieldKey", "responseCapture", "placeholder", "keyboardType", "maxLength", "actionEvent", "declarativeActionId"],
                 path: "render.textInputs[\(index)]"
             )
-            for field in ["id", "screenId", "artboardId", "viewNodeId", "renderedNodeId", "textObjectKey", "textRunObjectKey"] { try identifier(input[field], path: "render.textInputs[\(index)].\(field)") }
+            for field in ["id", "screenId", "artboardId", "viewNodeId", "renderedNodeId"] { try identifier(input[field], path: "render.textInputs[\(index)].\(field)") }
             guard screenIDSet.contains(input["screenId"] as! String) else { try invalid("render.textInputs[\(index)].screenId") }
-            try boundedString(input["textName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].textName")
-            try boundedString(input["textRunName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].textRunName")
-            if let value = input["editableValueName"] {
-                try boundedString(value, minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].editableValueName")
-            }
+            try boundedString(input["textInputName"], minimum: 1, maximumUTF16: 256, path: "render.textInputs[\(index)].textInputName")
             try boundedString(input["value"], minimum: 0, maximumUTF16: 1_000_000, path: "render.textInputs[\(index)].value")
             if let value = input["responseFieldKey"] { try identifier(value, path: "render.textInputs[\(index)].responseFieldKey") }
             if let value = input["actionEvent"] {

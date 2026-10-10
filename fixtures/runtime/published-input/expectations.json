@@ -1,0 +1,45 @@
+{
+  "model": "Experience",
+  "property": "experience",
+  "screens": [
+    "input",
+    "greeting"
+  ],
+  "startingValues": {
+    "name": "Ada"
+  },
+  "textInputName": {
+    "kind": "published-locator",
+    "source": "text-inputs.json",
+    "authoredId": "name",
+    "frame": "screens/input",
+    "viewNodeId": "scr_screens_sinput::v2",
+    "value": "scr_screens_sinput::v2 editable value"
+  },
+  "focusFlags": 7,
+  "handlers": {
+    "focus": {
+      "property": "focused",
+      "before": 0,
+      "after": 1
+    },
+    "blur": {
+      "property": "blurred",
+      "before": 0,
+      "after": 1
+    },
+    "input": {
+      "property": "typed",
+      "before": 0,
+      "after": 1
+    }
+  },
+  "typing": {
+    "append": " Lovelace",
+    "after": "Ada Lovelace"
+  },
+  "greeting": {
+    "prefix": "Hello, "
+  },
+  "qualification": "C3 first cut proves native host focus, typing and shared values. The input label is Name. Platform input delivery and signed release admission remain separate."
+}

@@ -1,0 +1,52 @@
+[
+  {
+    "fixturePath": "Tests/ExperienceRuntimeHostApp/Fixtures/rendered-text-input/profile.json",
+    "previousScene": "cb9967546c3f5b17af64c3244f82a4bb49d7300149a7770a97bc0b264fd79633",
+    "replacement": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+    "sourceCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65"
+  },
+  {
+    "fixturePath": "fixtures/journeys/planes/release.json",
+    "replacement": "admission-only table uses published F3 locator"
+  },
+  {
+    "fixturePath": "fixtures/journeys/planes/test-store-orchestration.json",
+    "previousScene": "cb9967546c3f5b17af64c3244f82a4bb49d7300149a7770a97bc0b264fd79633",
+    "replacement": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+    "sourceCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65"
+  },
+  {
+    "fixturePath": "fixtures/journeys/planes/test-store-orchestration.json",
+    "previousScene": "cb9967546c3f5b17af64c3244f82a4bb49d7300149a7770a97bc0b264fd79633",
+    "replacement": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+    "sourceCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65"
+  },
+  {
+    "fixturePath": "fixtures/journeys/planes/text-input-navigation.json",
+    "replacement": "admission-only table uses published F3 locator"
+  },
+  {
+    "fixturePath": "fixtures/journeys/planes/text-input-navigation.json",
+    "replacement": "admission-only table uses published F3 locator"
+  },
+  {
+    "fixturePath": "fixtures/journeys/planes/text-input-navigation.json",
+    "replacement": "admission-only table uses published F3 locator"
+  },
+  {
+    "fixturePath": "fixtures/journeys/rendered-custom-transition/release-entry.json",
+    "previousScene": "15764042bd3f08c014154b6f67e537be5d5da227937656e2bb4acf57629980bf",
+    "replacement": "remove retired input declarations; retain non-input scene"
+  },
+  {
+    "fixturePath": "fixtures/journeys/rendered-semantic-roles/release-entry.json",
+    "previousScene": "d7f4452d1fd439f3bf822f97bf8230dd33dc0b610468f069daaa0666fd6e6452",
+    "replacement": "remove retired input declarations; retain non-input scene"
+  },
+  {
+    "fixturePath": "fixtures/journeys/rendered-text-input/release-entry.json",
+    "previousScene": "cb9967546c3f5b17af64c3244f82a4bb49d7300149a7770a97bc0b264fd79633",
+    "replacement": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+    "sourceCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65"
+  }
+]

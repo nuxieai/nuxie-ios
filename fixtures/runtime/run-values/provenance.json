@@ -1,0 +1,66 @@
+{
+  "superprojectCommit": "97d23aae674d8035ffda773cefdf936f85a1ea46",
+  "publisherSourceCommit": "97d23aae674d8035ffda773cefdf936f85a1ea46",
+  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
+  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
+  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
+  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
+  "sha256": "e25f18da6205712aee0efb6e779094cb9bd133a662cfae8184b6535ab1ff2e08",
+  "sizeBytes": 5353,
+  "publisherWasmSha256": "2f3e64c33ad2858af55a3cb7822bba02c0384ff5688c3ccf849aed4cc99e629f",
+  "authorityWasmSha256": "1511d8dcb9e6a88222c3711d925716cbd4768e60df12517b2f2dc7fb65997353",
+  "qualification": "First cut. Real publisher; C8 first-advanced-frame semantic values and C9 real pointer/shared values/native continue event pass. Platform pixels and released-Experience admission remain separate. Non-visibility focus/semantic-listener additions are documented in NOTES.md.",
+  "files": {
+    "NOTES.md": {
+      "sha256": "94efac5560740d5d90792d51a3515a461b2f9de5aca9fd7cc9c2f795b07410f7",
+      "sizeBytes": 8058
+    },
+    "expectations.json": {
+      "sha256": "cccc1749bf5852e7b8b3339a18da0cec3face0b2f0f96f6db497318bd525ece5",
+      "sizeBytes": 829
+    },
+    "screen.riv": {
+      "sha256": "e25f18da6205712aee0efb6e779094cb9bd133a662cfae8184b6535ab1ff2e08",
+      "sizeBytes": 5353
+    },
+    "source/components/answer-card/frame.json": {
+      "sha256": "b74869099b375140a2b450ae8513d16513568910925a2cec6f77c27af85bc021",
+      "sizeBytes": 163
+    },
+    "source/components/answer-card/index.html": {
+      "sha256": "4b3df10edc18fbfe06253e0fc343da5f80423abb561b3fc12b908b09f387806c",
+      "sizeBytes": 112
+    },
+    "source/experience.json": {
+      "sha256": "fe1c7b3ed7b72f89117c89207a8d3b310bc771aef986123ae159167452a3741b",
+      "sizeBytes": 527
+    },
+    "source/screens/level/frame.json": {
+      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
+      "sizeBytes": 100
+    },
+    "source/screens/level/index.html": {
+      "sha256": "3a5261b715dd5c6c8490b61f8553bea4b03c82d01d45abde582e53a62d2a4c6b",
+      "sizeBytes": 251
+    },
+    "source/screens/tap/frame.json": {
+      "sha256": "d8c3a8e2fe9f63cb57a7d673110228861a1a11edce2e581ffa7571a2b0be93bf",
+      "sizeBytes": 137
+    },
+    "source/screens/tap/index.html": {
+      "sha256": "5a4e501675a339bb167fb3451af44280dec2a9575c72419bb0bbecc32a4b4347",
+      "sizeBytes": 218
+    }
+  },
+  "fonts": [
+    {
+      "location": "system",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "required": true
+    }
+  ]
+}

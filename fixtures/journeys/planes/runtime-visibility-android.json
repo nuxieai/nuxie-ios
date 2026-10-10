@@ -77,16 +77,21 @@
     }
   ],
   "frameBackpressure": {
+    "settlement": "An accepted native edit focuses through a pointer tap, then replaces the text in a zero-delta step before the next display frame.",
     "firstFrameNanos": 1000000000,
     "busyFrameCount": 100,
     "busyTickNanos": 1000000,
     "nextFrameNanos": 1101000000,
     "expectedOrder": [
       "frame:0",
-      "write:headline:ok",
+      "frame:2",
+      "frame:0",
+      "text:ok",
       "frame:0"
     ],
     "expectedElapsed": [
+      0,
+      0,
       0,
       0.101
     ]

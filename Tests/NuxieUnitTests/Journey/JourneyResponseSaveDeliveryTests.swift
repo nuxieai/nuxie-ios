@@ -8,7 +8,7 @@ import XCTest
 final class JourneyResponseSaveDeliveryTests: XCTestCase {
     private struct Vectors: Decodable {
         struct Reply: Decodable {
-            let body: ExactJSONObject<JourneyReleaseJSONValue>
+            let bodyText: String
             let httpStatus: Int
             let expected: String
         }
@@ -54,7 +54,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
                 let sheet = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: expectedSheet.answers, queued: true)
                 let host = UUID().uuidString.lowercased() + ".test"
                 let expected = suite.request
-                let responseData = try ExactJSONCodec.encode(vector.body)
+                let responseData = Data(vector.bodyText.utf8)
                 StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
                     XCTAssertEqual(request.url?.path, "/responses/save")
                     XCTAssertEqual(request.httpMethod, "POST")
@@ -379,6 +379,102 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         await delivery.shutdown()
     }
 
+    func testEnqueueDuringSendCannotReinstateReceiptBackoff() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = directory.appendingPathComponent("journey-journal-v2")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        _ = try await journal.reserveResponseSave(run: run, formName: "first", answers: [:], queued: true)
+        let started = expectation(description: "old send held")
+        let transport = WakeDuringReceiptTransport(root: root, started: started)
+        let sleeper = MockSleepProvider()
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: transport,
+            clock: MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000)), sleeper: sleeper)
+        addTeardownBlock { await transport.release(); await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        await fulfillment(of: [started], timeout: 3)
+        _ = try await delivery.enqueue(journal: journal, run: run, formName: "new", answers: [:])
+        await transport.release()
+        for _ in 0..<200 {
+            if try await journal.pendingResponseSaves().isEmpty { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let pending = try await journal.pendingResponseSaves()
+        XCTAssertTrue(pending.isEmpty, "A prior send cannot restore a backoff cleared by enqueue")
+        XCTAssertTrue(sleeper.sleepCalls.isEmpty)
+        await delivery.shutdown()
+    }
+
+    func testReceiptWriteFailureBacksOffAndRecovers() async throws {
+        try await assertReceiptWriteRecovery(enqueueDuringBackoff: false)
+    }
+
+    func testEnqueueWakesReceiptWriteBackoff() async throws {
+        try await assertReceiptWriteRecovery(enqueueDuringBackoff: true)
+    }
+
+    private func assertReceiptWriteRecovery(enqueueDuringBackoff: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = directory.appendingPathComponent("journey-journal-v2")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let run = try await run(journal)
+        _ = try await journal.reserveResponseSave(run: run, formName: "first", answers: [:], queued: true)
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
+        let sleeper = MockSleepProvider()
+        let transport = ReceiptWriteFailureTransport(root: root)
+        let delivery = JourneyResponseSaveDelivery(directory: directory, transport: transport, clock: clock, sleeper: sleeper)
+        addTeardownBlock { await delivery.shutdown() }
+        await delivery.activate(scope: .testFixture)
+        var observedSleeps = 0
+        for (index, duration) in [5.0, 10, 20].enumerated() {
+            for _ in 0..<200 {
+                if sleeper.sleepCalls.count > observedSleeps && sleeper.pendingSleepCount > 0 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(sleeper.sleepCalls.last?.duration, duration)
+            observedSleeps += 1
+            let count = await transport.count()
+            XCTAssertEqual(count, index + 1, "One send precedes each receipt backoff")
+            if index == 0 {
+                clock.advance(by: -86_400)
+                sleeper.completeAllSleeps()
+                for _ in 0..<200 {
+                    if sleeper.sleepCalls.count > observedSleeps && sleeper.pendingSleepCount > 0 { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                XCTAssertEqual(sleeper.sleepCalls.last?.duration, 5)
+                let countAfterRollback = await transport.count()
+                XCTAssertEqual(countAfterRollback, 1)
+                observedSleeps += 1
+            }
+            if index < 2 { clock.advance(by: duration); sleeper.completeAllSleeps() }
+        }
+        try await transport.allowWrites()
+        if enqueueDuringBackoff {
+            _ = try await delivery.enqueue(journal: journal, run: run, formName: "new", answers: [:])
+        } else {
+            clock.advance(by: 20)
+            sleeper.completeAllSleeps()
+        }
+        for _ in 0..<200 {
+            if try await journal.pendingResponseSaves().isEmpty { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let pending = try await journal.pendingResponseSaves()
+        XCTAssertTrue(pending.isEmpty, "Receipt recovery confirms every sheet without advancing the clock for enqueue")
+        let count = await transport.count()
+        XCTAssertEqual(count, enqueueDuringBackoff ? 5 : 4)
+        await delivery.shutdown()
+    }
+
     func testReceiptWriteFailureNeverSendsAReplacedSnapshot() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let root = directory.appendingPathComponent("journey-journal-v2")
@@ -458,5 +554,43 @@ private actor HeldResponseSaveTransport: JourneyResponseSaveTransport {
             return JourneyResponseSaveReply.decode(Data(#"{"status":"saved","sequence":1}"#.utf8), attemptedSequence: 1)
         }
         return JourneyResponseSaveReply.decode(Data(#"{"status":"saved","sequence":2}"#.utf8), attemptedSequence: 1)
+    }
+}
+
+private actor ReceiptWriteFailureTransport: JourneyResponseSaveTransport {
+    private let root: URL
+    private var failing = true
+    private var requests = 0
+    init(root: URL) { self.root = root }
+    func count() -> Int { requests }
+    func allowWrites() throws {
+        failing = false
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+    }
+    func sendResponseSave(_ sheet: JourneyResponseSave) async throws -> JourneyResponseSaveReply {
+        requests += 1
+        if failing { try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path) }
+        return .init(code: .saved, sequence: sheet.sequence)
+    }
+}
+
+private actor WakeDuringReceiptTransport: JourneyResponseSaveTransport {
+    private let root: URL
+    private let started: XCTestExpectation
+    private var count = 0
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    init(root: URL, started: XCTestExpectation) { self.root = root; self.started = started }
+    func release() { released = true; continuation?.resume(); continuation = nil }
+    func sendResponseSave(_ sheet: JourneyResponseSave) async throws -> JourneyResponseSaveReply {
+        count += 1
+        if count == 1 {
+            started.fulfill()
+            if !released { await withCheckedContinuation { continuation = $0 } }
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+        } else {
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        }
+        return .init(code: .saved, sequence: sheet.sequence)
     }
 }

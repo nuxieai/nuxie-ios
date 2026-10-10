@@ -279,6 +279,7 @@ extension JourneyTestCase {
     func makeRenderedJourneyTestContext(
         snapshot: JourneyProfileCatalog.Snapshot? = nil,
         presenterAvailable: Bool = true,
+        readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         featureAccess: @escaping JourneyService.FeatureAccessLookup = { _ in nil },
         preparedTriggerBeforeSend:
             (@Sendable (NuxieEvent) -> NuxieEvent?)? = nil
@@ -311,7 +312,8 @@ extension JourneyTestCase {
                 events: events,
                 directory: directory,
                 featureAccess: featureAccess,
-                presenter: presenter
+                presenter: presenter,
+                readNativeValues: readNativeValues
             )
             await service.initialize()
             let journal = try JourneyRunJournal(
@@ -860,10 +862,13 @@ extension JourneyTestCase {
         directory: URL,
         storageScope: JourneyStorageScope? = .testFixture,
         dateProvider: DateProviderProtocol = MockDateProvider(),
+        sleepProvider: SleepProviderProtocol = MockSleepProvider(),
         featureAccess: @escaping JourneyService.FeatureAccessLookup = { _ in nil },
         storeEntitlements: @escaping JourneyService.StoreEntitlementLookup = { [] },
         dispatcher: (any JourneyDispatching)? = nil,
         presenter: (any JourneyPresenting)? = nil,
+        prepareNativeValues: @escaping JourneyService.NativeValuesPreparer = { _, _, _, _ in },
+        readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         pinnedReleaseAuthenticator: @escaping JourneyService.PinnedReleaseAuthenticator = {
             _, _ in throw JourneyJournalError.invalidState
         },
@@ -873,7 +878,7 @@ extension JourneyTestCase {
             identity: identity,
             events: events,
             dateProvider: dateProvider,
-            sleepProvider: MockSleepProvider(),
+            sleepProvider: sleepProvider,
             journalDirectory: directory,
             storageScope: storageScope,
             featureAccess: featureAccess,
@@ -883,6 +888,8 @@ extension JourneyTestCase {
                 events: events
             ),
             presenter: presenter,
+            prepareNativeValues: prepareNativeValues,
+            readNativeValues: readNativeValues,
             pinnedReleaseAuthenticator: pinnedReleaseAuthenticator,
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!,
@@ -1455,7 +1462,7 @@ actor JourneyRevealRecorder {
     func count() -> Int { value }
 }
 
-actor JourneyResponsePersistenceProbe {
+actor JourneyPublicationPersistenceProbe {
     private var values: [String?] = []
 
     func record(_ value: String?) {

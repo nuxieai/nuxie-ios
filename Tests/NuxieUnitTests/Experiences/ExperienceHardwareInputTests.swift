@@ -237,6 +237,119 @@ final class ExperienceHardwareInputTests: XCTestCase {
         await controller.shutdownInteractiveScreen()
     }
 
+    func testNativeFieldTabAndShiftTabReachAuthoredRiveFocus() async throws {
+        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: "Main",
+            scene: Data(contentsOf: directory.appendingPathComponent("focus_collapsing.riv")))
+        let probe = InputStepProbe(modelName: "Main")
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe, fixtureName: "focus_collapsing")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 640)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.view.layoutIfNeeded()
+        let editor = UITextField(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+        controller.view.addSubview(editor)
+        do {
+            try await controller.mountInteractiveScreen()
+            await controller.enter(reduceMotion: true)
+            await controller.activate(reduceMotion: true)
+            for modifiers in [UIKeyModifierFlags(), .shift] {
+                XCTAssertTrue(controller.receiveFocusInput(.clear))
+                try await advance(controller, probe: probe)
+                XCTAssertFalse(controller.riveFocusState.hasFocus)
+                XCTAssertTrue(editor.becomeFirstResponder())
+                controller.pressesBegan([HardwarePress(HardwareKey(.keyboardTab, flags: modifiers), time: 1)], with: nil)
+                controller.pressesEnded([HardwarePress(HardwareKey(.keyboardTab, flags: modifiers), time: 2, pressed: false)], with: nil)
+                try await advance(controller, probe: probe)
+                XCTAssertTrue(controller.riveFocusState.hasFocus, "Native field Tab must traverse the authored Rive order")
+                XCTAssertFalse(editor.isFirstResponder)
+                let snapshot = try await controller.runtimeSnapshot()
+                let expectedChild = modifiers.contains(.shift) ? "child3" : "child1"
+                guard case .referencedInstance(let childID) = snapshot.values.first(where: {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == expectedChild
+                })?.value else {
+                    XCTFail("Missing authored child")
+                    await controller.shutdownInteractiveScreen()
+                    return
+                }
+                XCTAssertEqual(snapshot.values.first(where: { $0.ownerInstanceID == childID && $0.name == "isFocused" })?.value,
+                    .bool(true), "Tab direction selects the authored first or last child")
+                XCTAssertTrue(editor.becomeFirstResponder())
+                controller.pressesBegan([HardwarePress(HardwareKey(.keyboardA), time: 3)], with: nil)
+                controller.pressesEnded([HardwarePress(HardwareKey(.keyboardA), time: 4, pressed: false)], with: nil)
+                try await advance(controller, probe: probe)
+                XCTAssertTrue(editor.isFirstResponder, "Every other key stays in the native field")
+                XCTAssertFalse(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardA.rawValue,
+                    modifiers: 0, pressed: true, repeated: false))
+            }
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+        await controller.shutdownInteractiveScreen()
+    }
+
+    func testIdleFrameRetiresFocusAfterBoundOpacityHidesControl() async throws {
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("focus_collapsing.riv"))
+        let inspection = try await NuxieNativeRuntime.open(bytes: bytes, artboardName: "Artboard",
+            player: .stateMachine("State Machine 1"), pixelWidth: 64, pixelHeight: 64, bindDefaultViewModel: true)
+        let modelName: String
+        do {
+            let snapshot = try await inspection.snapshot()
+            let root = try XCTUnwrap(snapshot.instances.first { $0.id == snapshot.rootInstanceID })
+            let catalog = try await inspection.viewModelCatalog()
+            modelName = try XCTUnwrap(catalog.schemas.first { $0.index == root.schemaIndex }).name
+            try await inspection.close()
+        } catch { try? await inspection.close(); throw error }
+        let payload = try await ExperienceInputFixture.payload(defaultViewModelName: modelName, scene: bytes)
+        let probe = InputStepProbe(modelName: modelName)
+        let controller = try ExperienceInputFixture.makeController(payload, probe: probe, fixtureName: "focus_collapsing")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 640)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.view.layoutIfNeeded()
+        do {
+            try await controller.mountInteractiveScreen()
+            await controller.enter(reduceMotion: true)
+            await controller.activate(reduceMotion: true)
+            for _ in 0..<2 {
+                XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardTab.rawValue,
+                    modifiers: 0, pressed: true, repeated: false))
+                controller.pressesEnded([HardwarePress(HardwareKey(.keyboardTab), time: 2, pressed: false)], with: nil)
+                try await advance(controller, probe: probe)
+            }
+            XCTAssertTrue(controller.riveFocusState.hasFocus)
+            XCTAssertTrue(controller.applyValue(path: .init(viewModelName: modelName, path: "opacity"),
+                value: 0, screenId: nil, instanceId: nil))
+            try await advance(controller, probe: probe)
+            try await advance(controller, probe: probe)
+            XCTAssertFalse(controller.riveFocusState.hasFocus)
+            XCTAssertFalse(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: true, repeated: false))
+            XCTAssertTrue(controller.applyValue(path: .init(viewModelName: modelName, path: "opacity"),
+                value: 1, screenId: nil, instanceId: nil))
+            try await advance(controller, probe: probe)
+            for _ in 0..<2 {
+                XCTAssertTrue(controller.receiveFocusInput(.next))
+                try await advance(controller, probe: probe)
+            }
+            XCTAssertTrue(controller.riveFocusState.hasFocus)
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: true, repeated: false))
+            XCTAssertTrue(controller.receiveHardwareKey(hid: UIKeyboardHIDUsage.keyboardEscape.rawValue,
+                modifiers: 0, pressed: false, repeated: false))
+        } catch {
+            await controller.shutdownInteractiveScreen()
+            throw error
+        }
+        await controller.shutdownInteractiveScreen()
+    }
+
     func testOneHeldUIKitKeyProducesOneNonrepeatDownAndOneUp() async throws {
         let children: [[String: Any]] = [
             ["viewModelId": "KeyboardInputChildVM", "vmInstanceId": "key-e", "instanceName": "Instance 4"],
@@ -276,6 +389,14 @@ final class ExperienceHardwareInputTests: XCTestCase {
             controller.pressesEnded([HardwarePress(HardwareKey(.keyboardA), time: 4, pressed: false)], with: nil)
             try await advance(controller, probe: probe)
             XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 2, "The A-up listener fires once")
+            controller.pressesBegan([HardwarePress(HardwareKey(.keyboardB), time: 5)], with: nil)
+            for _ in 0..<40 { try await advance(controller, probe: probe) }
+            try await Task.sleep(nanoseconds: 650_000_000)
+            try await advance(controller, probe: probe)
+            XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 2, "A held key sends no repeat downs")
+            controller.pressesEnded([HardwarePress(HardwareKey(.keyboardB), time: 6, pressed: false)], with: nil)
+            try await advance(controller, probe: probe)
+            XCTAssertEqual((probe.values["keyCount"] as? NSNumber)?.intValue, 3, "The B-up listener fires once")
         } catch {
             await controller.shutdownInteractiveScreen()
             throw error

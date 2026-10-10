@@ -7,8 +7,8 @@ actor JourneyResponseSaveDelivery {
     private let sleeper: any SleepProviderProtocol
     private var scope: JourneyStorageScope?
     private var journals: ExactJSONObject<JourneyRunJournal> = [:]
-    private var receiptRetryAt: ExactJSONObject<Date> = [:]
-    private struct ReadBackoff {
+    private var receiptBackoffs: ExactJSONObject<RetryBackoff> = [:]
+    private struct RetryBackoff {
         var delay: TimeInterval = 5
         var retryAt: Date?
         mutating func failed(at now: Date) {
@@ -16,8 +16,8 @@ actor JourneyResponseSaveDelivery {
             delay = min(300, delay * 2)
         }
     }
-    private var discoveryBackoff = ReadBackoff()
-    private var readBackoffs: ExactJSONObject<ReadBackoff> = [:]
+    private var discoveryBackoff = RetryBackoff()
+    private var readBackoffs: ExactJSONObject<RetryBackoff> = [:]
     private var sleeping: Task<Void, Error>?
     private var lastClockReading: Date?
     private var discovered = false
@@ -90,8 +90,11 @@ actor JourneyResponseSaveDelivery {
                     readBackoffs[owner] = backoff
                 }
             }
-            for owner in receiptRetryAt.keys {
-                receiptRetryAt[owner] = receiptRetryAt[owner]?.addingTimeInterval(shift)
+            for owner in receiptBackoffs.keys {
+                if var backoff = receiptBackoffs[owner] {
+                    backoff.retryAt = backoff.retryAt?.addingTimeInterval(shift)
+                    receiptBackoffs[owner] = backoff
+                }
             }
         }
         lastClockReading = now
@@ -100,8 +103,9 @@ actor JourneyResponseSaveDelivery {
 
     private func wake() {
         workGeneration &+= 1
-        discoveryBackoff = ReadBackoff()
+        discoveryBackoff = RetryBackoff()
         readBackoffs = [:]
+        receiptBackoffs = [:]
         sleeping?.cancel()
         kick()
     }
@@ -151,20 +155,19 @@ actor JourneyResponseSaveDelivery {
                         nextDelay = min(nextDelay ?? remaining, remaining)
                         continue
                     }
-                    if let retryAt = receiptRetryAt[journal.distinctId] {
+                    if let retryAt = receiptBackoffs[journal.distinctId]?.retryAt {
                         let remaining = retryAt.timeIntervalSince(currentTime())
                         if remaining > 0 {
                             nextDelay = min(nextDelay ?? remaining, remaining)
                             continue
                         }
-                        receiptRetryAt[journal.distinctId] = nil
                     }
                     let attempts: [JourneyResponseSaveAttempt]
                     do { attempts = try await journal.responseSaveAttempts(at: currentTime()) }
                     catch is CancellationError { return }
                     catch {
                         LogWarning("Response save journal could not be read")
-                        var backoff = readBackoffs[journal.distinctId] ?? ReadBackoff()
+                        var backoff = readBackoffs[journal.distinctId] ?? RetryBackoff()
                         backoff.failed(at: currentTime())
                         readBackoffs[journal.distinctId] = backoff
                         let remaining = backoff.retryAt!.timeIntervalSince(currentTime())
@@ -195,10 +198,15 @@ actor JourneyResponseSaveDelivery {
                         catch is CancellationError { return }
                         catch {
                             LogWarning("Response save receipt could not be persisted")
-                            receiptRetryAt[journal.distinctId] = currentTime().addingTimeInterval(5)
+                            if observedGeneration == workGeneration {
+                                var backoff = receiptBackoffs[journal.distinctId] ?? RetryBackoff()
+                                backoff.failed(at: currentTime())
+                                receiptBackoffs[journal.distinctId] = backoff
+                            }
                             sent = true
                             break deliveryPass
                         }
+                        receiptBackoffs[journal.distinctId] = nil
                         if stopped {
                             LogWarning("Response save stopped: code=\(reply.code.rawValue), journey=\(attempt.sheet.journeyId), form=\(attempt.sheet.formName), owner=\(attempt.sheet.distinctId)")
                         }

@@ -502,6 +502,8 @@ targets:
           - Experiences/ExperienceHardwareInputTests.swift
           - Experiences/ExperienceTextInputTypographyTests.swift
           - Experiences/SignedSemanticJourneyTests.swift
+          - Experiences/ExperienceSharedValuesTests.swift
+          - Experiences/ExperienceSharedValuesPresentationTests.swift
           - Fixtures/semantic_text.riv
           - Fixtures/native_input_layout.riv
       - path: fixtures/journeys/rendered-semantic-screen-control
@@ -511,6 +513,8 @@ targets:
       - path: fixtures/journeys/rendered-semantic-screen-control-error
         type: folder
       - path: fixtures/journeys/rendered-semantic-roles
+        type: folder
+      - path: fixtures/journeys/rendered-text-input
         type: folder
     dependencies:
       - target: NuxieExperienceRuntimeHostApp

@@ -100,8 +100,18 @@ private struct ExperienceRuntimePresentationPointerQueue {
         }
     }
 
-    mutating func takeBatch() -> [ExperienceInteractivePointerEvent] {
-        let count = min(events.count, ExperienceRuntimePointerInputRouter.maximumActivePointers)
+    mutating func takeNativeTap(at point: CGPoint) -> [ExperienceInteractivePointerEvent] {
+        // Already queued native editing owns this reserved two-event slot.
+        // Later scene pointers stay queued until their ordinary frame.
+        events.insert(contentsOf: [
+            .init(kind: .down, x: Float(point.x), y: Float(point.y), pointerID: 0),
+            .init(kind: .up, x: Float(point.x), y: Float(point.y), pointerID: 0),
+        ], at: 0)
+        return takeBatch(maximumCount: 2)
+    }
+
+    mutating func takeBatch(maximumCount: Int = ExperienceRuntimePointerInputRouter.maximumActivePointers) -> [ExperienceInteractivePointerEvent] {
+        let count = min(events.count, maximumCount)
         let batch = Array(events.prefix(count))
         events.removeFirst(count)
         return batch
@@ -774,6 +784,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             guard eligible else { throw CancellationError() }
             return try await work.perform()
         }, completion: completion)
+    }
+
+    /// Called within serialized native editing work, before later scene input.
+    func takeNativeEditingTap(at point: CGPoint) -> [[ExperienceInteractivePointerEvent]] {
+        [pendingPointers.takeNativeTap(at: point)]
     }
 
     @discardableResult

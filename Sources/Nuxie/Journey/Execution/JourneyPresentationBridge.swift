@@ -66,7 +66,7 @@ struct JourneyPresentationRequest: Sendable {
     let release: AuthenticatedJourneyRelease
     let delivery: JourneyReleaseDelivery
     let pinnedArtifacts: JourneyPinnedReleaseArtifacts?
-    let responseValues: ExactJSONObject<JourneyReleaseJSONValue>
+    let runValues: ExperienceRunValues
     let screenId: String
     let owner: JourneyPresentationOwner
     let reservation: (any JourneyPresentationReservation)?
@@ -98,7 +98,7 @@ struct JourneyPresentationRequest: Sendable {
         release: AuthenticatedJourneyRelease,
         delivery: JourneyReleaseDelivery,
         pinnedArtifacts: JourneyPinnedReleaseArtifacts? = nil,
-        responseValues: ExactJSONObject<JourneyReleaseJSONValue> = [:],
+        runValues: ExperienceRunValues = ExperienceRunValues(),
         screenId: String,
         owner: JourneyPresentationOwner,
         reservation: (any JourneyPresentationReservation)?,
@@ -132,7 +132,7 @@ struct JourneyPresentationRequest: Sendable {
         self.fences = fences
         self.release = release
         self.delivery = delivery
-        self.responseValues = responseValues
+        self.runValues = runValues
         self.pinnedArtifacts = pinnedArtifacts
         self.screenId = screenId
         self.owner = owner
@@ -250,6 +250,7 @@ protocol JourneyPresenting: AnyObject, Sendable {
 
 @MainActor
 final class JourneyRuntimeDelegate {
+    let runValues: ExperienceRunValues
     let presentationFences: JourneyPresentationFences
     nonisolated let introEligibilityAuthorizationContext:
         IntroEligibilityAuthorizationContext
@@ -280,7 +281,6 @@ final class JourneyRuntimeDelegate {
     private let onPresentationFinished:
         @MainActor @Sendable () -> Void
     private let viewModelState: ExperienceViewModelStateCoordinator?
-    private var responseProjection: JourneyResponseViewModelProjection
     private let initialScreenId: String
     private(set) var activeScreenId: String?
     private var navigationHistory: [String] = []
@@ -296,6 +296,7 @@ final class JourneyRuntimeDelegate {
 
     init(request: JourneyPresentationRequest,
          openLink: (@MainActor (ExperienceViewController, ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest?)? = nil) {
+        runValues = request.runValues
         presentationFences = request.fences
         openLinkHandler = openLink
         introEligibilityAuthorizationContext = .init(
@@ -303,11 +304,6 @@ final class JourneyRuntimeDelegate {
             journeyId: request.owner.journeyId,
             legId: request.release.descriptor.leg.id,
             descriptorSha256: request.release.descriptorSHA256
-        )
-        responseProjection = JourneyResponseViewModelProjection(
-            screens: request.release.descriptor.leg.screens,
-            defaults: (try? ExperienceDefinition(journeyDescriptor: request.release.descriptor))?.viewModelValues ?? [],
-            answers: request.responseValues
         )
         journeyId = request.owner.journeyId
         presentationTraceContext = request.presentationTraceContext
@@ -373,7 +369,6 @@ final class JourneyRuntimeDelegate {
             return
         }
         activeScreenId = screenId
-        projectResponses(into: controller, screenID: screenId)
         await controller.configureScreenEmissionRun(
             screenControlScope(screenId: screenId)
         )
@@ -456,23 +451,7 @@ final class JourneyRuntimeDelegate {
               batch.presentationEpoch == presentationEpoch else {
             return false
         }
-        guard await onEmissionBatch(batch, frameSources) else { return false }
-        let changed = responseProjection.accept(batch.emissions)
-        if !resolved, let activeScreenId {
-            projectResponses(into: controller, screenID: activeScreenId, fields: changed)
-        }
-        return true
-    }
-
-    private func projectResponses(into controller: ExperienceViewController,
-                                  screenID: String, fields: Set<String>? = nil) {
-        for value in responseProjection.values(screenID: screenID, fields: fields) {
-            let path = VmPathRef(viewModelName: value.viewModelName, path: value.path)
-            _ = viewModelState?.setValue(path: path, value: value.value.value,
-                screenId: screenID, instanceId: value.instanceId)
-            controller.applyViewModelValue(path: path, value: value.value.value,
-                screenId: screenID, instanceId: value.instanceId)
-        }
+        return await onEmissionBatch(batch, frameSources)
     }
 
     func experienceViewController(

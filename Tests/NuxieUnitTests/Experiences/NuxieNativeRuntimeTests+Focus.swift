@@ -54,7 +54,7 @@ extension NuxieNativeRuntimeTests {
             XCTAssertTrue(pointerOnly.focusResults.isEmpty)
             XCTAssertEqual(pointerOnly.focusState, focusState)
             let idle = try await runtime.step(elapsedSeconds: 0)
-            XCTAssertNil(idle.focusState)
+            XCTAssertEqual(idle.focusState, focusState)
             let cleared = try await runtime.step(focusInputs: [.clear], elapsedSeconds: 0)
             XCTAssertEqual(cleared.focusResults, [false])
             for change in cleared.viewModelChanges where change.ownerInstanceID == snapshot.rootInstanceID {
@@ -68,6 +68,26 @@ extension NuxieNativeRuntimeTests {
             try await runtime.close()
         } catch { try? await runtime.close(); throw error }
         try await assertCompositeFocusDelivery()
+    }
+
+    func testBoundOpacityClearsFocusOnAnInputFreeStep() async throws {
+        let runtime = try await focusRuntime("focus_collapsing")
+        do {
+            _ = try await runtime.step(elapsedSeconds: 0.016)
+            for _ in 0..<2 { _ = try await runtime.step(focusInputs: [.next], elapsedSeconds: 0.016) }
+            let focused = try await runtime.step(elapsedSeconds: 0.016)
+            XCTAssertEqual(focused.focusState?.hasFocus, true)
+            _ = try await runtime.setNumber(0, path: "opacity")
+            _ = try await runtime.step(elapsedSeconds: 0)
+            let hidden = try await runtime.step(elapsedSeconds: 0)
+            XCTAssertEqual(hidden.focusState?.hasFocus, false)
+            _ = try await runtime.setNumber(1, path: "opacity")
+            _ = try await runtime.step(elapsedSeconds: 0)
+            for _ in 0..<2 { _ = try await runtime.step(focusInputs: [.next], elapsedSeconds: 0.016) }
+            let restored = try await runtime.step(elapsedSeconds: 0.016)
+            XCTAssertEqual(restored.focusState?.hasFocus, true)
+            try await runtime.close()
+        } catch { try? await runtime.close(); throw error }
     }
 
     private func assertCompositeFocusDelivery() async throws {

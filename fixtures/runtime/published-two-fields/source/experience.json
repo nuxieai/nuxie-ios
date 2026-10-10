@@ -1,0 +1,22 @@
+{
+  "$schema": "https://nuxie.com/schema/experience/1.json",
+  "entry": {
+    "steps": [
+      {
+        "type": "navigate",
+        "screen": "screens/input"
+      }
+    ]
+  },
+  "state": {
+    "name": {
+      "type": "string",
+      "default": "Ada"
+    },
+    "surname": {
+      "type": "string",
+      "default": "Hopper"
+    }
+  },
+  "journey": []
+}
