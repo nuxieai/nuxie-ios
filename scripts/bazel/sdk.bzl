@@ -7,23 +7,48 @@ load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@rules_swift//swift:providers.bzl", "SwiftInfo")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
 
+def _sdk_test_sources_impl(ctx):
+    outputs = []
+    sources = []
+    for source in ctx.files.srcs:
+        parts = source.short_path.split("/")
+        output = ctx.actions.declare_file(ctx.label.name + "/" + "/".join(parts[:-1]) + "/mapped_" + parts[-1])
+        outputs.append(output)
+        sources.append([source.path, source.short_path, output.path])
+    manifest = ctx.actions.declare_file(ctx.label.name + ".json")
+    ctx.actions.write(manifest, json.encode({"root": SDK_SOURCE_ROOT, "sources": sources}))
+    ctx.actions.run(
+        executable = ctx.file._mapper,
+        arguments = [manifest.path],
+        inputs = ctx.files.srcs + [manifest],
+        outputs = outputs,
+        use_default_shell_env = True,
+        mnemonic = "SDKTestSourcePaths",
+    )
+    return [DefaultInfo(files = depset(outputs))]
+
+_sdk_test_sources = rule(
+    implementation = _sdk_test_sources_impl,
+    attrs = {
+        "srcs": attr.label_list(allow_files = [".swift"]),
+        "_mapper": attr.label(default = "//scripts/bazel:map-test-sources.py", allow_single_file = True),
+    },
+)
+
 def sdk_test_library(name, module_name, srcs, deps = [], defines = [], strict_concurrency = False):
     # The authored suites use #filePath to inspect source and signed fixtures.
-    # Swift receives execroot-relative source paths; remap only test paths to
-    # the owning checkout, matching Xcode's #filePath contract on simulators.
+    # A source-location directive retains the owning checkout contract without
+    # changing authored tests or disabling Swift's hermetic compiler paths.
+    _sdk_test_sources(name = name + "_file_paths", testonly = True, srcs = srcs)
     swift_library(
         name = name,
         testonly = True,
         module_name = module_name,
         package_name = "Nuxie",
-        srcs = srcs,
+        srcs = [":" + name + "_file_paths"],
         deps = deps,
         defines = defines,
-        copts = [
-            "-swift-version", "5",
-            "-file-prefix-map", "Tests=" + SDK_SOURCE_ROOT + "/Tests",
-            "-file-prefix-map", "Examples=" + SDK_SOURCE_ROOT + "/Examples",
-        ] + (["-strict-concurrency=complete"] if strict_concurrency else []),
+        copts = ["-swift-version", "5"] + (["-strict-concurrency=complete"] if strict_concurrency else []),
     )
 
 def _platform_transition_impl(_settings, attr):

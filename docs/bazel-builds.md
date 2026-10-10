@@ -50,8 +50,10 @@ configuration. Both retain Swift 5 language mode, the supported iOS 15/macOS 12
 deployment targets, and the SDK/runtime strict concurrency checks. XcodeGen's
 unit/hosted exclusions, compilation conditions, fixture folders, app identities,
 and app versions are retained by the corresponding targets. Source conformance
-tests retain the existing checkout-relative `#filePath` contract; their inspected
-source and fixture files are also declared test inputs.
+tests retain the existing checkout-based `#filePath` contract through a declared,
+test-only source copy with `#sourceLocation`. Authored tests stay unchanged and
+their inspected source and fixture files are declared test inputs. Production
+compiler paths retain the shared-cache mapping provided by `rules_swift`.
 The SDK and test-support modules retain XcodeGen's explicit testability in both
 configurations; runtime adapters, applications, and tests use ordinary Debug
 testability and omit it in Release. The published SwiftPM manifest is unchanged.
