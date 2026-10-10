@@ -4,7 +4,15 @@
     {
       "name": "completed_after_authored_close",
       "terminalEvent": "$purchase_completed",
-      "outcome": "completed",
+      "outcome": "purchase_finished",
+      "reports": 1,
+      "commerceOperations": 1,
+      "authoredActions": 1
+    },
+    {
+      "name": "restored_after_authored_close",
+      "terminalEvent": "$restore_completed",
+      "outcome": "restore_finished",
       "reports": 1,
       "commerceOperations": 1,
       "authoredActions": 1

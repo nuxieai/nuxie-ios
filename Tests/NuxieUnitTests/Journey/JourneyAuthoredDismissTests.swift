@@ -38,6 +38,22 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
     }
 
     @MainActor
+    func testDeferredRestoreAllowsAuthoredCloseThenFollowsRestoredOutletOnce() async throws {
+        try await checkDismissal(commerce: "restore", pendingClose: true)
+    }
+
+    @MainActor
+    func testDeferredPurchaseAllowsExitThenFollowsCompletedOutletOnce() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true, exitClose: true)
+    }
+
+    @MainActor
+    func testExitThenCancelledPurchaseKeepsAuthoredCloseOutcome() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true,
+            terminalOutcome: SystemEventNames.purchaseCancelled, exitClose: true)
+    }
+
+    @MainActor
     func testDismissedLifecycleRouteRetainsPendingPurchase() async throws {
         try await checkDismissal(commerce: "purchase", pendingClose: true, lifecycleRoute: SystemEventNames.screenDismissed)
     }
@@ -122,7 +138,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
 
     @MainActor
     private func checkDismissal(commerce: String?, retryOutcome: String? = nil, pendingClose: Bool = false,
-        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false, secondPurchase: Bool = false, realEventRouting: Bool = false, failReportJournalWrite: Bool = false, deferralRace: String? = nil, lifecycleRoute: String? = nil) async throws {
+        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false, secondPurchase: Bool = false, realEventRouting: Bool = false, failReportJournalWrite: Bool = false, deferralRace: String? = nil, lifecycleRoute: String? = nil, exitClose: Bool = false) async throws {
         struct Corpus: Decodable {
             struct Vector: Decodable { let name, outcome: String; let reports: Int }
             let cases: [Vector]
@@ -147,7 +163,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         let pendingCorpus = try JSONDecoder().decode(PendingCorpus.self,
             from: Data(contentsOf: fixtureURL.deletingLastPathComponent().appendingPathComponent("pending-commerce.json")))
         let pendingExpected = try XCTUnwrap(pendingCorpus.cases.first {
-            $0.terminalEvent == (terminalOutcome ?? SystemEventNames.purchaseCompleted)
+            $0.terminalEvent == (terminalOutcome ?? (commerce == "restore" ? SystemEventNames.restoreCompleted : SystemEventNames.purchaseCompleted))
         })
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
@@ -156,13 +172,16 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         let action: [String: JourneyReleaseJSONValue] = type == "purchase"
             ? ["type": .string(type), "placementId": .string("golden:monthly")]
             : ["type": .string(type)]
+        let completedDismiss: [String: JourneyReleaseJSONValue] = pendingClose
+            ? ["type": .string("dismiss"), "reason": .string(type == "restore" ? "restore_finished" : "purchase_finished")]
+            : ["type": .string("dismiss")]
         var snapshot = replacing(base, entryStepId: "present", steps: [
             .init(kind: .action, id: "present", action: ["type": .string("navigate"), "screenId": .string("screen_welcome")], outlets: [:], outcome: nil),
             .init(kind: .action, id: "commerce", action: action,
                 outlets: [type == "purchase" ? "completed" : "restored": "dismiss"], outcome: nil),
-            .init(kind: .action, id: "dismiss", action: ["type": .string("dismiss")], outlets: [:], outcome: nil),
+            .init(kind: .action, id: "dismiss", action: completedDismiss, outlets: [:], outcome: nil),
             .init(kind: .action, id: "close_marker", action: ["type": .string("send_event"), "eventName": .string("authored_close_requested"), "payload": .object([:])], outlets: ["next": "close"], outcome: nil),
-            .init(kind: .action, id: "close", action: ["type": .string("dismiss"), "reason": .string("author_closed")], outlets: [:], outcome: nil),
+            .init(kind: .action, id: "close", action: ["type": .string(exitClose ? "exit" : "dismiss"), "reason": .string("author_closed")], outlets: [:], outcome: nil),
         ], routes: [
             .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "buy", entryStepId: "commerce"),
             .init(host: .init(kind: .screen, screenId: lifecycleRoute == SystemEventNames.screenShown ? "screen_thanks" : "screen_welcome"), eventName: lifecycleRoute ?? "close", entryStepId: "close_marker")
@@ -484,8 +503,9 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     XCTAssertEqual(waiting.first?.pendingCommerce?.stepId, "commerce")
                     XCTAssertEqual(waiting.first?.authoredCloseOutcome, "author_closed")
                     for (id, owner) in [("unrelated", "customer"), (correlation.eventId, "another-customer")] {
-                        await journeys.handleEvent(NuxieEvent(id: id, name: SystemEventNames.purchaseCompleted,
-                            distinctId: owner, properties: ["placement_id": "golden:monthly"]))
+                        await journeys.handleEvent(NuxieEvent(id: id,
+                            name: commerce == "restore" ? SystemEventNames.restoreCompleted : SystemEventNames.purchaseCompleted,
+                            distinctId: owner, properties: commerce == "restore" ? [:] : ["placement_id": "golden:monthly"]))
                     }
                     XCTAssertFalse(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
                 }
@@ -553,8 +573,9 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             XCTAssertEqual(persisted.count, 1, "The failed report write retains the completed run for recovery")
         }
         if pendingClose, let correlation = controller.correlation {
-            await journeys.handleEvent(NuxieEvent(id: correlation.eventId, name: SystemEventNames.purchaseCompleted,
-                distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
+            await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
+                name: commerce == "restore" ? SystemEventNames.restoreCompleted : SystemEventNames.purchaseCompleted,
+                distinctId: "customer", properties: commerce == "restore" ? [:] : ["placement_id": "golden:monthly"]))
             XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }.count, 1)
         }
         if let routeLog {
