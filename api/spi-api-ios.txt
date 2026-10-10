@@ -16,6 +16,7 @@ s:5Nuxie0A16TestingOverridesV7flushAtSiSgvp	Var	flushAt
 s:5Nuxie0A16TestingOverridesVACycfc	Constructor	init()
 s:5Nuxie0A3SDKC18FeatureCheckPolicyO9wireValueSSvg	Accessor	Get()
 s:5Nuxie0A3SDKC18FeatureCheckPolicyO9wireValueSSvp	Var	wireValue
+s:5Nuxie0A3SDKC19liveFormAnswersJSON5runID10distinctId10Foundation4DataVSgSS_SStYaKF	Function	liveFormAnswersJSON(runID:distinctId:)
 s:5Nuxie10AnyCodableV	TypeDecl	AnyCodable
 s:5Nuxie10AnyCodableV2eeoiySbAC_ACtFZ	Function	==(_:_:)
 s:5Nuxie10AnyCodableV4fromACs7Decoder_p_tKcfc	Constructor	init(from:)
