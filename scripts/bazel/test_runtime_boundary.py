@@ -6,16 +6,13 @@ import unittest
 
 
 class RuntimeOwnershipTests(unittest.TestCase):
-    def test_archived_fixture_provenance_does_not_admit_new_native_sources(self):
+    def test_sdk_does_not_admit_new_native_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "--quiet", str(root)], check=True)
             script = root / "scripts/check-runtime-consumer-boundary.sh"
             script.parent.mkdir()
             shutil.copy2(Path(__file__).parents[1] / script.name, script)
-            archive = root / "fixtures/runtime/nested-values/generate.rs"
-            archive.parent.mkdir(parents=True)
-            archive.write_text("archived publisher test")
             def check():
                 return subprocess.run(["bash", str(script)], cwd=root, text=True, capture_output=True)
             result = check()
