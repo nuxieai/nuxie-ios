@@ -47,9 +47,12 @@ frontend rejects successful runner exits that execute zero XCTest cases. The
 StoreKit suite requires native StoreKitTest availability; unavailable execution
 cannot count as qualification.
 
-The iOS unit suite runs inside a private UIKit test host so scene delivery and
-Metal initialization receive the simulator app lifecycle. The host preserves
-the authored suites' legacy window context without the runtime browser scene.
+The iOS unit and integration suites retain their authored hostless XCTest
+authority. The pinned Apple rules' `ios_xctestrun_runner` creates an XCResult
+and uses `xcodebuild test-without-building` with a disposable simulator.
+Xcode's test agent initializes UIKit and Metal; direct `simctl` process spawning
+does not provide the same context. Bazel still compiles and packages every
+Swift target directly, and the authored tests stay unchanged.
 App archives use the authored bundle name; the original public application
 target labels remain available as aliases.
 
@@ -133,7 +136,7 @@ platform-bound framework artifacts.
 | `NuxieRuntime`, `NuxieRuntimeMac` | Swift runtime adapter and Mac alias |
 | `NuxieSDK`, `NuxieSDKMac` | SDK dynamic frameworks, including Swift import modules |
 | `NuxieTestSupportiOS`, `NuxieTestSupportMac` | Shared test-support module aliases |
-| `NuxieSDKUnitTests` | Hosted UIKit and native Metal unit tests |
+| `NuxieSDKUnitTests` | Hostless UIKit and native Metal XCTest bundle |
 | `NuxieSDKMacUnitTests`, `NuxieSDKIntegrationTests` | Unhosted XCTest bundles |
 | `NuxieVideoDeviceTests`, `NuxieExperienceInputTests` | Hosted runtime/input XCTest bundles |
 | `NuxieStoreKitTestHost`, `NuxieSDKStoreKitTests` | iOS 17 StoreKit host and qualification bundle |
