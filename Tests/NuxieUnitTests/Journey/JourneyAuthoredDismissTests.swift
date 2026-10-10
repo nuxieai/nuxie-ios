@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import XCTest
-@testable import Nuxie
+@_spi(Testing) @testable import Nuxie
 @testable import NuxieRuntime
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
@@ -38,6 +38,11 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
     }
 
     @MainActor
+    func testSettledClosedPurchaseDoesNotCloseALaterCancelledPurchase() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true, secondPurchase: true)
+    }
+
+    @MainActor
     func testAuthoredCloseThenCancelledWithoutOutletKeepsCloseOutcome() async throws {
         try await checkDismissal(commerce: "purchase", pendingClose: true, terminalOutcome: SystemEventNames.purchaseCancelled)
     }
@@ -50,6 +55,19 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
     @MainActor
     func testTerminalWaitsForAcceptedAuthoredRouteDuringHeldPublication() async throws {
         try await checkDismissal(commerce: "purchase", pendingClose: true, holdClosePublication: true)
+    }
+
+    @MainActor
+    func testDeferredCommerceDoesNotBlockLaterEntryThroughRealEventLog() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true,
+            holdClosePublication: true, realEventRouting: true)
+    }
+
+    @MainActor
+    func testDurablyDeferredFailureRetriesCompletionWithoutEventReplay() async throws {
+        try await checkDismissal(commerce: "purchase", pendingClose: true,
+            terminalOutcome: SystemEventNames.purchaseFailed, holdClosePublication: true,
+            failCompletionOnce: true, realEventRouting: true)
     }
 
     @MainActor
@@ -77,7 +95,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
 
     @MainActor
     private func checkDismissal(commerce: String?, retryOutcome: String? = nil, pendingClose: Bool = false,
-        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false) async throws {
+        terminalOutcome: String? = nil, holdClosePublication: Bool = false, saveInDeclinedFrame: Bool = false, failCompletionOnce: Bool = false, holdReleaseLookup: Bool = false, secondPurchase: Bool = false, realEventRouting: Bool = false) async throws {
         struct Corpus: Decodable {
             struct Vector: Decodable { let name, outcome: String; let reports: Int }
             let cases: [Vector]
@@ -134,9 +152,29 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     .init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: Journey.Offer.accessUnknownEvent, entryStepId: "skip"),
                 ])
         }
+        if secondPurchase {
+            let leg = try XCTUnwrap(snapshot.releasesByDigest.values.first).descriptor.leg
+            snapshot = replacing(snapshot, offers: leg.offers + [
+                .init(screenId: "screen_thanks", placementIds: ["golden:monthly"], alreadyEntitledStepId: "skip", unknownStepId: "skip")
+            ], steps: leg.steps.map { step in
+                step.id == "commerce" ? .init(kind: .action, id: "commerce", action: action,
+                    outlets: ["completed": "thanks"], outcome: nil) : step
+            } + [
+                .init(kind: .action, id: "thanks", action: ["type": .string("navigate"), "screenId": .string("screen_thanks")], outlets: [:], outcome: nil),
+                .init(kind: .action, id: "commerce_again", action: action, outlets: ["completed": "dismiss"], outcome: nil)
+            ], routes: leg.routes + [
+                .init(host: .init(kind: .screen, screenId: "screen_thanks"), eventName: "buy_more", entryStepId: "commerce_again"),
+                .init(host: .init(kind: .screen, screenId: "screen_thanks"), eventName: Journey.Offer.alreadyEntitledEvent, entryStepId: "skip"),
+                .init(host: .init(kind: .screen, screenId: "screen_thanks"), eventName: Journey.Offer.accessUnknownEvent, entryStepId: "skip")
+            ], screens: leg.screens + [.init(id: "screen_thanks", defaultViewModelName: nil, defaultInstanceId: nil, responseCaptures: [])])
+        }
         if saveInDeclinedFrame {
             snapshot = replacing(snapshot, responses: ["feedback": .init(title: "Feedback", model: "Responses:feedback", fields: [
                 .init(key: "stars", label: "Stars", type: "number", values: nil, multiple: nil, rules: [])])])
+        }
+        if realEventRouting {
+            snapshot = replacing(snapshot, entry: .init(type: .event, eventName: "open_paywall", segmentId: nil, member: nil, condition: nil),
+                reentry: .init(type: .everyMatch, window: nil))
         }
         let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
         let identity = MockIdentityService()
@@ -148,7 +186,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         let definition = try ExperienceDefinition(journeyDescriptor: release.descriptor)
         let experience = Experience(id: "test-experience", versionId: release.descriptor.identity.experienceVersionId,
             buildId: "test-build", artifactContentHash: nil, authenticatedReleaseID: nil,
-            behaviorPresentation: .fullScreenDefault, behaviorPresentationScreens: ["screen_welcome": .init(width: 390, height: 844)],
+            behaviorPresentation: .fullScreenDefault, behaviorPresentationScreens: ["screen_welcome": .init(width: 390, height: 844), "screen_thanks": .init(width: 390, height: 844)],
             assetBaseURL: URL(string: "https://assets.example.com/")!,
             journey: .init(screens: definition.screens, viewModelValues: nil), definition: definition)
         let controller = AuthoredDismissCommerceController(mockExperienceVersionId: release.descriptor.identity.experienceVersionId,
@@ -162,11 +200,17 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         let saveDelivery = JourneyResponseSaveDelivery(directory: directory, transport: saveTransport,
             clock: SystemDateProvider(), sleeper: SystemSleepProvider())
         let completionFailure = PendingCommerceReadFailure()
+        if failCompletionOnce && holdClosePublication {
+            controller.onPreparedDismissal = { await completionFailure.arm() }
+        }
         let formFile: NuxieNativePreparedFile? = saveInDeclinedFrame
             ? try await NuxieNativePreparedFile.prepare(bytes: Data(contentsOf: fixtureURL.deletingLastPathComponent()
                 .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("runtime/forms-saves/screen.riv"))) : nil
+        let settlementSleeper = MockSleepProvider()
+        settlementSleeper.shouldCompleteImmediately = failCompletionOnce && holdClosePublication
         let journeys = makeService(identity: identity, events: events, directory: directory,
             responseSaveDelivery: saveInDeclinedFrame ? saveDelivery : nil,
+            sleepProvider: settlementSleeper,
             featureAccess: { _ in .notFound }, presenter: presentations,
             readNativeValues: { values in
                 try await completionFailure.read()
@@ -176,8 +220,30 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                 if holdReleaseLookup { await releaseGate.intercept(event: "release") }
                 return release
             })
+        let terminalRouted = realEventRouting ? expectation(description: "terminal delivered while authored publication is held") : nil
+        let routeLog: EventLog? = realEventRouting ? EventLog(identity: identity, dateProvider: MockDateProvider(),
+            apiClient: MockNuxieApi(), store: SQLiteEventStore()) : nil
+        if let routeLog {
+            let admission = routeLog.reserveCommittedAdmission { journeys.eventAdmissionGeneration() }
+            await routeLog.subscribeAcknowledgingCommitted(reservation: admission) { event, generation in
+                let accepted = await journeys.handleEvent(event, admittedProfileGeneration: generation)
+                if event.name == (terminalOutcome ?? SystemEventNames.purchaseCompleted) { terminalRouted?.fulfill() }
+                return accepted
+            }
+            let configuration = NuxieConfiguration(apiKey: "deferred-commerce-routing")
+            configuration.testingOverrides.suppressBackgroundWork = true
+            configuration.testingOverrides.customStoragePath = directory.appendingPathComponent("routing")
+            try await routeLog.configure(configuration: configuration)
+            addTeardownBlock { await routeLog.close() }
+        }
         await journeys.initialize()
         await journeys.profileDidCommit(snapshot, distinctId: "customer")
+        if let routeLog {
+            routeLog.track("open_paywall")
+            let routed = await routeLog.drainCommittedRouting()
+            XCTAssertTrue(routed)
+            for _ in 0..<200 where !presentations.isExperiencePresented { try await Task.sleep(nanoseconds: 10_000_000) }
+        }
         let journeyID = try XCTUnwrap(presentations.presentedJourneyId)
         XCTAssertTrue(presentations.isExperiencePresented)
         await controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "screen_welcome")
@@ -300,7 +366,12 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     let suspended = await publicationGate.isSuspended()
                     XCTAssertTrue(suspended)
                     let accepted: Bool
-                    if let earlyTerminal {
+                    if let routeLog {
+                        _ = await routeLog.captureAndRouteSystemEvent(.init(name: terminalOutcome ?? SystemEventNames.purchaseCompleted,
+                            properties: ["placement_id": "golden:monthly"], eventId: correlation.eventId, distinctId: "customer"))
+                        await fulfillment(of: [try XCTUnwrap(terminalRouted)], timeout: 2)
+                        accepted = await routeLog.drainCommittedRouting()
+                    } else if let earlyTerminal {
                         await releaseGate.release()
                         accepted = await earlyTerminal.value
                     } else {
@@ -309,7 +380,10 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                             properties: ["placement_id": "golden:monthly"]),
                             admittedProfileGeneration: journeys.eventAdmissionGeneration())
                     }
-                    XCTAssertFalse(accepted, "A terminal result stays pending until its accepted authored route finishes")
+                    XCTAssertTrue(accepted, "A durably deferred commerce result must not block event routing")
+                    let deferred = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+                    XCTAssertEqual(deferred.first?.pendingCommerceOutcome?.effectId, correlation.eventId)
+                    XCTAssertNil(deferred.first?.completion)
                     await publicationGate.release()
                 }
                 let closed = await closeTask.value
@@ -340,7 +414,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     XCTAssertTrue(accepted)
                 }
             }
-            if failCompletionOnce {
+            if failCompletionOnce && !holdClosePublication {
                 await completionFailure.arm()
                 let settled = await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
                     name: try XCTUnwrap(terminalOutcome), distinctId: "customer", properties: ["placement_id": "golden:monthly"]),
@@ -348,9 +422,39 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                 XCTAssertFalse(settled)
                 XCTAssertFalse(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
             }
-            await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
+            let nextController = AuthoredDismissCommerceController(mockExperienceVersionId: release.descriptor.identity.experienceVersionId,
+                mockScreenId: "screen_thanks", mockExperience: experience)
+            if secondPurchase { experiences.defaultMockViewController = nextController }
+            if !holdClosePublication { await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
                 name: terminalOutcome ?? (commerce == "purchase" ? SystemEventNames.purchaseCompleted : SystemEventNames.restoreCompleted),
-                distinctId: "customer", properties: commerce == "purchase" ? ["placement_id": "golden:monthly"] : [:]))
+                distinctId: "customer", properties: commerce == "purchase" ? ["placement_id": "golden:monthly"] : [:])) }
+            if secondPurchase {
+                for _ in 0..<200 where !presentations.isExperiencePresented { try await Task.sleep(nanoseconds: 10_000_000) }
+                let beforeSecond = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+                XCTAssertTrue(presentations.isExperiencePresented, "Second presentation state: \(beforeSecond.map { ($0.stepId, $0.completion?.outcome, $0.park?.wakeAt) })")
+                await nextController.runtimeDelegate?.experienceViewController(nextController, didChangeScreen: "screen_thanks")
+                let buyMore = ScreenEmissionBatch(journeyId: journeyID, executionOwnershipEpoch: 0,
+                    lifecycleGeneration: 0, presentationEpoch: 1, batchSequence: 0,
+                    previousCommittedBatchSequence: nil, invocationId: "second-purchase",
+                    source: .init(screenId: "screen_thanks", actionId: "buy_more", componentId: nil, instanceId: nil),
+                    emissions: [.init(id: "00000000-0000-7000-8000-000000000909", sequence: 0,
+                        occurredAt: "2026-08-29T12:00:03Z", name: "buy_more", payload: [:])])
+                let admitted = await nextController.runtimeDelegate?.experienceViewController(nextController,
+                    didEmitScreenEmissionBatch: buyMore, frameSources: nil)
+                XCTAssertEqual(admitted, true)
+                for _ in 0..<200 where nextController.correlation == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+                let nextCorrelation = try XCTUnwrap(nextController.correlation)
+                XCTAssertNotEqual(nextCorrelation.eventId, correlation.eventId)
+                await journeys.handleEvent(NuxieEvent(id: nextCorrelation.eventId, name: SystemEventNames.purchaseCancelled,
+                    distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
+                let runs = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+                XCTAssertNil(runs.first?.completion)
+                XCTAssertTrue(presentations.isExperiencePresented)
+                XCTAssertEqual(presentations.presentedJourneyId, journeyID)
+                XCTAssertFalse(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
+                await journeys.shutdown()
+                return
+            }
         } else {
             controller.performDismiss(reason: .userDismissed)
         }
@@ -366,6 +470,14 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             await journeys.handleEvent(NuxieEvent(id: correlation.eventId, name: SystemEventNames.purchaseCompleted,
                 distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
             XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }.count, 1)
+        }
+        if let routeLog {
+            routeLog.track("open_paywall")
+            let routed = await routeLog.drainCommittedRouting()
+            XCTAssertTrue(routed, "A later entry event must route in the same session")
+            for _ in 0..<200 where !presentations.isExperiencePresented { try await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertTrue(presentations.isExperiencePresented)
+            XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyStarted }.count, 2)
         }
         await journeys.shutdown()
     }
@@ -392,12 +504,14 @@ private final class AuthoredDismissCommerceController: MockExperienceViewControl
     private(set) var correlations: [CommerceOutcomeCorrelation] = []
     var correlation: CommerceOutcomeCorrelation? { correlations.last }
 
+    var onPreparedDismissal: (() async -> Void)?
     private var preparedDismissal = false
     override func prepareForDismissal(reason: CloseReason? = nil) async {
         guard !preparedDismissal else { return }
         preparedDismissal = true
         await runtimeDelegate?.experienceViewController(self, didDismissScreen: "screen_welcome",
             revealingScreenId: nil, method: reason.map { ExperienceScreenDismissalMethod.value(for: $0) } ?? "experience")
+        await onPreparedDismissal?()
     }
 
     override func performPurchase(placementId: String, outcomeCorrelation: CommerceOutcomeCorrelation?) {
