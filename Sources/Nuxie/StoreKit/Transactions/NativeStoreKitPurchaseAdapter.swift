@@ -105,9 +105,12 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
         }
     }
 
+    static func ownershipBeforeCheckout(targetProductID: String, ownedProductID: String) -> NativePurchaseResult? {
+        targetProductID.utf8.elementsEqual(ownedProductID.utf8) ? .alreadyOwned : nil
+    }
+
     private func currentOwnership(for product: Product) async -> NativePurchaseResult? {
         guard product.type != .consumable else { return nil }
-        let targetGroupId = product.subscription?.subscriptionGroupID
 
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result,
@@ -115,12 +118,8 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
                   !transaction.isUpgraded else {
                 continue
             }
-            if transaction.productID == product.id {
-                return .alreadyOwned
-            }
-            if let targetGroupId,
-               transaction.subscriptionGroupID == targetGroupId {
-                return .subscriptionChangeRequired
+            if let outcome = Self.ownershipBeforeCheckout(targetProductID: product.id, ownedProductID: transaction.productID) {
+                return outcome
             }
         }
         return nil

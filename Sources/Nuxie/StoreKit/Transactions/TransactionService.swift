@@ -29,9 +29,12 @@ func storeProductFeatureIds(
 
 struct PurchaseSyncResult: Sendable {
     public let syncTask: Task<Bool, Never>?
+    let completesWithoutAcquisition: Bool
+    var journeyCompletionOutlet: String? { completesWithoutAcquisition ? "completed" : nil }
 
-    public init(syncTask: Task<Bool, Never>? = nil) {
+    public init(syncTask: Task<Bool, Never>? = nil, completesWithoutAcquisition: Bool = false) {
         self.syncTask = syncTask
+        self.completesWithoutAcquisition = completesWithoutAcquisition
     }
 }
 
@@ -423,6 +426,19 @@ actor TransactionService {
     ///   resulting purchase outcome, when checkout began in a Journey.
     /// - Throws: StoreKitError when checkout does not complete.
     @discardableResult
+    /// Prepared conditions action adapter. Current presentation retains its
+    /// existing commerce event route until the complete protocol activation.
+    func purchaseAction(
+        _ product: StoreProduct,
+        outcomeCorrelation: CommerceOutcomeCorrelation? = nil
+    ) async throws -> JourneyPresentationActionResult {
+        let result = try await purchase(product, outcomeCorrelation: outcomeCorrelation)
+        if let outlet = result.journeyCompletionOutlet {
+            return .advanced(outlet: outlet)
+        }
+        return .awaitingOutcome
+    }
+
     public func purchase(
         _ product: StoreProduct,
         outcomeCorrelation: CommerceOutcomeCorrelation? = nil
@@ -448,7 +464,7 @@ actor TransactionService {
             ?? "anonymous"
         var checkoutProduct: StoreProduct
         let outcome: NativePurchaseResult?
-        let purchaseOutcome: PurchaseOutcome
+        let purchaseOutcome: PurchaseOutcome?
         let usesTestStore = testStore != nil
         // The delegate is checkout identity. Capture it before any suspension
         // so a concurrent configuration change cannot change which provider
@@ -553,6 +569,18 @@ actor TransactionService {
             }
         }
 
+        if case .alreadyOwned? = outcome {
+            removeCheckoutRecovery(for: checkoutProduct)
+            if usesNativeStoreKit {
+                await transactionObserver.syncCurrentEntitlements(distinctId: initiatingDistinctId)
+            }
+            return PurchaseSyncResult(completesWithoutAcquisition: true)
+        }
+        if case .subscriptionChangeRequired? = outcome {
+            removeCheckoutRecovery(for: checkoutProduct)
+            return PurchaseSyncResult(completesWithoutAcquisition: true)
+        }
+        guard let purchaseOutcome else { throw StoreKitError.purchaseFailed(nil) }
         let commitResult = await transactionObserver.commit(purchaseOutcome)
         guard let outcome else {
             guard commitResult.committed else {
@@ -574,43 +602,8 @@ actor TransactionService {
             )
             return PurchaseSyncResult(syncTask: commitResult.syncTask)
             
-        case .alreadyOwned:
-            removeCheckoutRecovery(for: checkoutProduct)
-            LogInfo("TransactionService: Product already owned; reconciling access for \(product.productId)")
-            if usesNativeStoreKit {
-                await transactionObserver.syncCurrentEntitlements(
-                    distinctId: initiatingDistinctId
-                )
-            }
-            await publishCommerceOutcome(
-                SystemEventNames.purchaseFailed,
-                properties: [
-                "product_id": product.productId,
-                "placement_id": product.placementId,
-                "store_product_id": product.storeProductId,
-                "reason": "already_owned",
-                "test_store": usesTestStore,
-                ],
-                correlation: outcomeCorrelation
-            )
-            return PurchaseSyncResult()
-
-        case .subscriptionChangeRequired:
-            removeCheckoutRecovery(for: checkoutProduct)
-            let error = StoreKitError.subscriptionChangeRequired(product.storeProductId)
-            LogInfo("TransactionService: Subscription change required for product: \(product.productId)")
-            await publishCommerceOutcome(
-                SystemEventNames.purchaseFailed,
-                properties: [
-                "product_id": product.productId,
-                "placement_id": product.placementId,
-                "store_product_id": product.storeProductId,
-                "reason": "subscription_change_required",
-                "test_store": usesTestStore,
-                ],
-                correlation: outcomeCorrelation
-            )
-            throw error
+        case .alreadyOwned, .subscriptionChangeRequired:
+            return PurchaseSyncResult(completesWithoutAcquisition: true)
 
         case .cancelled:
             removeCheckoutRecovery(for: checkoutProduct)
@@ -695,7 +688,7 @@ actor TransactionService {
         testStoreTransactionId: String?,
         usesTestStore: Bool,
         outcomeCorrelation: CommerceOutcomeCorrelation?
-    ) -> PurchaseOutcome {
+    ) -> PurchaseOutcome? {
         switch result {
         case .purchased(let evidence):
             if usesTestStore, let context = product.purchaseContext {
@@ -742,13 +735,8 @@ actor TransactionService {
                 ),
                 source: .checkout
             )
-        case .alreadyOwned:
-            return .failed(reason: "already_owned", source: .checkout)
-        case .subscriptionChangeRequired:
-            return .failed(
-                reason: "subscription_change_required",
-                source: .checkout
-            )
+        case .alreadyOwned, .subscriptionChangeRequired:
+            return nil
         case .cancelled:
             return .cancelled(source: .checkout)
         case .pending:

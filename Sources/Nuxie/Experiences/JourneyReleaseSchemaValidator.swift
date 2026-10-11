@@ -193,7 +193,7 @@ enum JourneyReleaseSchemaValidator {
         "$experiment_exposure",
     ]
 
-    private static func policyEvent(_ value: Any?) throws {
+    static func policyEvent(_ value: Any?) throws {
         let name = try identifier(value)
         guard name.utf8.count <= 128, !name.hasPrefix("$") || policySystemEvents.contains(name) else { throw invalid }
     }
