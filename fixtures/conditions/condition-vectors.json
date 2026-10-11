@@ -1,0 +1,5436 @@
+[
+  {
+    "expect": false,
+    "facts": {},
+    "name": "number ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 2
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "text ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "a"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "b"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "list ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "op": "==",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "empty field ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "two empty reads ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "a",
+        "type": "Event.Field"
+      },
+      "op": "==",
+      "right": {
+        "key": "b",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "number !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 2
+      },
+      "op": "!=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "text !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "a"
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "b"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "list !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "op": "!=",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "empty field !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "!=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "two empty reads !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "a",
+        "type": "Event.Field"
+      },
+      "op": "!=",
+      "right": {
+        "key": "b",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "number <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 2
+      },
+      "op": "<",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "text <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "a"
+      },
+      "op": "<",
+      "right": {
+        "type": "String",
+        "value": "b"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "list <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "op": "<",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "empty field <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "<",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "two empty reads <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "a",
+        "type": "Event.Field"
+      },
+      "op": "<",
+      "right": {
+        "key": "b",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "number <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 2
+      },
+      "op": "<=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "text <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "a"
+      },
+      "op": "<=",
+      "right": {
+        "type": "String",
+        "value": "b"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "list <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "op": "<=",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "empty field <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "<=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "two empty reads <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "a",
+        "type": "Event.Field"
+      },
+      "op": "<=",
+      "right": {
+        "key": "b",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "number >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 2
+      },
+      "op": ">",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "text >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "a"
+      },
+      "op": ">",
+      "right": {
+        "type": "String",
+        "value": "b"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "list >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "op": ">",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "empty field >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": ">",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "two empty reads >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "a",
+        "type": "Event.Field"
+      },
+      "op": ">",
+      "right": {
+        "key": "b",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "number >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 2
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "text >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "a"
+      },
+      "op": ">=",
+      "right": {
+        "type": "String",
+        "value": "b"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "list >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "op": ">=",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "String",
+            "value": "a"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "empty field >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "two empty reads >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "a",
+        "type": "Event.Field"
+      },
+      "op": ">=",
+      "right": {
+        "key": "b",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "null right empty ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "null left empty ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "==",
+      "right": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right present ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left present ==",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right empty !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "!=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left empty !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "!=",
+      "right": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "null right present !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": "!=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "null left present !=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "!=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right empty <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "<",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left empty <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "<",
+      "right": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right present <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": "<",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left present <",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "<",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right empty <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": "<=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left empty <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "<=",
+      "right": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right present <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": "<=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left present <=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "<=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right empty >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": ">",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left empty >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": ">",
+      "right": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right present >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": ">",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left present >",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": ">",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right empty >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "op": ">=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left empty >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": ">=",
+      "right": {
+        "key": "missing",
+        "type": "Event.Field"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null right present >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": ">=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "null left present >=",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "null equals null",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Null"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "event": {
+        "value": null
+      }
+    },
+    "name": "explicit null property is empty",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "value",
+        "type": "Event.Field"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "different kinds equal",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "3"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "different kinds not equal",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "3"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "different kinds ordering",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 3
+      },
+      "op": "<",
+      "right": {
+        "type": "String",
+        "value": "3"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "negative zero equals zero",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": -0.0
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 0
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "UTF16 supplementary precedes FF5E",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "😀"
+      },
+      "op": "<",
+      "right": {
+        "type": "String",
+        "value": "～"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "text equality is not normalized",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "String",
+        "value": "é"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "é"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "list item text is not normalized",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "String",
+            "value": "é"
+          }
+        ]
+      },
+      "op": "==",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "String",
+            "value": "é"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "list item kinds differ",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          }
+        ]
+      },
+      "op": "==",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "String",
+            "value": "1"
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "list lengths differ",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          }
+        ]
+      },
+      "op": "!=",
+      "right": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 1
+          },
+          {
+            "type": "Number",
+            "value": 2
+          }
+        ]
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "contains list item",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 3
+          },
+          {
+            "type": "String",
+            "value": "yes"
+          }
+        ]
+      },
+      "type": "Contains",
+      "value": {
+        "type": "String",
+        "value": "yes"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "contains list compares kinds",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Number",
+            "value": 3
+          }
+        ]
+      },
+      "type": "Contains",
+      "value": {
+        "type": "String",
+        "value": "3"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "contains substring",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "String",
+        "value": "a😀b"
+      },
+      "type": "Contains",
+      "value": {
+        "type": "String",
+        "value": "😀"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "contains no normalization",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "String",
+        "value": "é"
+      },
+      "type": "Contains",
+      "value": {
+        "type": "String",
+        "value": "é"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "contains empty read",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "List",
+        "value": [
+          {
+            "type": "Null"
+          }
+        ]
+      },
+      "type": "Contains",
+      "value": {
+        "key": "missing",
+        "type": "Event.Field"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "empty collection contains false",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "Null"
+      },
+      "type": "Contains",
+      "value": {
+        "type": "Number",
+        "value": 1
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "not empty boolean read",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "arg": {
+        "left": {
+          "id": "pro",
+          "op": "has",
+          "type": "Feature"
+        },
+        "op": "==",
+        "right": {
+          "type": "Bool",
+          "value": true
+        },
+        "type": "Compare"
+      },
+      "type": "Not"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "not empty comparison",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "arg": {
+        "left": {
+          "key": "missing",
+          "type": "Event.Field"
+        },
+        "op": "!=",
+        "right": {
+          "type": "Number",
+          "value": 3
+        },
+        "type": "Compare"
+      },
+      "type": "Not"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "access": {
+        "pro": true
+      }
+    },
+    "name": "access allowed",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "id": "pro",
+      "op": "has",
+      "type": "Feature"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "access": {
+        "pro": true
+      }
+    },
+    "name": "access allowed null",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "id": "pro",
+        "op": "has",
+        "type": "Feature"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "access": {
+        "pro": false
+      }
+    },
+    "name": "access denied",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "id": "pro",
+      "op": "has",
+      "type": "Feature"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "access": {
+        "pro": false
+      }
+    },
+    "name": "access denied null",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "id": "pro",
+        "op": "has",
+        "type": "Feature"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "access": {
+        "pro": null
+      }
+    },
+    "name": "access unknown",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "id": "pro",
+      "op": "has",
+      "type": "Feature"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "access": {
+        "pro": null
+      }
+    },
+    "name": "access unknown null",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "id": "pro",
+        "op": "has",
+        "type": "Feature"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "memberships": {
+        "power": true
+      }
+    },
+    "name": "segment member",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "id": "power",
+      "op": "is_member",
+      "type": "Segment"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "memberships": {
+        "power": false
+      }
+    },
+    "name": "segment nonmember",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "id": "power",
+      "op": "is_member",
+      "type": "Segment"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {},
+    "name": "segment missing",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "id": "power",
+      "op": "is_member",
+      "type": "Segment"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {},
+    "name": "missing segment under not",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "arg": {
+        "id": "power",
+        "op": "is_member",
+        "type": "Segment"
+      },
+      "type": "Not"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "counts": [
+        {
+          "count": 3,
+          "name": "session_start",
+          "withinSeconds": null
+        }
+      ]
+    },
+    "name": "count all history",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "name": "session_start",
+        "type": "Events.Count"
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "counts": [
+        {
+          "count": 0,
+          "name": "session_start",
+          "withinSeconds": null
+        }
+      ]
+    },
+    "name": "count zero all history",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "name": "session_start",
+        "type": "Events.Count"
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 1
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "counts": [
+        {
+          "count": 3,
+          "name": "session_start",
+          "withinSeconds": 604800
+        }
+      ]
+    },
+    "name": "count week",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "name": "session_start",
+        "type": "Events.Count",
+        "within": {
+          "type": "Duration",
+          "value": 604800
+        }
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "counts": [
+        {
+          "count": 0,
+          "name": "session_start",
+          "withinSeconds": 604800
+        }
+      ]
+    },
+    "name": "count zero week",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "name": "session_start",
+        "type": "Events.Count",
+        "within": {
+          "type": "Duration",
+          "value": 604800
+        }
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 1
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "counts": [
+        {
+          "count": 3,
+          "name": "session_start",
+          "withinSeconds": 31622400
+        }
+      ]
+    },
+    "name": "count 366 days",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "name": "session_start",
+        "type": "Events.Count",
+        "within": {
+          "type": "Duration",
+          "value": 31622400
+        }
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "counts": [
+        {
+          "count": 0,
+          "name": "session_start",
+          "withinSeconds": 31622400
+        }
+      ]
+    },
+    "name": "count zero 366 days",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "name": "session_start",
+        "type": "Events.Count",
+        "within": {
+          "type": "Duration",
+          "value": 31622400
+        }
+      },
+      "op": ">=",
+      "right": {
+        "type": "Number",
+        "value": 1
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {},
+    "name": "missing count under not",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "arg": {
+        "left": {
+          "name": "session_start",
+          "type": "Events.Count"
+        },
+        "op": ">=",
+        "right": {
+          "type": "Number",
+          "value": 1
+        },
+        "type": "Compare"
+      },
+      "type": "Not"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {
+      "counts": [
+        {
+          "count": null,
+          "name": "session_start",
+          "withinSeconds": 604800
+        }
+      ]
+    },
+    "name": "failed local count under not",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "arg": {
+        "left": {
+          "name": "session_start",
+          "type": "Events.Count",
+          "within": {
+            "type": "Duration",
+            "value": 604800
+          }
+        },
+        "op": ">=",
+        "right": {
+          "type": "Number",
+          "value": 1
+        },
+        "type": "Compare"
+      },
+      "type": "Not"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {},
+    "name": "false and unavailable",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "id": "power",
+          "op": "is_member",
+          "type": "Segment"
+        }
+      ],
+      "type": "And"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {},
+    "name": "true or unavailable",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "id": "power",
+          "op": "is_member",
+          "type": "Segment"
+        }
+      ],
+      "type": "Or"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "and all true",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ],
+      "type": "And"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "or all false",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ],
+      "type": "Or"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "run": {
+        "experience": {
+          "days": 7
+        },
+        "responses": {}
+      }
+    },
+    "name": "run experience value",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "path": "experience.days",
+        "type": "Run.Value"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 7
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "run missing is empty",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "path": "experience.days",
+        "type": "Run.Value"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {
+          "signup": {
+            "name": "Ada"
+          }
+        }
+      }
+    },
+    "name": "run response path",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "path": "responses.signup.name",
+        "type": "Run.Value"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "Ada"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "customer": {
+        "plan": "pro"
+      }
+    },
+    "name": "customer value",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "plan",
+        "type": "Customer.Field"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "pro"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "customer missing is empty",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "plan",
+        "type": "Customer.Field"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "event": {
+        "é": 2,
+        "é": 1
+      }
+    },
+    "name": "field names preserve Unicode",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "key": "é",
+        "type": "Event.Field"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 2
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Los Angeles previous day Hour",
+    "now": "2026-01-01T00:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Hour"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 16
+      },
+      "type": "Compare"
+    },
+    "zone": "America/Los_Angeles"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Los Angeles previous day Minute",
+    "now": "2026-01-01T00:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Minute"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 30
+      },
+      "type": "Compare"
+    },
+    "zone": "America/Los_Angeles"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Los Angeles previous day Weekday",
+    "now": "2026-01-01T00:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Weekday"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "wed"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/Los_Angeles"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Los Angeles previous day Date",
+    "now": "2026-01-01T00:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Date"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "2025-12-31"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/Los_Angeles"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Tokyo next day Hour",
+    "now": "2026-01-01T23:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Hour"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 8
+      },
+      "type": "Compare"
+    },
+    "zone": "Asia/Tokyo"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Tokyo next day Minute",
+    "now": "2026-01-01T23:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Minute"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 30
+      },
+      "type": "Compare"
+    },
+    "zone": "Asia/Tokyo"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Tokyo next day Weekday",
+    "now": "2026-01-01T23:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Weekday"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "fri"
+      },
+      "type": "Compare"
+    },
+    "zone": "Asia/Tokyo"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "Tokyo next day Date",
+    "now": "2026-01-01T23:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Date"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "2026-01-02"
+      },
+      "type": "Compare"
+    },
+    "zone": "Asia/Tokyo"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York spring jump Hour",
+    "now": "2026-03-08T07:00:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Hour"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 3
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York spring jump Minute",
+    "now": "2026-03-08T07:00:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Minute"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 0
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York spring jump Weekday",
+    "now": "2026-03-08T07:00:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Weekday"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "sun"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York spring jump Date",
+    "now": "2026-03-08T07:00:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Date"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "2026-03-08"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York repeated hour Hour",
+    "now": "2026-11-01T06:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Hour"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 1
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York repeated hour Minute",
+    "now": "2026-11-01T06:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Minute"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 30
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York repeated hour Weekday",
+    "now": "2026-11-01T06:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Weekday"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "sun"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "New York repeated hour Date",
+    "now": "2026-11-01T06:30:00.000Z",
+    "tree": {
+      "left": {
+        "type": "Time.Date"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "2026-11-01"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {},
+    "name": "18:29 is before evening",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "args": [
+        {
+          "left": {
+            "type": "Time.Hour"
+          },
+          "op": ">",
+          "right": {
+            "type": "Number",
+            "value": 18
+          },
+          "type": "Compare"
+        },
+        {
+          "args": [
+            {
+              "left": {
+                "type": "Time.Hour"
+              },
+              "op": "==",
+              "right": {
+                "type": "Number",
+                "value": 18
+              },
+              "type": "Compare"
+            },
+            {
+              "left": {
+                "type": "Time.Minute"
+              },
+              "op": ">=",
+              "right": {
+                "type": "Number",
+                "value": 30
+              },
+              "type": "Compare"
+            }
+          ],
+          "type": "And"
+        }
+      ],
+      "type": "Or"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {},
+    "name": "18:30 meets evening",
+    "now": "2026-10-05T22:30:00.000Z",
+    "tree": {
+      "args": [
+        {
+          "left": {
+            "type": "Time.Hour"
+          },
+          "op": ">",
+          "right": {
+            "type": "Number",
+            "value": 18
+          },
+          "type": "Compare"
+        },
+        {
+          "args": [
+            {
+              "left": {
+                "type": "Time.Hour"
+              },
+              "op": "==",
+              "right": {
+                "type": "Number",
+                "value": 18
+              },
+              "type": "Compare"
+            },
+            {
+              "left": {
+                "type": "Time.Minute"
+              },
+              "op": ">=",
+              "right": {
+                "type": "Number",
+                "value": 30
+              },
+              "type": "Compare"
+            }
+          ],
+          "type": "And"
+        }
+      ],
+      "type": "Or"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "next hour",
+    "nextClockChange": "2026-10-05T22:00:00.000Z",
+    "now": "2026-10-05T21:30:00.000Z",
+    "tree": {
+      "type": "Time.Hour"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "next minute",
+    "nextClockChange": "2026-10-05T22:30:00.000Z",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "args": [
+        {
+          "left": {
+            "type": "Time.Hour"
+          },
+          "op": ">",
+          "right": {
+            "type": "Number",
+            "value": 18
+          },
+          "type": "Compare"
+        },
+        {
+          "args": [
+            {
+              "left": {
+                "type": "Time.Hour"
+              },
+              "op": "==",
+              "right": {
+                "type": "Number",
+                "value": 18
+              },
+              "type": "Compare"
+            },
+            {
+              "left": {
+                "type": "Time.Minute"
+              },
+              "op": ">=",
+              "right": {
+                "type": "Number",
+                "value": 30
+              },
+              "type": "Compare"
+            }
+          ],
+          "type": "And"
+        }
+      ],
+      "type": "Or"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "next midnight",
+    "nextClockChange": "2026-10-06T04:00:00.000Z",
+    "now": "2026-10-05T22:30:00.000Z",
+    "tree": {
+      "type": "Time.Date"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "weekday midnight",
+    "nextClockChange": "2026-10-06T04:00:00.000Z",
+    "now": "2026-10-05T22:30:00.000Z",
+    "tree": {
+      "type": "Time.Weekday"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "spring next hour",
+    "nextClockChange": "2026-03-08T07:00:00.000Z",
+    "now": "2026-03-08T06:30:00.000Z",
+    "tree": {
+      "type": "Time.Hour"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "spring next midnight",
+    "nextClockChange": "2026-03-09T04:00:00.000Z",
+    "now": "2026-03-08T06:30:00.000Z",
+    "tree": {
+      "type": "Time.Date"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "fall repeated hour unchanged",
+    "nextClockChange": "2026-11-01T07:00:00.000Z",
+    "now": "2026-11-01T05:30:00.000Z",
+    "tree": {
+      "type": "Time.Hour"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "fall minute changes at rollback",
+    "nextClockChange": "2026-11-01T06:00:00.000Z",
+    "now": "2026-11-01T05:59:30.000Z",
+    "tree": {
+      "type": "Time.Minute"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "fall next midnight",
+    "nextClockChange": "2026-11-02T05:00:00.000Z",
+    "now": "2026-11-01T05:30:00.000Z",
+    "tree": {
+      "type": "Time.Date"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "no clock",
+    "nextClockChange": null,
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Number",
+        "value": 1
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 1
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "Tokyo local midnight",
+    "nextClockChange": "2026-01-01T15:00:00.000Z",
+    "now": "2026-01-01T14:59:30.000Z",
+    "tree": {
+      "type": "Time.Date"
+    },
+    "zone": "Asia/Tokyo"
+  },
+  {
+    "name": "half hour offset hour",
+    "nextClockChange": "2026-10-05T12:30:00.000Z",
+    "now": "2026-10-05T12:15:00.000Z",
+    "tree": {
+      "type": "Time.Hour"
+    },
+    "zone": "Asia/Kolkata"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "ios"
+    },
+    "name": "ios platform compared with ios",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "ios"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "ios"
+    },
+    "name": "ios platform compared with android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "android"
+    },
+    "name": "android platform compared with ios",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "ios"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "android"
+    },
+    "name": "android platform compared with android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {
+      "platform": null
+    },
+    "name": "missing platform",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "ios"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {
+      "platform": null
+    },
+    "name": "missing platform under Not",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "arg": {
+        "left": {
+          "type": "Env.Platform"
+        },
+        "op": "==",
+        "right": {
+          "type": "String",
+          "value": "ios"
+        },
+        "type": "Compare"
+      },
+      "type": "Not"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {
+      "platform": null
+    },
+    "name": "missing platform under Or",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "left": {
+            "type": "Env.Platform"
+          },
+          "op": "==",
+          "right": {
+            "type": "String",
+            "value": "ios"
+          },
+          "type": "Compare"
+        }
+      ],
+      "type": "Or"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "name": "platform alone schedules no clock wake",
+    "nextClockChange": null,
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "type": "Env.Platform"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "macos"
+    },
+    "name": "macos platform compared with macos",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "macos"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "macos"
+    },
+    "name": "macos platform compared with ios",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "ios"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "macos"
+    },
+    "name": "macos platform compared with android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "web"
+    },
+    "name": "web platform compared with web",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "web"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "web"
+    },
+    "name": "web platform compared with ios",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "ios"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "web"
+    },
+    "name": "web platform compared with android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "run": {
+        "experience": {
+          "́name": 7
+        },
+        "responses": {}
+      }
+    },
+    "name": "run name begins with a combining mark",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "path": "experience.́name",
+        "type": "Run.Value"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 7
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {
+          "́form": {
+            "field": 7
+          }
+        }
+      }
+    },
+    "name": "response name begins with a combining mark",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "path": "responses.́form.field",
+        "type": "Run.Value"
+      },
+      "op": "==",
+      "right": {
+        "type": "Number",
+        "value": 7
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "ios"
+    },
+    "name": "ios not ios",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "ios"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "ios"
+    },
+    "name": "ios not android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "android"
+    },
+    "name": "android not ios",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "ios"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "android"
+    },
+    "name": "android not android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "ios"
+    },
+    "name": "ios in phones",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "List",
+        "value": [
+          {
+            "type": "String",
+            "value": "ios"
+          },
+          {
+            "type": "String",
+            "value": "android"
+          }
+        ]
+      },
+      "type": "Contains",
+      "value": {
+        "type": "Env.Platform"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "android"
+    },
+    "name": "android in phones",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "List",
+        "value": [
+          {
+            "type": "String",
+            "value": "ios"
+          },
+          {
+            "type": "String",
+            "value": "android"
+          }
+        ]
+      },
+      "type": "Contains",
+      "value": {
+        "type": "Env.Platform"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "macos"
+    },
+    "name": "macos not in phones",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "List",
+        "value": [
+          {
+            "type": "String",
+            "value": "ios"
+          },
+          {
+            "type": "String",
+            "value": "android"
+          }
+        ]
+      },
+      "type": "Contains",
+      "value": {
+        "type": "Env.Platform"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "web"
+    },
+    "name": "web not in phones",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "collection": {
+        "type": "List",
+        "value": [
+          {
+            "type": "String",
+            "value": "ios"
+          },
+          {
+            "type": "String",
+            "value": "android"
+          }
+        ]
+      },
+      "type": "Contains",
+      "value": {
+        "type": "Env.Platform"
+      }
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "macos"
+    },
+    "name": "macos not android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": true,
+    "facts": {
+      "platform": "web"
+    },
+    "name": "web not android",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "String",
+        "value": "android"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": false,
+    "facts": {
+      "platform": "web"
+    },
+    "name": "web is not macos",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "String",
+        "value": "macos"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {
+      "platform": null
+    },
+    "name": "null platform equals null unavailable",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {
+      "platform": null
+    },
+    "name": "null platform not null unavailable",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {},
+    "name": "missing platform equals null unavailable",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "==",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "expect": "unavailable",
+    "facts": {},
+    "name": "missing platform not null unavailable",
+    "now": "2026-10-05T22:29:30.000Z",
+    "tree": {
+      "left": {
+        "type": "Env.Platform"
+      },
+      "op": "!=",
+      "right": {
+        "type": "Null"
+      },
+      "type": "Compare"
+    },
+    "zone": "America/New_York"
+  },
+  {
+    "now": "2026-10-10T12:00:00.000Z",
+    "zone": "UTC",
+    "name": "nested Experience number",
+    "facts": {
+      "run": {
+        "experience": {
+          "profile": {
+            "settings": {
+              "minutes": 7
+            }
+          }
+        },
+        "responses": {}
+      }
+    },
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Run.Value",
+        "path": "experience.profile.settings.minutes"
+      },
+      "right": {
+        "type": "Number",
+        "value": 7
+      }
+    },
+    "expect": true
+  },
+  {
+    "now": "2026-10-10T12:00:00.000Z",
+    "zone": "UTC",
+    "name": "form answer number",
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {
+          "onboarding": {
+            "trip_days": 7
+          }
+        }
+      }
+    },
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Run.Value",
+        "path": "responses.onboarding.trip_days"
+      },
+      "right": {
+        "type": "Number",
+        "value": 7
+      }
+    },
+    "expect": true
+  },
+  {
+    "now": "2026-10-10T12:00:00.000Z",
+    "zone": "UTC",
+    "name": "nested Experience boolean",
+    "facts": {
+      "run": {
+        "experience": {
+          "profile": {
+            "settings": {
+              "enabled": true
+            }
+          }
+        },
+        "responses": {}
+      }
+    },
+    "tree": {
+      "type": "Run.Value",
+      "path": "experience.profile.settings.enabled"
+    },
+    "expect": true
+  },
+  {
+    "now": "2026-10-10T12:00:00.000Z",
+    "zone": "UTC",
+    "name": "form answer list",
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {
+          "onboarding": {
+            "choices": [
+              "walk",
+              "bike"
+            ]
+          }
+        }
+      }
+    },
+    "tree": {
+      "type": "Contains",
+      "collection": {
+        "type": "Run.Value",
+        "path": "responses.onboarding.choices"
+      },
+      "value": {
+        "type": "String",
+        "value": "bike"
+      }
+    },
+    "expect": true
+  },
+  {
+    "now": "2026-10-10T12:00:00.000Z",
+    "zone": "UTC",
+    "name": "nested missing is empty",
+    "facts": {
+      "run": {
+        "experience": {
+          "profile": {}
+        },
+        "responses": {}
+      }
+    },
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Run.Value",
+        "path": "experience.profile.settings.minutes"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "expect": true
+  },
+  {
+    "now": "2026-10-10T12:00:00.000Z",
+    "zone": "UTC",
+    "name": "form empty text",
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {
+          "onboarding": {
+            "name": ""
+          }
+        }
+      }
+    },
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Run.Value",
+        "path": "responses.onboarding.name"
+      },
+      "right": {
+        "type": "String",
+        "value": ""
+      }
+    },
+    "expect": true
+  },
+  {
+    "now": "2026-10-10T12:00:00.000Z",
+    "zone": "UTC",
+    "name": "form false is present",
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {
+          "onboarding": {
+            "done": false
+          }
+        }
+      }
+    },
+    "tree": {
+      "type": "Compare",
+      "op": "!=",
+      "left": {
+        "type": "Run.Value",
+        "path": "responses.onboarding.done"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "Experience responses value and form responses have separate namespaces",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "facts": {
+      "run": {
+        "experience": {
+          "responses": {
+            "x": "experience"
+          }
+        },
+        "responses": {
+          "x": "form"
+        }
+      }
+    },
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.responses.x"
+          },
+          "right": {
+            "type": "String",
+            "value": "experience"
+          }
+        },
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "responses.x"
+          },
+          "right": {
+            "type": "String",
+            "value": "form"
+          }
+        }
+      ]
+    },
+    "expect": true
+  },
+  {
+    "name": "And table false, false",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "And table false, false reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "And table false, true",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "And table false, true reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "And table false, unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table false, unavailable reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table true, false",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "And table true, false reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "And table true, true",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "And table true, true reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "And table true, unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table true, unavailable reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table unavailable, false",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table unavailable, false reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table unavailable, true",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table unavailable, true reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table unavailable, unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "And table unavailable, unavailable reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table false, false",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "Or table false, false reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "Or table false, true",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "Or table false, true reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "Or table false, unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table false, unavailable reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table true, false",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "Or table true, false reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "Or table true, true",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "Or table true, true reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "Or table true, unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table true, unavailable reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table unavailable, false",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": false
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table unavailable, false reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": false
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table unavailable, true",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Bool",
+          "value": true
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table unavailable, true reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table unavailable, unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Or table unavailable, unavailable reversed",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        },
+        {
+          "type": "Segment",
+          "op": "is_member",
+          "id": "not_gathered"
+        }
+      ]
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "Not table false",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Bool",
+        "value": false
+      }
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "Not table true",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Bool",
+        "value": true
+      }
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "Not table unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Segment",
+        "op": "is_member",
+        "id": "not_gathered"
+      }
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "two-level Not Or And unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "And",
+            "args": [
+              {
+                "type": "Bool",
+                "value": false
+              },
+              {
+                "type": "Segment",
+                "op": "is_member",
+                "id": "not_gathered"
+              }
+            ]
+          },
+          {
+            "type": "Bool",
+            "value": true
+          }
+        ]
+      }
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "two-level Not And Or unavailable",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "And",
+        "args": [
+          {
+            "type": "Or",
+            "args": [
+              {
+                "type": "Bool",
+                "value": true
+              },
+              {
+                "type": "Segment",
+                "op": "is_member",
+                "id": "not_gathered"
+              }
+            ]
+          },
+          {
+            "type": "Bool",
+            "value": false
+          }
+        ]
+      }
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "two-level known composition",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "And",
+            "args": [
+              {
+                "type": "Bool",
+                "value": false
+              },
+              {
+                "type": "Bool",
+                "value": true
+              }
+            ]
+          },
+          {
+            "type": "Bool",
+            "value": false
+          }
+        ]
+      }
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "customer empty snapshot",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Customer.Field",
+        "key": "plan"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "facts": {
+      "customer": {}
+    },
+    "expect": true
+  },
+  {
+    "name": "customer failed snapshot",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Customer.Field",
+        "key": "plan"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "facts": {
+      "customer": null
+    },
+    "expect": "unavailable"
+  },
+  {
+    "name": "event empty snapshot",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Event.Field",
+        "key": "plan"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "facts": {
+      "event": {}
+    },
+    "expect": true
+  },
+  {
+    "name": "event failed snapshot",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Event.Field",
+        "key": "plan"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "facts": {
+      "event": null
+    },
+    "expect": "unavailable"
+  },
+  {
+    "name": "failed run under Not",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Run.Value",
+        "path": "experience.done"
+      }
+    },
+    "facts": {
+      "run": null
+    },
+    "expect": "unavailable"
+  },
+  {
+    "name": "failed access under Or",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Bool",
+          "value": true
+        },
+        {
+          "type": "Feature",
+          "op": "has",
+          "id": "pro"
+        }
+      ]
+    },
+    "facts": {
+      "access": null
+    },
+    "expect": "unavailable"
+  },
+  {
+    "name": "unknown access is empty before caller wait",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Feature",
+      "op": "has",
+      "id": "pro"
+    },
+    "facts": {
+      "access": {
+        "pro": null
+      }
+    },
+    "expect": false
+  },
+  {
+    "name": "M48 missing",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "Null"
+          }
+        },
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "String",
+            "value": ""
+          }
+        }
+      ]
+    },
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "M48 negated missing",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "Null"
+            }
+          },
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "String",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {}
+      }
+    },
+    "expect": false
+  },
+  {
+    "name": "M48 null",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "Null"
+          }
+        },
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "String",
+            "value": ""
+          }
+        }
+      ]
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": null
+        },
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "M48 negated null",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "Null"
+            }
+          },
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "String",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": null
+        },
+        "responses": {}
+      }
+    },
+    "expect": false
+  },
+  {
+    "name": "M48 empty text",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "Null"
+          }
+        },
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "String",
+            "value": ""
+          }
+        }
+      ]
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": ""
+        },
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "M48 negated empty text",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "Null"
+            }
+          },
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "String",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": ""
+        },
+        "responses": {}
+      }
+    },
+    "expect": false
+  },
+  {
+    "name": "M48 text",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "Null"
+          }
+        },
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "String",
+            "value": ""
+          }
+        }
+      ]
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": "Ada"
+        },
+        "responses": {}
+      }
+    },
+    "expect": false
+  },
+  {
+    "name": "M48 negated text",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "Null"
+            }
+          },
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "String",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": "Ada"
+        },
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "M48 number",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "Null"
+          }
+        },
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "String",
+            "value": ""
+          }
+        }
+      ]
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": 0
+        },
+        "responses": {}
+      }
+    },
+    "expect": false
+  },
+  {
+    "name": "M48 negated number",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "Null"
+            }
+          },
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "String",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": 0
+        },
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "M48 list",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": [
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "Null"
+          }
+        },
+        {
+          "type": "Compare",
+          "op": "==",
+          "left": {
+            "type": "Run.Value",
+            "path": "experience.name"
+          },
+          "right": {
+            "type": "String",
+            "value": ""
+          }
+        }
+      ]
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": []
+        },
+        "responses": {}
+      }
+    },
+    "expect": false
+  },
+  {
+    "name": "M48 negated list",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Not",
+      "arg": {
+        "type": "Or",
+        "args": [
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "Null"
+            }
+          },
+          {
+            "type": "Compare",
+            "op": "==",
+            "left": {
+              "type": "Run.Value",
+              "path": "experience.name"
+            },
+            "right": {
+              "type": "String",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "name": []
+        },
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "distinct count lifetime",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Events.Count",
+        "name": "opened"
+      },
+      "right": {
+        "type": "Number",
+        "value": 10
+      }
+    },
+    "facts": {
+      "counts": [
+        {
+          "name": "opened",
+          "withinSeconds": null,
+          "count": 10
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 60,
+          "count": 2
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 86400,
+          "count": 5
+        }
+      ]
+    },
+    "expect": true
+  },
+  {
+    "name": "distinct count minute",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Events.Count",
+        "name": "opened",
+        "within": {
+          "type": "Duration",
+          "value": 60
+        }
+      },
+      "right": {
+        "type": "Number",
+        "value": 2
+      }
+    },
+    "facts": {
+      "counts": [
+        {
+          "name": "opened",
+          "withinSeconds": null,
+          "count": 10
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 60,
+          "count": 2
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 86400,
+          "count": 5
+        }
+      ]
+    },
+    "expect": true
+  },
+  {
+    "name": "distinct count day",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Events.Count",
+        "name": "opened",
+        "within": {
+          "type": "Duration",
+          "value": 86400
+        }
+      },
+      "right": {
+        "type": "Number",
+        "value": 5
+      }
+    },
+    "facts": {
+      "counts": [
+        {
+          "name": "opened",
+          "withinSeconds": null,
+          "count": 10
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 60,
+          "count": 2
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 86400,
+          "count": 5
+        }
+      ]
+    },
+    "expect": true
+  },
+  {
+    "name": "missing exact count window",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Events.Count",
+        "name": "opened",
+        "within": {
+          "type": "Duration",
+          "value": 3600
+        }
+      },
+      "right": {
+        "type": "Number",
+        "value": 0
+      }
+    },
+    "facts": {
+      "counts": [
+        {
+          "name": "opened",
+          "withinSeconds": null,
+          "count": 10
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 60,
+          "count": 2
+        },
+        {
+          "name": "opened",
+          "withinSeconds": 86400,
+          "count": 5
+        }
+      ]
+    },
+    "expect": "unavailable"
+  },
+  {
+    "name": "nested inherited constructor is missing",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Run.Value",
+        "path": "experience.profile.constructor"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {
+          "profile": {}
+        },
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "root inherited constructor is missing",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Run.Value",
+        "path": "experience.constructor"
+      },
+      "right": {
+        "type": "Null"
+      }
+    },
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {}
+      }
+    },
+    "expect": true
+  },
+  {
+    "name": "absent clock zone",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": null,
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Time.Hour"
+      },
+      "right": {
+        "type": "Number",
+        "value": 12
+      }
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "absent clock zone has no schedulable boundary",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": null,
+    "tree": {
+      "type": "Time.Hour"
+    },
+    "facts": {},
+    "nextClockChange": null
+  },
+  {
+    "name": "invalid clock zone",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "not/a-zone",
+    "tree": {
+      "type": "Compare",
+      "op": "==",
+      "left": {
+        "type": "Time.Hour"
+      },
+      "right": {
+        "type": "Number",
+        "value": 12
+      }
+    },
+    "facts": {},
+    "expect": "unavailable"
+  },
+  {
+    "name": "invalid clock zone has no schedulable boundary",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "not/a-zone",
+    "tree": {
+      "type": "Time.Hour"
+    },
+    "facts": {},
+    "nextClockChange": null
+  },
+  {
+    "name": "empty And identity",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "And",
+      "args": []
+    },
+    "facts": {},
+    "expect": true
+  },
+  {
+    "name": "empty Or identity",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Or",
+      "args": []
+    },
+    "facts": {},
+    "expect": false
+  },
+  {
+    "name": "inherited nested constructor name is absent",
+    "now": "2026-10-11T12:00:00.000Z",
+    "zone": "UTC",
+    "tree": {
+      "type": "Run.Value",
+      "path": "experience.constructor.name"
+    },
+    "facts": {
+      "run": {
+        "experience": {},
+        "responses": {}
+      }
+    },
+    "expect": false
+  }
+]
