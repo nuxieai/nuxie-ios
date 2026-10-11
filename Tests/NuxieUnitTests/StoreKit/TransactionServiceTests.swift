@@ -1605,11 +1605,13 @@ final class TransactionServiceTests: AsyncSpec {
                         }.to(throwError(StoreKitError.noProductsAvailable))
                     }
 
-                    it("reconciles an already-owned product without completing purchase") {
+                    it("M33 completes an already-owned Buy without purchase records") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configureAlreadyOwned()
 
-                        _ = try await transactionService.purchase(mockProduct)
+                        let result = try await transactionService.purchase(mockProduct)
+                        expect(result.completesWithoutAcquisition) == true
+                        expect(result.journeyCompletionOutlet) == "completed"
 
                         let reconciled = await mockTransactionObserver.syncCurrentEntitlementsCalled
                         expect(reconciled) == true
@@ -1618,53 +1620,33 @@ final class TransactionServiceTests: AsyncSpec {
                         )
                         expect(eventSink.events.map(\.name).filter {
                             $0 == SystemEventNames.purchaseFailed
-                        }.count) == 1
+                        }.count) == 0
                     }
 
-                    it("routes subscription replacement away from acquisition checkout") {
+                    it("M33 subscription plan change ends Completed without failure") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configureSubscriptionChangeRequired()
-
-                        await expect {
-                            try await transactionService.purchase(mockProduct)
-                        }.to(throwError(StoreKitError.subscriptionChangeRequired(
-                            mockProduct.storeProductId
-                        )))
-
-                        expect(eventSink.events.map(\.name)).toNot(
-                            contain(SystemEventNames.purchaseCompleted)
-                        )
+                        let result = try await transactionService.purchase(mockProduct)
+                        expect(result.completesWithoutAcquisition) == true
+                        expect(result.journeyCompletionOutlet) == "completed"
+                        expect(eventSink.events.map(\.name)).toNot(contain(SystemEventNames.purchaseCompleted))
+                        expect(eventSink.events.map(\.name)).toNot(contain(SystemEventNames.purchaseFailed))
                     }
 
-                    it("routes subscription replacement to the failure branch exactly once") {
+                    it("advances the prepared plan-change action exactly once without acquisition") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configureSubscriptionChangeRequired()
-                        let activeTransactionService = transactionService!
-                        let activeEventSink = eventSink!
-                        let retainedProduct = mockProduct!
-                        let controller = await MainActor.run {
-                            RecordingPurchaseExperienceViewController(
-                                mockExperienceVersionId: "subscription-change",
-                                products: [retainedProduct],
-                                transactionService: activeTransactionService,
-                                systemEventSink: activeEventSink
-                            )
-                        }
-
-                        await MainActor.run {
-                            controller.performPurchase(placementId: retainedProduct.placementId)
-                        }
-
-                        await expect(eventSink.events.map(\.name).filter {
-                            $0 == SystemEventNames.purchaseFailed
-                        }.count).toEventually(equal(1), timeout: .seconds(2))
-                        let controllerFailures = await MainActor.run {
-                            controller.emittedSystemEvents.filter {
-                                $0.name == SystemEventNames.purchaseFailed
-                            }.count
-                        }
-                        expect(controllerFailures) == 0
+                        let action = try await transactionService.purchaseAction(mockProduct)
+                        expect(action) == .advanced(outlet: "completed")
+                        expect(mockNativePurchaseAdapter.purchasedProducts.count) == 1
+                        let outcomes = await mockTransactionObserver.committedOutcomes
+                        expect(outcomes.count) == 0
+                        expect(eventSink.events.map(\.name).filter {
+                            $0 == SystemEventNames.purchaseCompleted || $0 == SystemEventNames.purchaseFailed
+                        }.count) == 0
                     }
+
+
                 }
 
                 context("when the purchase is deferred (Ask-to-Buy / SCA)") {

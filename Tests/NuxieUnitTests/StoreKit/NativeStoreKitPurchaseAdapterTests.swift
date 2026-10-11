@@ -52,6 +52,12 @@ final class NativeStoreKitPurchaseAdapterTests: XCTestCase {
         XCTAssertEqual(options, expected)
     }
 
+    func testExistingPlanInTheSameGroupLeavesThePlanChangeToStoreKit() {
+        XCTAssertNil(NativeStoreKitPurchaseAdapter.ownershipBeforeCheckout(targetProductID: "pro.annual", ownedProductID: "pro.monthly"))
+        XCTAssertNil(NativeStoreKitPurchaseAdapter.ownershipBeforeCheckout(targetProductID: "pro.annual", ownedProductID: "other.product"))
+        guard case .alreadyOwned? = NativeStoreKitPurchaseAdapter.ownershipBeforeCheckout(targetProductID: "pro.annual", ownedProductID: "pro.annual") else { XCTFail("The same product stays already owned"); return }
+    }
+
     func testAutomaticBaseCheckoutCarriesNoStoreKitOptions() {
         let product = StoreProduct(
             productId: "product_premium",
