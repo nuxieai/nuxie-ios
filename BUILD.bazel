@@ -216,7 +216,8 @@ sdk_test_library(
     name = "experience_input_test_sources",
     module_name = "NuxieExperienceInputTests",
     srcs = ["Tests/NuxieUnitTests/Experiences/" + name + ".swift" for name in [
-        "ExperienceTextInputSemanticsTests", "ExperienceTextInputTypographyTests", "SignedSemanticJourneyTests",
+        "ExperienceTextInputSemanticsTests", "ExperienceHardwareInputTests", "ExperienceTextInputTypographyTests",
+        "SignedSemanticJourneyTests", "ExperienceSharedValuesTests", "ExperienceSharedValuesPresentationTests",
     ]],
     defines = ["NUXIE_HOSTED_INPUT_TESTS"],
     deps = _TEST_DEPS,
