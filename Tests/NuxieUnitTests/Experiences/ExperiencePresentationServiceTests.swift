@@ -948,6 +948,55 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 
+                it("routes an already-owned live Buy to authored Completed without commerce records") { @MainActor in
+                    let versionID = "Journey-owned-buy"
+                    let release = makeJourneyRelease(versionId: versionID)
+                    let native = MockStoreProduct(id: "pro.monthly", displayName: "Pro",
+                        description: "Pro", price: 9.99, displayPrice: "$9.99", productType: .autoRenewable)
+                    var product = StoreProduct(productId: "pro", storeProductId: native.id,
+                        placementId: "placement-pro", name: native.displayName,
+                        description: native.description, price: native.displayPrice,
+                        period: .month, productType: native.productType, appStoreProduct: native)
+                    product.purchaseContext = PurchaseCommercialContext(
+                        release: AuthenticatedJourneyReleaseID(identity: release.descriptor.identity,
+                            descriptorSHA256: release.descriptorSHA256),
+                        placementId: "placement-pro", productId: "pro", storeProductId: native.id,
+                        displayPrice: "$9.99", price: 9.99)
+                    let adapter = MockNativeStoreKitPurchaseAdapter()
+                    adapter.configureAlreadyOwned()
+                    let observer = MockTransactionObserver()
+                    let sink = RecordingPresentationSystemEventSink()
+                    let transactions = TransactionService(productService: MockFactory.shared.productService,
+                        transactionObserver: observer, pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+                        dateProvider: MockFactory.shared.dateProvider,
+                        settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "test-api-key")),
+                        eventSink: sink, nativePurchaseAdapter: adapter)
+                    let controller = MockExperienceViewController(mockExperienceVersionId: versionID,
+                        mockScreenId: "screen-selected", products: [product],
+                        transactionService: transactions, systemEventSink: sink)
+                    mockExperienceService.mockViewControllers[versionID] = controller
+                    let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
+                        release: release, delivery: journeyDelivery(), screenId: "screen-selected",
+                        owner: owner, reservation: service.reserveJourneyPresentation(ownerDistinctId: "user-1"),
+                        onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+                    let presentation = await service.presentJourney(request)
+                    expect(presentation).to(equal(.shown))
+                    let result = await service.dispatchJourneyPresentationAction(owner: owner,
+                        action: ["type": .string("purchase"), "placementId": .string("placement-pro")],
+                        effectId: "owned-effect")
+                    expect(result).to(equal(.advanced(outlet: "completed")))
+                    let recorded = await observer.committedOutcomes
+                    expect(recorded).to(beEmpty())
+                    expect(sink.names.filter {
+                        $0 == SystemEventNames.purchaseCompleted || $0 == SystemEventNames.purchaseFailed
+                    }).to(beEmpty())
+                    expect(adapter.purchasedProducts.count).to(equal(1))
+                    let reconciled = await observer.syncCurrentEntitlementsCalled
+                    expect(reconciled).to(beTrue())
+                    await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
+                }
+
                 it("correlates purchase and restore outcomes to their claimed effects") { @MainActor in
                     let versionID = "Journey-commerce-action"
                     let screenID = "screen-selected"

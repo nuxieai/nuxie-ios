@@ -641,6 +641,43 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
     }
 
+    func testRealPlanChangeKeepsOneCompletedAcquisitionAndItsPrice() async throws {
+        let api = RestoreRefreshAPI()
+        let harness = makeRestoreRefreshHarness(api: api)
+        func subscription(_ sku: String, price: Decimal, displayPrice: String) -> StoreProduct {
+            let native = MockStoreProduct(id: sku, displayName: "Pro", price: price,
+                displayPrice: displayPrice, productType: .autoRenewable)
+            var product = StoreProduct(productId: sku, storeProductId: sku,
+                placementId: "plans", name: "Pro", price: displayPrice,
+                period: sku == "pro.monthly" ? .month : .year,
+                productType: .autoRenewable, appStoreProduct: native)
+            product.purchaseContext = PurchaseCommercialContext(release: commercialContext().release,
+                placementId: "plans", productId: sku, storeProductId: sku,
+                displayPrice: displayPrice, price: NSDecimalNumber(decimal: price).doubleValue)
+            return product
+        }
+        harness.adapter.configureVerifiedPurchase(transactionJws: "monthly-jws",
+            transactionId: "monthly-purchase", originalTransactionId: "plan-original", productId: "pro.monthly")
+        let monthly = try await harness.service.purchase(subscription("pro.monthly", price: 9.99, displayPrice: "$9.99"))
+        _ = await monthly.syncTask?.value
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 1)
+
+        XCTAssertNil(NativeStoreKitPurchaseAdapter.ownershipBeforeCheckout(
+            targetProductID: "pro.annual", ownedProductID: "pro.monthly"))
+        harness.adapter.configureVerifiedPurchase(transactionJws: "annual-jws",
+            transactionId: "annual-purchase", originalTransactionId: "plan-original", productId: "pro.annual")
+        let annual = try await harness.service.purchase(subscription("pro.annual", price: 59.99, displayPrice: "$59.99"),
+            outcomeCorrelation: .init(eventId: "annual-effect", distinctId: "restore-owner", journeyId: "plans-journey"))
+        _ = await annual.syncTask?.value
+        XCTAssertFalse(annual.completesWithoutAcquisition)
+        let completions = harness.sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }
+        XCTAssertEqual(completions.count, 2)
+        XCTAssertEqual(completions.last?.properties?["store_product_id"] as? String, "pro.annual")
+        XCTAssertEqual(completions.last?.properties?["price"] as? Double, 59.99)
+        XCTAssertEqual(harness.adapter.purchasedProducts.map(\.storeProductId), ["pro.monthly", "pro.annual"])
+        XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseFailed }.count, 0)
+    }
+
     func testProfileReadyDoesNotRefreshAlreadySyncedReceipt() async {
         let api = RestoreRefreshAPI()
         let harness = makeRestoreRefreshHarness(api: api)

@@ -1623,27 +1623,33 @@ final class TransactionServiceTests: AsyncSpec {
                         }.count) == 0
                     }
 
-                    it("M33 subscription plan change ends Completed without failure") {
+                    it("completes a real monthly to annual plan purchase through the native adapter") {
                         settings.setPurchaseDelegate(nil)
-                        mockNativePurchaseAdapter.configureSubscriptionChangeRequired()
-                        let result = try await transactionService.purchase(mockProduct)
-                        expect(result.completesWithoutAcquisition) == true
-                        expect(result.journeyCompletionOutlet) == "completed"
-                        expect(eventSink.events.map(\.name)).toNot(contain(SystemEventNames.purchaseCompleted))
-                        expect(eventSink.events.map(\.name)).toNot(contain(SystemEventNames.purchaseFailed))
-                    }
-
-                    it("advances the prepared plan-change action exactly once without acquisition") {
-                        settings.setPurchaseDelegate(nil)
-                        mockNativePurchaseAdapter.configureSubscriptionChangeRequired()
-                        let action = try await transactionService.purchaseAction(mockProduct)
-                        expect(action) == .advanced(outlet: "completed")
-                        expect(mockNativePurchaseAdapter.purchasedProducts.count) == 1
+                        let native = MockStoreProduct(id: "pro.annual", displayName: "Pro Annual",
+                            price: 59.99, displayPrice: "$59.99", productType: .autoRenewable)
+                        var annual = StoreProduct(productId: "pro-annual", storeProductId: native.id,
+                            placementId: "placement-annual", name: native.displayName,
+                            price: native.displayPrice, period: .year, productType: .autoRenewable,
+                            appStoreProduct: native)
+                        annual.purchaseContext = PurchaseCommercialContext(
+                            release: mockProduct.purchaseContext!.release,
+                            placementId: "placement-annual", productId: "pro-annual", storeProductId: native.id,
+                            displayPrice: "$59.99", price: 59.99)
+                        expect(NativeStoreKitPurchaseAdapter.ownershipBeforeCheckout(
+                            targetProductID: "pro.annual", ownedProductID: "pro.monthly")).to(beNil())
+                        mockNativePurchaseAdapter.configureVerifiedPurchase(transactionId: "annual-purchase",
+                            originalTransactionId: "monthly-purchase", productId: "pro.annual")
+                        let action = try await transactionService.purchaseAction(annual,
+                            outcomeCorrelation: .init(eventId: "plan-change-effect", distinctId: "test-user", journeyId: "plans"))
+                        // Real purchases continue through their correlated acquisition event.
+                        expect(action) == .awaitingOutcome
+                        expect(mockNativePurchaseAdapter.purchasedProducts.map(\.storeProductId)) == ["pro.annual"]
                         let outcomes = await mockTransactionObserver.committedOutcomes
-                        expect(outcomes.count) == 0
-                        expect(eventSink.events.map(\.name).filter {
-                            $0 == SystemEventNames.purchaseCompleted || $0 == SystemEventNames.purchaseFailed
-                        }.count) == 0
+                        expect(outcomes.count) == 1
+                        expect(outcomes.first?.kind) == .verified
+                        expect(outcomes.first?.transactionId) == "annual-purchase"
+                        expect(outcomes.first?.outcomeEventId) == "plan-change-effect"
+                        expect(eventSink.events.map(\.name)).toNot(contain(SystemEventNames.purchaseFailed))
                     }
 
 
