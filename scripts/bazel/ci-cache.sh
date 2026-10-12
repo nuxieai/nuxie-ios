@@ -3,7 +3,8 @@
 nuxie_bazel_ci_caches() {
   if [[ "${NUXIE_CI_RUNNER_POLICY_VERSION:-1}" == 2 ]]; then
     source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/runner-policy.sh"
-    nuxie_runner_policy_environment
+    nuxie_runner_policy_environment || return
+    export NODE_OPTIONS="${NUXIE_NODE_OPTIONS}"
     return
   fi
   local agent_name cache_root
