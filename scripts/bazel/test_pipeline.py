@@ -11,9 +11,9 @@ SDK = 'ios'
 
 
 class PipelineTests(unittest.TestCase):
-    def render(self, version='1', split='0', topology='consolidated'):
+    def render(self, version='1', split='0', topology='consolidated', **controls):
         env = dict(os.environ, NUXIE_CI_RUNNER_POLICY_VERSION=version,
-                   NUXIE_SDK_SPLIT_LANES=split, NUXIE_CI_RUNNER_TOPOLOGY=topology)
+                   NUXIE_SDK_SPLIT_LANES=split, NUXIE_CI_RUNNER_TOPOLOGY=topology, **controls)
         return subprocess.run([sys.executable, str(ROOT / 'scripts/ci/pipeline.py')], env=env,
                               capture_output=True, text=True, timeout=10)
 
@@ -70,6 +70,29 @@ class PipelineTests(unittest.TestCase):
         for version, split, topology in [('1', '1', 'consolidated'), ('2', '1', 'fallback'),
                                           ('2', '0', 'fallback'), ('3', '0', 'consolidated'), ('2', 'yes', 'consolidated')]:
             self.assertNotEqual(self.render(version, split, topology).returncode, 0)
+
+    def test_renderer_forwards_only_explicit_qualified_reader_profile_and_never_writer(self):
+        profile = 'macos-apple' if SDK == 'ios' else 'linux-native'
+        controls = {'NUXIE_CI_BAZEL_REMOTE_CACHE_MODE': 'read',
+                    'NUXIE_CI_BAZEL_CACHE_PROFILES': profile,
+                    'NUXIE_BAZEL_REMOTE_CACHE_ELIGIBLE': '1',
+                    'NUXIE_BAZEL_REMOTE_CACHE_DOMAIN': 'sha256:' + 'a' * 64,
+                    'NUXIE_BAZEL_REMOTE_CACHE_URL': 'https://fixture.example.test',
+                    'NUXIE_BAZEL_REMOTE_CACHE_CA_FILE': '/opt/fixture/leaf.pem',
+                    'NUXIE_BAZEL_REMOTE_CACHE_TLS_PIN_FILE': '/opt/fixture/pin.json',
+                    'NUXIE_BAZEL_REMOTE_CACHE_CREDENTIAL_FILE': '/fixture/reader.json'}
+        steps = json.loads(self.render('2', '1', **controls).stdout)['steps']
+        for step in steps:
+            qualified = step['env']['NUXIE_CI_RUNNER_PROFILE'] == profile
+            self.assertEqual(step['env']['NUXIE_BAZEL_REMOTE_CACHE_MODE'], 'read' if qualified else 'off')
+            if qualified:
+                self.assertEqual(step['env']['NUXIE_BAZEL_REMOTE_CACHE_TLS_PIN_FILE'], '/opt/fixture/pin.json')
+                self.assertEqual(step['env']['NUXIE_BAZEL_REMOTE_CACHE_DOMAIN'], 'sha256:' + 'a' * 64)
+            else:
+                self.assertNotIn('NUXIE_BAZEL_REMOTE_CACHE_CREDENTIAL_FILE', step['env'])
+        controls['NUXIE_CI_BAZEL_REMOTE_CACHE_MODE'] = 'write'
+        steps = json.loads(self.render('2', '1', **controls).stdout)['steps']
+        self.assertTrue(all(step['env']['NUXIE_BAZEL_REMOTE_CACHE_MODE'] == 'off' for step in steps))
 
     def test_repository_upload_v2_selector_has_initial_profile(self):
         steps = json.loads((ROOT / '.buildkite/pipeline.yml').read_text())['steps']
