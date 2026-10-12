@@ -469,7 +469,21 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             XCTAssertEqual(native.values.first { $0.ownerInstanceID == annual.rawValue && $0.name == "productId" }?.value,
                            .bytes(Data("product-annual".utf8)))
         }
-        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        for _ in 0..<20 {
+            let opening = try await screen.step(elapsedSeconds: 0.016)
+            for effect in opening.effects {
+                guard case .viewModelChange(let change) = effect.kind, change.origin == .runtime else { continue }
+                let resolved = try await screen.resolveViewModelChange(change)
+                XCTAssertFalse(["paywall/selectedProductId", "paywall/selectedPlacementId"].contains(resolved.path),
+                               "Opening the scene must not select another plan")
+                await delegate.experienceViewController(controller, didEmitViewModelChange:
+                    .init(path: .init(viewModelName: resolved.viewModelName, path: resolved.path),
+                          value: nativeTapValue(resolved.value), source: "runtime", screenId: "state-screen",
+                          instanceId: resolved.instanceID, isTrigger: resolved.isTrigger))
+            }
+        }
+        let afterOpening = await delegate.resolvePresentationString(scenario.purchaseReference)
+        XCTAssertEqual(afterOpening, scenario.initialPlacement)
         let down = try await screen.step(pointers: [.init(kind: .down, x: 80, y: 40)], elapsedSeconds: 0)
         let up = try await screen.step(pointers: [.init(kind: .up, x: 80, y: 40, timestamp: 0.1)], elapsedSeconds: 0)
         let settled = try await screen.step(elapsedSeconds: 0.016)
@@ -494,6 +508,18 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         for update in try ExperienceInteractiveStateCompiler.signedValues(sent) {
             _ = try await screen.applyStateCommand(.value(update))
         }
+        let feedbackFrame = try await screen.step(elapsedSeconds: 0.016)
+        for effect in feedbackFrame.effects {
+            guard case .viewModelChange(let change) = effect.kind, change.origin == .runtime else { continue }
+            let resolved = try await screen.resolveViewModelChange(change)
+            await delegate.experienceViewController(controller, didEmitViewModelChange:
+                .init(path: .init(viewModelName: resolved.viewModelName, path: resolved.path),
+                      value: nativeTapValue(resolved.value), source: "runtime", screenId: "state-screen",
+                      instanceId: resolved.instanceID, isTrigger: resolved.isTrigger))
+        }
+        let afterFeedback = await delegate.resolvePresentationString(scenario.purchaseReference)
+        XCTAssertEqual(afterFeedback, scenario.writes[0].expectedPlacement,
+                       "Native feedback must not be treated as another plan tap")
         let nativeSelection = try await screen.snapshot()
         guard case .referencedInstance(let parent) = nativeSelection.values.first(where: {
             $0.ownerInstanceID == nativeSelection.rootInstanceID && $0.name == "paywall"
