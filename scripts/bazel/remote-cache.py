@@ -99,6 +99,7 @@ def flags():
     helper = str(Path(__file__).resolve())
     return ["--tls_certificate=" + certificate] + [
         "--remote_cache=" + origin,
+        "--remote_max_connections=1",
         "--remote_upload_local_results=" + str(mode == "write").lower(),
         "--action_env=NUXIE_BAZEL_REMOTE_CACHE_DOMAIN=" + domain,
         "--credential_helper=" + host + "=" + helper,
