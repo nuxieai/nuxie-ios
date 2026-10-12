@@ -1308,6 +1308,32 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
+    func testConfiguredImageDecoderPreservesNeighbourFormats() throws {
+        // PNG values come from each file's PLTE/tRNS or unfiltered sample row.
+        // Multiply straight sRGB channels by alpha once, rounding to 8 bits.
+        // The JPEG has one constant neutral block, so its DC coefficient gives 128.
+        let cases: [(String, UInt32, UInt32, [UInt8])] = [
+            ("decoder-indexed-opaque", 2, 1, [17, 34, 51, 255, 255, 64, 32, 255]),
+            ("decoder-truecolor-alpha", 2, 1, [17, 34, 51, 255, 180, 45, 23, 180]),
+            ("decoder-grayscale-alpha", 2, 1, [85, 85, 85, 255, 102, 102, 102, 128]),
+            ("decoder-16bit-alpha", 2, 1, [17, 34, 51, 255, 180, 45, 23, 180]),
+            ("decoder-jpeg", 8, 8, Array(repeating: [128, 128, 128, 255], count: 64).flatMap { $0 }),
+            ("decoder-indexed-profile-alpha", 2, 1, [17, 34, 51, 255, 180, 45, 23, 180]),
+        ]
+        for (name, width, height, expected) in cases {
+            let encoded = try fixture(named: name, extension: "bin")
+            let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
+                encoded,
+                maximumDimension: 512,
+                maximumDecodedBytes: 512 * 512 * 4
+            ), name)
+            XCTAssertEqual(decoded.width, width, name)
+            XCTAssertEqual(decoded.height, height, name)
+            XCTAssertEqual(decoded.rowBytes, width * 4, name)
+            XCTAssertEqual(Array(decoded.pixels as Data), expected, name)
+        }
+    }
+
     func testConfiguredImportDecodesAnEmbeddedImageAgainstItsInspectedCatalog() async throws {
         let encoded = try fixture(named: "in_band_asset", extension: "riv.base64")
         guard let scene = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters) else {
