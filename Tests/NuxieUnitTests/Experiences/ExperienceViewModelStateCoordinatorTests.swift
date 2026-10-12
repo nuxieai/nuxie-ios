@@ -240,6 +240,32 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
                 )).to(beNil())
             }
 
+            it("prefers a nested property and a named paywall over a flat root link") {
+                let values = [
+                    value(path: "paywall", ["vmInstanceId": "nested-paywall"]),
+                    value(path: "paywall/selectedProduct", ["vmInstanceId": "flat-product"]),
+                    value(viewModelName: "Paywall", instanceId: "nested-paywall", instanceName: nil,
+                          path: "selectedProduct", ["vmInstanceId": "nested-product"]),
+                    value(viewModelName: "PaywallProduct", instanceId: "nested-product", instanceName: nil,
+                          path: "placementId", "nested-placement"),
+                    value(viewModelName: "PaywallProduct", instanceId: "flat-product", instanceName: nil,
+                          path: "placementId", "flat-placement"),
+                ]
+                let purchase = path("paywall.selectedProduct.placementId", viewModelName: nil)
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(values: values))
+                expect(coordinator.getPurchaseValue(path: purchase, screenId: "screen-1", instanceId: nil) as? String)
+                    .to(equal("nested-placement"))
+
+                coordinator.hydrate(.init(values: values + [
+                    value(viewModelName: "NamedPaywall", instanceId: "named-paywall", instanceName: "paywall",
+                          path: "selectedProduct", ["vmInstanceId": "named-product"]),
+                    value(viewModelName: "PaywallProduct", instanceId: "named-product", instanceName: nil,
+                          path: "placementId", "named-placement"),
+                ]))
+                expect(coordinator.getPurchaseValue(path: purchase, screenId: "screen-1", instanceId: nil) as? String)
+                    .to(equal("named-placement"))
+            }
+
             it("does not reuse the screen default instance for explicit refs to another view model") {
                 let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
                     values: [

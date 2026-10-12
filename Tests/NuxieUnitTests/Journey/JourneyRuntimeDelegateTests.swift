@@ -313,6 +313,41 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
+    func testFilePaywallPlanTapChangesTheJourneyPurchasePlacement() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let scenarioURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/file-paywall-selection.json")
+        let scenario = try JSONDecoder().decode(FilePaywallSelectionScenario.self, from: Data(contentsOf: scenarioURL))
+        let model = try XCTUnwrap(scenario.screen.defaultViewModelName)
+        let root = try XCTUnwrap(scenario.screen.defaultInstanceId)
+        let snapshot = replacing(try await authenticatedRenderedSnapshot(fixture),
+            screens: [scenario.screen], viewModelValues: scenario.viewModelValues)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
+            release: release, delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
+            reservation: nil, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+        await delegate.experienceViewController(controller, didChangeScreen: scenario.screen.id)
+        let initial = await delegate.resolvePresentationString(scenario.purchaseReference)
+        XCTAssertEqual(initial, scenario.initialPlacement)
+
+        // This is the production callback for the native tap's selectedProductId
+        // write. The test never writes selectedProduct or a purchase placement.
+        for write in scenario.writes {
+            await delegate.experienceViewController(controller, didEmitViewModelChange:
+                .init(path: .init(viewModelName: model, path: "paywall/selectedProductId"),
+                      value: write.selectedProductId, source: "runtime", screenId: scenario.screen.id,
+                      instanceId: root, isTrigger: false))
+            let selected = await delegate.resolvePresentationString(scenario.purchaseReference)
+            XCTAssertEqual(selected, write.expectedPlacement, write.selectedProductId)
+        }
+    }
+
     func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let fixtureURL = URL(fileURLWithPath: #filePath)
@@ -1115,3 +1150,16 @@ private final class OccupiedLinkController: MockExperienceViewController {
     override var presentedViewController: UIViewController? { occupied }
 }
 #endif
+
+private struct FilePaywallSelectionScenario: Decodable {
+    let screen: Journey.Screen
+    let viewModelValues: [[String: JourneyReleaseJSONValue]]
+    let purchaseReference: JourneyReleaseJSONValue
+    let initialPlacement: String
+    let writes: [Write]
+
+    struct Write: Decodable {
+        let selectedProductId: String
+        let expectedPlacement: String?
+    }
+}
