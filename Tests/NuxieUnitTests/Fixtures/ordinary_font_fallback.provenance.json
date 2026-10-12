@@ -1,0 +1,54 @@
+{
+  "generator": "generate-ordinary-font-fallback.py",
+  "schemaPin": "42b4fdcd1",
+  "sha256": "925c0b51fcbe9081816fc5fa50b014bf1f3b08938a62041b07076c745fe2aae3",
+  "width": 390,
+  "height": 844,
+  "fontSize": 64,
+  "rows": [
+    {
+      "name": "Japanese",
+      "text": "日本語",
+      "x": 24,
+      "y": 32
+    },
+    {
+      "name": "Arabic",
+      "text": "مرحبا",
+      "x": 24,
+      "y": 140
+    },
+    {
+      "name": "Hebrew",
+      "text": "שלום",
+      "x": 24,
+      "y": 248
+    },
+    {
+      "name": "Hindi",
+      "text": "नमस्ते",
+      "x": 24,
+      "y": 356
+    },
+    {
+      "name": "emoji",
+      "text": "😀",
+      "x": 24,
+      "y": 464
+    },
+    {
+      "name": "missing",
+      "text": "􏿿",
+      "x": 24,
+      "y": 572
+    },
+    {
+      "name": "Latin",
+      "text": "Ada",
+      "x": 24,
+      "y": 680
+    }
+  ],
+  "externalPrimary": "Chosen by the SDK test: current System or Latin-only Roboto. No fallback attached.",
+  "nativeStructure": "Ordinary Text and TextValueRun; no TextInput or host editing overlay"
+}
