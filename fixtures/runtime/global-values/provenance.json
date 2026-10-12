@@ -41,7 +41,8 @@
       "artboards": {
         "0": "GlobalValuesRow",
         "1": "GlobalValuesScreen"
-      }
+      },
+      "sizeBytes": 341
     }
   }
 }

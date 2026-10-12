@@ -1,6 +1,6 @@
 {
   "publisherSourceCommit": "4f555cd437e2cd3a368ba5b3e679c9c88c197356",
-  "descriptorSha256": "58d8bea294ad406fdc0220d668290f63fc7f88137b019dc5d94067b584aeba71",
+  "descriptorSha256": "3149b64ca2cd51052dcc113d64fa3acf18d8efcbbad8ac35fa672c2fff6199ad",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
   "qualification": "Test-authored signed Journey and screen-actions artifact around actual publisher-generated render bytes; not a full production publisher release qualification.",
   "descriptorRefresh": {

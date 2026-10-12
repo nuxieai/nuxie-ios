@@ -9,7 +9,7 @@
   "publisherWasmSha256": "fd3f5e222eef4bc4483edffbdd6a009e6a793062ac3543dbea956edebefacfb1",
   "authorityWasmSha256": "5a6e66b556f69100f55bc13d4fa9aa8b9d5ac2dbde4de253f997207825353797",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "descriptorSha256": "954c98d426dc5dbe274d4b90a4bbbeb625aaabcaf1b8338072dbb1cb3dfac208",
+  "descriptorSha256": "2f92b2d2af9ffcb8def8f47f5930be1833220065b66e0039c23cd212e38dd5a8",
   "fonts": [
     {
       "location": "system",
@@ -39,16 +39,16 @@
       "sizeBytes": 370
     },
     "profile.json": {
-      "sha256": "3dcf185dbf50477fa2b6ff02cbb35ea0bfae93464a9953051f3b53aebd334427",
-      "sizeBytes": 8144
+      "sha256": "b5e11b4848cb54a3d6f3a05c3c212b70f8a1712709d411dda675d4c68db63f50",
+      "sizeBytes": 8116
     },
     "release-entry.json": {
-      "sha256": "16521d38d3aba3cbe9e1a7200f16b3fee311680afebde40e67c0a077a0fbec7a",
-      "sizeBytes": 7181
+      "sha256": "c0bb38d30648f1e15318ea408d715bdae7eb87232688c93dc83cf9d1b2f0e31d",
+      "sizeBytes": 7153
     },
     "release.json": {
-      "sha256": "bb8cd7d8675a0bb3c89bff2977bb2c507e49ab57aa23e2ef906e4bbe3ac39734",
-      "sizeBytes": 7411
+      "sha256": "8a84fb11900594883266f26b51ad2fccc2fa70eed4fbd73379f8c5e079c51028",
+      "sizeBytes": 7383
     },
     "render.json": {
       "sha256": "c352813cef172f7abe20b3dd789a182e1e787e143975fc5b0698335a80d7a022",
