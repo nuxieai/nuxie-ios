@@ -1,0 +1,7 @@
+{
+  "publisherCommit": "7974f6d36b5d87a2d0029700df51fc9d361329be",
+  "publisherWasmSha256": "fb48135874e16aa5c7a34b105419d120f3ffc0c9e98b9ed1f7029e44e6b629b2",
+  "sourceSnapshotSha256": "5d471c12590a5d37d6284eecf45ddc2ec754bb30ef5d743922640ba0de78b5f1",
+  "renderSha256": "7a3cd47dcee0670ba851f39da71bba4c90bbb5fdac26f0c149c3b53f81b3c8f9",
+  "qualification": "Native pointer, SDK selection and purchase resolution require separate red and green proof."
+}
