@@ -40,6 +40,52 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
+    func testPublishedOrdinaryScreenTextDrawsInstalledFallbackGlyphs() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/authored-font-fallback")
+        let scene = try Data(contentsOf: directory.appendingPathComponent("ordinary-roboto.nux"))
+        let latin = try Data(contentsOf: directory.appendingPathComponent("ordinary-latin.ttf"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let asset = try XCTUnwrap(assets.first { $0.kind == .font })
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene,
+            artboardName: "One", player: .staticArtboard,
+            pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: false,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                externalAssets: [asset.ordinal: latin]))
+        do {
+            _ = try await runtime.step(elapsedSeconds: 0)
+            let frame = try await renderPixels(runtime, width: 390, height: 844)
+            try attachMetricPixels(frame.pixels, name: "P038-ordinary-published-installed-Roboto")
+            XCTAssertEqual(frame.outcome.disposition, .presented)
+            // Independent published positions; the Latin-only primary leaves
+            // these rows completely blank without the installed OS fallback.
+            for (script, top) in [("Japanese", 32), ("Arabic", 140),
+                                  ("Hebrew", 248), ("Hindi", 356), ("emoji", 464)] {
+                XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: top), 100,
+                    "Published \(script) must draw visible glyphs")
+            }
+            XCTAssertEqual(ordinaryTextInk(frame.pixels, top: 572), 0,
+                "U+10FFFF must remain unsupported")
+            XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: 680), 100,
+                "The primary Latin face must keep drawing")
+            try await runtime.close()
+        } catch {
+            try? await runtime.close()
+            throw error
+        }
+    }
+
+    private func ordinaryTextInk(_ pixels: Data, top: Int) -> Int {
+        (top..<(top + 104)).reduce(0) { sum, y in
+            sum + (0..<390).reduce(0) { count, x in
+                let offset = (y * 390 + x) * 4
+                return count + (pixels[offset] > 100 || pixels[offset + 1] > 100
+                    || pixels[offset + 2] > 100 ? 1 : 0)
+            }
+        }
+    }
+
     // P038 observation through ordinary text emitted by the real publisher.
     // There is no TextInput or UIKit editing overlay in either scene. Font and
     // scene hashes, authored strings and positions are in ordinary-provenance.
