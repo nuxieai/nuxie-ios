@@ -388,6 +388,22 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
     }
 
     func testNativePlanTapChangesPurchaseThroughTheRuntimeDelegate() async throws {
+        try await assertNativePlanTapChangesPurchase()
+    }
+
+    func testNativePlacementTapChangesPurchaseThroughTheRuntimeDelegate() async throws {
+        try await assertNativePlanTapChangesPurchase(fixtureDirectory: "paywall-placement-selection",
+            selectorPath: "paywall/selectedPlacementId", duplicateProductID: true)
+    }
+
+    func testNativePlanTapReadsSignedIdentityAfterStoreCatalogMapping() async throws {
+        try await assertNativePlanTapChangesPurchase(fixtureDirectory: "paywall-catalog-selection", hydrateCatalog: true)
+    }
+
+    private func assertNativePlanTapChangesPurchase(
+        fixtureDirectory: String = "paywall-selection", selectorPath: String = "paywall/selectedProductId",
+        duplicateProductID: Bool = false, hydrateCatalog: Bool = false
+    ) async throws {
         let fixtureRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -399,15 +415,34 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         // the generated per-screen model name.
         let sourceRows = try JSONDecoder().decode([JourneyViewModelValue].self,
             from: JSONEncoder().encode(scenario.viewModelValues))
-        let values = sourceRows.map { value in
+        var values = sourceRows.map { value in
             JourneyViewModelValue(
                 viewModelName: value.viewModelName == scenario.screen.defaultViewModelName ? "Runtime" : value.viewModelName,
                 instanceId: value.instanceId == scenario.screen.defaultInstanceId ? "root-sdk-id" : value.instanceId,
                 instanceName: value.viewModelName == "PaywallProduct" ? value.instanceId?.capitalized : nil,
                 path: value.path, value: value.value)
         }
-        let payload = try await statePayload(defaultViewModelName: "Runtime", values: values,
-            scene: Data(contentsOf: fixtureRoot.appendingPathComponent("runtime/paywall-selection/screen.riv")),
+        if fixtureDirectory != "paywall-selection" {
+            values.append(.init(viewModelName: "Runtime", instanceId: "root-sdk-id", path: "annual",
+                                value: AnyCodable(["vmInstanceId": "annual"])))
+        }
+        if duplicateProductID {
+            values = values.map { row in
+                if row.path == "productId" || row.path == "paywall/selectedProductId" {
+                    return .init(viewModelName: row.viewModelName, instanceId: row.instanceId, instanceName: row.instanceName,
+                                 path: row.path, value: AnyCodable("product-pro"))
+                }
+                return row
+            }
+            values.append(.init(viewModelName: "Runtime", instanceId: "root-sdk-id", path: "paywall/selectedPlacementId",
+                                value: AnyCodable("placement-monthly")))
+        }
+        let nativeValues = hydrateCatalog ? StoreProductViewModelProjection.apply(["monthly", "annual"].map { plan in
+            StoreProduct(productId: "target-environment-\(plan)", storeProductId: "com.example.\(plan)", placementId: "placement-\(plan)",
+                         name: plan, price: "$9.99", period: .month, productType: .autoRenewable)
+        }, to: values) : values
+        let payload = try await statePayload(defaultViewModelName: "Runtime", values: nativeValues,
+            scene: Data(contentsOf: fixtureRoot.appendingPathComponent("runtime/\(fixtureDirectory)/screen.riv")),
             artboardName: "Paywall")
         let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 320, pixelHeight: 100)
         defer { Task { try? await screen.close() } }
@@ -428,6 +463,12 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         await delegate.experienceViewController(controller, didChangeScreen: "state-screen")
         let initial = await delegate.resolvePresentationString(scenario.purchaseReference)
         XCTAssertEqual(initial, scenario.initialPlacement)
+        if hydrateCatalog {
+            let annual = try await screen.viewModel(named: "PaywallProduct", instanceID: "annual")
+            let native = try await screen.snapshot()
+            XCTAssertEqual(native.values.first { $0.ownerInstanceID == annual.rawValue && $0.name == "productId" }?.value,
+                           .bytes(Data("product-annual".utf8)))
+        }
         for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
         let down = try await screen.step(pointers: [.init(kind: .down, x: 80, y: 40)], elapsedSeconds: 0)
         let up = try await screen.step(pointers: [.init(kind: .up, x: 80, y: 40, timestamp: 0.1)], elapsedSeconds: 0)
@@ -436,9 +477,9 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         for effect in down.effects + up.effects + settled.effects {
             guard case .viewModelChange(let change) = effect.kind, change.origin == .runtime else { continue }
             let resolved = try await screen.resolveViewModelChange(change)
-            if resolved.path == "paywall/selectedProductId", case .string(let id) = resolved.value {
+            if resolved.path == selectorPath, case .string(let id) = resolved.value {
                 selectionWrites += 1
-                XCTAssertEqual(id, "product-annual")
+                XCTAssertEqual(id, selectorPath == "paywall/selectedPlacementId" ? "placement-annual" : "product-annual")
             }
             await delegate.experienceViewController(controller, didEmitViewModelChange:
                 .init(path: .init(viewModelName: resolved.viewModelName, path: resolved.path),
@@ -461,6 +502,9 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertEqual(nativeSelection.values.first { $0.ownerInstanceID == parent && $0.name == "selectedProduct" }?.value,
             .referencedInstance(annual.rawValue))
         XCTAssertEqual(nativeSelection.values.first { $0.ownerInstanceID == parent && $0.name == "selectedIndex" }?.value, .number(1))
+        let monthly = try await screen.viewModel(named: "PaywallProduct", instanceID: "monthly")
+        XCTAssertEqual(nativeSelection.values.first { $0.ownerInstanceID == annual.rawValue && $0.name == "isSelected" }?.value, .bool(true))
+        XCTAssertEqual(nativeSelection.values.first { $0.ownerInstanceID == monthly.rawValue && $0.name == "isSelected" }?.value, .bool(false))
     }
 
     private func nativeTapValue(_ value: ExperienceInteractiveValue) -> Any {
