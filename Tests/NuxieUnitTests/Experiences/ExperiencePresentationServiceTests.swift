@@ -954,6 +954,11 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
 
                 it("returns the failed purchase outlet when no plan was selected") { @MainActor in
+                    let fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                        .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/events/purchase-without-selection.json")
+                    let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as! [String: Any]
+                    let expected = fixture["expected"] as! [String: Any]
+                    let purchase = expected["purchase"] as! [String: String]
                     let versionID = "Journey-no-selection"
                     let screenID = "screen-selected"
                     let controller = CommerceActionRecordingExperienceViewController(mockExperienceVersionId: versionID, mockScreenId: screenID)
@@ -967,10 +972,10 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(shown).to(equal(.shown))
                     let result = await service.dispatchJourneyPresentationAction(owner: owner,
                         action: ["type": .string("purchase"), "placementId": .string("")], effectId: "buy-no-selection")
-                    expect(result).to(equal(.advanced(outlet: "failed")))
+                    expect(result).to(equal(.advanced(outlet: expected["outlet"] as! String)))
                     expect(controller.purchaseRequests).to(beEmpty())
-                    expect(controller.screenValues["paywall/purchase/status"]).to(equal("error"))
-                    expect(controller.screenValues["paywall/purchase/errorCode"]).to(equal("failed"))
+                    expect(controller.screenValues["paywall/purchase/status"]).to(equal(purchase["status"]))
+                    expect(controller.screenValues["paywall/purchase/errorCode"]).to(equal(purchase["errorCode"]))
                     expect(service.ownsJourneyPresentation(owner: owner)).to(beTrue())
                     await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }

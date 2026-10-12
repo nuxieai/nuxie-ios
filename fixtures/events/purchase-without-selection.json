@@ -1,0 +1,21 @@
+{
+  "purchaseAction": {
+    "type": "purchase",
+    "placementId": {
+      "ref": {
+        "kind": "path",
+        "path": "paywall.selectedProduct.placementId"
+      }
+    }
+  },
+  "selectedPlacementId": "",
+  "expected": {
+    "outlet": "failed",
+    "screenVisible": true,
+    "checkoutStarted": false,
+    "purchase": {
+      "status": "error",
+      "errorCode": "failed"
+    }
+  }
+}
