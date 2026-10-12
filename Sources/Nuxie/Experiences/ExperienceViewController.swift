@@ -646,14 +646,6 @@ class ExperienceViewController: NuxiePlatformViewController {
         )
     }
 
-    /// Resets presentation-scoped state and starts fresh interactive screens.
-    /// Every show builds a new controller, which begins artifact loading when
-    /// its view is first loaded; a controller whose view is already loaded
-    /// reacquires its artifact and never shares earlier runtime state.
-    /// Resets presentation-scoped state and starts fresh interactive screens for
-    /// cached controllers. A newly created controller begins artifact loading
-    /// when its view is first loaded; a reused controller reacquires its
-    /// artifact and never shares the previous presentation's runtime state.
     #if canImport(UIKit)
     private var initialContentHeightResolution: Bool?
     private var initialContentHeightWaiters: [CheckedContinuation<Bool, Never>] = []
@@ -674,6 +666,10 @@ class ExperienceViewController: NuxiePlatformViewController {
     }
     #endif
 
+    /// Resets presentation-scoped state and starts fresh interactive screens.
+    /// Every show builds a new controller, which begins artifact loading when
+    /// its view is first loaded; a controller whose view is already loaded
+    /// reacquires its artifact and never shares earlier runtime state.
     func prepareForPresentation(
         traceToken: ExperiencePresentationTraceToken?,
         initialScreenID: String? = nil
