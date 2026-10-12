@@ -184,6 +184,11 @@ private final class CommerceActionRecordingExperienceViewController:
     )] = []
     private(set) var restoreCorrelations: [CommerceOutcomeCorrelation?] = []
 
+    private(set) var screenValues: [String: String] = [:]
+    override func applyViewModelValue(path: VmPathRef, value: Any, screenId: String? = nil, instanceId: String? = nil) {
+        screenValues[path.path] = value as? String
+    }
+
     override func performPurchase(
         placementId: String,
         outcomeCorrelation: CommerceOutcomeCorrelation?
@@ -945,6 +950,28 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(controller.requestPermissionResolutionTypes)
                         .to(equal(["camera"]))
                     expect(service.isExperiencePresented).to(beTrue())
+                    await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
+                }
+
+                it("returns the failed purchase outlet when no plan was selected") { @MainActor in
+                    let versionID = "Journey-no-selection"
+                    let screenID = "screen-selected"
+                    let controller = CommerceActionRecordingExperienceViewController(mockExperienceVersionId: versionID, mockScreenId: screenID)
+                    mockExperienceService.mockViewControllers[versionID] = controller
+                    let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
+                    let request = JourneyPresentationRequest(fences: testPresentationFences(),
+                        release: makeJourneyRelease(versionId: versionID, screenId: screenID), delivery: journeyDelivery(),
+                        screenId: screenID, owner: owner, reservation: service.reserveJourneyPresentation(ownerDistinctId: "user-1"),
+                        onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+                    let shown = await service.presentJourney(request)
+                    expect(shown).to(equal(.shown))
+                    let result = await service.dispatchJourneyPresentationAction(owner: owner,
+                        action: ["type": .string("purchase"), "placementId": .string("")], effectId: "buy-no-selection")
+                    expect(result).to(equal(.advanced(outlet: "failed")))
+                    expect(controller.purchaseRequests).to(beEmpty())
+                    expect(controller.screenValues["paywall/purchase/status"]).to(equal("error"))
+                    expect(controller.screenValues["paywall/purchase/errorCode"]).to(equal("failed"))
+                    expect(service.ownsJourneyPresentation(owner: owner)).to(beTrue())
                     await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 

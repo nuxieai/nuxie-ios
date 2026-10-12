@@ -131,6 +131,43 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         }
     }
 
+    func testPurchaseWithoutSelectionFollowsFailedOutletAndKeepsPresentation() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let base = try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry"))
+        let snapshot = try addingPurchaseOffer(replacing(base, entryStepId: "present", steps: [
+            .init(kind: .action, id: "present", action: ["type": .string("navigate"), "screenId": .string("screen_welcome")], outlets: [:], outcome: nil),
+            .init(kind: .action, id: "purchase", action: ["type": .string("purchase"), "placementId": .object(["ref": .object(["kind": .string("path"), "path": .string("paywall.selectedProduct.placementId")])])], outlets: ["failed": "failed"], outcome: nil),
+            .init(kind: .action, id: "failed", action: ["type": .string("delay"), "durationMs": .number(60_000)], outlets: [:], outcome: nil)
+        ], routes: [.init(host: .init(kind: .screen, screenId: "screen_welcome"), eventName: "buy", entryStepId: "purchase")]))
+        let identity = MockIdentityService(); identity.setDistinctId("customer")
+        let events = MockEventLog(); events.identity = identity
+        let presenter = await MainActor.run {
+            let presenter = RecordingJourneyPresenter()
+            presenter.resolvedPurchasePlacementId = ""
+            presenter.actionResult = .advanced(outlet: "failed")
+            return presenter
+        }
+        let service = makeService(identity: identity, events: events, directory: directory, featureAccess: { _ in .notFound }, presenter: presenter)
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presented = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presented)
+        let accepted = await request.onEmissionBatch(presentationBatch(request: request, invocationId: "buy-without-selection",
+            emissions: [.init(id: "00000000-0000-7000-8000-000000000912", sequence: 0, occurredAt: "2026-08-29T12:00:00Z", name: "buy", payload: [:])]), nil)
+        XCTAssertTrue(accepted)
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        for _ in 0..<200 {
+            if try await journal.runs().first?.stepId == "failed" { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let runs = try await journal.runs()
+        XCTAssertEqual(runs.first?.stepId, "failed")
+        let observations = await MainActor.run { (presenter.presentationActions.count, presenter.finishedOwners.count) }
+        XCTAssertEqual(observations.0, 1)
+        XCTAssertEqual(observations.1, 0)
+    }
+
     func testSecondRowFrameReachesRelativePurchaseThroughBatchAdmission() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }

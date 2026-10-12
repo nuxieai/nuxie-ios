@@ -2989,7 +2989,12 @@ private extension JourneyService {
                     guard let contextResolvedAction = resolvedPresentationAction(
                         action,
                         context: run.context
-                    ), let resolvedAction = await presenter
+                    ) else {
+                        await finish(run, outcome: "abandoned", leg: leg, journal: journal,
+                            dismissPresentation: dismissPresentationOnCompletion, executionFenceToken: executionFenceToken)
+                        return
+                    }
+                    let presentationAction = await presenter
                         .resolveJourneyPresentationAction(
                             owner: .init(
                                 journeyId: run.journeyId,
@@ -2999,7 +3004,14 @@ private extension JourneyService {
                             source: presentationSource,
                             eventSource: eventSource
                         )
-                    else {
+                    let resolvedAction: [String: JourneyReleaseJSONValue]
+                    if let presentationAction {
+                        resolvedAction = presentationAction
+                    } else if actionType == .purchase {
+                        var failedPurchase = contextResolvedAction
+                        failedPurchase["placementId"] = .string("")
+                        resolvedAction = failedPurchase
+                    } else {
                         await finish(
                             run,
                             outcome: "abandoned",
@@ -3010,20 +3022,9 @@ private extension JourneyService {
                         )
                         return
                     }
-                    if actionType == .purchase {
-                        guard case .string(let placementId)? = resolvedAction[
-                            "placementId"
-                        ], !placementId.isEmpty else {
-                            await finish(
-                                run,
-                                outcome: "abandoned",
-                                leg: leg,
-                                journal: journal,
-                                dismissPresentation: dismissPresentationOnCompletion,
-                                executionFenceToken: executionFenceToken
-                            )
-                            return
-                        }
+                    if actionType == .purchase,
+                       case .string(let placementId)? = resolvedAction["placementId"],
+                       !placementId.isEmpty {
                         if let offer = JourneyOfferAccess.offer(forPurchaseStep: command.step.id, in: leg) {
                             let decision = await offerDecision(offer, release: release, placementId: placementId)
                             guard executionFence.isCurrent(executionFenceToken),

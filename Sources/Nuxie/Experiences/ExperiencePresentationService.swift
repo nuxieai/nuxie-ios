@@ -656,12 +656,20 @@ final class ExperiencePresentationService {
 
         case .purchase:
             guard let placementValue = action["placementId"],
-                  let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,
-                  let placementId = delegate.resolvePresentationString(
-                    placementValue,
-                    source: nil
-                  ), !placementId.isEmpty else {
+                  let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate else {
                 return .failed
+            }
+            guard let placementId = delegate.resolvePresentationString(placementValue, source: nil),
+                  !placementId.isEmpty else {
+                for (path, value) in [
+                    ("paywall/purchase/status", "error"),
+                    ("paywall/purchase/errorCode", "failed"),
+                    ("paywall/purchase/invocationId", effectId),
+                ] {
+                    controller.applyViewModelValue(path: .init(path: path), value: value,
+                        screenId: nil)
+                }
+                return .advanced(outlet: "failed")
             }
             controller.performPurchase(
                 placementId: placementId,
