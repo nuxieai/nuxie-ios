@@ -40,6 +40,40 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
+    // P038 observation through ordinary text emitted by the real publisher.
+    // There is no TextInput or UIKit editing overlay in either scene. Font and
+    // scene hashes, authored strings and positions are in ordinary-provenance.
+    func testPublishedOrdinaryScreenTextFallbackBaseline() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/runtime/authored-font-fallback")
+        let system = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
+        let latin = try Data(contentsOf: directory.appendingPathComponent("ordinary-latin.ttf"))
+        for (name, fontBytes) in [("System", system.bytes), ("Roboto", latin)] {
+            let scene = try Data(contentsOf: directory.appendingPathComponent("ordinary-" + name.lowercased() + ".nux"))
+            let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+            XCTAssertEqual(assets.filter { $0.kind == .font }.count, 1)
+            let asset = try XCTUnwrap(assets.first { $0.kind == .font })
+            let runtime = try await NuxieNativeRuntime.open(bytes: scene,
+                artboardName: "One", player: .staticArtboard,
+                pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: false,
+                importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                    externalAssets: [asset.ordinal: fontBytes]))
+            do {
+                _ = try await runtime.step(elapsedSeconds: 0)
+                let frame = try await renderPixels(runtime, width: 390, height: 844)
+                XCTAssertEqual(frame.outcome.disposition, .presented)
+                XCTAssertGreaterThan(frame.outcome.drawCalls, 0)
+                try attachMetricPixels(frame.pixels, name: "P038-ordinary-published-baseline-" + name)
+                try await runtime.close()
+            } catch {
+                try? await runtime.close()
+                throw error
+            }
+        }
+    }
+
+
     func testMixedSystemAndCDNFontsRenderBothTextRows() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
