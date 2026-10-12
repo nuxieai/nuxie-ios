@@ -19,7 +19,7 @@ class RunnerTests(unittest.TestCase):
         self.checkout = self.root / 'checkout'
         (self.checkout / 'scripts/bazel').mkdir(parents=True)
         (self.checkout / 'scripts/ci').mkdir()
-        for name in ('bazel.sh', 'cache.py', 'remote-cache.sh', 'remote-cache.py', 'cache-tls-pin.py'):
+        for name in ('bazel.sh', 'ci-cache.sh', 'cache.py', 'remote-cache.sh', 'remote-cache.py', 'cache-tls-pin.py'):
             shutil.copyfile(ROOT / 'scripts/bazel' / name, self.checkout / 'scripts/bazel' / name)
         helper = self.root / 'installed.py'
         helper.write_text('''import json, os, subprocess, sys
@@ -28,7 +28,7 @@ if sys.argv[1] == 'environment':
               'NUXIE_BAZEL_LOCAL_TEST_JOBS': 1, 'NUXIE_BAZEL_BOOTSTRAP_JOBS': 2,
               'NUXIE_BAZEL_BATCH': 1, 'NUXIE_BAZEL_CACHE_DIR': os.environ['OWNED_CACHE'],
               'NUXIE_BAZEL_OUTPUT_USER_ROOT': os.environ['OWNED_CACHE'] + '/outputs',
-              'NUXIE_BAZEL_REMOTE_CACHE_MODE': 'off'}
+              'NUXIE_BAZEL_REMOTE_CACHE_MODE': 'off', 'NUXIE_NODE_OPTIONS': '--max-old-space-size=3072'}
     for key, value in values.items(): print('export ' + key + '=' + str(value))
 elif sys.argv[1:3] == ['run', '--']:
     with open(os.environ['CALLS'], 'w') as log: json.dump(sys.argv[4:], log)
@@ -80,6 +80,34 @@ else: sys.exit(99)
     def test_binary_failure_preserves_exit_status(self):
         self.environment['STATUS'] = '17'
         self.assertEqual(self.run_wrapper(['test', '//fixture']).returncode, 17)
+
+    def cache_child(self, environment):
+        return subprocess.run(
+            ['/bin/bash', '-eu', '-c',
+             'source "$1"; exec "$2" -I -c \'import os; print(os.environ.get("NODE_OPTIONS", ""))\'',
+             'cache-fixture', str(self.checkout / 'scripts/bazel/ci-cache.sh'), sys.executable],
+            env=environment, text=True, capture_output=True, timeout=10)
+
+    def test_ci_cache_exports_trusted_heap_to_direct_children(self):
+        environment = dict(self.environment, NODE_OPTIONS='--max-old-space-size=65536',
+                           NUXIE_NODE_OPTIONS='--max-old-space-size=65536')
+        result = self.cache_child(environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), '--max-old-space-size=3072')
+
+    def test_ci_cache_preserves_legacy_child_options(self):
+        environment = dict(self.environment, NUXIE_CI_RUNNER_POLICY_VERSION='1',
+                           NODE_OPTIONS='--trace-warnings')
+        result = self.cache_child(environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), '--trace-warnings')
+
+    def test_ci_cache_refuses_children_when_installed_policy_fails(self):
+        (self.checkout / 'scripts/ci/runner-policy.sh').write_text(
+            'nuxie_runner_policy_environment() { return 17; }\n')
+        result = self.cache_child(self.environment)
+        self.assertEqual(result.returncode, 17)
+        self.assertEqual(result.stdout, '')
 
 
 
