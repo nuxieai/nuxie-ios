@@ -1,0 +1,99 @@
+[
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/products",
+    "value": [
+      {
+        "vmInstanceId": "monthly"
+      },
+      {
+        "vmInstanceId": "annual"
+      }
+    ]
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/selectedProduct",
+    "value": {
+      "vmInstanceId": "monthly"
+    }
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/selectedIndex",
+    "value": 0
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/marker",
+    "value": "authored parent"
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/selectedPlacementId",
+    "value": "placement-monthly"
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "monthly",
+    "value": {
+      "vmInstanceId": "monthly"
+    }
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "monthly",
+    "instanceName": "Monthly",
+    "path": "productId",
+    "value": "product-pro"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "monthly",
+    "instanceName": "Monthly",
+    "path": "placementId",
+    "value": "placement-monthly"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "monthly",
+    "instanceName": "Monthly",
+    "path": "isSelected",
+    "value": true
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "annual",
+    "value": {
+      "vmInstanceId": "annual"
+    }
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "annual",
+    "instanceName": "Annual",
+    "path": "productId",
+    "value": "product-pro"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "annual",
+    "instanceName": "Annual",
+    "path": "placementId",
+    "value": "placement-annual"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "annual",
+    "instanceName": "Annual",
+    "path": "isSelected",
+    "value": false
+  }
+]
