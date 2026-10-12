@@ -4,6 +4,10 @@ These JSON vectors define the contracts shared by SDK implementations.
 
 ## Published runtime values
 
+- `runtime/paywall-selection/`: portable compiled product-ID tap and signed link setup, with native feedback/read-back proof.
+- `runtime/paywall-catalog-selection/` and `runtime/paywall-placement-selection/`: real `valueFrom` taps from the annual child; catalog remapping and placement selection of two rows with one product are SDK-native assertions. They do not establish normal publication or checkout.
+- `journeys/planes/file-paywall-selection.json`: file-made flat rows, dynamic purchase reference, signed identities and at-open cases with duplicate product IDs or a different baked root ID.
+
 - `runtime/published-input/`: F3 input and greeting from publisher `09081fd6591bb5f24c33693d0b06a7c3a207ea65`. Preserves the published text-input table, source, behavior oracle and provenance. The native input handler runs on the advance after the text changes; no authored key handler or emit is present. Native field delivery and signed release admission require separate platform proof.
 - `runtime/run-values/`: F4 tap and level screens from publisher `97d23aae674d8035ffda773cefdf936f85a1ea46`, with unchanged source, handwritten expectations and file hashes. Platform tests check native `continue` admission in a signed Journey, write-before-route ordering and the component copy's first drawn pixels. The published event has no action id; the test release keeps its control table empty.
 

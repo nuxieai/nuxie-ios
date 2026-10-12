@@ -183,7 +183,13 @@ final class ExperienceViewModelStateCoordinator {
         instanceId: String?
     ) -> [JourneyViewModelValue] {
         guard let resolved = resolve(path, screenId: screenId, instanceId: instanceId) else { return [] }
-        let isSelection = path.path == "paywall/selectedProductId"
+        let identityPath: String?
+        switch path.path {
+        case "paywall/selectedProductId": identityPath = "productId"
+        case "paywall/selectedPlacementId": identityPath = "placementId"
+        default: identityPath = nil
+        }
+        let isSelection = identityPath != nil
         if isSelection {
             guard let defaults = screenId.flatMap({ screenDefaults[$0] }),
                   defaults.viewModelName == resolved.viewModelName,
@@ -205,7 +211,7 @@ final class ExperienceViewModelStateCoordinator {
         let matches = productInstances.enumerated().filter { _, productInstance in
             let ids = declaredValues.filter {
                 $0.viewModelName == "PaywallProduct" && $0.instanceId == productInstance
-                    && $0.path == "productId"
+                    && $0.path == identityPath
             }
             return selectedID != nil && ids.count == 1 && ids[0].value.value as? String == selectedID
         }
@@ -223,6 +229,18 @@ final class ExperienceViewModelStateCoordinator {
                 instanceId: resolved.instanceId, path: "paywall/selectedProduct",
                 value: AnyCodable(selectedLink)),
         ]
+        let otherPath = identityPath == "productId" ? "paywall/selectedPlacementId" : "paywall/selectedProductId"
+        if declaredValues.contains(where: {
+            $0.viewModelName == resolved.viewModelName && $0.instanceId == resolved.instanceId && $0.path == otherPath
+        }) {
+            let otherIdentity = identityPath == "productId" ? "placementId" : "productId"
+            let fields = declaredValues.filter {
+                $0.viewModelName == "PaywallProduct" && $0.instanceId == selected?.element && $0.path == otherIdentity
+            }
+            let otherID = fields.count == 1 ? fields[0].value.value as? String : nil
+            changes.append(.init(viewModelName: resolved.viewModelName, instanceId: resolved.instanceId,
+                                 path: otherPath, value: AnyCodable(otherID ?? "")))
+        }
         for productInstance in Set(declaredInstances).sorted() {
             changes.append(JourneyViewModelValue(viewModelName: "PaywallProduct",
                 instanceId: productInstance, path: "isSelected",
