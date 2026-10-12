@@ -6,56 +6,64 @@
       "phase": "entering",
       "transition": "",
       "reduceMotion": false,
-      "appearances": 1
+      "appearances": 1,
+      "exitReason": "none"
     },
     {
       "action": "move",
       "phase": "active",
       "transition": "",
       "reduceMotion": false,
-      "appearances": 1
+      "appearances": 1,
+      "exitReason": "none"
     },
     {
       "action": "reduceMotion",
       "phase": "active",
       "transition": "",
       "reduceMotion": true,
-      "appearances": 1
+      "appearances": 1,
+      "exitReason": "none"
     },
     {
       "action": "move",
       "phase": "exiting",
       "transition": "checkout",
       "reduceMotion": true,
-      "appearances": 1
+      "appearances": 1,
+      "exitReason": "navigation"
     },
     {
       "action": "move",
       "phase": "hidden",
       "transition": "",
       "reduceMotion": true,
-      "appearances": 1
+      "appearances": 1,
+      "exitReason": "none"
     },
     {
       "action": "move",
       "phase": "entering",
       "transition": "return",
       "reduceMotion": true,
-      "appearances": 2
+      "appearances": 2,
+      "exitReason": "none"
     },
     {
       "action": "move",
       "phase": "active",
       "transition": "",
       "reduceMotion": true,
-      "appearances": 2
+      "appearances": 2,
+      "exitReason": "none"
     },
     {
       "action": "reduceMotion",
       "phase": "active",
       "transition": "",
       "reduceMotion": false,
-      "appearances": 2
+      "appearances": 2,
+      "exitReason": "none"
     }
   ]
 }

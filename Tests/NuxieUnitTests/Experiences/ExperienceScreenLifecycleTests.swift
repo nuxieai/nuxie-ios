@@ -30,6 +30,7 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
                 let action: String
                 let phase: String
                 let transition: String
+                let exitReason: String
                 let reduceMotion: Bool
                 let appearances: UInt64
             }
@@ -54,6 +55,7 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
             XCTAssertEqual(snapshot.phase.rawValue, step.phase)
             XCTAssertEqual(snapshot.appearances, step.appearances)
             XCTAssertEqual(snapshot.transition, step.transition)
+            XCTAssertEqual(snapshot.exitReason.rawValue, step.exitReason)
             XCTAssertEqual(snapshot.reduceMotion, step.reduceMotion)
         }
     }
@@ -63,7 +65,8 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
             phase: .entering,
             appearances: 2,
             transition: "transition.checkout_to_success",
-            reduceMotion: true
+            reduceMotion: true,
+            exitReason: .none
         )
 
         XCTAssertEqual(
@@ -90,8 +93,26 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
                     path: "screen/transition",
                     value: .string("transition.checkout_to_success")
                 ),
+                .init(
+                    viewModelName: "Root",
+                    instanceID: "root-id",
+                    instanceName: nil,
+                    path: "screen/exitReason",
+                    value: .string("none")
+                ),
             ])
         )
+    }
+
+    func testExitReasonFollowsTheEdgeAndClearsOnReturn() {
+        var state = ExperienceScreenLifecycleState(reduceMotion: false)
+        XCTAssertEqual(state.snapshot.exitReason, .none)
+        XCTAssertEqual(state.move(to: .exiting, exitReason: .navigation).exitReason, .navigation)
+        XCTAssertEqual(state.updateReduceMotion(true).exitReason, .navigation)
+        XCTAssertEqual(state.move(to: .hidden).exitReason, .none)
+        XCTAssertEqual(state.move(to: .entering).exitReason, .none)
+        XCTAssertEqual(state.move(to: .exiting, exitReason: .dismissed).exitReason, .dismissed)
+        XCTAssertEqual(state.move(to: .active).exitReason, .none)
     }
 
     func testFreshMountUsesHiddenEnteringActiveOrdering() {
