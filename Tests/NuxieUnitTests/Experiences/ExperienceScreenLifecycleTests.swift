@@ -104,6 +104,16 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
         )
     }
 
+    func testLegacyLifecycleBatchKeepsPhaseWritesWithoutTheOptionalReason() {
+        var state = ExperienceScreenLifecycleState(reduceMotion: false)
+        let snapshot = state.move(to: .exiting, exitReason: .dismissed)
+        guard case .snapshot(let values) = snapshot.stateCommand(
+            viewModelName: "Root", instanceID: nil, includesExitReason: false
+        ) else { return XCTFail("Expected a lifecycle batch") }
+        XCTAssertEqual(values.map(\.path), ["screen/phase", "screen/appearances", "screen/transition"])
+        XCTAssertEqual(values.first?.value, .string("exiting"))
+    }
+
     func testExitReasonFollowsTheEdgeAndClearsOnReturn() {
         var state = ExperienceScreenLifecycleState(reduceMotion: false)
         XCTAssertEqual(state.snapshot.exitReason, .none)
