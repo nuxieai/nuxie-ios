@@ -10,6 +10,36 @@ import XCTest
 
 final class NuxieNativeRuntimeTests: XCTestCase {
     #if os(iOS)
+    // P038 ordinary native text control. The generated fixture contains only
+    // Text/ValueRun rows, no TextInput or UIKit overlay. The publisher example
+    // supplies a separate production-file control for device qualification.
+    func testOrdinaryScreenTextFallbackBaseline() async throws {
+        let scene = try fixture(named: "ordinary_font_fallback", extension: "riv")
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        XCTAssertEqual(assets.filter { $0.kind == .font }.count, 1)
+        let asset = try XCTUnwrap(assets.first { $0.kind == .font })
+        let system = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
+        let latin = try fixture(named: "ordinary_font_fallback_latin", extension: "ttf")
+        for (name, fontBytes) in [("System", system.bytes), ("Roboto", latin)] {
+            let runtime = try await NuxieNativeRuntime.open(bytes: scene,
+                artboardName: "P038 ordinary text", player: .staticArtboard,
+                pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: false,
+                importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                    externalAssets: [asset.ordinal: fontBytes]))
+            do {
+                _ = try await runtime.step(elapsedSeconds: 0)
+                let frame = try await renderPixels(runtime, width: 390, height: 844)
+                XCTAssertEqual(frame.outcome.disposition, .presented)
+                XCTAssertGreaterThan(frame.outcome.drawCalls, 0)
+                try attachMetricPixels(frame.pixels, name: "P038-ordinary-native-baseline-" + name)
+                try await runtime.close()
+            } catch {
+                try? await runtime.close()
+                throw error
+            }
+        }
+    }
+
     func testMixedSystemAndCDNFontsRenderBothTextRows() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
