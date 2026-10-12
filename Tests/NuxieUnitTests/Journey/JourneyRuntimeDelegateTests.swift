@@ -313,6 +313,45 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
+    func testPlanWriteBeforeScreenCommitStillDecidesThePurchase() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let scenarioURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/planes/file-paywall-selection.json")
+        let scenario = try JSONDecoder().decode(FilePaywallSelectionScenario.self, from: Data(contentsOf: scenarioURL))
+        let model = try XCTUnwrap(scenario.screen.defaultViewModelName)
+        let root = try XCTUnwrap(scenario.screen.defaultInstanceId)
+        let snapshot = replacing(try await authenticatedRenderedSnapshot(fixture),
+            screens: [scenario.screen], viewModelValues: scenario.viewModelValues)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let gate = JourneyScreenCommitGate()
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
+            release: release, delivery: snapshot.profile.delivery,
+            screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
+            reservation: nil, onScreenChanged: { _ in await gate.suspend(); return true }, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+        let controller = await MainActor.run { PaywallValueRecordingController(mockExperienceVersionId: "version") }
+        let activation = Task { @MainActor in
+            await delegate.experienceViewController(controller, didChangeScreen: scenario.screen.id)
+        }
+        await gate.waitUntilEntered()
+        await delegate.experienceViewController(controller, didEmitViewModelChange:
+            .init(path: .init(viewModelName: model, path: "paywall/selectedProductId"),
+                  value: "product-annual", source: "runtime", screenId: scenario.screen.id,
+                  instanceId: root, isTrigger: false))
+        let sent = await controller.recordedValues
+        XCTAssertTrue(sent.contains { $0.path == "paywall/selectedProduct" })
+        let writingScreens = await controller.writingScreens
+        XCTAssertFalse(writingScreens.isEmpty)
+        XCTAssertTrue(writingScreens.allSatisfy { $0 == scenario.screen.id })
+        await gate.release()
+        await activation.value
+        let selected = await delegate.resolvePresentationString(scenario.purchaseReference)
+        XCTAssertEqual(selected, "placement-annual")
+    }
+
     func testFilePaywallPlanTapChangesTheJourneyPurchasePlacement() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let scenarioURL = URL(fileURLWithPath: #filePath)
@@ -331,7 +370,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             screenId: "screen_welcome", owner: .init(journeyId: "journey", distinctId: "customer"),
             reservation: nil, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
         let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
-        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+        let controller = await MainActor.run { PaywallValueRecordingController(mockExperienceVersionId: "version") }
         await delegate.experienceViewController(controller, didChangeScreen: scenario.screen.id)
         let initial = await delegate.resolvePresentationString(scenario.purchaseReference)
         XCTAssertEqual(initial, scenario.initialPlacement)
@@ -385,7 +424,7 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             screenId: "state-screen", owner: .init(journeyId: "journey", distinctId: "customer"),
             reservation: nil, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
         let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
-        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+        let controller = await MainActor.run { PaywallValueRecordingController(mockExperienceVersionId: "version") }
         await delegate.experienceViewController(controller, didChangeScreen: "state-screen")
         let initial = await delegate.resolvePresentationString(scenario.purchaseReference)
         XCTAssertEqual(initial, scenario.initialPlacement)
@@ -409,6 +448,19 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertGreaterThan(selectionWrites, 0, "The real pointer must emit the selection write")
         let afterTap = await delegate.resolvePresentationString(scenario.purchaseReference)
         XCTAssertEqual(afterTap, scenario.writes[0].expectedPlacement)
+        let sent = await controller.recordedValues
+        XCTAssertTrue(sent.contains { $0.path == "paywall/selectedProduct" })
+        for update in try ExperienceInteractiveStateCompiler.signedValues(sent) {
+            _ = try await screen.applyStateCommand(.value(update))
+        }
+        let nativeSelection = try await screen.snapshot()
+        guard case .referencedInstance(let parent) = nativeSelection.values.first(where: {
+            $0.ownerInstanceID == nativeSelection.rootInstanceID && $0.name == "paywall"
+        })?.value else { return XCTFail("Expected the paywall parent") }
+        let annual = try await screen.viewModel(named: "PaywallProduct", instanceID: "annual")
+        XCTAssertEqual(nativeSelection.values.first { $0.ownerInstanceID == parent && $0.name == "selectedProduct" }?.value,
+            .referencedInstance(annual.rawValue))
+        XCTAssertEqual(nativeSelection.values.first { $0.ownerInstanceID == parent && $0.name == "selectedIndex" }?.value, .number(1))
     }
 
     private func nativeTapValue(_ value: ExperienceInteractiveValue) -> Any {
@@ -1236,5 +1288,16 @@ private struct FilePaywallSelectionScenario: Decodable {
     struct Write: Decodable {
         let selectedProductId: String
         let expectedPlacement: String?
+    }
+}
+
+@MainActor
+private final class PaywallValueRecordingController: MockExperienceViewController {
+    private(set) var recordedValues: [JourneyViewModelValue] = []
+    private(set) var writingScreens: [String?] = []
+    override func applyViewModelValue(path: VmPathRef, value: Any, screenId: String? = nil, instanceId: String? = nil) {
+        writingScreens.append(screenId)
+        recordedValues.append(.init(viewModelName: path.viewModelName ?? "Runtime", instanceId: instanceId,
+                                    path: path.path, value: AnyCodable(value)))
     }
 }
