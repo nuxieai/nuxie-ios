@@ -30,7 +30,7 @@ package enum ExperienceRuntimeFontFallbackProvider {
     }, nil)
 
     package static func install() throws {
-        guard installation == NUX_STATUS_OK else {
+        guard installation == NuxieNativeStatus.ok.rawValue else {
             throw ExperienceRuntimeSystemFontProvider.Failure.unavailableFace
         }
     }
@@ -50,7 +50,7 @@ package enum ExperienceRuntimeFontFallbackProvider {
             let key = "\(face.path)#\(face.index)#\(face.coordinates.map { "\($0.axis)=\($0.value)" }.joined(separator: ","))"
             if let font = fonts[key] { characters[missing] = font; return font }
             var font: OpaquePointer?
-            let status = Array(face.path.utf8).withUnsafeBufferPointer { path in
+            let status = face.path.utf8.map { CChar(bitPattern: $0) }.withUnsafeBufferPointer { path in
                 coordinates.withUnsafeBufferPointer { coords in
                     var source = NuxFontSource()
                     source.struct_size = UInt32(MemoryLayout<NuxFontSource>.size)
@@ -61,7 +61,7 @@ package enum ExperienceRuntimeFontFallbackProvider {
                     return nux_font_new(&source, &font)
                 }
             }
-            guard status == NUX_STATUS_OK, let font else { misses.insert(missing); return nil }
+            guard status == NuxieNativeStatus.ok.rawValue, let font else { misses.insert(missing); return nil }
             fonts[key] = font
             characters[missing] = font
             return font
