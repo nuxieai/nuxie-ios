@@ -1,28 +1,31 @@
-env:
-  CI: "1"
-
-steps:
-  - label: ":apple: SDK and released runtime validation"
-    command: |
-      set -euo pipefail
-      source scripts/bazel/ci-cache.sh
-      python3 scripts/bazel/launcher.py --version
-      make bazel-contract-test
-      make check-runtime-consumer-boundary check-runtime-package-pin
-      make fetch-runtime-xcframework-clean
-      make verify-runtime-artifact check-runtime-module-boundary
-      make test
-      make build-ios-device
-    agents:
-      queue: nuxie-pr
-      nuxie-platform: macos
-    concurrency: 1
-    concurrency_group: nuxie-macos-xcode
-    timeout_in_minutes: 180
-    artifact_paths:
-      - "bazel-testlogs/**/*"
-      - "macos-unit-crash-reports/**/*"
-    retry:
-      automatic:
-        - exit_status: -1
-          limit: 1
+{
+  "steps": [
+    {
+      "label": ":pipeline: Upload SDK pipeline",
+      "key": "pipeline-upload-legacy",
+      "if": "build.env(\"NUXIE_CI_RUNNER_POLICY_VERSION\") != \"2\"",
+      "command": "set -euo pipefail\npython3 scripts/ci/pipeline.py | buildkite-agent pipeline upload --replace --no-interpolation\n",
+      "agents": {
+        "queue": "nuxie-pr"
+      },
+      "timeout_in_minutes": 10
+    },
+    {
+      "label": ":pipeline: Upload SDK pipeline",
+      "key": "pipeline-upload-v2",
+      "if": "build.env(\"NUXIE_CI_RUNNER_POLICY_VERSION\") == \"2\"",
+      "command": "set -euo pipefail\npython3 scripts/ci/pipeline.py | buildkite-agent pipeline upload --replace --no-interpolation\n",
+      "agents": {
+        "queue": "nuxie-pr",
+        "nuxie-platform": "linux",
+        "nuxie-resources": "linux-16g-v2"
+      },
+      "timeout_in_minutes": 10,
+      "env": {
+        "NUXIE_CI_RUNNER_POLICY_VERSION": "2",
+        "NUXIE_CI_RUNNER_PROFILE": "linux-portable",
+        "NUXIE_BAZEL_REMOTE_CACHE_MODE": "off"
+      }
+    }
+  ]
+}

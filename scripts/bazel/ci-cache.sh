@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Source in standalone Buildkite lanes to share the root/runtime cache policy.
 nuxie_bazel_ci_caches() {
+  if [[ "${NUXIE_CI_RUNNER_POLICY_VERSION:-1}" == 2 ]]; then
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/runner-policy.sh"
+    nuxie_runner_policy_environment
+    return
+  fi
   local agent_name cache_root
   agent_name="$(printf '%s' "${BUILDKITE_AGENT_NAME:-${RUNNER_NAME:-}}" | sed 's/[^A-Za-z0-9._-]/-/g')"
   [[ -n "$agent_name" && "$agent_name" != "." && "$agent_name" != ".." ]] || agent_name=default
