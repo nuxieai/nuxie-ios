@@ -2668,8 +2668,6 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    /// Resolves SDK-authored identities and values entirely in Swift, then
-    /// commits one generic typed mutation batch through the native actor.
     func supportsScreenExitReason(viewModelName: String) -> Bool {
         guard let schema = try? stateCompiler.schema(named: viewModelName) else { return false }
         return (try? stateCompiler.property(
@@ -2677,6 +2675,8 @@ actor ExperienceInteractiveScreen {
         ))?.kind == .enumeration
     }
 
+    /// Resolves SDK-authored identities and values entirely in Swift, then
+    /// commits one generic typed mutation batch through the native actor.
     func applyStateCommand(
         _ command: ExperienceInteractiveStateCommand,
         correlationID: UInt64 = 0
