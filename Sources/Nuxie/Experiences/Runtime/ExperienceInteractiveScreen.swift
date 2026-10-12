@@ -4049,8 +4049,10 @@ enum StoreProductViewModelProjection {
             let leaf = value.path.split(separator: "/").last.map(String.init)
             let replacement: Any
             switch (leaf, product) {
-            case ("productId", .some(let product)):
-                replacement = product.productId
+            case ("productId", .some):
+                // File plan cards write the signed catalog identity. The
+                // release product may belong to a different environment.
+                replacement = value.value.value
             case ("storeProductId", .some(let product)):
                 replacement = product.storeProductId
             case ("placementId", .some(let product)):

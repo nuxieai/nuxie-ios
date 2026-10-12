@@ -475,8 +475,7 @@ final class JourneyRuntimeDelegate {
         _ controller: ExperienceViewController,
         didEmitViewModelChange change: ExperienceRendererViewModelChange
     ) {
-        guard !resolved, let activeScreenId,
-              change.screenId == activeScreenId else { return }
+        guard !resolved else { return }
         let projected = viewModelState?.applyRendererValue(
             path: change.path,
             value: change.value,
@@ -489,7 +488,7 @@ final class JourneyRuntimeDelegate {
             if value.value.value is NSNull { continue }
             controller.applyViewModelValue(
                 path: VmPathRef(viewModelName: value.viewModelName, path: value.path),
-                value: value.value.value, screenId: activeScreenId, instanceId: value.instanceId)
+                value: value.value.value, screenId: change.screenId, instanceId: value.instanceId)
         }
     }
 
