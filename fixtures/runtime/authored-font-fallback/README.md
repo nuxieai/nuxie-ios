@@ -10,8 +10,8 @@ Text nodes, with no TextInput or platform editing overlay.
 
 The System font stays external. Its private source bytes are not present here.
 `ordinary-latin.ttf` is the same Apache-licensed Roboto fixture as
-`../ordinary_font_fallback_latin.ttf`; its license is in
-`../ordinary_font_fallback_latin.LICENSE`.
+`Tests/NuxieUnitTests/Fixtures/ordinary_font_fallback_latin.ttf`; its license is
+in `Tests/NuxieUnitTests/Fixtures/LICENSE-ordinary-font-fallback.txt`.
 
 The XCTest baseline records native Metal frames for both authored faces.
 It is an observation, not a claim that fallback already works. Run the
