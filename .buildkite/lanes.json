@@ -1,0 +1,30 @@
+{
+  "env": {
+    "CI": "1"
+  },
+  "steps": [
+    {
+      "label": ":apple: SDK and released runtime validation",
+      "command": "set -euo pipefail\nsource scripts/bazel/ci-cache.sh\npython3 scripts/bazel/launcher.py --version\nmake bazel-contract-test\nmake check-runtime-consumer-boundary check-runtime-package-pin\nmake fetch-runtime-xcframework-clean\nmake verify-runtime-artifact check-runtime-module-boundary\nmake test\nmake build-ios-device\n",
+      "agents": {
+        "queue": "nuxie-pr",
+        "nuxie-platform": "macos"
+      },
+      "timeout_in_minutes": 180,
+      "concurrency": 1,
+      "concurrency_group": "nuxie-macos-xcode",
+      "artifact_paths": [
+        "bazel-testlogs/**/*",
+        "macos-unit-crash-reports/**/*"
+      ],
+      "retry": {
+        "automatic": [
+          {
+            "exit_status": -1,
+            "limit": 1
+          }
+        ]
+      }
+    }
+  ]
+}

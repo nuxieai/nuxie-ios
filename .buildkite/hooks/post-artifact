@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Buildkite invokes this owning hook after its declared artifacts upload.
+if [[ "${NUXIE_CI_RUNNER_POLICY_VERSION:-1}" == 2 ]]; then
+  source "${BUILDKITE_BUILD_CHECKOUT_PATH:?}/scripts/ci/runner-policy.sh"
+  if nuxie_runner_policy_verify; then
+    /usr/bin/python3 -I "${NUXIE_RUNNER_POLICY_HELPER}" post-artifact "${BUILDKITE_BUILD_CHECKOUT_PATH}" || \
+      echo "Post-artifact cleanup preserved uncertain or active output" >&2
+  fi
+fi

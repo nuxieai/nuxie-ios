@@ -77,6 +77,14 @@ class ConsumerArtifactContractTests(unittest.TestCase):
             self.assertTrue(all(file.is_relative_to(execution_root) for file in result))
             self.assertFalse((workspace / "external").exists())
 
+    def test_installed_policy_uses_guarded_frontend_and_owns_job_and_output_options(self):
+        with patch.dict('os.environ', {'NUXIE_CI_RUNNER_POLICY_VERSION': '2'}, clear=True):
+            self.assertEqual(sdk.bazel_command(), [str(sdk.ROOT / 'scripts/bazel/bazel.sh')])
+            self.assertFalse(any(value.startswith('--jobs') for value in sdk.options('Debug', 'ios-device', 'arm64')))
+        with patch.dict('os.environ', {'NUXIE_CI_RUNNER_POLICY_VERSION': '2', 'NUXIE_IOS_BAZEL_OUTPUT_BASE': '/caller'}, clear=True):
+            with self.assertRaises(ValueError):
+                sdk.bazel_command()
+
     def test_cache_override_reaches_bazel_without_overriding_worktree_output_base(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -64,7 +64,7 @@ bazel-prepare:
 	@scripts/bazel/sdk.sh prepare --output "$(BAZEL_SDK_OUTPUT)"
 
 bazel-contract-test:
-	@python3 -B -m unittest discover -s scripts/bazel -p 'test_*.py'
+	@NUXIE_CI_RUNNER_POLICY_VERSION=1 python3 -B -m unittest discover -s scripts/bazel -p 'test_*.py'
 	@python3 -c 'import sys; sys.path.insert(0, "scripts/bazel"); import sdk; sdk.run(sdk.bazel_command() + ["test", "//scripts/bazel:xcresult_test"])'
 
 # Default target

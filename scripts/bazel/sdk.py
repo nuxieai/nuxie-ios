@@ -57,6 +57,10 @@ def run(command: list[str], *, capture: bool = False, raw: bool = False) -> str:
 
 
 def bazel_command() -> list[str]:
+    if os.environ.get("NUXIE_CI_RUNNER_POLICY_VERSION") == "2":
+        if os.environ.get("NUXIE_IOS_BAZEL_OUTPUT_BASE"):
+            raise ValueError("Installed runner policy owns the iOS Bazel output base")
+        return [str(ROOT / "scripts/bazel/bazel.sh")]
     binary = os.environ.get("NUXIE_BAZEL_BIN") or os.environ.get("BAZEL") or shutil.which("bazelisk") or shutil.which("bazel")
     if not binary and (ROOT.parent.parent / "node_modules/.bin/bazelisk").is_file():
         binary = str(ROOT.parent.parent / "node_modules/.bin/bazelisk")
@@ -85,7 +89,7 @@ def options(configuration: str, sdk_platform: str, architecture: str) -> list[st
             "--platforms=@apple_support//platforms:" + cpu,
             "--apple_platforms=@apple_support//platforms:" + cpu,
             ("--macos_cpus=" + architecture if sdk_platform == "macos" else "--ios_multi_cpus=" + cpu.removeprefix("ios_")),
-            "--jobs=" + jobs,
+            *([] if os.environ.get("NUXIE_CI_RUNNER_POLICY_VERSION") == "2" else ["--jobs=" + jobs]),
             "--macos_minimum_os=12.0" if sdk_platform == "macos" else "--ios_minimum_os=15.0"]
 
 
