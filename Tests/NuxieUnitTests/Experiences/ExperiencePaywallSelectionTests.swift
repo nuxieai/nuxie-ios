@@ -14,6 +14,7 @@ final class ExperiencePaywallSelectionTests: XCTestCase {
             value("Runtime", "root", "paywall/products", [["vmInstanceId": "monthly"], ["vmInstanceId": "annual"]]),
             value("Runtime", "root", "paywall/selectedProduct", ["vmInstanceId": "monthly"]),
             value("Runtime", "root", "paywall/selectedProductId", "product-monthly"),
+            value("Runtime", "root", "paywall/selectedPlacementId", "placement-monthly"),
             value("Runtime", "root", "paywall/selectedIndex", 0),
             value("PaywallProduct", "monthly", "productId", "product-monthly"),
             value("PaywallProduct", "monthly", "placementId", "placement-monthly"),
@@ -64,6 +65,21 @@ final class ExperiencePaywallSelectionTests: XCTestCase {
         }
     }
 
+    func testSignedPlacementChoiceSeparatesTwoPlacementsOfOneProduct() {
+        let subject = coordinator(duplicateID: true)
+        XCTAssertEqual(placement(subject), "placement-monthly")
+        _ = subject.applyRendererValue(path: .init(viewModelName: "Runtime", path: "paywall/selectedPlacementId"),
+            value: "placement-annual", screenId: "paywall", instanceId: "root")
+        XCTAssertEqual(placement(subject), "placement-annual")
+        XCTAssertEqual(subject.getValue(path: .init(path: "paywall/selectedProductId"), screenId: "paywall") as? String,
+                       "product-monthly")
+        XCTAssertEqual(subject.getValue(path: .init(path: "paywall/selectedIndex"), screenId: "paywall") as? Int, 1)
+        _ = subject.applyRendererValue(path: .init(viewModelName: "Runtime", path: "paywall/selectedPlacementId"),
+            value: "unknown", screenId: "paywall", instanceId: "root")
+        XCTAssertNil(placement(subject))
+        XCTAssertEqual(subject.getValue(path: .init(path: "paywall/selectedProductId"), screenId: "paywall") as? String, "")
+    }
+
     func testAmbiguousProductIDClearsThePurchaseTarget() {
         let subject = coordinator(duplicateID: true)
         select("product-monthly", on: subject)
@@ -100,7 +116,6 @@ final class ExperiencePaywallSelectionTests: XCTestCase {
     }
 
 
-
     func testSelectionUsesTheCurrentOrderOfDeclaredProducts() {
         let subject = coordinator()
         _ = subject.applyRendererValue(path: .init(viewModelName: "Runtime", path: "paywall/products"),
@@ -110,6 +125,4 @@ final class ExperiencePaywallSelectionTests: XCTestCase {
         XCTAssertEqual(placement(subject), "placement-annual")
         XCTAssertEqual(subject.getValue(path: .init(path: "paywall/selectedIndex"), screenId: "paywall") as? Int, 0)
     }
-
-
 }
