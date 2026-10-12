@@ -2103,46 +2103,23 @@ private func decodeNativeImage(
         return UInt32(NUX_ASSET_CALLBACK_STATUS_FAILED)
     }
     let encoded = Data(bytes: encodedBytes, count: request.pointee.encoded.len)
-    guard let source = CGImageSourceCreateWithData(encoded as CFData, nil),
-          let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
-          image.width > 0,
-          image.height > 0,
-          image.width <= Int(request.pointee.maximum_dimension),
-          image.height <= Int(request.pointee.maximum_dimension) else {
+    guard let bitmap = NuxieNativeDecodedImage.decode(
+        encoded,
+        maximumDimension: request.pointee.maximum_dimension,
+        maximumDecodedBytes: request.pointee.maximum_decoded_bytes
+    ) else {
         return UInt32(NUX_ASSET_CALLBACK_STATUS_FAILED)
     }
-    let (rowBytes, rowOverflow) = image.width.multipliedReportingOverflow(by: 4)
-    let (byteCount, countOverflow) = rowBytes.multipliedReportingOverflow(by: image.height)
-    guard !rowOverflow, !countOverflow,
-          byteCount <= request.pointee.maximum_decoded_bytes,
-          let colors = CGColorSpace(name: CGColorSpace.sRGB),
-          let pixels = NSMutableData(length: byteCount),
-          let bitmap = CGContext(
-            data: pixels.mutableBytes,
-            width: image.width,
-            height: image.height,
-            bitsPerComponent: 8,
-            bytesPerRow: rowBytes,
-            space: colors,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                | CGBitmapInfo.byteOrder32Big.rawValue
-          ) else {
-        return UInt32(NUX_ASSET_CALLBACK_STATUS_FAILED)
-    }
-    bitmap.draw(
-        image,
-        in: CGRect(x: 0, y: 0, width: image.width, height: image.height)
-    )
     let context = Unmanaged<NuxieNativeAppleAssetImportContext>
         .fromOpaque(rawContext).takeUnretainedValue()
-    context.decodedImages.append(pixels)
+    context.decodedImages.append(bitmap.pixels)
     var decoded = NuxDecodedImage()
     decoded.struct_size = UInt32(MemoryLayout<NuxDecodedImage>.size)
-    decoded.width = UInt32(image.width)
-    decoded.height = UInt32(image.height)
-    decoded.row_bytes = UInt32(rowBytes)
+    decoded.width = bitmap.width
+    decoded.height = bitmap.height
+    decoded.row_bytes = bitmap.rowBytes
     decoded.pixel_format = UInt32(NUX_PIXEL_FORMAT_RGBA8_PREMULTIPLIED_SRGB)
-    decoded.pixels = retainedNativeAssetBytes(pixels)
+    decoded.pixels = retainedNativeAssetBytes(bitmap.pixels)
     outImage.pointee = decoded
     return UInt32(NUX_ASSET_CALLBACK_STATUS_OK)
 }

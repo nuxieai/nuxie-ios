@@ -1262,6 +1262,23 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         )
     }
 
+    func testConfiguredImageDecoderPremultipliesAnIndexedPNGOnce() throws {
+        // The PNG stores straight green 255 with palette alpha 180. Native
+        // import requires green 180, not green 127 (a second alpha product).
+        let encoded = try fixture(named: "translucent-indexed-green", extension: "png")
+        let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
+            encoded,
+            maximumDimension: 512,
+            maximumDecodedBytes: 512 * 512 * 4
+        ))
+        XCTAssertEqual(decoded.width, 512)
+        XCTAssertEqual(decoded.height, 512)
+        XCTAssertEqual(decoded.rowBytes, 512 * 4)
+        let center = decoded.pixels.bytes.assumingMemoryBound(to: UInt8.self)
+            + (256 * 512 + 256) * 4
+        XCTAssertEqual(Array(UnsafeBufferPointer(start: center, count: 4)), [0, 180, 0, 180])
+    }
+
     func testConfiguredImportDecodesAnEmbeddedImageAgainstItsInspectedCatalog() async throws {
         let encoded = try fixture(named: "in_band_asset", extension: "riv.base64")
         guard let scene = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters) else {
