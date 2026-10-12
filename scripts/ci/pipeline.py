@@ -50,7 +50,7 @@ def pipeline(environment=None):
         for index, step in enumerate(document['steps']):
             selected = step['agents'].get('nuxie-platform', 'linux')
             step['agents']['nuxie-platform'] = selected
-            step['agents']['nuxie-resources'] = 'mac-64g-v2' if selected == 'macos' else 'linux-16g-v2'
+            step['agents']['nuxie-resources'] = 'mac-64g-v2' if selected == 'macos' else 'linux-14g-v2'
             step.update(concurrency=1, concurrency_method='eager',
                         concurrency_group='nuxie/physical/mac-m2' if selected == 'macos' else 'nuxie/physical/proxmox-heavy')
             step['env'] = {'NUXIE_CI_RUNNER_POLICY_VERSION': '2',

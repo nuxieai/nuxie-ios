@@ -18,7 +18,7 @@
       "agents": {
         "queue": "nuxie-pr",
         "nuxie-platform": "linux",
-        "nuxie-resources": "linux-16g-v2"
+        "nuxie-resources": "linux-14g-v2"
       },
       "timeout_in_minutes": 10,
       "env": {
