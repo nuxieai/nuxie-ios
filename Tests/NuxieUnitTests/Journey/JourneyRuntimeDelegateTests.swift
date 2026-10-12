@@ -397,16 +397,30 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         for effect in down.effects + up.effects + settled.effects {
             guard case .viewModelChange(let change) = effect.kind, change.origin == .runtime else { continue }
             let resolved = try await screen.resolveViewModelChange(change)
-            guard resolved.path == "paywall/selectedProductId", case .string(let id) = resolved.value else { continue }
-            selectionWrites += 1
-            XCTAssertEqual(id, "product-annual")
+            if resolved.path == "paywall/selectedProductId", case .string(let id) = resolved.value {
+                selectionWrites += 1
+                XCTAssertEqual(id, "product-annual")
+            }
             await delegate.experienceViewController(controller, didEmitViewModelChange:
-                .init(path: .init(viewModelName: resolved.viewModelName, path: resolved.path), value: id,
-                      source: "runtime", screenId: "state-screen", instanceId: resolved.instanceID, isTrigger: false))
+                .init(path: .init(viewModelName: resolved.viewModelName, path: resolved.path),
+                      value: nativeTapValue(resolved.value), source: "runtime", screenId: "state-screen",
+                      instanceId: resolved.instanceID, isTrigger: resolved.isTrigger))
         }
         XCTAssertGreaterThan(selectionWrites, 0, "The real pointer must emit the selection write")
         let afterTap = await delegate.resolvePresentationString(scenario.purchaseReference)
         XCTAssertEqual(afterTap, scenario.writes[0].expectedPlacement)
+    }
+
+    private func nativeTapValue(_ value: ExperienceInteractiveValue) -> Any {
+        switch value {
+        case .null: NSNull()
+        case .bool(let value): value
+        case .number(let value): value
+        case .string(let value): value
+        case .bytes(let value): value
+        case .list(let values): values.map(nativeTapValue)
+        case .object(let fields): Dictionary(uniqueKeysWithValues: fields.map { ($0.key, nativeTapValue($0.value)) })
+        }
     }
 
     func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
