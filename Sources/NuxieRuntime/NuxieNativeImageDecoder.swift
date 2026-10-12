@@ -41,8 +41,9 @@ package struct NuxieNativeDecodedImage {
               ) else {
             return nil
         }
+        guard let drawable = drawableImage(image, encoded: encoded) else { return nil }
         bitmap.draw(
-            image,
+            drawable,
             in: CGRect(x: 0, y: 0, width: image.width, height: image.height)
         )
         return Self(
@@ -51,6 +52,49 @@ package struct NuxieNativeDecodedImage {
             rowBytes: UInt32(rowBytes),
             pixels: pixels
         )
+    }
+
+    private static func drawableImage(_ image: CGImage, encoded: Data) -> CGImage? {
+        #if os(iOS)
+        // ImageIO expands indexed PNGs to premultiplied RGBA on iOS but
+        // labels that buffer as straight alpha. Drawing it multiplies twice.
+        // Preserve the decoded bytes and color space with the correct label.
+        let header = Array(encoded.prefix(26))
+        let indexedPNG = header.count == 26
+            && header.starts(with: [137, 80, 78, 71, 13, 10, 26, 10])
+            && Array(header[8..<16]) == [0, 0, 0, 13, 73, 72, 68, 82]
+            && header[25] == 3 // PNG IHDR indexed-color type.
+        guard indexedPNG,
+              image.alphaInfo == .last,
+              image.bitsPerComponent == 8,
+              image.bitsPerPixel == 32 else {
+            return image
+        }
+        guard let data = image.dataProvider?.data,
+              let provider = CGDataProvider(data: data),
+              let colors = image.colorSpace else {
+            return nil
+        }
+        let bitmapInfo = CGBitmapInfo(rawValue:
+            (image.bitmapInfo.rawValue & ~CGBitmapInfo.alphaInfoMask.rawValue)
+                | CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+        return CGImage(
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: image.bitsPerComponent,
+            bitsPerPixel: image.bitsPerPixel,
+            bytesPerRow: image.bytesPerRow,
+            space: colors,
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: image.decode,
+            shouldInterpolate: image.shouldInterpolate,
+            intent: image.renderingIntent
+        )
+        #else
+        return image
+        #endif
     }
 }
 #endif
