@@ -995,6 +995,31 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertEqual((product["values"] as? [String: String])?["price"], "$0")
     }
 
+    func testStoreProjectionKeepsSignedIdentityWhenTheReleaseCatalogDiffers() throws {
+        let signedValues: [JourneyViewModelValue] = [
+            .init(viewModelName: "Runtime", instanceId: "root", path: "paywall/products",
+                  value: AnyCodable([["vmInstanceId": "annual"]])),
+            .init(viewModelName: "Runtime", instanceId: "root", path: "paywall/selectedProduct",
+                  value: AnyCodable(["vmInstanceId": "annual"])),
+            .init(viewModelName: "PaywallProduct", instanceId: "annual", path: "productId", value: AnyCodable("signed-annual")),
+            .init(viewModelName: "PaywallProduct", instanceId: "annual", path: "placementId", value: AnyCodable("placement-annual")),
+            .init(viewModelName: "PaywallProduct", instanceId: "annual", path: "storeProductId", value: AnyCodable("com.example.annual")),
+        ]
+        let projected = StoreProductViewModelProjection.apply([
+            StoreProduct(productId: "target-environment-annual", placementId: "placement-annual",
+                         name: "Annual", price: "$49.99", period: .year, productType: .autoRenewable)
+        ], to: signedValues)
+        let tappedID = try XCTUnwrap(projected.first { $0.path == "productId" }?.value.value as? String)
+        XCTAssertEqual(tappedID, "signed-annual")
+        let state = ExperienceViewModelStateCoordinator(screens: .init(screens: [
+            .init(id: "screen", defaultViewModelName: "Runtime", defaultInstanceId: "root")
+        ], viewModelValues: signedValues))
+        _ = state.applyRendererValue(path: .init(viewModelName: "Runtime", path: "paywall/selectedProductId"),
+                                     value: tappedID, screenId: "screen", instanceId: "root")
+        XCTAssertEqual(state.getPurchaseValue(path: .init(path: "paywall.selectedProduct.placementId", isRelative: false),
+                                             screenId: "screen", instanceId: nil) as? String, "placement-annual")
+    }
+
     func testStoreKitProductsReplaceSignedCatalogValuesBeforeRuntimeOpen() throws {
         let values = [
             JourneyViewModelValue(

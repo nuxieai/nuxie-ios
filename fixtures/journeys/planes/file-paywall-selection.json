@@ -78,5 +78,19 @@
       "selectedProductId": "product-monthly",
       "expectedPlacement": "placement-monthly"
     }
+  ],
+  "defaultCases": [
+    {
+      "name": "two placements of one product",
+      "duplicateProductId": true,
+      "bakedProductId": "product-monthly",
+      "expectedPlacement": "placement-monthly"
+    },
+    {
+      "name": "baked id from another environment",
+      "duplicateProductId": false,
+      "bakedProductId": "other-environment-product",
+      "expectedPlacement": "placement-monthly"
+    }
   ]
 }
