@@ -200,6 +200,46 @@ final class ExperienceViewModelStateCoordinatorTests: QuickSpec {
                     .to(equal("paywall:annual"))
             }
 
+            it("resolves the staging file paywall purchase and follows a changed flat selection") {
+                // Staging 670 case 4: the root is named Untitled, not paywall.
+                let screenId = "scr_screens_squalification-offer"
+                let rootModel = "vm_runtime_root_scr_screens_squalification-offer"
+                let rootInstance = "vmi_runtime_scr_screens_squalification-offer"
+                let monthlyInstance = "vmi_paywall_paywall_scr_screens_squalification_offer_0"
+                let monthlyPlacement = "scr_screens_squalification-offer::paywall:monthly"
+                // Staging has one product; add another to prove selection is read live.
+                let annualInstance = "vmi_paywall_paywall_scr_screens_squalification_offer_1"
+                let annualPlacement = "scr_screens_squalification-offer::paywall:annual"
+                let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
+                    values: [
+                        value(viewModelName: rootModel, instanceId: rootInstance, instanceName: "Untitled",
+                              path: "paywall/selectedProduct", ["vmInstanceId": monthlyInstance]),
+                        value(viewModelName: "PaywallProduct", instanceId: monthlyInstance, instanceName: "Premium monthly",
+                              path: "placementId", monthlyPlacement),
+                        value(viewModelName: "PaywallProduct", instanceId: annualInstance, instanceName: "Premium annual",
+                              path: "placementId", annualPlacement),
+                    ],
+                    screens: [JourneyScreen(id: screenId, defaultViewModelName: rootModel, defaultInstanceId: rootInstance)]
+                ))
+                let purchasePath = path("paywall.selectedProduct.placementId", viewModelName: nil)
+
+                expect(coordinator.getPurchaseValue(path: purchasePath, screenId: screenId, instanceId: nil) as? String)
+                    .to(equal(monthlyPlacement))
+                expect(coordinator.getPurchaseValue(
+                    path: path("paywall/selectedProduct/placementId", viewModelName: nil), screenId: screenId, instanceId: nil
+                ) as? String).to(equal(monthlyPlacement))
+
+                expect(coordinator.setValue(
+                    path: path("paywall/selectedProduct", viewModelName: rootModel),
+                    value: ["vmInstanceId": annualInstance], screenId: screenId, instanceId: rootInstance
+                )).to(beTrue())
+                expect(coordinator.getPurchaseValue(path: purchasePath, screenId: screenId, instanceId: nil) as? String)
+                    .to(equal(annualPlacement))
+                expect(coordinator.getPurchaseValue(
+                    path: path("paywall.selectedProduct.missing", viewModelName: nil), screenId: screenId, instanceId: nil
+                )).to(beNil())
+            }
+
             it("does not reuse the screen default instance for explicit refs to another view model") {
                 let coordinator = ExperienceViewModelStateCoordinator(screens: makeJourneyDocument(
                     values: [
