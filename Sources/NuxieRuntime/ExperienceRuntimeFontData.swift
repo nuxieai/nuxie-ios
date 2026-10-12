@@ -65,7 +65,7 @@ package enum ExperienceRuntimeFontData {
         return Face(version: version, tables: tables)
     }
 
-    package static func assemble(_ face: Face) throws -> Data {
+    package static func assemble(_ face: Face, maximumBytes: Int = 32 * 1_024 * 1_024) throws -> Data {
         // A rebuilt font cannot retain a signature over the original container.
         var tables = face.tables.filter { $0.key != signature }
         guard var header = tables[head], header.count >= 54 else { throw Failure.missingHeader }

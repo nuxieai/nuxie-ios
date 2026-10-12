@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 /// Main entry point for the Nuxie SDK
 // @unchecked Sendable: all lifecycle state is isolated by
@@ -106,6 +107,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     try NuxieConfigurationValidator.validate(
       setupConfiguration.internalConfiguration
     )
+#if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    try ExperienceRuntimeFontFallbackProvider.install()
+#endif
     let runtimeSettings = NuxieRuntimeSettings(
       localeIdentifier: configuration.localeIdentifier,
       purchaseDelegate: configuration.purchaseDelegate,
