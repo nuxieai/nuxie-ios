@@ -1,0 +1,8 @@
+{
+  "generatorCheckoutCommit": "a2b303995f990f102ee38e8a1bac8850cd4dff7d",
+  "generatorSha256": "a50d9f50b5fb697e5670767d4e2ffc94437df1450a2ceef864450bca1b83275b",
+  "sourceSnapshotSha256": "01100514e71da6a697bddc79f2f212f9d4afd41b14ca0f763c41306f31533a18",
+  "publisherWasmSha256": "b8979b1f78159dac0bda90435a5d13d42f0c6e304130f6d90872c1fee5488243",
+  "renderSha256": "f15818bac6eba9641a2b3d874decdaaf07f3bd87290ea36a966a9ceb91979a0e",
+  "qualification": "Candidate published nested selection graph; native execution and signed Journey purchase require separate tests."
+}

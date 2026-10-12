@@ -348,6 +348,67 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
+    func testNativePlanTapChangesPurchaseThroughTheRuntimeDelegate() async throws {
+        let fixtureRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures")
+        let scenario = try JSONDecoder().decode(FilePaywallSelectionScenario.self,
+            from: Data(contentsOf: fixtureRoot.appendingPathComponent("journeys/planes/file-paywall-selection.json")))
+        // The native fixture's root is named Runtime. Its rows have the same
+        // flat structure as a file-made screen; the callback case also pins
+        // the generated per-screen model name.
+        let sourceRows = try JSONDecoder().decode([JourneyViewModelValue].self,
+            from: JSONEncoder().encode(scenario.viewModelValues))
+        let values = sourceRows.map { value in
+            JourneyViewModelValue(
+                viewModelName: value.viewModelName == scenario.screen.defaultViewModelName ? "Runtime" : value.viewModelName,
+                instanceId: value.instanceId == scenario.screen.defaultInstanceId ? "root-sdk-id" : value.instanceId,
+                instanceName: value.viewModelName == "PaywallProduct" ? value.instanceId?.capitalized : nil,
+                path: value.path, value: value.value)
+        }
+        let payload = try await statePayload(defaultViewModelName: "Runtime", values: values,
+            scene: Data(contentsOf: fixtureRoot.appendingPathComponent("runtime/paywall-selection/screen.riv")),
+            artboardName: "Paywall")
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await screen.close() } }
+        let snapshot = replacing(try await authenticatedRenderedSnapshot(
+            JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")),
+            screens: [.init(id: "state-screen", defaultViewModelName: "Runtime",
+                            defaultInstanceId: "root-sdk-id", responseCaptures: [])],
+            viewModelValues: try JSONDecoder().decode([[String: JourneyReleaseJSONValue]].self,
+                from: JSONEncoder().encode(values)))
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let request = JourneyPresentationRequest(fences: testPresentationFences(),
+            release: release, delivery: snapshot.profile.delivery,
+            screenId: "state-screen", owner: .init(journeyId: "journey", distinctId: "customer"),
+            reservation: nil, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version") }
+        await delegate.experienceViewController(controller, didChangeScreen: "state-screen")
+        let initial = await delegate.resolvePresentationString(scenario.purchaseReference)
+        XCTAssertEqual(initial, scenario.initialPlacement)
+        for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
+        let down = try await screen.step(pointers: [.init(kind: .down, x: 80, y: 40)], elapsedSeconds: 0)
+        let up = try await screen.step(pointers: [.init(kind: .up, x: 80, y: 40, timestamp: 0.1)], elapsedSeconds: 0)
+        let settled = try await screen.step(elapsedSeconds: 0.016)
+        var selectionWrites = 0
+        for effect in down.effects + up.effects + settled.effects {
+            guard case .viewModelChange(let change) = effect.kind, change.origin == .runtime else { continue }
+            let resolved = try await screen.resolveViewModelChange(change)
+            guard resolved.path == "paywall/selectedProductId", case .string(let id) = resolved.value else { continue }
+            selectionWrites += 1
+            XCTAssertEqual(id, "product-annual")
+            await delegate.experienceViewController(controller, didEmitViewModelChange:
+                .init(path: .init(viewModelName: resolved.viewModelName, path: resolved.path), value: id,
+                      source: "runtime", screenId: "state-screen", instanceId: resolved.instanceID, isTrigger: false))
+        }
+        XCTAssertGreaterThan(selectionWrites, 0, "The real pointer must emit the selection write")
+        let afterTap = await delegate.resolvePresentationString(scenario.purchaseReference)
+        XCTAssertEqual(afterTap, scenario.writes[0].expectedPlacement)
+    }
+
     func testRuntimeDelegateResolvesDynamicPurchasePlacementFromActiveScreenState() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let fixtureURL = URL(fileURLWithPath: #filePath)
