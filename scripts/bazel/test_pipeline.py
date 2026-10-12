@@ -43,7 +43,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             for step in json.loads(result.stdout)['steps']:
                 mac = step['agents']['nuxie-platform'] == 'macos'
-                self.assertEqual(step['agents']['nuxie-resources'], 'mac-64g-v2' if mac else 'linux-16g-v2')
+                self.assertEqual(step['agents']['nuxie-resources'], 'mac-64g-v2' if mac else 'linux-14g-v2')
                 self.assertEqual(step['env']['NUXIE_CI_RUNNER_POLICY_VERSION'], '2')
                 self.assertEqual(step['env']['NUXIE_BAZEL_REMOTE_CACHE_MODE'], 'off')
                 self.assertIn(step['env']['NUXIE_CI_RUNNER_PROFILE'], ('macos-apple',) if mac else ('linux-portable', 'linux-native'))
@@ -75,7 +75,7 @@ class PipelineTests(unittest.TestCase):
         steps = json.loads((ROOT / '.buildkite/pipeline.yml').read_text())['steps']
         self.assertEqual(len(steps), 2)
         uploader = steps[1]
-        self.assertEqual(uploader['agents'], {'queue': 'nuxie-pr', 'nuxie-platform': 'linux', 'nuxie-resources': 'linux-16g-v2'})
+        self.assertEqual(uploader['agents'], {'queue': 'nuxie-pr', 'nuxie-platform': 'linux', 'nuxie-resources': 'linux-14g-v2'})
         self.assertEqual(uploader['env'], {'NUXIE_CI_RUNNER_POLICY_VERSION': '2', 'NUXIE_CI_RUNNER_PROFILE': 'linux-portable', 'NUXIE_BAZEL_REMOTE_CACHE_MODE': 'off'})
         self.assertIn('buildkite-agent pipeline upload --replace --no-interpolation', uploader['command'])
 

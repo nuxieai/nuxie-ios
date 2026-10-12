@@ -6,7 +6,7 @@ the platform graph only with `NUXIE_CI_RUNNER_POLICY_VERSION=2` and the
 consolidated topology. Invalid activation fails before uploading work.
 
 Each v2 job declares its installed profile and capability before checkout:
-Linux uses `linux-16g-v2` with `linux-portable` or `linux-native`; Apple uses
+Linux uses `linux-14g-v2` with `linux-portable` or `linux-native`; Apple uses
 `mac-64g-v2` with `macos-apple`. All substantial jobs use eager concurrency one
 in `nuxie/physical/proxmox-heavy` or `nuxie/physical/mac-m2`. The Mac runs one
 agent. Repository upload uses Linux portable resources; the LIVE Buildkite
