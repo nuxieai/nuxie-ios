@@ -1279,6 +1279,33 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertEqual(Array(UnsafeBufferPointer(start: center, count: 4)), [0, 180, 0, 180])
     }
 
+    func testConfiguredImageDecoderPreservesRGBAChannelsAndDimensions() throws {
+        // Authored straight pixels are (17,34,51,255) and (255,64,32,180).
+        let encoded = try fixture(named: "translucent-rgba-channels", extension: "png")
+        let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
+            encoded,
+            maximumDimension: 512,
+            maximumDecodedBytes: 8
+        ))
+        XCTAssertEqual(decoded.width, 2)
+        XCTAssertEqual(decoded.height, 1)
+        XCTAssertEqual(decoded.rowBytes, 8)
+        XCTAssertEqual(
+            decoded.pixels as Data,
+            Data([17, 34, 51, 255, 180, 45, 23, 180])
+        )
+        XCTAssertNil(NuxieNativeDecodedImage.decode(
+            encoded,
+            maximumDimension: 1,
+            maximumDecodedBytes: 8
+        ))
+        XCTAssertNil(NuxieNativeDecodedImage.decode(
+            encoded,
+            maximumDimension: 512,
+            maximumDecodedBytes: 7
+        ))
+    }
+
     func testConfiguredImportDecodesAnEmbeddedImageAgainstItsInspectedCatalog() async throws {
         let encoded = try fixture(named: "in_band_asset", extension: "riv.base64")
         guard let scene = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters) else {
