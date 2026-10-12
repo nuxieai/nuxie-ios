@@ -736,7 +736,7 @@ final class ExperienceScreenViewController: UIViewController {
         try? await presentationLoop?.advanceZeroDelta()
     }
 
-    func performExitHandshake(reduceMotion: Bool) async {
+    func performExitHandshake(reduceMotion: Bool, exitReason: ExperienceScreenExitReason = .navigation) async {
         let plan = ExperienceScreenExitPlan(
             declaration: screen.exit,
             reduceMotion: reduceMotion
@@ -744,7 +744,8 @@ final class ExperienceScreenViewController: UIViewController {
         let waiter = plan.completionEventName.map(registerCompletionWaiter(eventName:))
         let snapshot = lifecycleState.move(
             to: .exiting,
-            reduceMotion: reduceMotion
+            reduceMotion: reduceMotion,
+            exitReason: exitReason
         )
         await applyLifecycleSnapshot(snapshot)
         try? await presentationLoop?.advanceZeroDelta()
@@ -758,10 +759,11 @@ final class ExperienceScreenViewController: UIViewController {
         removeCompletionWaiter(waiter)
     }
 
-    func markExiting(reduceMotion: Bool) async {
+    func markExiting(reduceMotion: Bool, exitReason: ExperienceScreenExitReason = .dismissed) async {
         let snapshot = lifecycleState.move(
             to: .exiting,
-            reduceMotion: reduceMotion
+            reduceMotion: reduceMotion,
+            exitReason: exitReason
         )
         await applyLifecycleSnapshot(snapshot)
         try? await presentationLoop?.advanceZeroDelta()
@@ -1363,9 +1365,17 @@ final class ExperienceScreenViewController: UIViewController {
         }
         guard !lifecycleWritesUnavailable else { return nil }
         // Rootless screens still receive the file's global device values.
-        let command = journeyScreen?.defaultViewModelName.map {
-            snapshot.stateCommand(viewModelName: $0, instanceID: journeyScreen?.defaultInstanceId)
-        } ?? .snapshot([])
+        let command: ExperienceInteractiveStateCommand
+        if let name = journeyScreen?.defaultViewModelName, let interactiveScreen {
+            let includesExitReason = await interactiveScreen.supportsScreenExitReason(viewModelName: name)
+            command = snapshot.stateCommand(
+                viewModelName: name,
+                instanceID: journeyScreen?.defaultInstanceId,
+                includesExitReason: includesExitReason
+            )
+        } else {
+            command = .snapshot([])
+        }
         let result: Result<Void, Error> = await withCheckedContinuation { continuation in
             let accepted = enqueueStateCommand(
                 command,
