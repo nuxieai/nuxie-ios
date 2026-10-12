@@ -318,13 +318,25 @@ final class ExperienceViewModelStateCoordinator {
 
         var current: Any?
         while index < segments.count {
+            var end = index + 1
             current = storedValue(
                 viewModelName: viewModelName,
                 instanceId: instanceId,
                 path: segments[index]
             )
+            // Published object namespaces use slash-joined paths, while
+            // view-model links retain their instance references at that path.
+            // Prefer a single segment for releases with nested instances.
+            while current == nil, end < segments.count {
+                end += 1
+                current = storedValue(
+                    viewModelName: viewModelName,
+                    instanceId: instanceId,
+                    path: segments[index..<end].joined(separator: "/")
+                )
+            }
             guard let current else { return nil }
-            index += 1
+            index = end
             if index == segments.count {
                 return unwrap(current)
             }
