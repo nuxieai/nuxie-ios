@@ -139,7 +139,8 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
                 instanceID: "source",
                 phase: .exiting,
                 appearances: 1,
-                transitionId: transitionId
+                transitionId: transitionId,
+                exitReason: "navigation"
             )
         )
         XCTAssertEqual(
@@ -386,7 +387,8 @@ private func lifecycleCommand(
     instanceID: String,
     phase: ExperienceScreenLifecyclePhase,
     appearances: Double,
-    transitionId: String
+    transitionId: String,
+    exitReason: String = "none"
 ) -> ExperienceInteractiveStateCommand {
     .snapshot([
         .init(
@@ -409,6 +411,13 @@ private func lifecycleCommand(
             instanceName: nil,
             path: "screen/transition",
             value: .string(transitionId)
+        ),
+        .init(
+            viewModelName: viewModelName,
+            instanceID: instanceID,
+            instanceName: nil,
+            path: "screen/exitReason",
+            value: .string(exitReason)
         ),
     ])
 }
