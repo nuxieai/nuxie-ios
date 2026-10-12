@@ -1,0 +1,82 @@
+{
+  "screen": {
+    "id": "screen_welcome",
+    "defaultViewModelName": "vm_runtime_root_screen_welcome",
+    "defaultInstanceId": "vmi_runtime_screen_welcome",
+    "responseCaptures": []
+  },
+  "viewModelValues": [
+    {
+      "viewModelName": "vm_runtime_root_screen_welcome",
+      "instanceId": "vmi_runtime_screen_welcome",
+      "path": "paywall/products",
+      "value": [
+        {
+          "vmInstanceId": "monthly"
+        },
+        {
+          "vmInstanceId": "annual"
+        }
+      ]
+    },
+    {
+      "viewModelName": "vm_runtime_root_screen_welcome",
+      "instanceId": "vmi_runtime_screen_welcome",
+      "path": "paywall/selectedProduct",
+      "value": {
+        "vmInstanceId": "monthly"
+      }
+    },
+    {
+      "viewModelName": "vm_runtime_root_screen_welcome",
+      "instanceId": "vmi_runtime_screen_welcome",
+      "path": "paywall/selectedProductId",
+      "value": "product-monthly"
+    },
+    {
+      "viewModelName": "PaywallProduct",
+      "instanceId": "monthly",
+      "path": "productId",
+      "value": "product-monthly"
+    },
+    {
+      "viewModelName": "PaywallProduct",
+      "instanceId": "monthly",
+      "path": "placementId",
+      "value": "placement-monthly"
+    },
+    {
+      "viewModelName": "PaywallProduct",
+      "instanceId": "annual",
+      "path": "productId",
+      "value": "product-annual"
+    },
+    {
+      "viewModelName": "PaywallProduct",
+      "instanceId": "annual",
+      "path": "placementId",
+      "value": "placement-annual"
+    }
+  ],
+  "purchaseReference": {
+    "ref": {
+      "kind": "path",
+      "path": "paywall.selectedProduct.placementId"
+    }
+  },
+  "initialPlacement": "placement-monthly",
+  "writes": [
+    {
+      "selectedProductId": "product-annual",
+      "expectedPlacement": "placement-annual"
+    },
+    {
+      "selectedProductId": "unknown",
+      "expectedPlacement": null
+    },
+    {
+      "selectedProductId": "product-monthly",
+      "expectedPlacement": "placement-monthly"
+    }
+  ]
+}
