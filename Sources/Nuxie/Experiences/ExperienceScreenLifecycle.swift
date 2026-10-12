@@ -54,17 +54,27 @@ enum ExperienceScreenLifecyclePhase: String, CaseIterable, Sendable {
     }
 }
 
+enum ExperienceScreenExitReason: String, Sendable {
+    case none
+    case dismissed
+    case navigation
+
+    static let path = "screen/exitReason"
+}
+
 struct ExperienceScreenLifecycleSnapshot: Equatable, Sendable {
     let phase: ExperienceScreenLifecyclePhase
     let appearances: UInt64
     let transition: String
     let reduceMotion: Bool
+    let exitReason: ExperienceScreenExitReason
 
     func stateCommand(
         viewModelName: String,
-        instanceID: String?
+        instanceID: String?,
+        includesExitReason: Bool = true
     ) -> ExperienceInteractiveStateCommand {
-        .snapshot([
+        var values: [ExperienceInteractiveStateCommand.Value] = [
             .init(
                 viewModelName: viewModelName,
                 instanceID: instanceID,
@@ -86,7 +96,17 @@ struct ExperienceScreenLifecycleSnapshot: Equatable, Sendable {
                 path: "screen/transition",
                 value: .string(transition)
             ),
-        ])
+        ]
+        if includesExitReason {
+            values.append(.init(
+                viewModelName: viewModelName,
+                instanceID: instanceID,
+                instanceName: nil,
+                path: ExperienceScreenExitReason.path,
+                value: .string(exitReason.rawValue)
+            ))
+        }
+        return .snapshot(values)
     }
 }
 
@@ -94,6 +114,7 @@ struct ExperienceScreenLifecycleState: Sendable {
     private(set) var phase: ExperienceScreenLifecyclePhase = .hidden
     private(set) var appearances: UInt64 = 0
     private(set) var transition = ""
+    private(set) var exitReason: ExperienceScreenExitReason = .none
     private(set) var reduceMotion: Bool
 
     init(reduceMotion: Bool) {
@@ -103,12 +124,14 @@ struct ExperienceScreenLifecycleState: Sendable {
     mutating func move(
         to phase: ExperienceScreenLifecyclePhase,
         transition: String = "",
-        reduceMotion: Bool? = nil
+        reduceMotion: Bool? = nil,
+        exitReason: ExperienceScreenExitReason = .navigation
     ) -> ExperienceScreenLifecycleSnapshot {
         if phase == .entering {
             appearances &+= 1
         }
         self.phase = phase
+        self.exitReason = phase == .exiting ? exitReason : .none
         self.transition = transition
         if let reduceMotion {
             self.reduceMotion = reduceMotion
@@ -126,7 +149,8 @@ struct ExperienceScreenLifecycleState: Sendable {
             phase: phase,
             appearances: appearances,
             transition: transition,
-            reduceMotion: reduceMotion
+            reduceMotion: reduceMotion,
+            exitReason: exitReason
         )
     }
 }

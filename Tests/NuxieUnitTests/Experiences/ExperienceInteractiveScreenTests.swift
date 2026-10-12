@@ -849,6 +849,19 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     #endif
 
+    func testOlderAuthenticatedCatalogDoesNotDeclareScreenExitReason() async throws {
+        let payload = try await statePayload(defaultViewModelName: "Test")
+        let screen = try await ExperienceInteractiveScreen.open(
+            payload: payload,
+            player: .stateMachine("State Machine 1"),
+            pixelWidth: 64,
+            pixelHeight: 64
+        )
+        let supportsReason = await screen.supportsScreenExitReason(viewModelName: "Test")
+        XCTAssertFalse(supportsReason)
+        try await screen.close()
+    }
+
     func testAuthenticatedScreenPreservesStateAcrossRepeatedRenders() async throws {
         let payload = try await statePayload(defaultViewModelName: "Test")
         XCTAssertFalse(payload.renderPlan.images.isEmpty)
