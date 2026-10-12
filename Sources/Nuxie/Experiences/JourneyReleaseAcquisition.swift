@@ -264,7 +264,7 @@ struct JourneyReleaseRuntime {
         ),
         timezoneDataRevision: "2026c",
         timezoneDataSHA256: SignedTimezoneBundle.sha256,
-        supportedCapabilities: NuxieEmbeddedRuntimeCompatibility.capabilities.union(["system-fonts", "paywall.selection.v1"])
+        supportedCapabilities: NuxieEmbeddedRuntimeCompatibility.capabilities.union(["system-fonts"])
     )
 }
 
