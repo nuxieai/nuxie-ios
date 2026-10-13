@@ -1612,7 +1612,6 @@ class ExperienceViewController: NuxiePlatformViewController {
             #if canImport(UIKit)
             resolveInitialContentHeight()
             #endif
-            releasePresentationWarmReservation()
             platformCancelPresentationRevealTransition()
             contentIsRevealed = false
             setExperienceContentHidden(true)
