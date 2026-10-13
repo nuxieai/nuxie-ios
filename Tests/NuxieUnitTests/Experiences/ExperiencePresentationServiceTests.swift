@@ -342,7 +342,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     identity: release.descriptor.identity,
                     descriptorSHA256: release.descriptorSHA256
                 ),
-                behaviorPresentation: .fullScreenDefault,
+                behaviorPresentation: .standard,
                 behaviorPresentationScreens: [
                     screenId: .init(width: 390, height: 844)
                 ],
