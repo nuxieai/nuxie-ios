@@ -292,7 +292,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
             .deletingLastPathComponent().appendingPathComponent("Fixtures/env-entry")
         let payload = try SharedValuesFixture.payload(directory: directory, screens: ["entry"])
         let experience = Experience(id: "env-entry", versionId: "entry-version", buildId: "entry-build",
-            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .fullScreenDefault,
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
             behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
         for reduceMotion in [true, false] {
             let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),

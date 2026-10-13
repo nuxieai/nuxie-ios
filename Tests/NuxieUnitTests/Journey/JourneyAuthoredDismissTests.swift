@@ -237,7 +237,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         let definition = try ExperienceDefinition(journeyDescriptor: release.descriptor)
         let experience = Experience(id: "test-experience", versionId: release.descriptor.identity.experienceVersionId,
             buildId: "test-build", artifactContentHash: nil, authenticatedReleaseID: nil,
-            behaviorPresentation: .fullScreenDefault, behaviorPresentationScreens: ["screen_welcome": .init(width: 390, height: 844), "screen_thanks": .init(width: 390, height: 844)],
+            behaviorPresentation: .standard, behaviorPresentationScreens: ["screen_welcome": .init(width: 390, height: 844), "screen_thanks": .init(width: 390, height: 844)],
             assetBaseURL: URL(string: "https://assets.example.com/")!,
             journey: .init(screens: definition.screens, viewModelValues: nil), definition: definition)
         let controller = AuthoredDismissCommerceController(mockExperienceVersionId: release.descriptor.identity.experienceVersionId,

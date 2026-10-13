@@ -932,7 +932,7 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
             buildId: "test-build",
             artifactContentHash: nil,
             authenticatedReleaseID: nil,
-            behaviorPresentation: .fullScreenDefault,
+            behaviorPresentation: .standard,
             behaviorPresentationScreens: [screenId: .init(width: 390, height: 844)],
             assetBaseURL: URL(string: "https://assets.example.com/")!,
             journey: JourneyDocument(

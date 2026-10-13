@@ -8,10 +8,6 @@ final class NuxieNativeGlobalInstallTests: XCTestCase {
     private func expectedLabels(_ key: String) throws -> [String] {
         try XCTUnwrap(expectations()[key] as? [String])
     }
-    private func expectedStatus(_ key: String) throws -> NuxieNativeStatus {
-        let raw = try XCTUnwrap(expectations()[key] as? NSNumber).uint32Value
-        return try XCTUnwrap(NuxieNativeStatus(rawValue: raw))
-    }
     private func expectations() throws -> [String: Any] {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -44,53 +40,42 @@ final class NuxieNativeGlobalInstallTests: XCTestCase {
         return capture.tree.nodes.map(\.label).sorted()
     }
 
-    private func reject(_ status: NuxieNativeStatus, _ call: () async throws -> Void) async {
-        do { try await call(); XCTFail("Expected native refusal") }
-        catch NuxieNativeRuntimeError.callFailed(let diagnostic) { XCTAssertEqual(diagnostic.status, status) }
-        catch { XCTFail("Unexpected error: \(error)") }
-    }
-
-    func testGlobalSetRefusalMutationAndClearReachScreenCopyAndListRow() async throws {
+    func testNamedGlobalBindingRetainsIdentityAndMutationsReachScreenCopyAndListRow() async throws {
         let runtime = try await open()
         try await runtime.enableSemantics()
-        let catalog = try await runtime.viewModelCatalog()
-        let flags = try XCTUnwrap(catalog.schemas.first { $0.name == "Flags" })
-        let root = try XCTUnwrap(catalog.schemas.first { $0.name == "Root" })
-        let value = try await runtime.makeViewModel(schemaIndex: flags.index)
-        let wrong = try await runtime.makeViewModel(schemaIndex: root.index)
+        let bound = try await runtime.bindGlobalViewModel(named: "Flags")
+        let value = try XCTUnwrap(bound)
         _ = try await runtime.mutateViewModel([.setBool(instance: value, path: "enabled", value: true)])
-        try await runtime.setGlobalViewModel(name: "Flags", instance: value)
         let on = try await labels(runtime)
         XCTAssertEqual(on, try expectedLabels("enabledLabels"))
-        await reject(try expectedStatus("notFound")) { try await runtime.setGlobalViewModel(name: "missing", instance: value) }
-        await reject(try expectedStatus("notFound")) { try await runtime.setGlobalViewModel(name: "Root", instance: wrong) }
-        await reject(try expectedStatus("handleMismatch")) { try await runtime.setGlobalViewModel(name: "Flags", instance: wrong) }
-        let retained = try await labels(runtime)
-        XCTAssertEqual(retained, try expectedLabels("enabledLabels"))
+        let missing = try await runtime.bindGlobalViewModel(named: "missing")
+        let nonGlobal = try await runtime.bindGlobalViewModel(named: "Root")
+        XCTAssertNil(missing)
+        XCTAssertNil(nonGlobal)
+        let retained = try await runtime.bindGlobalViewModel(named: "Flags")
+        XCTAssertEqual(retained, value)
+        let unchanged = try await labels(runtime)
+        XCTAssertEqual(unchanged, try expectedLabels("enabledLabels"))
         _ = try await runtime.mutateViewModel([.setBool(instance: value, path: "enabled", value: false)])
         let changed = try await labels(runtime)
         XCTAssertEqual(changed, try expectedLabels("disabledLabels"))
-        _ = try await runtime.mutateViewModel([.setBool(instance: value, path: "enabled", value: true)])
-        try await runtime.setGlobalViewModel(name: "Flags", instance: nil)
-        let cleared = try await labels(runtime)
-        XCTAssertEqual(cleared, try expectedLabels("disabledLabels"))
     }
 
-    func testPrimaryPlayerKindControlsGlobalAdmission() async throws {
+    func testOnlyStateMachinePlayersReceiveNamedGlobalBindings() async throws {
         for selection: NuxieNativePlayerSelection in [.staticArtboard, .linearAnimation("Timeline")] {
             let runtime = try await open(selection)
-            let catalog = try await runtime.viewModelCatalog()
-            let flags = try XCTUnwrap(catalog.schemas.first { $0.name == "Flags" })
-            let value = try await runtime.makeViewModel(schemaIndex: flags.index)
-            await reject(try expectedStatus("notFound")) { try await runtime.setGlobalViewModel(name: "Flags", instance: value) }
+            try await runtime.enableSemantics()
+            let bound = try await runtime.bindGlobalViewModel(named: "Flags")
+            let value = try XCTUnwrap(bound)
+            _ = try await runtime.mutateViewModel([.setBool(instance: value, path: "enabled", value: true)])
+            let unchanged = try await labels(runtime)
+            XCTAssertEqual(unchanged, try expectedLabels("disabledLabels"))
         }
         let runtime = try await open(.defaultSceneWithInputStateMachine("Main"))
         try await runtime.enableSemantics()
-        let catalog = try await runtime.viewModelCatalog()
-        let flags = try XCTUnwrap(catalog.schemas.first { $0.name == "Flags" })
-        let value = try await runtime.makeViewModel(schemaIndex: flags.index)
+        let bound = try await runtime.bindGlobalViewModel(named: "Flags")
+        let value = try XCTUnwrap(bound)
         _ = try await runtime.mutateViewModel([.setBool(instance: value, path: "enabled", value: true)])
-        try await runtime.setGlobalViewModel(name: "Flags", instance: value)
         let on = try await labels(runtime)
         XCTAssertEqual(on, try expectedLabels("enabledLabels"))
     }
