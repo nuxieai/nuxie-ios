@@ -1426,9 +1426,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         for y in [0, 24, 48] {
             for x in [0, 64, 128, 192, 255] {
                 let index = min(y / 22, 2) * 64 + x * 63 / 255
-                let a = Int(alpha[index])
-                let expected = (0..<3).map { UInt8((Int(palette[index * 3 + $0]) * a + 127) / 255) }
-                    + [UInt8(a)]
+                let expected = palettePixel(palette, alpha: alpha, index: index)
                 let offset = (y * 256 + x) * 4
                 let actual = Array(pixels[offset..<offset + 4])
                 print("Wide palette (\(x),\(y)): expected=\(expected), actual=\(actual)")
@@ -1451,11 +1449,10 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             let (palette, alpha) = try indexedPalette(encoded)
             let source = try XCTUnwrap(CGImageSourceCreateWithData(encoded as CFData, nil))
             let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
-            let expected: [UInt8] = (0..<image.width).flatMap { x in
+            var expected: [UInt8] = []
+            for x in 0..<image.width {
                 let index = x % (palette.count / 3)
-                let a = index < alpha.count ? Int(alpha[index]) : 255
-                return (0..<3).map { UInt8((Int(palette[index * 3 + $0]) * a + 127) / 255) }
-                    + [UInt8(a)]
+                expected += palettePixel(palette, alpha: alpha, index: index)
             }
             let original = try drawDecoderControl(image)
             let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
@@ -1486,6 +1483,17 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
         XCTAssertFalse(palette.isEmpty)
         return (palette, alpha)
+    }
+
+    private func palettePixel(_ palette: [UInt8], alpha: [UInt8], index: Int) -> [UInt8] {
+        let a = index < alpha.count ? Int(alpha[index]) : 255
+        var pixel: [UInt8] = []
+        for channel in 0..<3 {
+            let colour = Int(palette[index * 3 + channel])
+            pixel.append(UInt8((colour * a + 127) / 255))
+        }
+        pixel.append(UInt8(a))
+        return pixel
     }
 
     private func drawDecoderControl(_ image: CGImage) throws -> [UInt8] {
