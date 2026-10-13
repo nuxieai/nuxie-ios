@@ -49,6 +49,48 @@ package enum ExperienceRuntimeFontFallbackProvider {
             let coordinates = face.coordinates.map { NuxFontAxisCoord(axis: $0.axis, value: $0.value) }
             let key = "\(face.path)#\(face.index)#\(face.coordinates.map { "\($0.axis)=\($0.value)" }.joined(separator: ","))"
             if let font = fonts[key] { characters[missing] = font; return font }
+            let context = Unmanaged.passRetained(OutlineFont(selected))
+            var callbacks = NuxFontOutlineCallbacks()
+            callbacks.struct_size = UInt32(MemoryLayout<NuxFontOutlineCallbacks>.size)
+            callbacks.user_data = context.toOpaque()
+            callbacks.release = { context in
+                guard let context else { return }
+                Unmanaged<OutlineFont>.fromOpaque(context).release()
+            }
+            callbacks.get_path = { context, glyph, coordinates, count, sink, sinkContext in
+                guard let context, let sink else { return }
+                let owner = Unmanaged<OutlineFont>.fromOpaque(context).takeUnretainedValue()
+                var font = owner.font
+                if let coordinates, count > 0 {
+                    var variations: [NSNumber: NSNumber] = [:]
+                    for coordinate in UnsafeBufferPointer(start: coordinates, count: count) {
+                        variations[NSNumber(value: coordinate.axis)] = NSNumber(value: coordinate.value)
+                    }
+                    font = CTFontCreateCopyWithVariations(font, variations as CFDictionary)
+                }
+                guard let path = CTFontCreatePathForGlyph(font, glyph, nil) else { return }
+                // Mirrors font_hb_apple.mm apply_element: normalized 2048
+                // scale, inverted y, and quadratic converted by the runtime.
+                path.applyWithBlock { element in
+                    let element = element.pointee
+                    let verb: UInt8
+                    let pointCount: Int
+                    switch element.type {
+                    case .moveToPoint: verb = 0; pointCount = 1
+                    case .addLineToPoint: verb = 1; pointCount = 1
+                    case .addQuadCurveToPoint: verb = 2; pointCount = 2
+                    case .addCurveToPoint: verb = 3; pointCount = 3
+                    case .closeSubpath: verb = 4; pointCount = 0
+                    @unknown default: return
+                    }
+                    var points: [Float] = []
+                    for index in 0..<pointCount {
+                        points.append(Float(element.points[index].x) / 2048)
+                        points.append(-Float(element.points[index].y) / 2048)
+                    }
+                    points.withUnsafeBufferPointer { sink(sinkContext, verb, $0.baseAddress) }
+                }
+            }
             var font: OpaquePointer?
             let status = face.path.utf8.map { CChar(bitPattern: $0) }.withUnsafeBufferPointer { path in
                 coordinates.withUnsafeBufferPointer { coords in
@@ -58,16 +100,28 @@ package enum ExperienceRuntimeFontFallbackProvider {
                     source.face_index = face.index
                     source.coords = coords.baseAddress
                     source.coord_count = coords.count
-                    return nux_font_new(&source, &font)
+                    return nux_font_new_with_outline(&source, &callbacks, &font)
                 }
             }
-            guard status == NuxieNativeStatus.ok.rawValue, let font else { misses.insert(missing); return nil }
+            guard status == NuxieNativeStatus.ok.rawValue, let font else {
+                context.release()
+                misses.insert(missing)
+                return nil
+            }
             fonts[key] = font
             characters[missing] = font
             return font
         } catch {
             misses.insert(missing)
             return nil
+        }
+    }
+
+    private final class OutlineFont {
+        let font: CTFont
+
+        init(_ font: CTFont) {
+            self.font = CTFontCreateCopyWithAttributes(font, 2048, nil, nil)
         }
     }
 
