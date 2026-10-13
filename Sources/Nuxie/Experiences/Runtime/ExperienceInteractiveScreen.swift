@@ -1836,7 +1836,8 @@ actor ExperienceInteractiveScreen {
                 products: products,
                 runtime: runtime
             )
-            environmentReference = try await runtime.bindGlobalViewModel(named: "env")
+            environmentReference = try await runtime.bindGlobalViewModel(named: "env",
+                sharingAcrossSessions: false)
             if let environmentReference {
                 // Entry transitions must see host values during the initialization advance.
                 let mutations = ExperienceEnvironmentBindings(catalog: initialState.catalog).mutations(reference: environmentReference,

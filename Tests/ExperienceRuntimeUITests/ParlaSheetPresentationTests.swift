@@ -26,6 +26,10 @@ final class ParlaSheetPresentationTests: XCTestCase {
         XCTAssertGreaterThan(mediumFrame.height, fullscreenFrame.height * 0.4)
         XCTAssertLessThan(mediumFrame.height, fullscreenFrame.height * 0.6)
         let medium = try capture("ios-medium", text: "Special offer")
+        let lessonTitle = try XCTUnwrap(full.first { $0.topCandidates(1).first?.string == "Say hello" })
+        let coveredLessonTitle = try XCTUnwrap(medium.first { $0.topCandidates(1).first?.string == "Say hello" })
+        XCTAssertEqual(lessonTitle.boundingBox.midY, coveredLessonTitle.boundingBox.midY,
+            accuracy: 2 / app.frame.height, "Opening a sheet must retain the lesson's own safe-area padding")
         try tap("Save this offer", observations: medium, app: app)
 
         let saved = screen("scr_screens_ssaved", app: app)
@@ -71,6 +75,12 @@ final class ParlaSheetPresentationTests: XCTestCase {
 
     private func capture(_ name: String, text: String) throws -> [VNRecognizedTextObservation] {
         Thread.sleep(forTimeInterval: 1)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.descendants(matching: .any).matching(identifier: "NotificationShortLookView").firstMatch
+        if banner.exists {
+            banner.swipeUp()
+            Thread.sleep(forTimeInterval: 1)
+        }
         let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
