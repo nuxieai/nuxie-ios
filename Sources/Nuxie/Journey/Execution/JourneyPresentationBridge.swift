@@ -244,12 +244,22 @@ protocol JourneyPresenting: AnyObject, Sendable {
     ) async -> JourneyPresentationActionResult
 
     @MainActor
+    func projectJourneyCommerceOutcome(owner: JourneyPresentationOwner, actionType: JourneyActionType,
+        outlet: String, errorCode: String, effectId: String)
+
+    @MainActor
     func finishJourneyPresentation(
         owner: JourneyPresentationOwner
     ) async
 
     @MainActor
     func shutdownJourneyPresentation(ownerDistinctId: String) async
+}
+
+extension JourneyPresenting {
+    @MainActor
+    func projectJourneyCommerceOutcome(owner: JourneyPresentationOwner, actionType: JourneyActionType,
+        outlet: String, errorCode: String, effectId: String) {}
 }
 
 @MainActor
@@ -296,6 +306,7 @@ final class JourneyRuntimeDelegate {
     private var hostDismissalRequested = false
     private var presentationIsRevealed = false
     private var presentationEpoch: UInt64 = 0
+    private var commerceProjections: [String: (effectId: String, screenId: String)] = [:]
     private var resolved = false
     private var resolutionWaiters: [CheckedContinuation<Bool, Never>]?
 
@@ -672,6 +683,48 @@ final class JourneyRuntimeDelegate {
             nextBatchSequence: 0,
             nextEmissionSequence: 0
         )
+    }
+
+    func beginCommerceProjection(_ type: JourneyActionType, effectId: String, controller: ExperienceViewController) {
+        let operation = type == .purchase ? "purchase" : "restore"
+        let screenId = activeScreenId ?? initialScreenId
+        commerceProjections[operation] = (effectId, screenId)
+        writeCommerceProjection(operation, status: "idle", errorCode: "", effectId: effectId, screenId: screenId, controller: controller)
+    }
+
+    func projectCommerceRunning(_ type: JourneyActionType, effectId: String, controller: ExperienceViewController) {
+        let operation = type == .purchase ? "purchase" : "restore"
+        guard let projection = commerceProjections[operation], projection.effectId == effectId else { return }
+        writeCommerceProjection(operation, status: "running", errorCode: "", effectId: effectId,
+            screenId: projection.screenId, controller: controller)
+    }
+
+    func projectCommerceOutcome(_ type: JourneyActionType, outlet: String, errorCode: String, effectId: String,
+        controller: ExperienceViewController) {
+        let operation = type == .purchase ? "purchase" : "restore"
+        guard let projection = commerceProjections[operation], projection.effectId == effectId else { return }
+        let status: String
+        switch outlet {
+        case "completed", "restored": status = "success"
+        case "failed": status = "error"
+        case "cancelled": status = "cancelled"
+        case "noPurchases": status = "not_found"
+        default: return
+        }
+        writeCommerceProjection(operation, status: status, errorCode: errorCode, effectId: effectId,
+            screenId: projection.screenId, controller: controller)
+        commerceProjections.removeValue(forKey: operation)
+    }
+
+    private func writeCommerceProjection(_ operation: String, status: String, errorCode: String, effectId: String,
+        screenId: String, controller: ExperienceViewController) {
+        for (field, value) in [("status", status), ("errorCode", errorCode), ("invocationId", effectId)] {
+            let path = VmPathRef(path: "paywall/\(operation)/\(field)")
+            // Older released screens may not declare operation feedback.
+            guard viewModelState?.getValue(path: path, screenId: screenId) != nil,
+                  viewModelState?.setValue(path: path, value: value, screenId: screenId) == true else { continue }
+            controller.applyViewModelValue(path: path, value: value, screenId: screenId)
+        }
     }
 
     func resolvePresentationString(

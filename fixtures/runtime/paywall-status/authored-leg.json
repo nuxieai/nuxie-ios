@@ -1,0 +1,129 @@
+{
+  "schemaVersion": "nuxie.experience-planes.v1",
+  "id": "4f5c1c1c67fdbd8258bd1cf5fb91058f9d1a128015d6ab09395441d8702ec4c1",
+  "entryCondition": {
+    "type": "app_foregrounded"
+  },
+  "entryStepId": "3c2bc3a2d26c2130308120277380b2c0a99ca9db34c1e5f0ab7047028f8a1c73",
+  "steps": [
+    {
+      "kind": "action",
+      "id": "3c2bc3a2d26c2130308120277380b2c0a99ca9db34c1e5f0ab7047028f8a1c73",
+      "action": {
+        "type": "navigate",
+        "screenId": "state-screen"
+      },
+      "outlets": {}
+    },
+    {
+      "kind": "complete",
+      "id": "5f82774783626c37600e098810ab8032baa773ee68cee998120d534b914ace26",
+      "outcome": "completed"
+    },
+    {
+      "kind": "action",
+      "id": "8d4c0b24862254b47f8874e4d5e90c6bea46eaaae9c9f0a15260585bce7c3969",
+      "action": {
+        "type": "delay",
+        "durationMs": 60000
+      },
+      "outlets": {
+        "next": "5f82774783626c37600e098810ab8032baa773ee68cee998120d534b914ace26"
+      }
+    },
+    {
+      "kind": "action",
+      "id": "a95835ce245f4cd2c3ca8f590a219714e0236e21c65de3284c5b2ea8a37b1c86",
+      "action": {
+        "type": "dismiss"
+      },
+      "outlets": {}
+    },
+    {
+      "kind": "action",
+      "id": "ad3defb7e92ecee5e2937be02534ee2c8786de3bb2a25c754c558e00d239aa8c",
+      "action": {
+        "type": "restore"
+      },
+      "outlets": {
+        "restored": "a95835ce245f4cd2c3ca8f590a219714e0236e21c65de3284c5b2ea8a37b1c86"
+      }
+    },
+    {
+      "kind": "action",
+      "id": "b1ffaf1626665db400310442f22601dea463f3600ceb67231ef7f83265987fd0",
+      "action": {
+        "type": "dismiss"
+      },
+      "outlets": {}
+    },
+    {
+      "kind": "action",
+      "id": "dce0f744b34955906e68fc985f9612262315aed81166967d63a419ba8952731d",
+      "action": {
+        "type": "purchase",
+        "placementId": {
+          "ref": {
+            "kind": "path",
+            "path": "paywall.selectedProduct.placementId",
+            "isRelative": false
+          }
+        }
+      },
+      "outlets": {
+        "completed": "b1ffaf1626665db400310442f22601dea463f3600ceb67231ef7f83265987fd0",
+        "failed": "8d4c0b24862254b47f8874e4d5e90c6bea46eaaae9c9f0a15260585bce7c3969"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "host": {
+        "kind": "screen",
+        "screenId": "state-screen"
+      },
+      "eventName": "purchase",
+      "entryStepId": "dce0f744b34955906e68fc985f9612262315aed81166967d63a419ba8952731d"
+    },
+    {
+      "host": {
+        "kind": "screen",
+        "screenId": "state-screen"
+      },
+      "eventName": "restore",
+      "entryStepId": "ad3defb7e92ecee5e2937be02534ee2c8786de3bb2a25c754c558e00d239aa8c"
+    }
+  ],
+  "screens": [
+    {
+      "id": "state-screen",
+      "defaultViewModelName": "Runtime",
+      "defaultInstanceId": "root-sdk-id",
+      "responseCaptures": []
+    }
+  ],
+  "policy": {
+    "entry": {
+      "trigger": {
+        "type": "event",
+        "eventName": "$app_opened"
+      },
+      "frequency": {
+        "type": "every_match"
+      }
+    },
+    "exitWhenAny": []
+  },
+  "offers": [],
+  "facts": {
+    "propertyKeys": [],
+    "segmentIds": [],
+    "experimentIds": []
+  },
+  "inputs": {
+    "eventFields": [],
+    "responseFields": []
+  },
+  "outputs": [],
+  "completionOutputs": {}
+}

@@ -826,6 +826,11 @@ private extension JourneyService {
                       let continued = try await journal.settlePresentationCommerce(candidate.id,
                         stepId: step.id, effectId: effectId, nextStepId: nextStepId, admission: admission) else { continue }
                 pendingPresentationPurchasePlacements.removeValue(forKey: candidate.id)
+                let errorCode = route.outlet == "failed"
+                    ? ["error_code", "errorCode", "code", "error"].compactMap { event.properties[$0] as? String }.first { !$0.isEmpty } ?? ""
+                    : ""
+                await presenter?.projectJourneyCommerceOutcome(owner: .init(journeyId: candidate.journeyId, distinctId: journal.distinctId),
+                    actionType: route.actionType, outlet: route.outlet, errorCode: errorCode, effectId: effectId)
                 if nextStepId != nil {
                     await continuePresentedRun(continued, release: release, executionFenceToken: token,
                         signal: .init(), journal: journal)
@@ -3148,9 +3153,23 @@ private extension JourneyService {
                         pendingPresentationPurchasePlacements.removeValue(forKey: run.id)
                         result = .complete(outcome)
                     case .advanced(let outlet):
-                        pendingPresentationPurchasePlacements.removeValue(
-                            forKey: run.id
-                        )
+                        pendingPresentationPurchasePlacements.removeValue(forKey: run.id)
+                        if actionType.isCommerce {
+                            // Synchronous failures have the same retry semantics as store outcomes.
+                            do {
+                                let nextStepId = command.step.outlets?[outlet]
+                                guard let continued = try await journal.settlePresentationCommerce(run.id,
+                                    stepId: command.step.id, effectId: effectId, nextStepId: nextStepId,
+                                    admission: originAdmission) else { return }
+                                if nextStepId != nil {
+                                    await continuePresentedRun(continued, release: release,
+                                        executionFenceToken: executionFenceToken, signal: .init(), journal: journal)
+                                }
+                            } catch {
+                                LogWarning("JourneyService: failed to settle synchronous commerce outcome: \(error)")
+                            }
+                            return
+                        }
                         result = .outlet(outlet)
                     case .permissionResolved(let outlet, let event):
                         pendingPresentationPurchasePlacements.removeValue(
