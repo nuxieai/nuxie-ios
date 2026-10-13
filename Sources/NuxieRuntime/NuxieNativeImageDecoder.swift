@@ -58,7 +58,7 @@ package struct NuxieNativeDecodedImage {
     // Probe ImageIO itself: an OS name or alpha label cannot distinguish these bytes.
     package static let indexedPNGNeedsAlphaRelabeling: Bool = {
         // Four 2-bit palette entries share straight (255,64,32), at alpha 0,64,128,255.
-        // Multiple alpha levels exercise ImageIO's palette expansion path.
+        // The packed 2-bit indices exercise ImageIO's affected sample expansion path.
         guard let encoded = Data(base64Encoded:
             "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABAgMAAACEUudeAAAAAXNSR0IArs4c6QAAAAxQTFRF/0Ag/0Ag/0Ag/0AgXACsbQAAAAR0Uk5TAECA/9WInJwAAAAKSURBVHicY5AGAAAdAByO9PUhAAAAAElFTkSuQmCC"
         ), let source = CGImageSourceCreateWithData(encoded as CFData, nil),

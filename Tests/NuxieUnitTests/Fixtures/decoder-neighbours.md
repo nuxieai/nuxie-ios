@@ -26,4 +26,20 @@ Display P3 uses the sRGB transfer curve. Linearizing (255,128,0), multiplying by
 
 `translucent-indexed-green.bin` retains the original 512 by 512 palette PNG without Apple's PNG resource copying. Its straight palette entry is (0,255,0), with tRNS alpha 180. The central native pixel must be (0,180,0,180).
 
-The built-in process probe uses the 120 encoded bytes of `decoder-indexed-2bit-alpha.bin`. Its second pixel is known straight (255,64,32,64), or multiplied (64,16,8,64). Multiple palette alpha levels select the affected ImageIO expansion path; a single-entry palette can use a different path even in the same process.
+The built-in process probe uses the 120 encoded bytes of `decoder-indexed-2bit-alpha.bin`. Its second pixel is known straight (255,64,32,64), or multiplied (64,16,8,64). The encoded 2-bit indices exercise packed-sample expansion. In the tested iOS ImageIO versions, translucent indexed PNGs with encoded depth 1, 2 or 4 expand to multiplied 8-bit RGBA bytes labelled straight alpha (`last`, value 3). The tested 8-bit indices return correctly labelled premultiplied RGBA (`premultipliedLast`, value 1). Matched controls below distinguish encoded bit depth from palette entry count and tRNS shape; several alpha levels do not select the path. macOS returns straight bytes labelled straight alpha for these packed controls and needs no correction.
+
+## Wide 8-bit palette picture
+
+`decoder-indexed-wide-8bit-alpha.bin` is 256 by 64, indexed colour type 3, encoded bit depth 8, noninterlaced and tagged sRGB. PLTE has 192 entries: three bands of 64 entries with straight RGB (255,64,32), (32,192,96) and (64,128,255). Each band has tRNS alpha round(step*255/63), step 0 through 63. The unfiltered index at (x,y) is min(floor(y/22),2)*64 + floor(x*63/255). Thus the file has 64 distinct alpha levels, including zero and full opacity.
+
+The expected bytes below come from the actual file's index, PLTE and tRNS. Each RGB byte is floor((colour*alpha+127)/255). The XCTest reads PLTE and tRNS independently of ImageIO and checks all 15 samples exactly.
+
+| y | x=0 | x=64 | x=128 | x=192 | x=255 |
+| --- | --- | --- | --- | --- | --- |
+| 0 | (0,0,0,0) | (61,15,8,61) | (125,31,16,125) | (190,48,24,190) | (255,64,32,255) |
+| 24 | (0,0,0,0) | (8,46,23,61) | (16,94,47,125) | (24,143,72,190) | (32,192,96,255) |
+| 48 | (0,0,0,0) | (15,31,61,61) | (31,63,125,125) | (48,95,190,190) | (64,128,255,255) |
+
+## Matched path controls
+
+The `decoder-path-*` files hold the colour and sample order fixed while changing encoded bit depth, palette entry count or tRNS length. Every PLTE colour is (255,64,32). The two-entry controls use alpha 64,128 at bit depths 1,2,4,8. The four-entry controls compare tRNS [180] (three implicit opaque entries) with [180,255,255,255], at depths 2 and 8. The sixteen-entry controls have tRNS [0,64,128,255] and twelve implicit opaque entries, at depths 4 and 8. The eight-bit one-entry control has alpha 180. Rows cycle through the palette, so every entry is exercised. The test draws the original ImageIO image as a control and compares the SDK decoder against the independent one-product expectation.
