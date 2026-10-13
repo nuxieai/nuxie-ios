@@ -2,9 +2,8 @@
 
 P038 / [UNIV-3375](https://universe.basis.dev/issue/UNIV-3375).
 
-These two files were emitted by the real superproject publisher example
-`tools/nuxie-editor/crates/publisher-wasm/examples/font_fallback_fixture.rs`
-at `be00893bb0`. `ordinary-provenance.json` records source and output hashes,
+These two files were emitted by the publisher example at `be00893bb0`.
+`ordinary-provenance.json` records source and output hashes,
 font declarations, strings and row positions. The scenes contain ordinary
 Text nodes, with no TextInput or platform editing overlay.
 
