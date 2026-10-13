@@ -80,13 +80,10 @@ alias(name = "sdk_macos", actual = ":NuxieSDKMac")
 sdk_platform_artifact(name = "sdk_ios_device", artifact = ":NuxieSDK", platform = "@apple_support//platforms:ios_arm64")
 sdk_platform_artifact(name = "sdk_ios_simulator", artifact = ":NuxieSDK", platform = "@apple_support//platforms:ios_sim_arm64")
 
-swift_library(
+sdk_test_library(
     name = "NuxieTestSupport",
-    testonly = True,
     module_name = "NuxieTestSupport",
-    package_name = "Nuxie",
     srcs = glob(["Tests/NuxieTestSupport/**/*.swift"]),
-    copts = _TEST_SWIFT,
     features = ["swift.enable_testing"],
     deps = [":Nuxie", ":NuxieRuntime", "@swiftpkg_nimble//:Nimble", "@swiftpkg_quick//:Quick"],
 )

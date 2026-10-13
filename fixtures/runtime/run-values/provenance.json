@@ -42,8 +42,8 @@
       "sizeBytes": 13593
     },
     "release.json": {
-      "sha256": "1593df4c1dcdb7a6dc63701f262e6beee5b688f53cf7b2ace3d0746a42104dde",
-      "sizeBytes": 9566
+      "sha256": "f23c46d5627d63921f465b5c90aaea1c17a9f470b0c66cf3217b42940ef92e63",
+      "sizeBytes": 9544
     },
     "renders/sha256/4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb.nux": {
       "sha256": "4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb",

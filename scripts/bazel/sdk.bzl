@@ -58,7 +58,7 @@ _sdk_test_sources = rule(
     },
 )
 
-def sdk_test_library(name, module_name, srcs, deps = [], defines = [], strict_concurrency = False):
+def sdk_test_library(name, module_name, srcs, deps = [], defines = [], strict_concurrency = False, features = []):
     # The authored suites use #filePath to inspect source and signed fixtures.
     # A source-location directive retains the owning checkout contract without
     # changing authored tests or disabling Swift's hermetic compiler paths.
@@ -71,6 +71,7 @@ def sdk_test_library(name, module_name, srcs, deps = [], defines = [], strict_co
         srcs = [":" + name + "_file_paths"],
         deps = deps,
         defines = defines,
+        features = features,
         copts = ["-swift-version", "5"] + (["-strict-concurrency=complete"] if strict_concurrency else []),
     )
 
