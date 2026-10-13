@@ -16,6 +16,7 @@ _SDK_RESOURCES = [
     "Sources/Nuxie/PrivacyInfo.xcprivacy",
     "Sources/Nuxie/Resources/LICENSE-unicode.txt",
     "Sources/Nuxie/Resources/timezone-bundle.json",
+    "Sources/Nuxie/Resources/presentation-schema.json",
 ] + glob(["Sources/Nuxie/Resources/**/*.strings"])
 _TEST_DEPS = [":Nuxie", ":NuxieRuntime", ":NuxieTestSupport", "@swiftpkg_nimble//:Nimble", "@swiftpkg_quick//:Quick"]
 
@@ -118,6 +119,7 @@ sdk_test_library(
     srcs = glob(["Tests/NuxieUnitTests/**/*.swift"], exclude = [
         "Tests/NuxieUnitTests/Experiences/ExperienceHardwareInputTests.swift",
         "Tests/NuxieUnitTests/Experiences/ExperienceTextInputSemanticsTests.swift",
+        "Tests/NuxieUnitTests/Experiences/ExperienceFitContentPresentationTests.swift",
     ]) + ["Examples/Adapters/NuxieProviderCheckoutRoute.swift"],
     defines = ["SWIFT_PACKAGE", "NUXIE_PROVIDER_ADAPTER_TESTS"],
     deps = _TEST_DEPS,
@@ -219,6 +221,7 @@ sdk_test_library(
     srcs = ["Tests/NuxieUnitTests/Experiences/" + name + ".swift" for name in [
         "ExperienceTextInputSemanticsTests", "ExperienceHardwareInputTests", "ExperienceTextInputTypographyTests",
         "SignedSemanticJourneyTests", "ExperienceSharedValuesTests", "ExperienceSharedValuesPresentationTests",
+        "ExperienceLayerNavigationTests", "ExperienceFitContentPresentationTests",
     ]],
     defines = ["NUXIE_HOSTED_INPUT_TESTS"],
     deps = _TEST_DEPS,
