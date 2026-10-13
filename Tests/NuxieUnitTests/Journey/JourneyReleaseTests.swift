@@ -15,15 +15,11 @@ final class JourneyReleaseTests: XCTestCase {
         let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
             from: Data(contentsOf: directory.appendingPathComponent("release-entry.json")))
         let bytes = try Data(contentsOf: directory.appendingPathComponent("descriptor.json"))
-        var testing = NuxieTestingOverrides()
-        testing.qualifyExperienceAccessibility = true
-        let supported = JourneyReleaseRuntime.supported(environment: .development,
-            testing: NuxieInternalConfiguration(testingOverrides: testing))
         let release = try JourneyReleaseVerifier().authenticateJourney(
             envelopeBytes: JSONEncoder().encode(entry.envelope),
             authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
             expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
-            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+            supportedRuntime: JourneyReleaseRuntime.current, replayPolicy: .active(minimumPublishedAtSeq: 0))
         XCTAssertEqual(release.exactDescriptorBytes, bytes)
         let descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         let presentation = try XCTUnwrap(descriptor["presentation"] as? [String: String])
