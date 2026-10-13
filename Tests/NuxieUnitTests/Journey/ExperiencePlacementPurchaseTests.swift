@@ -6,15 +6,20 @@ import XCTest
 final class ExperiencePlacementPurchaseTests: JourneyTestCase {
     @MainActor
     func testNativePlanThenBuyDispatchesEachPlacementOfOneProduct() async throws {
-        let writer = ProcessInfo.processInfo.environment["NUXIE_E2E_PAYWALL_WRITER"] ?? "placement"
+        let writer = "placement"
+        print("Native paywall writer: \(writer)")
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/runtime/paywall-two-placement-\(writer)")
         let values = try JSONDecoder().decode([JourneyViewModelValue].self,
             from: Data(contentsOf: directory.appendingPathComponent("view-model-values.json")))
         let payload = try await statePayload(defaultViewModelName: "Runtime", values: values,
-            scene: Data(contentsOf: directory.appendingPathComponent("screen.riv")), artboardName: "Paywall")
+            scene: Data(contentsOf: directory.appendingPathComponent("screen.riv")), artboardName: "Paywall", width: 320, height: 150,
+            definition: ExperienceDefinition(screens: [.init(id: "state-screen", defaultViewModelName: "Runtime", defaultInstanceId: "root-sdk-id")],
+                viewModelValues: values, controlsByScreen: ["state-screen": ["buy": .init(actionId: "buy",
+                    binding: .declarative([.emit(eventName: "purchase_requested", payload: [:])]))]]))
         let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 320, pixelHeight: 150)
+        defer { Task { try? await screen.close() } }
         let snapshot = replacing(try await authenticatedRenderedSnapshot(JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")),
             screens: [.init(id: "state-screen", defaultViewModelName: "Runtime", defaultInstanceId: "root-sdk-id", responseCaptures: [])],
             viewModelValues: try JSONDecoder().decode([[String: JourneyReleaseJSONValue]].self, from: JSONEncoder().encode(values)))
@@ -62,7 +67,7 @@ final class ExperiencePlacementPurchaseTests: JourneyTestCase {
             let buy = try await tap(160, 120)
             XCTAssertTrue(buy.contains { if case .controlAction(let id, _) = $0.kind { return id == "buy" }; return false }, "Buy must come from a native pointer")
             let action = service.resolveJourneyPresentationAction(owner: owner, action: purchase,
-                source: .init(screenId: "state-screen", actionId: "buy", componentId: "buy"), eventSource: nil)
+                source: .init(screenId: "state-screen", actionId: "buy", componentId: "buy", instanceId: nil), eventSource: nil)
             XCTAssertEqual(action?["placementId"], .string("placement-\(plan)"))
             if let action {
                 let result = await service.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: "buy-\(index)")

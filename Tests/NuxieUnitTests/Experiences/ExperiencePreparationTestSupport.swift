@@ -221,7 +221,10 @@ func statePayload(
     defaultViewModelName: String?,
     values: [JourneyViewModelValue]? = nil,
     scene suppliedScene: Data? = nil,
-    artboardName: String = "Artboard"
+    artboardName: String = "Artboard",
+    width: Double = 100,
+    height: Double = 100,
+    definition: ExperienceDefinition? = nil
 ) async throws -> AuthenticatedRuntimePayload {
     let scene = try suppliedScene ?? experiencePreparationTestResource(
         named: "data_binding_test",
@@ -340,8 +343,8 @@ func statePayload(
                 screenId: "state-screen",
                 artboardId: artboardName,
                 artboardName: artboardName,
-                width: 100,
-                height: 100,
+                width: width,
+                height: height,
                 exit: nil
             )],
             transitions: [],
@@ -350,6 +353,7 @@ func statePayload(
             fonts: fonts
         ),
         journey: journey,
+        definition: definition,
         sceneBytes: scene,
         assets: runtimeAssets
     )
