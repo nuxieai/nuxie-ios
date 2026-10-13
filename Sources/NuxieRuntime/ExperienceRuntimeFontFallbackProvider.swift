@@ -66,7 +66,9 @@ package enum ExperienceRuntimeFontFallbackProvider {
                     for coordinate in UnsafeBufferPointer(start: coordinates, count: count) {
                         variations[NSNumber(value: coordinate.axis)] = NSNumber(value: coordinate.value)
                     }
-                    font = CTFontCreateCopyWithVariations(font, variations as CFDictionary)
+                    let descriptor = CTFontDescriptorCreateWithAttributes(
+                        [kCTFontVariationAttribute: variations] as CFDictionary)
+                    font = CTFontCreateCopyWithAttributes(font, 2048, nil, descriptor)
                 }
                 guard let path = CTFontCreatePathForGlyph(font, glyph, nil) else { return }
                 // Mirrors font_hb_apple.mm apply_element: normalized 2048
