@@ -16,7 +16,7 @@ actor ExperiencePresentationHeight {
     }
     private final class ResourceToken {}
     private static let contract: Result<Contract, Error> = Result {
-        #if SWIFT_PACKAGE
+        #if SWIFT_PACKAGE || NUXIE_BAZEL
         let bundle = Bundle.module
         #else
         let bundle = Bundle(for: ResourceToken.self)
@@ -42,9 +42,8 @@ actor ExperiencePresentationHeight {
                catalog.properties.contains(where: {
                    $0.schemaIndex == schema.index && $0.name == contract.property.name && $0.kind == .number
                }) {
-                let value = try await runtime.makeViewModel(schemaIndex: schema.index)
-                try await runtime.setGlobalViewModel(name: contract.globalName, instance: value)
-                instance = value
+                instance = try await runtime.bindGlobalViewModel(named: contract.globalName,
+                    sharingAcrossSessions: false)
             }
             resolved = true
         }

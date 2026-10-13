@@ -1038,10 +1038,11 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.rootViewModelReference() }
     }
 
-    /// Bind one file-authored global, shared by every session in this file group.
-    package func bindGlobalViewModel(named name: String) async throws -> NuxieNativeViewModelReference? {
+    /// Bind a file-authored global. Platform presentation values belong to one session;
+    /// authored shared values retain the default file scope.
+    package func bindGlobalViewModel(named name: String, sharingAcrossSessions: Bool = true) async throws -> NuxieNativeViewModelReference? {
         let state = try requireState()
-        return try await executor.call { try state.bindGlobalViewModel(named: name) }
+        return try await executor.call { try state.bindGlobalViewModel(named: name, sharingAcrossSessions: sharingAcrossSessions) }
     }
 
     package func makeViewModel(
@@ -1834,12 +1835,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         return try viewModel.reference()
     }
 
-    func bindGlobalViewModel(named name: String) throws -> NuxieNativeViewModelReference? {
+    func bindGlobalViewModel(named name: String, sharingAcrossSessions: Bool = true) throws -> NuxieNativeViewModelReference? {
         let catalog = try file.viewModelCatalog()
         guard let schema = catalog.schemas.first(where: { $0.name == name && $0.isGlobal }) else { return nil }
         let reference: NuxieNativeViewModelReference
         let model: NuxieNativeViewModelHandle
-        if let sharedContext, let existing = sharedContext.globalViewModels[name] {
+        if sharingAcrossSessions, let sharedContext, let existing = sharedContext.globalViewModels[name] {
             reference = existing
             model = try sharedContext.resolve(existing)
         } else if let existing = globalViewModels[name], let retained = retainedViewModels[existing.rawValue] {
@@ -1849,7 +1850,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             model = try file.makeViewModel(schemaIndex: schema.index,
                 authoredInstanceIndex: nil)
             reference = try model.reference()
-            if let sharedContext {
+            if sharingAcrossSessions, let sharedContext {
                 sharedContext.sharedViewModels[reference.rawValue] = model
                 sharedContext.globalViewModels[name] = reference
             } else {
