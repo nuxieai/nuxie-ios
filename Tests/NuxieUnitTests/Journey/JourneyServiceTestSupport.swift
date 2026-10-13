@@ -876,7 +876,8 @@ extension JourneyTestCase {
             _, _ in throw JourneyJournalError.invalidState
         },
         journalBeforePersist: (@Sendable () throws -> Void)? = nil,
-        beforeCommerceOutcomeDeferral: (@Sendable (String) async throws -> Void)? = nil
+        beforeCommerceOutcomeDeferral: (@Sendable (String) async throws -> Void)? = nil,
+        onPresentationContinuationFinished: (@Sendable () -> Void)? = nil
     ) -> JourneyService {
         JourneyService(
             identity: identity,
@@ -899,7 +900,8 @@ extension JourneyTestCase {
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!,
             journalBeforePersist: journalBeforePersist,
-            beforeCommerceOutcomeDeferral: beforeCommerceOutcomeDeferral
+            beforeCommerceOutcomeDeferral: beforeCommerceOutcomeDeferral,
+            onPresentationContinuationFinished: onPresentationContinuationFinished
         )
     }
 

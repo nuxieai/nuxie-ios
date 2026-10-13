@@ -1,0 +1,141 @@
+[
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/products",
+    "value": [
+      {
+        "vmInstanceId": "monthly"
+      },
+      {
+        "vmInstanceId": "annual"
+      }
+    ]
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/selectedProduct",
+    "value": {
+      "vmInstanceId": "monthly"
+    }
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/selectedIndex",
+    "value": 0
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/marker",
+    "value": "authored parent"
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/selectedPlacementId",
+    "value": "golden:monthly"
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "monthly",
+    "value": {
+      "vmInstanceId": "monthly"
+    }
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "monthly",
+    "instanceName": "Monthly",
+    "path": "productId",
+    "value": "monthly"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "monthly",
+    "instanceName": "Monthly",
+    "path": "placementId",
+    "value": "golden:monthly"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "monthly",
+    "instanceName": "Monthly",
+    "path": "isSelected",
+    "value": true
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "annual",
+    "value": {
+      "vmInstanceId": "annual"
+    }
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "annual",
+    "instanceName": "Annual",
+    "path": "productId",
+    "value": "monthly"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "annual",
+    "instanceName": "Annual",
+    "path": "placementId",
+    "value": "golden:annual"
+  },
+  {
+    "viewModelName": "PaywallProduct",
+    "instanceId": "annual",
+    "instanceName": "Annual",
+    "path": "isSelected",
+    "value": false
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/purchase/status",
+    "value": "idle"
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/purchase/errorCode",
+    "value": ""
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/purchase/invocationId",
+    "value": ""
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/restore/status",
+    "value": "idle"
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/restore/errorCode",
+    "value": ""
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/restore/invocationId",
+    "value": ""
+  },
+  {
+    "viewModelName": "Runtime",
+    "instanceId": "root-sdk-id",
+    "path": "paywall/selectedProductId",
+    "value": "monthly"
+  }
+]

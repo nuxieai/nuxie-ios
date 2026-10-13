@@ -664,18 +664,14 @@ final class ExperiencePresentationService {
                   let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate else {
                 return .failed
             }
+            delegate.beginCommerceProjection(.purchase, effectId: effectId, controller: controller)
             guard let placementId = delegate.resolvePresentationString(placementValue, source: nil),
                   !placementId.isEmpty else {
-                for (path, value) in [
-                    ("paywall/purchase/status", "error"),
-                    ("paywall/purchase/errorCode", "failed"),
-                    ("paywall/purchase/invocationId", effectId),
-                ] {
-                    controller.applyViewModelValue(path: .init(path: path), value: value,
-                        screenId: nil)
-                }
+                delegate.projectCommerceOutcome(.purchase, outlet: "failed", errorCode: "failed",
+                    effectId: effectId, controller: controller)
                 return .advanced(outlet: "failed")
             }
+            delegate.projectCommerceRunning(.purchase, effectId: effectId, controller: controller)
             controller.performPurchase(
                 placementId: placementId,
                 outcomeCorrelation: CommerceOutcomeCorrelation(
@@ -687,6 +683,9 @@ final class ExperiencePresentationService {
             result = .awaitingOutcome
 
         case .restore:
+            guard let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate else { return .failed }
+            delegate.beginCommerceProjection(.restore, effectId: effectId, controller: controller)
+            delegate.projectCommerceRunning(.restore, effectId: effectId, controller: controller)
             controller.performRestore(outcomeCorrelation: CommerceOutcomeCorrelation(
                 eventId: effectId,
                 distinctId: owner.distinctId
@@ -742,6 +741,14 @@ final class ExperiencePresentationService {
             return .failed
         }
         return result
+    }
+
+    func projectJourneyCommerceOutcome(owner: JourneyPresentationOwner, actionType: JourneyActionType,
+        outlet: String, errorCode: String, effectId: String) {
+        guard ownsCurrentJourneyPresentation(owner), let controller = currentExperienceViewController,
+              let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate else { return }
+        delegate.projectCommerceOutcome(actionType, outlet: outlet, errorCode: errorCode,
+            effectId: effectId, controller: controller)
     }
 
     func finishJourneyPresentation(
