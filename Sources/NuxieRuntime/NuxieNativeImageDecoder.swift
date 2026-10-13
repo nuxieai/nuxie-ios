@@ -41,7 +41,7 @@ package struct NuxieNativeDecodedImage {
               ) else {
             return nil
         }
-        guard let drawable = drawableImage(image, encoded: encoded) else { return nil }
+        let drawable = drawableImage(image, encoded: encoded)
         bitmap.draw(
             drawable,
             in: CGRect(x: 0, y: 0, width: image.width, height: image.height)
@@ -54,22 +54,47 @@ package struct NuxieNativeDecodedImage {
         )
     }
 
-    private static func drawableImage(_ image: CGImage, encoded: Data) -> CGImage? {
-        #if os(iOS)
-        // ImageIO expands indexed PNGs to premultiplied RGBA on iOS but
-        // labels that buffer as straight alpha. Drawing it multiplies twice.
-        // Preserve the decoded bytes and color space with the correct label.
+    // Swift initializes static lets once, with synchronization across callers.
+    // Probe ImageIO itself: an OS name or alpha label cannot distinguish these bytes.
+    package static let indexedPNGNeedsAlphaRelabeling: Bool = {
+        // One indexed pixel: straight green 255, alpha 180, tagged sRGB.
+        guard let encoded = Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAAAXNSR0IArs4c6QAAAANQTFRFAP8ANF7AqAAAAAF0Uk5TtIzqr/MAAAAKSURBVHicY2AAAAACAAFIr6RxAAAAAElFTkSuQmCC"
+        ), let source = CGImageSourceCreateWithData(encoded as CFData, nil),
+           let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+           image.alphaInfo == .last,
+           image.bitsPerComponent == 8,
+           image.bitsPerPixel == 32,
+           let data = image.dataProvider?.data,
+           CFDataGetLength(data) >= 4,
+           let bytes = CFDataGetBytePtr(data) else {
+            return false
+        }
+        return Array(UnsafeBufferPointer(start: bytes, count: 4)) == [0, 180, 0, 180]
+    }()
+
+    package static func drawableImage(
+        _ image: CGImage,
+        encoded: Data,
+        needsAlphaRelabeling: Bool = indexedPNGNeedsAlphaRelabeling,
+        copyImage: (CGImage) -> CGImage? = copyWithPremultipliedAlpha
+    ) -> CGImage {
         let header = Array(encoded.prefix(26))
         let indexedPNG = header.count == 26
             && header.starts(with: [137, 80, 78, 71, 13, 10, 26, 10])
             && Array(header[8..<16]) == [0, 0, 0, 13, 73, 72, 68, 82]
             && header[25] == 3 // PNG IHDR indexed-color type.
-        guard indexedPNG,
+        guard needsAlphaRelabeling, indexedPNG,
               image.alphaInfo == .last,
               image.bitsPerComponent == 8,
               image.bitsPerPixel == 32 else {
             return image
         }
+        // Failure to correct the description must still allow the original draw.
+        return copyImage(image) ?? image
+    }
+
+    package static func copyWithPremultipliedAlpha(_ image: CGImage) -> CGImage? {
         guard let data = image.dataProvider?.data,
               let provider = CGDataProvider(data: data),
               let colors = image.colorSpace else {
@@ -92,9 +117,6 @@ package struct NuxieNativeDecodedImage {
             shouldInterpolate: image.shouldInterpolate,
             intent: image.renderingIntent
         )
-        #else
-        return image
-        #endif
     }
 }
 #endif

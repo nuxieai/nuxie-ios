@@ -1265,7 +1265,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
     func testConfiguredImageDecoderPremultipliesAnIndexedPNGOnce() throws {
         // The PNG stores straight green 255 with palette alpha 180. Native
         // import requires green 180, not green 127 (a second alpha product).
-        let encoded = try fixture(named: "translucent-indexed-green", extension: "png")
+        let encoded = try fixture(named: "translucent-indexed-green", extension: "bin")
         let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
             encoded,
             maximumDimension: 512,
@@ -1331,6 +1331,79 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             XCTAssertEqual(decoded.height, height, name)
             XCTAssertEqual(decoded.rowBytes, width * 4, name)
             XCTAssertEqual(Array(decoded.pixels as Data), expected, name)
+        }
+    }
+
+    func testImageDecoderProbeMatchesImageIOBytes() throws {
+        let encoded = try fixture(named: "translucent-indexed-green", extension: "bin")
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(encoded as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let data = try XCTUnwrap(image.dataProvider?.data)
+        let bytes = try XCTUnwrap(CFDataGetBytePtr(data))
+        let pixel = Array(UnsafeBufferPointer(start: bytes + 256 * image.bytesPerRow + 256 * 4, count: 4))
+        XCTAssertTrue(pixel == [0, 255, 0, 180] || pixel == [0, 180, 0, 180])
+        let affected = image.alphaInfo == .last && pixel == [0, 180, 0, 180]
+        XCTAssertEqual(NuxieNativeDecodedImage.indexedPNGNeedsAlphaRelabeling, affected)
+        print("ImageIO palette probe: \(affected ? "multiplied" : "straight or correctly labelled"), alphaInfo=\(image.alphaInfo.rawValue), pixel=\(pixel)")
+    }
+
+    func testImageDecoderDrawsStraightAndMultipliedPaletteBytes() throws {
+        let encoded = try fixture(named: "translucent-indexed-channels", extension: "bin")
+        let colors = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let expected: [UInt8] = [17, 34, 51, 255, 180, 45, 23, 180]
+        for multiplied in [false, true] {
+            let input = multiplied ? expected : [17, 34, 51, 255, 255, 64, 32, 180]
+            let provider = try XCTUnwrap(CGDataProvider(data: Data(input) as CFData))
+            let image = try XCTUnwrap(CGImage(
+                width: 2, height: 1, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: 8, space: colors,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue
+                    | CGBitmapInfo.byteOrder32Big.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+            ))
+            // Force both probe answers without changing shared process state.
+            let drawable = NuxieNativeDecodedImage.drawableImage(
+                image, encoded: encoded, needsAlphaRelabeling: multiplied
+            )
+            XCTAssertEqual(drawable.alphaInfo, multiplied ? .premultipliedLast : .last)
+            let output = try XCTUnwrap(NSMutableData(length: 8))
+            let bitmap = try XCTUnwrap(CGContext(
+                data: output.mutableBytes, width: 2, height: 1, bitsPerComponent: 8,
+                bytesPerRow: 8, space: colors,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            bitmap.draw(drawable, in: CGRect(x: 0, y: 0, width: 2, height: 1))
+            XCTAssertEqual(Array(output as Data), expected)
+            let fallback = NuxieNativeDecodedImage.drawableImage(
+                image, encoded: encoded, needsAlphaRelabeling: true, copyImage: { _ in nil }
+            )
+            XCTAssertTrue(fallback === image, "A failed copy must retain the original drawable")
+        }
+    }
+
+    func testImageDecoderPreservesPackedInterlacedAndProfiledPalettes() throws {
+        // Each palette stores (255,64,32) at alpha 0,64,128,255.
+        let row: [UInt8] = [0, 0, 0, 0, 64, 16, 8, 64, 128, 32, 16, 128, 255, 64, 32, 255]
+        let cases: [(String, UInt32, UInt32, [UInt8], Int)] = [
+            ("decoder-indexed-2bit-alpha", 4, 1, row, 0),
+            ("decoder-indexed-4bit-alpha", 4, 1, row, 0),
+            ("decoder-indexed-interlaced-alpha", 4, 4, Array(repeating: row, count: 4).flatMap { $0 }, 0),
+            // Display P3 grey remains neutral; P3 orange converts to sRGB (255,119,0).
+            ("decoder-indexed-display-p3-alpha", 2, 1, [64, 64, 64, 128, 180, 84, 0, 180], 1),
+        ]
+        for (name, width, height, expected, tolerance) in cases {
+            let encoded = try fixture(named: name, extension: "bin")
+            let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
+                encoded, maximumDimension: 512, maximumDecodedBytes: 512 * 512 * 4
+            ), name)
+            XCTAssertEqual(decoded.width, width, name)
+            XCTAssertEqual(decoded.height, height, name)
+            let actual = Array(decoded.pixels as Data)
+            XCTAssertEqual(actual.count, expected.count, name)
+            for (actualByte, expectedByte) in zip(actual, expected) {
+                XCTAssertLessThanOrEqual(abs(Int(actualByte) - Int(expectedByte)), tolerance, name)
+            }
         }
     }
 
