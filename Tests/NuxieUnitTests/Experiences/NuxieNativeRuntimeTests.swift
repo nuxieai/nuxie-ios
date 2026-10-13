@@ -1407,6 +1407,100 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
+    func testImageDecoderPreservesWideEightBitPaletteAlpha() throws {
+        let encoded = try fixture(named: "decoder-indexed-wide-8bit-alpha", extension: "bin")
+        let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
+            encoded, maximumDimension: 256, maximumDecodedBytes: 256 * 64 * 4
+        ))
+        XCTAssertEqual(decoded.width, 256)
+        XCTAssertEqual(decoded.height, 64)
+        XCTAssertEqual(decoded.rowBytes, 256 * 4)
+        XCTAssertEqual(encoded[24], 8)
+        let (palette, alpha) = try indexedPalette(encoded)
+        XCTAssertEqual(palette.count, 192 * 3)
+        XCTAssertEqual(alpha.count, 192)
+        XCTAssertEqual(Set(alpha).count, 64)
+        let pixels = Array(decoded.pixels as Data)
+        // The unfiltered file row stores index band*64 + floor(x*63/255).
+        // Read the file's own straight PLTE and tRNS, then multiply once.
+        for y in [0, 24, 48] {
+            for x in [0, 64, 128, 192, 255] {
+                let index = min(y / 22, 2) * 64 + x * 63 / 255
+                let a = Int(alpha[index])
+                let expected = (0..<3).map { UInt8((Int(palette[index * 3 + $0]) * a + 127) / 255) }
+                    + [UInt8(a)]
+                let offset = (y * 256 + x) * 4
+                let actual = Array(pixels[offset..<offset + 4])
+                print("Wide palette (\(x),\(y)): expected=\(expected), actual=\(actual)")
+                XCTAssertEqual(actual, expected, "pixel (\(x),\(y))")
+            }
+        }
+    }
+
+    func testImageDecoderPalettePathDependsOnEncodedBitDepth() throws {
+        let names = [
+            "decoder-path-1bit-two", "decoder-path-2bit-two",
+            "decoder-path-4bit-two", "decoder-path-8bit-two",
+            "decoder-path-2bit-four-short", "decoder-path-2bit-four-full",
+            "decoder-path-8bit-four-short", "decoder-path-8bit-four-full",
+            "decoder-path-4bit-sixteen", "decoder-path-8bit-sixteen",
+            "decoder-path-8bit-one",
+        ]
+        for name in names {
+            let encoded = try fixture(named: name, extension: "bin")
+            let (palette, alpha) = try indexedPalette(encoded)
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(encoded as CFData, nil))
+            let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            let expected: [UInt8] = (0..<image.width).flatMap { x in
+                let index = x % (palette.count / 3)
+                let a = index < alpha.count ? Int(alpha[index]) : 255
+                return (0..<3).map { UInt8((Int(palette[index * 3 + $0]) * a + 127) / 255) }
+                    + [UInt8(a)]
+            }
+            let original = try drawDecoderControl(image)
+            let decoded = try XCTUnwrap(NuxieNativeDecodedImage.decode(
+                encoded, maximumDimension: 256, maximumDecodedBytes: 256 * 64 * 4
+            ), name)
+            let affected = original != expected
+            print("Palette path \(name): encodedDepth=\(encoded[24]), entries=\(palette.count / 3), tRNS=\(alpha), CG=\(image.bitsPerComponent)/\(image.bitsPerPixel)/alpha\(image.alphaInfo.rawValue), original=\(original), expected=\(expected), affected=\(affected)")
+            XCTAssertEqual(Array(decoded.pixels as Data), expected, name)
+            XCTAssertEqual(affected,
+                NuxieNativeDecodedImage.indexedPNGNeedsAlphaRelabeling && encoded[24] < 8,
+                name)
+        }
+    }
+
+    private func indexedPalette(_ encoded: Data) throws -> ([UInt8], [UInt8]) {
+        let bytes = Array(encoded)
+        var offset = 8
+        var palette: [UInt8] = []
+        var alpha: [UInt8] = []
+        while offset + 12 <= bytes.count {
+            let length = bytes[offset..<offset + 4].reduce(0) { $0 * 256 + Int($1) }
+            guard offset + 12 + length <= bytes.count else { throw CocoaError(.fileReadCorruptFile) }
+            let type = String(bytes: bytes[offset + 4..<offset + 8], encoding: .ascii)
+            let payload = Array(bytes[offset + 8..<offset + 8 + length])
+            if type == "PLTE" { palette = payload }
+            if type == "tRNS" { alpha = payload }
+            offset += length + 12
+        }
+        XCTAssertFalse(palette.isEmpty)
+        return (palette, alpha)
+    }
+
+    private func drawDecoderControl(_ image: CGImage) throws -> [UInt8] {
+        let output = try XCTUnwrap(NSMutableData(length: image.width * image.height * 4))
+        let colors = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let bitmap = try XCTUnwrap(CGContext(
+            data: output.mutableBytes, width: image.width, height: image.height,
+            bitsPerComponent: 8, bytesPerRow: image.width * 4, space: colors,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                | CGBitmapInfo.byteOrder32Big.rawValue
+        ))
+        bitmap.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return Array(output as Data)
+    }
+
     func testConfiguredImportDecodesAnEmbeddedImageAgainstItsInspectedCatalog() async throws {
         let encoded = try fixture(named: "in_band_asset", extension: "riv.base64")
         guard let scene = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters) else {
