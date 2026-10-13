@@ -132,7 +132,7 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
         let presenter = ExperiencePresentationService(windowProvider: MockWindowProvider(), experiences: experiences, eventLog: events, identity: identity)
         let continuation = PaywallContinuationSignal()
         let journeys = makeService(identity: identity, events: events, directory: directory, presenter: presenter,
-            onPresentationContinuationFinished: { continuation.finished.fulfill() })
+            onPresentationContinuationFinished: { continuation.notify() })
         sink.route = { request in
             await journeys.handleEvent(NuxieEvent(id: request.eventId, name: request.name, distinctId: request.distinctId, properties: request.properties ?? [:]))
             return true
@@ -251,5 +251,19 @@ private final class PaywallStore: NuxiePurchaseDelegate, @unchecked Sendable {
 }
 
 private final class PaywallContinuationSignal: @unchecked Sendable {
-    var finished = XCTestExpectation(description: "continuation finished")
+    private let lock = NSLock()
+    private var expected = XCTestExpectation(description: "continuation finished")
+    private var notified = false
+    var finished: XCTestExpectation {
+        get { lock.withLock { expected } }
+        set { lock.withLock { expected = newValue; notified = false } }
+    }
+    func notify() {
+        let pending: XCTestExpectation? = lock.withLock {
+            guard !notified else { return nil }
+            notified = true
+            return expected
+        }
+        pending?.fulfill()
+    }
 }
