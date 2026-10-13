@@ -65,11 +65,12 @@ final class NuxieNativeGlobalInstallTests: XCTestCase {
         for selection: NuxieNativePlayerSelection in [.staticArtboard, .linearAnimation("Timeline")] {
             let runtime = try await open(selection)
             try await runtime.enableSemantics()
+            let before = try await labels(runtime)
             let bound = try await runtime.bindGlobalViewModel(named: "Flags")
             let value = try XCTUnwrap(bound)
             _ = try await runtime.mutateViewModel([.setBool(instance: value, path: "enabled", value: true)])
             let unchanged = try await labels(runtime)
-            XCTAssertEqual(unchanged, try expectedLabels("disabledLabels"))
+            XCTAssertEqual(unchanged, before, "A player without a state machine retains its unbound drawing")
         }
         let runtime = try await open(.defaultSceneWithInputStateMachine("Main"))
         try await runtime.enableSemantics()

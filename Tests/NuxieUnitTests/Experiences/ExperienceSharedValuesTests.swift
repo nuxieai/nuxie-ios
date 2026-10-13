@@ -335,7 +335,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         }
     }
 
-    func testPublishedDeviceGlobalReachesScreenAndCopyBeforeFirstDraw() async throws {
+    func testPublishedDeviceGlobalIsScopedToEachMountedScreen() async throws {
         let expected = try PublishedRunValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,
             screens: expected.screens)
@@ -355,7 +355,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let initial = try XCTUnwrap(initialValue)
         let otherValue = try await second.environmentSnapshot()
         let other = try XCTUnwrap(otherValue)
-        XCTAssertEqual(initial.rootInstanceID, other.rootInstanceID, "One run shares one env instance")
+        XCTAssertNotEqual(initial.rootInstanceID, other.rootInstanceID, "Each mounted screen owns its native geometry and motion environment")
         XCTAssertEqual(initial.values.first { $0.name == "reduceMotion" }?.value, .bool(false))
         XCTAssertEqual(initial.values.first { $0.name == "top" }?.value, .number(0))
         try await first.enableSemantics()
@@ -380,11 +380,16 @@ final class ExperienceSharedValuesTests: XCTestCase {
         XCTAssertTrue(zip(originalInk, movedInk).allSatisfy { abs(Int($0) - Int($1)) <= 2 },
             "Device's unchanged ink moves by exactly the source's safe-area delta")
         let secondPixels = try await renderCopyPixels(second)
-        XCTAssertEqual(secondPixels, after.pixels, "Both mounted screens draw the shared global")
-        try await second.updateEnvironment(reduceMotion: false, safeArea: .zero)
+        XCTAssertEqual(secondPixels, before.pixels, "The other screen retains its own environment")
+        try await second.updateEnvironment(reduceMotion: true,
+            safeArea: .init(top: 31, bottom: 0, left: 0, right: 0))
+        _ = try await first.step(elapsedSeconds: 0)
+        let retained = try await renderCopyPixels(first)
+        XCTAssertEqual(retained, after.pixels, "The other screen's env update cannot shift this screen")
+        try await first.updateEnvironment(reduceMotion: false, safeArea: .zero)
         _ = try await first.step(elapsedSeconds: 0)
         let restored = try await renderCopyPixels(first)
-        XCTAssertEqual(restored, before.pixels, "Live env updates restore the initial drawing on the other screen")
+        XCTAssertEqual(restored, before.pixels, "A screen restores its own initial environment")
     }
 
     func testPublishedCopyDrawsSelectedValueOnItsFirstFrame() async throws {
