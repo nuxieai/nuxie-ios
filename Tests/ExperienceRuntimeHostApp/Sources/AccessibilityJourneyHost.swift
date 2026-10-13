@@ -8,6 +8,7 @@ import UIKit
 final class AccessibilityJourneyHostViewController: UIViewController {
     private let status = UILabel()
     private let start = UIButton(type: .system)
+    private let openLesson = UIButton(type: .system)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -18,7 +19,11 @@ final class AccessibilityJourneyHostViewController: UIViewController {
         start.setTitle("Start Experience", for: .normal)
         start.accessibilityIdentifier = "start-accessibility-journey"
         start.addTarget(self, action: #selector(startJourney), for: .touchUpInside)
-        let stack = UIStackView(arrangedSubviews: [status, start])
+        openLesson.setTitle("Open lesson", for: .normal)
+        openLesson.accessibilityIdentifier = "open-parla-lesson"
+        openLesson.isHidden = !ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification")
+        openLesson.addTarget(self, action: #selector(triggerLesson), for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [status, start, openLesson])
         stack.axis = .vertical
         stack.spacing = 24
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -28,6 +33,10 @@ final class AccessibilityJourneyHostViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
             stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
         ])
+    }
+
+    @objc private func triggerLesson() {
+        NuxieSDK.shared.trigger("lesson_opened")
     }
 
     @objc private func startJourney() {
@@ -68,7 +77,9 @@ private struct AccessibilityFixture {
 
     init() throws {
         guard let resource = Bundle.main.resourceURL else { throw CocoaError(.fileNoSuchFile) }
-        root = resource.appendingPathComponent("rendered-semantic-roles", isDirectory: true)
+        let directory = ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification")
+            ? "parla-sheets" : "rendered-semantic-roles"
+        root = resource.appendingPathComponent(directory, isDirectory: true)
         let data = try Data(contentsOf: root.appendingPathComponent("release-entry.json"))
         guard let entry = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let locator = entry["locator"] as? [String: Any],
@@ -118,7 +129,7 @@ private struct AccessibilityFixture {
                 "reference": ["experienceId": experienceID, "versionId": versionID,
                               "legId": legID, "descriptorSha256": digest],
                 "binding": ["type": "new"],
-                "entryCondition": ["type": "app_foregrounded"],
+                "entryCondition": (descriptor["leg"] as? [String: Any])?["entryCondition"] ?? [:],
                 "context": ["event": [:], "responses": [:]],
             ]],
         ])

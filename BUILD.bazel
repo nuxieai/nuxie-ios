@@ -192,6 +192,7 @@ apple_resource_group(
         "Tests/ExperienceRuntimeHostApp/Fixtures/**",
         "Tests/ExperienceRuntimeHostApp/PresentationStates/**",
         "fixtures/journeys/rendered-semantic-roles/**",
+        "fixtures/journeys/parla-sheets/**",
     ]),
     strip_structured_resources_prefixes = ["Tests/ExperienceRuntimeHostApp", "fixtures/journeys"],
 )

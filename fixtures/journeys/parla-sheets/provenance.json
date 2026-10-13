@@ -1,0 +1,36 @@
+{
+  "publisherParentCommit": "c55753145c76cabb17964d023eb775d1ed170c3d",
+  "pendingPublisherSwitchSource": "0d3c3ff497d70f5276b99424ae9a30fbd9607168",
+  "source": "tests/fixtures/e2e-experience-files/presentation-sheets",
+  "sourceFiles": {
+    "experience.json": "0c27fbdf67ead572dbc7ca5929c12140611bfeef9b5569b1bc87263651234932",
+    "styles/common.css": "adf438ce267bafa336c84c4a6bbf234f85b5868ab26d0c77f85c86efe06bc318",
+    "screens/saved/index.html": "e67d7587fa69d794a19de33f2133072eee42d48834a183c19f353fb92b22351e",
+    "screens/saved/style.css": "c348d1a55120ee078d8daea985e0b5ee9860928c4dd09a5b2df0e164a0b0a8f3",
+    "screens/saved/frame.json": "e6bae9e1d26db1a5c54ec48ff5174fd0dab3a3ac5ee7bce97536bae7af4cd13a",
+    "screens/offer/index.html": "b23095e1b035b5c258c224d67c0b24e347d6c0468c0922549544a0894fc8c6e5",
+    "screens/offer/style.css": "3c20d02e40cb4387a2403e28865bf44606ef727236712fcae1aad7b87dbac650",
+    "screens/offer/frame.json": "b14ca52ccaed439f52d59c19c98c5a0844f7a2f5edd451c202b41c6b68896fbf",
+    "screens/lesson/index.html": "19e602376a445f6270beefdd0e6440d2ade3007291d24b3f9bf8d42679e441fb",
+    "screens/lesson/style.css": "cdaa93a0789bb98af34ac850eff1ae9f9b1598ab928d918ede774fd72b1aa20b",
+    "screens/lesson/frame.json": "153ad4a64d07e1b248455cf5dd44b8061b1103f7863b76837b62e4a83fd19ddb"
+  },
+  "files": {
+    "release-entry.json": {
+      "sha256": "81f42a9201fc740f72fb5561ae67355c6fa807161758deaf1f37a44294ed918e",
+      "sizeBytes": 7009
+    },
+    "descriptor.json": {
+      "sha256": "ecfa37e2acfa73e0a28ed1413ed4354e179bd5c1f5a9c6941a4e10af841b7931",
+      "sizeBytes": 4607
+    },
+    "assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": {
+      "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
+      "sizeBytes": 879708
+    },
+    "renders/sha256/08df81fbb8b851c7abdd37f3b7229c7c0f169c18f9ac347ddad02202d0207efa.nux": {
+      "sha256": "08df81fbb8b851c7abdd37f3b7229c7c0f169c18f9ac347ddad02202d0207efa",
+      "sizeBytes": 12300
+    }
+  }
+}
