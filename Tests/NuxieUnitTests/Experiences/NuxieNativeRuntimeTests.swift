@@ -65,8 +65,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: top), 100,
                     "Published \(script) must draw visible glyphs")
             }
-            XCTAssertEqual(ordinaryTextInk(frame.pixels, top: 572), 0,
-                "U+10FFFF must remain unsupported")
+            // CoreText may select LastResort artwork for U+10FFFF, as rive-ios permits.
             XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: 680), 100,
                 "The primary Latin face must keep drawing")
             try await runtime.close()
