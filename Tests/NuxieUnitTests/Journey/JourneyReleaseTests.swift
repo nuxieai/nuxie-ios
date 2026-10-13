@@ -8,6 +8,38 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testPublishedParlaAuthenticatesAllThreePresentations() throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/journeys/parla-sheets")
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release-entry.json")))
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("descriptor.json"))
+        var testing = NuxieTestingOverrides()
+        testing.qualifyExperienceAccessibility = true
+        let supported = JourneyReleaseRuntime.supported(environment: .development,
+            testing: NuxieInternalConfiguration(testingOverrides: testing))
+        let release = try JourneyReleaseVerifier().authenticateJourney(
+            envelopeBytes: JSONEncoder().encode(entry.envelope),
+            authorizationKeys: [key(signingKey.publicKey.rawRepresentation)],
+            expectedIdentity: entry.locator.identity, expectedLegId: entry.locator.legId,
+            supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+        XCTAssertEqual(release.exactDescriptorBytes, bytes)
+        let descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let presentation = try XCTUnwrap(descriptor["presentation"] as? [String: String])
+        XCTAssertEqual(presentation, ["orientation": "any", "backgroundColor": "#000000FF"])
+        let leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
+        let steps = try XCTUnwrap(leg["steps"] as? [[String: Any]])
+        let navigations = steps.compactMap { $0["action"] as? [String: Any] }.filter { $0["type"] as? String == "navigate" }
+        for (screen, height) in [("scr_screens_soffer", "medium"), ("scr_screens_ssaved", "fit-content")] {
+            let action = try XCTUnwrap(navigations.first { $0["screenId"] as? String == screen })
+            let transition = try XCTUnwrap(action["transition"] as? [String: String])
+            XCTAssertEqual(transition, ["type": "modal", "present": "sheet", "height": height, "closedby": "any"])
+        }
+        let lesson = try XCTUnwrap(navigations.first { $0["screenId"] as? String == "scr_screens_slesson" })
+        XCTAssertNil(lesson["transition"])
+    }
+
     func testSignedV3NestedObjectPolicyAuthenticatesExactMetadata() throws {
         let fixture = try golden()
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: fixture.envelope.descriptorBytesBase64))) as? [String: Any])

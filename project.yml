@@ -399,6 +399,8 @@ targets:
     sources:
       - path: fixtures/journeys/rendered-semantic-roles
         type: folder
+      - path: fixtures/journeys/parla-sheets
+        type: folder
       - path: Tests/ExperienceRuntimeHostApp/Sources
         name: ExperienceRuntimeHostApp
       - path: Tests/ExperienceRuntimeHostApp/Fixtures
