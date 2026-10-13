@@ -25,7 +25,9 @@ package enum ExperienceRuntimeFontFallbackProvider {
 
     // Swift's static initialization installs the process hook exactly once.
     private static let installation: UInt32 = nux_font_set_fallback_proc({ _, missing, index, _ in
-        guard index == 0 else { return nil }
+        // Layout controls need no fallback artwork. Retain the primary font's
+        // metrics instead of introducing a system face for a missing line feed.
+        guard index == 0, missing >= 0x20, !(0x7F..<0xA0).contains(missing) else { return nil }
         return fallback(for: missing)
     }, nil)
 
