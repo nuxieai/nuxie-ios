@@ -1344,7 +1344,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertTrue(pixel == [0, 255, 0, 180] || pixel == [0, 180, 0, 180])
         let affected = image.alphaInfo == .last && pixel == [0, 180, 0, 180]
         XCTAssertEqual(NuxieNativeDecodedImage.indexedPNGNeedsAlphaRelabeling, affected)
-        print("ImageIO palette probe: \(affected ? "multiplied" : "straight or correctly labelled"), alphaInfo=\(image.alphaInfo.rawValue), pixel=\(pixel)")
+        print("ImageIO palette probe: \(NuxieNativeDecodedImage.indexedPNGNeedsAlphaRelabeling ? "multiplied" : "straight or correctly labelled"), alphaInfo=\(image.alphaInfo.rawValue), pixel=\(pixel)")
     }
 
     func testImageDecoderDrawsStraightAndMultipliedPaletteBytes() throws {

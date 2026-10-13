@@ -57,20 +57,21 @@ package struct NuxieNativeDecodedImage {
     // Swift initializes static lets once, with synchronization across callers.
     // Probe ImageIO itself: an OS name or alpha label cannot distinguish these bytes.
     package static let indexedPNGNeedsAlphaRelabeling: Bool = {
-        // One indexed pixel: straight green 255, alpha 180, tagged sRGB.
+        // Four 2-bit palette entries share straight (255,64,32), at alpha 0,64,128,255.
+        // Multiple alpha levels exercise ImageIO's palette expansion path.
         guard let encoded = Data(base64Encoded:
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAMAAAAoyzS7AAAAAXNSR0IArs4c6QAAAANQTFRFAP8ANF7AqAAAAAF0Uk5TtIzqr/MAAAAKSURBVHicY2AAAAACAAFIr6RxAAAAAElFTkSuQmCC"
+            "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABAgMAAACEUudeAAAAAXNSR0IArs4c6QAAAAxQTFRF/0Ag/0Ag/0Ag/0AgXACsbQAAAAR0Uk5TAECA/9WInJwAAAAKSURBVHicY5AGAAAdAByO9PUhAAAAAElFTkSuQmCC"
         ), let source = CGImageSourceCreateWithData(encoded as CFData, nil),
            let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
            image.alphaInfo == .last,
            image.bitsPerComponent == 8,
            image.bitsPerPixel == 32,
            let data = image.dataProvider?.data,
-           CFDataGetLength(data) >= 4,
+           CFDataGetLength(data) >= 8,
            let bytes = CFDataGetBytePtr(data) else {
             return false
         }
-        return Array(UnsafeBufferPointer(start: bytes, count: 4)) == [0, 180, 0, 180]
+        return Array(UnsafeBufferPointer(start: bytes + 4, count: 4)) == [64, 16, 8, 64]
     }()
 
     package static func drawableImage(

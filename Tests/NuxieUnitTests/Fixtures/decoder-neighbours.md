@@ -25,3 +25,5 @@ For example, the translucent red pixel gives red 255*180/255=180, green round(64
 Display P3 uses the sRGB transfer curve. Linearizing (255,128,0), multiplying by the Display P3 to sRGB primary matrix, clipping to the sRGB gamut and applying the transfer curve gives approximately (255,119,0). Multiplication by 180/255 gives (180,84,0). Neutral grey retains its channels and gives round(128*128/255)=64. This expectation comes from the encoded profile and source colours, independently of ImageIO output.
 
 `translucent-indexed-green.bin` retains the original 512 by 512 palette PNG without Apple's PNG resource copying. Its straight palette entry is (0,255,0), with tRNS alpha 180. The central native pixel must be (0,180,0,180).
+
+The built-in process probe uses the 120 encoded bytes of `decoder-indexed-2bit-alpha.bin`. Its second pixel is known straight (255,64,32,64), or multiplied (64,16,8,64). Multiple palette alpha levels select the affected ImageIO expansion path; a single-entry palette can use a different path even in the same process.
