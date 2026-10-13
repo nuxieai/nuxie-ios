@@ -53,11 +53,11 @@ final class AccessibilityJourneyHostViewController: UIViewController {
                 configuration.environment = .development
                 configuration.testingOverrides.apiEndpoint = URL(string: "https://semantic.sdk-fixtures.nuxie.test")!
                 configuration.testingOverrides.urlSession = URLSession(configuration: sessionConfiguration)
-                configuration.testingOverrides.qualifyExperienceAccessibility = true
+                configuration.testingOverrides.qualifyExperienceAccessibility = !ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification")
                 configuration.testingOverrides.customStoragePath = FileManager.default.urls(
                     for: .documentDirectory, in: .userDomainMask
                 )[0].appendingPathComponent("accessibility-qualification/\(UUID().uuidString)", isDirectory: true)
-                configuration.testingOverrides.presentationDiagnosticsEnabled = false
+                configuration.testingOverrides.presentationDiagnosticsEnabled = ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification")
                 try NuxieSDK.shared.setup(with: configuration)
                 status.text = "SDK started; waiting for the signed Experience. The journal is retained in Documents/accessibility-qualification."
             } catch {
