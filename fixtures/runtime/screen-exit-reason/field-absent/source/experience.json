@@ -1,0 +1,26 @@
+{
+  "$schema": "https://nuxie.ai/schema/experience/1.json",
+  "platforms": [
+    "ios:apple_app_store",
+    "android:google_play"
+  ],
+  "entry": {
+    "steps": [
+      {
+        "type": "navigate",
+        "screen": "screens/tap"
+      }
+    ]
+  },
+  "journey": [
+    {
+      "screen": "screens/tap",
+      "on": "done",
+      "steps": [
+        {
+          "type": "dismiss"
+        }
+      ]
+    }
+  ]
+}
