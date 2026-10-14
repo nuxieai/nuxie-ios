@@ -21,6 +21,8 @@ final class ExperienceRuntimeSurfaceView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
 
     weak var runtimeObserver: (any ExperienceRuntimeSurfaceViewObserver)?
+    var onEnvironmentChange: (() -> Void)?
+    private(set) var foldEnvironment = ExperienceFoldEnvironment.unavailable
 
     private struct Geometry: Equatable {
         let bounds: CGRect
@@ -59,11 +61,33 @@ final class ExperienceRuntimeSurfaceView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         configureLayer()
+        configureFoldObservation()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         configureLayer()
+        configureFoldObservation()
+    }
+
+    private func configureFoldObservation() {
+        if #available(iOS 27.1, *) {
+            addInteraction(UIHingeInteraction { [weak self] _, update in
+                guard let self else { return }
+                let state: ExperienceFoldEnvironment.State
+                switch update.hinge?.status {
+                case .closed: state = .closed
+                case .partiallyOpen: state = .partiallyOpen
+                case .fullyOpen: state = .fullyOpen
+                case .unknown: state = .unknown
+                default: state = update.hinge == nil ? .unavailable : .unknown
+                }
+                let next = ExperienceFoldEnvironment(angleRadians: update.hinge.map { Double($0.angle) }, state: state)
+                guard next != foldEnvironment else { return }
+                foldEnvironment = next
+                onEnvironmentChange?()
+            })
+        }
     }
 
     override func layoutSubviews() {
@@ -92,6 +116,8 @@ final class ExperienceRuntimeSurfaceView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window == nil { foldEnvironment = .unavailable }
+        onEnvironmentChange?()
         runtimeObserver?.runtimeSurfaceViewVisibilityDidChange()
         updateGeometry()
     }

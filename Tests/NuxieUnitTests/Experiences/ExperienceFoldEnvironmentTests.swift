@@ -1,0 +1,91 @@
+import Foundation
+import XCTest
+@testable import NuxieRuntime
+@testable import Nuxie
+
+final class ExperienceFoldEnvironmentTests: XCTestCase {
+    func testEndpointsAndFractionsAreNormalizedWithoutLayoutAssumptions() {
+        for (angle, state, expected) in [
+            (0.4, ExperienceFoldEnvironment.State.closed, Float(0)),
+            (2.0, .fullyOpen, Float(1)),
+            (Double.pi / 2, .partiallyOpen, Float(0.5)),
+            (Double.pi * 0.709876543, .partiallyOpen, Float(0.709876543)),
+            (-2.0, .partiallyOpen, Float(0)),
+            (5.0, .partiallyOpen, Float(1))
+        ] {
+            let value = ExperienceFoldEnvironment(angleRadians: angle, state: state)
+            XCTAssertTrue(value.available)
+            XCTAssertEqual(value.state, state)
+            XCTAssertEqual(value.openProgress, expected, accuracy: 0.000001)
+            XCTAssertEqual(value.openProgress + value.foldProgress, 1)
+        }
+    }
+
+    func testMissingUnknownAndInvalidObservationsAreNeutralAndDistinct() {
+        for (angle, state) in [
+            (nil, ExperienceFoldEnvironment.State.unavailable),
+            (Double.pi, .unknown),
+            (Double.nan, .partiallyOpen),
+            (Double.infinity, .closed)
+        ] {
+            let value = ExperienceFoldEnvironment(angleRadians: angle, state: state)
+            XCTAssertFalse(value.available)
+            XCTAssertEqual(value.state, state)
+            XCTAssertEqual(value.openProgress, 1)
+            XCTAssertEqual(value.foldProgress, 0)
+        }
+    }
+
+    func testViewportUsesFiniteLogicalDimensions() {
+        XCTAssertEqual(ExperienceViewportEnvironment(width: 466, height: 678).width, 466)
+        XCTAssertEqual(ExperienceViewportEnvironment(width: .infinity, height: -1),
+                       ExperienceViewportEnvironment(width: 0, height: 0))
+    }
+
+    #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    func testOlderEnvironmentArtifactsReceiveOnlyTheirDeclaredSlots() throws {
+        let catalog = NuxieNativeViewModelCatalog(
+            schemas: [.init(index: 0, name: "env", propertyRange: 0..<1,
+                            authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: true)],
+            properties: [.init(schemaIndex: 0, index: 0, name: "reduceMotion", kind: .bool,
+                               referencedSchemaIndex: nil, enumLabels: [])], authoredInstances: [])
+        let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: 1))
+        let writes = ExperienceEnvironmentBindings(catalog: catalog).mutations(
+            reference: reference, reduceMotion: true,
+            viewport: .init(width: 466, height: 678),
+            fold: .init(angleRadians: .pi / 2, state: .partiallyOpen))
+        XCTAssertEqual(writes, [.setBool(instance: reference, path: "reduceMotion", value: true)])
+    }
+
+    func testFoldBatchUsesArtifactEnumLabelsAndComplementaryFractions() throws {
+        let catalog = NuxieNativeViewModelCatalog(
+            schemas: [
+                .init(index: 0, name: "env", propertyRange: 0..<3,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: true),
+                .init(index: 1, name: "fold", propertyRange: 3..<7,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: false)
+            ], properties: [
+                .init(schemaIndex: 0, index: 0, name: "width", kind: .number, referencedSchemaIndex: nil, enumLabels: []),
+                .init(schemaIndex: 0, index: 1, name: "height", kind: .number, referencedSchemaIndex: nil, enumLabels: []),
+                .init(schemaIndex: 0, index: 2, name: "fold", kind: .viewModel, referencedSchemaIndex: 1, enumLabels: []),
+                .init(schemaIndex: 1, index: 0, name: "available", kind: .bool, referencedSchemaIndex: nil, enumLabels: []),
+                .init(schemaIndex: 1, index: 1, name: "state", kind: .enumeration, referencedSchemaIndex: nil,
+                      enumLabels: ["partially-open", "unavailable", "closed", "fully-open", "unknown"]),
+                .init(schemaIndex: 1, index: 2, name: "openProgress", kind: .number, referencedSchemaIndex: nil, enumLabels: []),
+                .init(schemaIndex: 1, index: 3, name: "foldProgress", kind: .number, referencedSchemaIndex: nil, enumLabels: [])
+            ], authoredInstances: [])
+        let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: 1))
+        let writes = ExperienceEnvironmentBindings(catalog: catalog).mutations(
+            reference: reference, viewport: .init(width: 466, height: 678),
+            fold: .init(angleRadians: .pi / 4, state: .partiallyOpen))
+        XCTAssertEqual(writes, [
+            .setNumber(instance: reference, path: "width", value: 466),
+            .setNumber(instance: reference, path: "height", value: 678),
+            .setBool(instance: reference, path: "fold/available", value: true),
+            .setNumber(instance: reference, path: "fold/openProgress", value: 0.25),
+            .setNumber(instance: reference, path: "fold/foldProgress", value: 0.75),
+            .setEnumeration(instance: reference, path: "fold/state", value: 0)
+        ])
+    }
+    #endif
+}

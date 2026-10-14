@@ -165,6 +165,9 @@ final class ExperienceScreenViewController: UIViewController {
     private(set) var riveFocusState = NuxieNativeFocusState(hasFocus: false, expectsKeyboardInput: false)
     private var lastPushedFontScale: Double?
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
+    private var lastPushedViewport: ExperienceViewportEnvironment?
+    private var lastPushedFold: ExperienceFoldEnvironment?
+    private var environmentWriteQueued = false
     private var lifecycleState: ExperienceScreenLifecycleState
     private var lifecycleWritesUnavailable = false
     private var didLogUnavailableLifecycleWrite = false
@@ -190,6 +193,10 @@ final class ExperienceScreenViewController: UIViewController {
     func runtimeSnapshot() async throws -> ExperienceInteractiveViewModelSnapshot {
         guard let interactiveScreen else { throw ExperienceInteractiveScreenControllerError.unavailable }
         return try await interactiveScreen.snapshot()
+    }
+    func runtimeEnvironmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
+        guard let interactiveScreen else { throw ExperienceInteractiveScreenControllerError.unavailable }
+        return try await interactiveScreen.environmentSnapshot()
     }
     var lifecyclePhase: ExperienceScreenLifecyclePhase { lifecycleState.phase }
 
@@ -228,6 +235,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        surfaceView.onEnvironmentChange = { [weak self] in self?.syncSafeAreaInsets() }
         NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
             name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
@@ -501,9 +509,14 @@ final class ExperienceScreenViewController: UIViewController {
 
         do {
             let insets = experienceSafeAreaInsets(for: view)
+            let viewport = viewportEnvironment()
+            let fold = surfaceView.foldEnvironment
             try await interactive.updateEnvironment(
-                reduceMotion: lifecycleState.snapshot.reduceMotion, safeArea: insets)
+                reduceMotion: lifecycleState.snapshot.reduceMotion, safeArea: insets,
+                viewport: viewport, fold: fold)
             lastPushedSafeAreaInsets = insets
+            lastPushedViewport = viewport
+            lastPushedFold = fold
             try await loop.start()
             configureTextInputCallbacks()
             bindTextInputs(to: interactive, loop: loop)
@@ -755,19 +768,40 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func syncSafeAreaInsets(force: Bool = false) {
-        if force { lastPushedSafeAreaInsets = nil }
+        if force { lastPushedSafeAreaInsets = nil; lastPushedViewport = nil; lastPushedFold = nil }
         guard isViewLoaded, !isShuttingDown, runtimeFailure == nil,
-              let interactiveScreen, let presentationLoop else { return }
+              !environmentWriteQueued, let interactiveScreen, let presentationLoop else { return }
         let insets = experienceSafeAreaInsets(for: view)
-        guard insets != lastPushedSafeAreaInsets else { return }
-        if presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
-            try await interactiveScreen.updateEnvironment(safeArea: insets)
+        let viewport = viewportEnvironment()
+        let fold = surfaceView.foldEnvironment
+        guard insets != lastPushedSafeAreaInsets || viewport != lastPushedViewport || fold != lastPushedFold else { return }
+        environmentWriteQueued = true
+        if !presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
+            guard let values = await self?.takeLatestEnvironment() else { return .work(requestsFrame: false) }
+            try await interactiveScreen.updateEnvironment(safeArea: values.0, viewport: values.1, fold: values.2)
             return .work(requestsFrame: true)
         }, completion: { [weak self] result in
-            if case .failure(let error) = result { self?.handleTerminalFailure(error) }
+            guard let self else { return }
+            environmentWriteQueued = false
+            if case .failure(let error) = result { handleTerminalFailure(error) }
+            else { syncSafeAreaInsets() }
         }) {
-            lastPushedSafeAreaInsets = insets
+            environmentWriteQueued = false
         }
+    }
+
+    private func viewportEnvironment() -> ExperienceViewportEnvironment {
+        ExperienceViewportEnvironment(width: Double(surfaceView.bounds.width), height: Double(surfaceView.bounds.height))
+    }
+
+    /// Reads at execution time so rapid hinge callbacks cannot grow the queue.
+    private func takeLatestEnvironment() -> (ExperienceSafeAreaInsets, ExperienceViewportEnvironment, ExperienceFoldEnvironment)? {
+        guard !isShuttingDown, runtimeFailure == nil else { return nil }
+        let values = (experienceSafeAreaInsets(for: view), viewportEnvironment(), surfaceView.foldEnvironment)
+        lastPushedSafeAreaInsets = values.0
+        lastPushedViewport = values.1
+        lastPushedFold = values.2
+        return values
     }
 
     func applyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
