@@ -346,6 +346,7 @@ class NativeCommandSelectionTests(unittest.TestCase):
         self.assertIn("--compilation_mode=opt", command)
         self.assertIn("--platforms=@apple_support//platforms:ios_arm64", command)
         self.assertIn("--ios_minimum_os=15.0", command)
+        self.assertIn("--remote_download_outputs=all", command)
 
     def test_hosted_input_suite_selects_its_hosted_test_rule(self):
         command = self.command(["test", "--suite", "hosted-input"])
