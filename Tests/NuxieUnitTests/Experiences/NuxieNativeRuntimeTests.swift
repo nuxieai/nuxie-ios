@@ -90,11 +90,14 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: top), 100,
                     "Published \(script) must draw visible glyphs")
             }
-            // Pinned Rive only reads PNG color bitmaps. On this iPhone OS,
+            // Pinned Rive only reads PNG color bitmaps. On qualified iOS 27.0,
             // Apple Color Emoji supplies emjc and CoreText supplies no path.
             // A blank emoji row therefore matches upstream; this is not emoji support.
-            XCTAssertEqual(ordinaryTextInk(frame.pixels, top: 464), 0,
-                "Apple emjc emoji must match pinned upstream's blank row")
+            let os = ProcessInfo.processInfo.operatingSystemVersion
+            if os.majorVersion == 27 && os.minorVersion == 0 {
+                XCTAssertEqual(ordinaryTextInk(frame.pixels, top: 464), 0,
+                    "Qualified iOS 27.0 emjc emoji must match pinned upstream's blank row")
+            }
             // CoreText may select LastResort artwork for U+10FFFF, as rive-ios permits.
             XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: 680), 100,
                 "The primary Latin face must keep drawing")
