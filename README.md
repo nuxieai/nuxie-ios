@@ -64,7 +64,11 @@ A link already in flight still opens externally after identity change or current
 
 - iOS 15+
 - macOS 12+ for non-rendering SDK behavior
-- Swift 5.9+ (Xcode 15+)
+- Swift 5.9+ language support; iOS source builds require Xcode 27.1+ for the UIKit hinge APIs.
+
+The iOS deployment target remains 15+. Hinge observation runs on iOS 27.1+
+and supplies unavailable values on earlier systems. See
+[runtime environment](docs/runtime-environment.md) for the fold contract.
 
 Rendered product experiences are intentionally iOS-only. The pure-Swift
 `NuxieRuntime` ownership facade and its portable C dependency also compile as
