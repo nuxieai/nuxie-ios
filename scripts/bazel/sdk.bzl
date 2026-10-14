@@ -7,6 +7,29 @@ load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@rules_swift//swift:providers.bzl", "SwiftInfo")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
 
+def _runtime_imports_aspect_impl(target, ctx):
+    files = []
+    if SwiftInfo in target:
+        for module in target[SwiftInfo].direct_modules:
+            if module.name == "NuxieRuntime" and module.swift:
+                files.extend([module.swift.swiftmodule, module.swift.swiftdoc])
+    transitive = []
+    for name in ["deps", "artifact"]:
+        dependencies = getattr(ctx.rule.attr, name, [])
+        if type(dependencies) != "list":
+            dependencies = [dependencies]
+        for dependency in dependencies:
+            if OutputGroupInfo in dependency and hasattr(dependency[OutputGroupInfo], "sdk_runtime_imports"):
+                transitive.append(dependency[OutputGroupInfo].sdk_runtime_imports)
+    return [OutputGroupInfo(sdk_runtime_imports = depset([file for file in files if file], transitive = transitive))]
+
+# Framework linking needs the module, but can leave its documentation output
+# unmaterialized. Publication retains both in the exact configured dependency.
+sdk_runtime_imports_aspect = aspect(
+    implementation = _runtime_imports_aspect_impl,
+    attr_aspects = ["deps", "artifact"],
+)
+
 def _sdk_test_sources_impl(ctx):
     outputs = []
     sources = []

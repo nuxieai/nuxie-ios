@@ -222,6 +222,9 @@ def runtime_slice(runtime: Path, sdk_platform: str, architectures: list[str]) ->
 
 def stage_framework_dependencies(target: str, flags: list[str], sdk_platform: str, stage: Path) -> list[Path]:
     """Retain the exact Swift/C imports needed to load the compiled framework."""
+    run(bazel_command() + ["build", *flags,
+        "--aspects=//scripts/bazel:sdk.bzl%sdk_runtime_imports_aspect",
+        "--output_groups=sdk_runtime_imports", "//:" + target])
     files = outputs(f'filter("^//:NuxieRuntime$", deps(//:{target}))', flags)
     modules = [source for source in files if source.name == "NuxieRuntime.swiftmodule"]
     if len(modules) != 1 or not modules[0].is_file():
