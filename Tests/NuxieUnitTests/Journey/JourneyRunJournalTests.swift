@@ -170,6 +170,26 @@ final class JourneyRunJournalTests: XCTestCase {
         } catch JourneyResponseSaveError.sequenceExhausted {}
     }
 
+    func testRestartAbandonsAnUnsettledSynchronousCommerceReceipt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "buy", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        _ = try await journal.claimEffect(run.id, stepId: "buy")
+        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let resumable = try await reopened.recover(at: date(200))
+        let recoveredRuns = try await reopened.runs()
+        let recovered = try XCTUnwrap(recoveredRuns.first { $0.id == run.id })
+        XCTAssertTrue(resumable.isEmpty)
+        XCTAssertEqual(recovered.completion?.outcome, "abandoned")
+        XCTAssertNil(recovered.pendingCommerce)
+    }
+
     func testResponseSaveFailedPersistenceKeepsSequenceSheetAndOriginalOwner() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

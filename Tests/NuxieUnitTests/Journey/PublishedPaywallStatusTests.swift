@@ -33,6 +33,23 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
     }
 
     @MainActor
+    func testSynchronousBuyFailureSaveErrorAbandonsInsteadOfBlockingLaterBuy() async throws {
+        let failures = JourneyJournalPersistenceFailures()
+        let harness = try await open("empty", persistenceFailures: failures)
+        harness.controller.select("")
+        harness.controller.beforeFailureFeedback = { failures.failNext(1) }
+        harness.continuation.finished = expectation(description: "failed save handled")
+        let accepted = await harness.controller.buy()
+        XCTAssertEqual(accepted, true)
+        await fulfillment(of: [harness.continuation.finished], timeout: 3)
+        let runs = try await harness.journal.runs()
+        XCTAssertFalse(runs.contains { $0.completion == nil && !$0.effectReceipts.isEmpty })
+        XCTAssertFalse(harness.presenter.isExperiencePresented)
+        await harness.journeys.shutdown()
+        try await harness.controller.screen.close()
+    }
+
+    @MainActor
     func testPurchaseAndRestoreProjectStoreLifecycleIntoRealEngine() async throws {
         let harness = try await open("empty")
         let store = harness.store
@@ -54,6 +71,8 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
             await fulfillment(of: [harness.sink.terminal], timeout: 3)
             let settled = try await harness.controller.status("purchase")
             XCTAssertEqual(settled, expected)
+            let terminalError = try await harness.controller.field("purchase", "errorCode")
+            XCTAssertEqual(terminalError, expected == "error" ? StoreKitError.networkUnavailable.localizedDescription : "")
             if expected != "success" { XCTAssertTrue(harness.presenter.isExperiencePresented) }
         }
         await harness.journeys.shutdown()
@@ -73,13 +92,15 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
             await fulfillment(of: [restore.sink.terminal], timeout: 3)
             let settled = try await restore.controller.status("restore")
             XCTAssertEqual(settled, expected)
+            let terminalError = try await restore.controller.field("restore", "errorCode")
+            XCTAssertEqual(terminalError, expected == "error" ? StoreKitError.networkUnavailable.localizedDescription : "")
             await restore.journeys.shutdown()
             try await restore.controller.screen.close()
         }
     }
 
     @MainActor
-    private func open(_ variant: String) async throws -> PaywallHarness {
+    private func open(_ variant: String, persistenceFailures: JourneyJournalPersistenceFailures? = nil) async throws -> PaywallHarness {
         let directory = temporaryDirectory()
         addTeardownBlock { self.removeTemporaryDirectoryIfPresent(directory) }
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -132,6 +153,7 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
         let presenter = ExperiencePresentationService(windowProvider: MockWindowProvider(), experiences: experiences, eventLog: events, identity: identity)
         let continuation = PaywallContinuationSignal()
         let journeys = makeService(identity: identity, events: events, directory: directory, presenter: presenter,
+            journalBeforePersist: { try persistenceFailures?.beforePersist() },
             onPresentationContinuationFinished: { continuation.notify() })
         sink.route = { request in
             await journeys.handleEvent(NuxieEvent(id: request.eventId, name: request.name, distinctId: request.distinctId, properties: request.properties ?? [:]))
@@ -167,7 +189,9 @@ private final class PaywallEngineController: MockExperienceViewController {
     var journeyID = ""
     var sequence: UInt64 = 0
     private var feedback: [JourneyViewModelValue] = []
+    var beforeFailureFeedback: (() -> Void)?
     override func applyViewModelValue(path: VmPathRef, value: Any, screenId: String? = nil, instanceId: String? = nil) {
+        if path.path == "paywall/purchase/status", value as? String == "error" { beforeFailureFeedback?() }
         feedback.append(.init(viewModelName: path.viewModelName ?? "Runtime", instanceId: instanceId, path: path.path, value: AnyCodable(value)))
     }
     override func prepareForDismissal(reason: CloseReason? = nil) async {

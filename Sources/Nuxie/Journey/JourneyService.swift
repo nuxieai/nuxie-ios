@@ -3167,6 +3167,10 @@ private extension JourneyService {
                                 }
                             } catch {
                                 LogWarning("JourneyService: failed to settle synchronous commerce outcome: \(error)")
+                                await finish(run, outcome: "abandoned", leg: leg, journal: journal,
+                                    dismissPresentation: dismissPresentationOnCompletion,
+                                    executionFenceToken: executionFenceToken,
+                                    originAdmission: originAdmission)
                             }
                             return
                         }
