@@ -804,19 +804,6 @@ final class ExperienceScreenViewController: UIViewController {
         return values
     }
 
-    func applyVideoCommand(_ action: JourneyVideoAction) async -> Bool {
-        guard !isShuttingDown, runtimeFailure == nil,
-              let interactiveScreen, let presentationLoop else { return false }
-        return await withCheckedContinuation { continuation in
-            presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork {
-                try await interactiveScreen.applyVideoCommand(action)
-                return .work(requestsFrame: true)
-            }, completion: { result in
-                continuation.resume(returning: (try? result.get()) != nil)
-            })
-        }
-    }
-
     /// Reads the captured field through the same serial lane as input and presentation.
     func readPresentedFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> String {
         guard !isShuttingDown, runtimeFailure == nil,

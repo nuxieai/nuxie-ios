@@ -190,14 +190,14 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
-            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog,
+            pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: true, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog,
                 externalAssets: [:], videoEnabled: true))
         defer { Task { try? await runtime.close() } }
         let videos = try await runtime.videos()
         let video = try XCTUnwrap(videos.first)
         _ = try await runtime.videoStep(componentID: video.componentID, observation: 1, generation: video.generation, value: 2.022)
-        try await runtime.videoCommand(componentID: video.componentID, kind: 1, value: 0)
-        try await runtime.videoCommand(componentID: video.componentID, kind: 2, value: 1.0)
+        try await runtime.setVideoBool(true, path: "paused")
+        try await runtime.setVideoNumber(1.0, path: "current-time")
         _ = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
         let oldVideos = try await runtime.videos()
         let oldGeneration = try XCTUnwrap(oldVideos.first).generation
@@ -213,6 +213,65 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let current = try await runtime.videos()
         XCTAssertFalse(try XCTUnwrap(current.first).wantsPlay)
         try await runtime.close()
+    }
+
+    func testBoundVideoValuesChangeLivePlayback() async throws {
+        let scene = try Data(contentsOf: videoFixtureDirectory().appendingPathComponent("greeting.nux"))
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
+            pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: true,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
+        defer { Task { try? await runtime.close() } }
+        _ = try await runtime.step(elapsedSeconds: 0)
+        let initial = try await runtime.videos()
+        let video = try XCTUnwrap(initial.first)
+        _ = try await runtime.videoStep(componentID: video.componentID, observation: 1, generation: video.generation, value: 2.022)
+        _ = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
+
+        func drain() async throws -> [NuxieNativeVideoAction] {
+            let current = try await runtime.videos()
+            return try await runtime.videoStep(componentID: video.componentID, observation: 0,
+                generation: try XCTUnwrap(current.first).generation)
+        }
+        try await runtime.setVideoBool(true, path: "paused")
+        var actions = try await drain()
+        XCTAssertTrue(actions.contains { $0.kind == 1 })
+        try await runtime.setVideoNumber(0.75, path: "current-time")
+        actions = try await drain()
+        XCTAssertTrue(actions.contains { $0.kind == 2 && abs($0.value - 0.75) < 0.001 })
+        try await runtime.setVideoNumber(0.4, path: "volume")
+        actions = try await drain()
+        XCTAssertTrue(actions.contains { $0.kind == 4 && abs($0.value - 0.4) < 0.001 })
+        try await runtime.setVideoBool(true, path: "muted")
+        actions = try await drain()
+        XCTAssertTrue(actions.contains { $0.kind == 4 && $0.value == 0 })
+        try await runtime.setVideoBool(false, path: "muted")
+        actions = try await drain()
+        XCTAssertTrue(actions.contains { $0.kind == 4 && abs($0.value - 0.4) < 0.001 }, "Unmuting restores retained volume")
+        try await runtime.setVideoNumber(1.5, path: "playback-rate")
+        actions = try await drain()
+        XCTAssertTrue(actions.contains { $0.kind == 3 && abs($0.value - 1.5) < 0.001 })
+        try await runtime.setVideoBool(false, path: "loop")
+        try await runtime.setVideoBool(false, path: "paused")
+        _ = try await drain()
+        let playing = try await runtime.videos()
+        XCTAssertTrue(try XCTUnwrap(playing.first).wantsPlay)
+        try await runtime.setVideoNumber(2.022, path: "current-time")
+        actions = try await drain()
+        XCTAssertTrue(actions.contains { $0.kind == 2 && abs($0.value - 2.022) < 0.001 })
+        var current = try await runtime.videos()
+        actions = try await runtime.videoStep(componentID: video.componentID, observation: 3,
+            generation: try XCTUnwrap(current.first).generation)
+        XCTAssertFalse(actions.contains { $0.kind == 2 }, "A disabled loop must stop at the endpoint")
+        current = try await runtime.videos()
+        XCTAssertEqual(try XCTUnwrap(current.first).state, 6)
+        try await runtime.setVideoBool(true, path: "loop")
+        try await runtime.setVideoBool(false, path: "paused")
+        _ = try await drain()
+        current = try await runtime.videos()
+        actions = try await runtime.videoStep(componentID: video.componentID, observation: 3,
+            generation: try XCTUnwrap(current.first).generation)
+        XCTAssertTrue(actions.contains { $0.kind == 2 && $0.value == 0 }, "Enabling a bound loop seeks back to its start")
     }
 
     func testMobileReleaseAdmissionAdvertisesVideo() {
@@ -261,7 +320,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let scene = try Data(contentsOf: directory.appendingPathComponent("greeting.nux"))
         let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
-            pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
+            pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: true, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
         defer { Task { try? await runtime.close() } }
         let videos = try await runtime.videos()
         let video = try XCTUnwrap(videos.first)
@@ -285,7 +344,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         XCTAssertEqual(caption.language, "en")
         XCTAssertEqual(caption.text, "Hello 👋")
         for (seconds, expected) in [(1.0, "Welcome"), (0.0, "Hello 👋"), (2.0, "")] {
-            try await runtime.videoCommand(componentID: video.componentID, kind: 2, value: seconds)
+            try await runtime.setVideoNumber(seconds, path: "current-time")
             _ = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
             caption = try await runtime.videoCaption(componentID: video.componentID)
             XCTAssertEqual(caption.text, expected)
@@ -298,10 +357,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
-    func testScrubToSourceEndpointSettlesWithFinalDecodedPixels() async throws {
-        try await verifyPublishedVideo(sceneName: "endpoint", artboardName: "Interactive video comparison",
+    func testBoundSeekToSourceEndpointPresentsFinalDecodedPixels() async throws {
+        try await verifyPublishedVideo(sceneName: "endpoint", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
-            endpointScrubQualification: true)
+            endpointSeekQualification: true)
     }
 
     @MainActor
@@ -379,13 +438,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false, endpointScrubQualification: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false, endpointSeekQualification: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measurement?.width ?? 64
         let mediaHeight = measurement?.height ?? 32
         let directory = try videoFixtureDirectory()
         let scene = try Data(contentsOf: directory.appendingPathComponent("\(sceneName).nux"))
-        var url = directory.appendingPathComponent(measurement?.file ?? (endpointScrubQualification ? "endpoint-low-fps.mp4" : frenchCaptions ? "multilingual.mp4" : "captions.mp4"))
+        var url = directory.appendingPathComponent(measurement?.file ?? (endpointSeekQualification ? "endpoint-low-fps.mp4" : frenchCaptions ? "multilingual.mp4" : "captions.mp4"))
         let media = try Data(contentsOf: url)
         let digest = SHA256Provider.hexDigest(media)
         let cacheDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -402,11 +461,11 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let id = try XCTUnwrap(authored.authoredID)
         let name = "\(authored.name)-\(id)"
         var tracks: [NativeExperienceVideoAsset.CaptionTrack] = [.init(streamIndex: 2, codec: "mov_text", language: "eng", title: nil)]
-        if endpointScrubQualification { tracks = [] }
+        if endpointSeekQualification { tracks = [] }
         if frenchCaptions { tracks.append(.init(streamIndex: 3, codec: "mov_text", language: "fra", title: nil)) }
         let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
             authoredAssetId: UInt64(id), assetUniqueName: name, sha256: digest, sizeBytes: media.count,
-            width: mediaWidth, height: mediaHeight, durationMs: endpointScrubQualification ? 2000 : 2022, videoCodec: measurement?.codec ?? "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
+            width: mediaWidth, height: mediaHeight, durationMs: endpointSeekQualification ? 2000 : 2022, videoCodec: measurement?.codec ?? "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: tracks, required: true)
         struct ExportedScreen: Decodable { let width: Int; let height: Int }
         struct ExportedTargets: Decodable {
             let videoElements: [NativeExperienceVideoElement]
@@ -431,7 +490,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             authenticatedAssets: payload.assets, catalog: catalog, systemFontCache: .shared).bytes
         XCTAssertTrue(externalAssets.isEmpty, "Published external video must bind without an in-memory payload")
         let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: artboardName, player: .defaultScene,
-            pixelWidth: UInt32(width), pixelHeight: UInt32(height), bindDefaultViewModel: sceneName == "list", importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
+            pixelWidth: UInt32(width), pixelHeight: UInt32(height), bindDefaultViewModel: true, importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: externalAssets, videoEnabled: true))
         var decoderSlots = UInt32(expectedOccurrences)
         let pool = ExperienceVideoDecoderPool(budget: {
             .init(maxPlayers: decoderSlots, managedPlayers: decoderSlots, hardwarePlayers: 0,
@@ -499,43 +558,42 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             XCTAssertEqual(occurrence.sourceArtboardIndex, Int(target.sourceArtboardIndex))
             XCTAssertEqual(occurrence.sourceComponentID, Int(target.componentId))
         }
+        XCTAssertTrue(exportedTargets.videoElements.allSatisfy { $0.viewNodeId == viewNodeID })
         let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
-        if endpointScrubQualification {
-            // The 10 fps fixture ends at 2.000 s; its last video PTS
-            // is 1.900 s. The script requests scrub(1, 0, duration), and paints
-            // green only when that request reports settled. Host delivery alone
-            // cannot prove the runtime accepted the frame or settled the request.
-            var settled = false
+        if endpointSeekQualification {
+            // The final image is at 1.9 s, before the media duration of 2 s.
+            // A bound seek must select and compose that final image while paused.
+            let initialDeadline = Date().addingTimeInterval(5)
+            while host.deliveredFrames == 0 && Date() < initialDeadline {
+                _ = try await host.tick()
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertGreaterThan(host.deliveredFrames, 0)
+            let before = host.deliveredFrames
+            try await runtime.setVideoNumber(2.0, path: "current-time")
+            var finalFrame = false
             let deadline = Date().addingTimeInterval(5)
             while Date() < deadline {
-                _ = try await runtime.step(elapsedSeconds: 0.01)
                 _ = try await host.tick()
                 guard let drawable = layer.nextDrawable() else { return XCTFail("Metal drawable unavailable") }
-                let completed = expectation(description: "endpoint scrub pixels")
+                let completed = expectation(description: "endpoint seek pixels")
                 _ = try await runtime.render(layoutScaleFactor: 1, drawable: .available(.init(drawable)),
                     readback: .init(buffer: buffer, bytesPerRow: stride), completion: { completed.fulfill() })
                 await fulfillment(of: [completed], timeout: 2)
                 let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
-                let status = 588 * stride + 160 * 4
-                settled = abs(Int(pixels[status]) - 146) < 8
-                    && abs(Int(pixels[status + 1]) - 190) < 8
-                    && abs(Int(pixels[status + 2]) - 88) < 8
-                if settled {
-                    let image = sampleY * stride + sampleX * 4
-                    XCTAssertGreaterThan(pixels[image], 180, "Endpoint must show the final blue image")
-                    XCTAssertLessThan(pixels[image + 2], 70, "Endpoint must not retain the first red image")
-                    break
-                }
+                let image = sampleY * stride + sampleX * 4
+                finalFrame = host.deliveredFrames > before && pixels[image] > 180 && pixels[image + 2] < 70
+                if finalFrame { break }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
-            XCTAssertTrue(settled, "Source endpoint scrub must settle; delivered=\(host.deliveredFrames): \(host.playbackDiagnostics)")
+            XCTAssertTrue(finalFrame, "Bound endpoint seek must show the final blue image: \(host.playbackDiagnostics)")
             return
         }
         if pausedSeekQualification {
             // The shared greeting fixture normally loops; qualify inclusive
             // end seeking without its authored wrap-to-start behavior.
-            try await runtime.videoCommand(componentID: videoComponent, kind: 9, value: 0)
-            try await runtime.videoCommand(componentID: videoComponent, kind: 1, value: 0)
+            try await runtime.setVideoBool(false, path: "loop")
+            try await runtime.setVideoBool(true, path: "paused")
             let initialDeadline = Date().addingTimeInterval(5)
             while host.deliveredFrames == 0 && Date() < initialDeadline {
                 _ = try await host.tick()
@@ -545,9 +603,9 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             // Repeat the first and final decoded images under new seek owners.
             // Merely acknowledging currentTime is insufficient: pixels must be
             // uploaded again even when AVFoundation says no new buffer exists.
-            for seconds in [0.0, 0.0, 1.99, 2.022, 0.0] {
+            for seconds in [0.01, 0.0, 1.99, 2.022, 0.0] {
                 let before = host.deliveredFrames
-                try await runtime.videoCommand(componentID: videoComponent, kind: 2, value: seconds)
+                try await runtime.setVideoNumber(seconds, path: "current-time")
                 let deadline = Date().addingTimeInterval(3)
                 while host.deliveredFrames == before && Date() < deadline {
                     _ = try await host.tick()
@@ -658,10 +716,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
         }
         if clockQualification {
-            try await runtime.videoCommand(componentID: videoComponent, kind: 1, value: 0)
+            try await runtime.setVideoBool(true, path: "paused")
             _ = try await host.tick()
             let framesBeforeSeek = host.deliveredFrames
-            try await runtime.videoCommand(componentID: videoComponent, kind: 2, value: 0.25)
+            try await runtime.setVideoNumber(0.25, path: "current-time")
             let seekDeadline = Date().addingTimeInterval(5)
             var seekReady = false
             while Date() < seekDeadline {
@@ -676,7 +734,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             }
             XCTAssertTrue(seekReady, "Paused seek must deliver a new frame at 0.25s")
             previousClockSample = nil
-            try await runtime.videoCommand(componentID: videoComponent, kind: 0, value: 0)
+            try await runtime.setVideoBool(false, path: "paused")
             let resumeDeadline = Date().addingTimeInterval(5)
             while Date() < resumeDeadline {
                 _ = try await runtime.step(elapsedSeconds: 0.03)
@@ -740,22 +798,11 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         XCTAssertTrue(sawRed, "Decoded red frame must reach the composed Metal scene")
         XCTAssertTrue(sawBlue, "Playback must advance to the decoded blue frame")
         XCTAssertEqual(phase, 4, "Two red/blue cycles must render across a runtime-owned loop seek: \(host.playbackDiagnostics)")
-        let occurrences = try await runtime.videos()
-        _ = try XCTUnwrap(occurrences.first)
-        func command(_ type: String, view: String? = nil) throws -> JourneyVideoAction {
-            try JourneyVideoAction(action: ["type": .string("video"),
-                "target": .object(["artboardId": .string("screen"), "viewNodeId": .string(view ?? viewNodeID)]),
-                "command": .object(["type": .string(type)])])
-        }
-        do {
-            try await host.apply(command("pause", view: "missing"))
-            XCTFail("An unknown authored target must not control another video")
-        } catch {}
-        try await host.apply(command("pause"))
+        try await runtime.setVideoBool(true, path: "paused")
         _ = try await host.tick()
         var current = try await runtime.videos()
         var paused = try XCTUnwrap(current.first)
-        XCTAssertTrue(current.allSatisfy { !$0.wantsPlay }, "Journey pause reaches every live row")
+        XCTAssertTrue(current.allSatisfy { !$0.wantsPlay }, "Bound pause reaches every live row")
         XCTAssertEqual(paused.state, 3)
         if frenchCaptions {
             let diagnostics = host.playbackDiagnostics
@@ -800,7 +847,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         current = try await runtime.videos()
         XCTAssertGreaterThan(try XCTUnwrap(current.first).generation, retired.generation)
         XCTAssertTrue(current.allSatisfy { !$0.wantsPlay })
-        try await host.apply(command("play"))
+        try await runtime.setVideoBool(false, path: "paused")
         _ = try await host.tick()
         try await host.setSuspended(reason: 2, enabled: true)
         current = try await runtime.videos()
@@ -810,14 +857,14 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         try await host.setSuspended(reason: 2, enabled: false)
         _ = try await host.tick()
         current = try await runtime.videos()
-        XCTAssertTrue(current.allSatisfy(\.wantsPlay), "Journey play reaches every live row")
+        XCTAssertTrue(current.allSatisfy(\.wantsPlay), "Bound play reaches every live row")
         #if canImport(UIKit)
         try await host.handleAudioInterruption(.began, options: [])
         try await host.handleAudioInterruption(.ended, options: [])
         current = try await runtime.videos()
         XCTAssertTrue(current.allSatisfy { !$0.wantsPlay && $0.state != 2 },
             "An interruption without shouldResume must leave playback paused")
-        try await host.apply(command("play"))
+        try await runtime.setVideoBool(false, path: "paused")
         let resumeDeadline = Date().addingTimeInterval(5)
         repeat {
             _ = try await host.tick()
@@ -844,10 +891,10 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         XCTAssertTrue(closedCaptions.isEmpty)
         XCTAssertTrue(host.playbackDiagnostics.isEmpty)
         try await host.setSuspended(reason: 2, enabled: false)
-        do {
-            try await host.apply(command("play"))
-            XCTFail("A closed owner must reject playback commands")
-        } catch {}
+        try await runtime.setVideoBool(false, path: "paused")
+        let afterClosedMutation = try await host.tick()
+        XCTAssertFalse(afterClosedMutation, "Bound changes cannot recreate a closed playback host")
+        XCTAssertTrue(host.playbackDiagnostics.isEmpty)
         try await runtime.close()
     }
 
@@ -1036,5 +1083,19 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             authenticatedAssets: [asset(fileURL: url)], catalog: catalog + catalog, systemFontCache: .shared))
     }
 
+}
+
+extension NuxieNativeRuntime {
+    func setVideoBool(_ value: Bool, path: String) async throws {
+        let root = try await rootViewModelReference()
+        _ = try await mutateViewModel([.setBool(instance: root, path: path, value: value)])
+        _ = try await step(elapsedSeconds: 0)
+    }
+
+    func setVideoNumber(_ value: Double, path: String) async throws {
+        let root = try await rootViewModelReference()
+        _ = try await mutateViewModel([.setNumber(instance: root, path: path, value: Float(value))])
+        _ = try await step(elapsedSeconds: 0)
+    }
 }
 #endif

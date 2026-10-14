@@ -52,14 +52,14 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
         defer { UIApplication.shared.isIdleTimerDisabled = idleTimer }
         for index in 0..<5 {
             let runtime = try await NuxieNativeRuntime.open(bytes: scene, artboardName: "Video Frame", player: .defaultScene,
-                pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie",
+                pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: true, importMode: .configured(moduleName: "nuxie",
                     expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
             runtimes.append(runtime)
             _ = try await runtime.step(elapsedSeconds: 0)
             let occurrences = try await runtime.videos()
-            let component = try XCTUnwrap(occurrences.first).componentID
-            try await runtime.videoCommand(componentID: component, kind: 5, value: 1)
-            try await runtime.videoCommand(componentID: component, kind: 9, value: 1)
+            _ = try XCTUnwrap(occurrences.first)
+            try await runtime.setVideoBool(true, path: "muted")
+            try await runtime.setVideoBool(true, path: "loop")
             let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
                 artboardBounds: CGRect(x: 0, y: 0, width: 320, height: 640), decoderPool: .shared)
             hosts.append(host)
@@ -182,15 +182,15 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
 
         func cycle(_ index: Int) async throws {
             let runtime = try await NuxieNativeRuntime.open(bytes: payload.sceneBytes, artboardName: "Video Frame", player: .defaultScene,
-                pixelWidth: 320, pixelHeight: 640, importMode: .configured(moduleName: "nuxie",
+                pixelWidth: 320, pixelHeight: 640, bindDefaultViewModel: true, importMode: .configured(moduleName: "nuxie",
                     expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
             var runtimeClosed = false
             defer { if !runtimeClosed { Task { try? await runtime.close() } } }
             _ = try await runtime.step(elapsedSeconds: 0)
             let occurrences = try await runtime.videos()
-            let component = try XCTUnwrap(occurrences.first).componentID
-            try await runtime.videoCommand(componentID: component, kind: 5, value: 1)
-            try await runtime.videoCommand(componentID: component, kind: 9, value: 1)
+            _ = try XCTUnwrap(occurrences.first)
+            try await runtime.setVideoBool(true, path: "muted")
+            try await runtime.setVideoBool(true, path: "loop")
             let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
                 artboardBounds: CGRect(x: 0, y: 0, width: 320, height: 640), decoderPool: .shared)
             defer { host.close() }
@@ -222,7 +222,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
             }
             XCTAssertEqual(colors.count, 2, "Every new session must actually compose both video phases")
             XCTAssertEqual(host.activeDecoderCount, 1)
-            try await runtime.videoCommand(componentID: component, kind: 1, value: 0)
+            try await runtime.setVideoBool(true, path: "paused")
             _ = try await host.tick()
             host.close()
             XCTAssertEqual(host.activeDecoderCount, 0)

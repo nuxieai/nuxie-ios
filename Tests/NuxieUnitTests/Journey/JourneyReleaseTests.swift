@@ -1109,24 +1109,24 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
-    func testSharedVideoActionContract() throws {
+    func testJourneyVideoActionsAreRejected() throws {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/video-actions.json")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/unsupported-video-actions.json")
         let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
         for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
             let name = try XCTUnwrap(item["name"] as? String)
-            if item["valid"] as? Bool == true {
-                XCTAssertNoThrow(try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(
-                    item["action"], path: "action", screenIDs: [], placementIDs: []), name)
-                let bytes = try JSONSerialization.data(withJSONObject: try XCTUnwrap(item["action"]))
-                let action = try JSONDecoder().decode([String: JourneyReleaseJSONValue].self, from: bytes)
-                let command = try JourneyVideoAction(action: action)
-                XCTAssertEqual(command.commandKind, (item["kind"] as? NSNumber)?.uint32Value, name)
-                XCTAssertEqual(command.commandValue, (item["value"] as? NSNumber)?.doubleValue, name)
-            } else {
-                XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(
-                    item["action"], path: "action", screenIDs: [], placementIDs: []), name)
-            }
+            XCTAssertNil(JourneyActionType(rawValue: "video"), name)
+            XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(
+                item["action"], path: "action", screenIDs: [], placementIDs: []), name)
+            var root = try systemFontRoot()
+            XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
+            var leg = try XCTUnwrap(root["leg"] as? [String: Any])
+            var steps = try XCTUnwrap(leg["steps"] as? [[String: Any]])
+            let index = try XCTUnwrap(steps.firstIndex { $0["kind"] as? String == "action" })
+            steps[index]["action"] = item["action"]
+            leg["steps"] = steps
+            root["leg"] = leg
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name)
         }
     }
 

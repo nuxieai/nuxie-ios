@@ -2680,13 +2680,6 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    func applyVideoCommand(_ action: JourneyVideoAction) async throws {
-        guard let videoPlayback else {
-            throw ExperienceInteractiveScreenError.stateContract("screen has no video playback host")
-        }
-        try await videoPlayback.apply(action)
-    }
-
     private func screenOwnedValues(_ values: [ExperienceInteractiveStateCommand.Value])
         -> [ExperienceInteractiveStateCommand.Value] {
         guard let rootName = sharedExperienceRootName else { return values }
