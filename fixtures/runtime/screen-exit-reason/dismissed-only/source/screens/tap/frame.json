@@ -1,0 +1,10 @@
+{
+  "$schema": "https://nuxie.ai/schema/frame/1.json",
+  "size": {
+    "width": 100,
+    "height": 100
+  },
+  "emits": {
+    "done": {}
+  }
+}

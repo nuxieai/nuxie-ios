@@ -1,0 +1,16 @@
+<html><head><template data-motion>
+  <nux-timeline name="rest" duration="0ms">
+    <nux-object target="#panel"><nux-track property="opacity"><nux-key at="0" value="1"/></nux-track></nux-object>
+  </nux-timeline>
+  <nux-timeline name="leave" duration="400ms">
+    <nux-object target="#panel"><nux-track property="opacity">
+      <nux-key at="0" value="1"/><nux-key at="400ms" value="0"/>
+    </nux-track></nux-object>
+  </nux-timeline>
+  <nux-machine name="lifecycle"><nux-layer name="main">
+    <nux-entry><nux-transition to="rest"/></nux-entry>
+    <nux-any><nux-transition to="leaving" when="screen.phase == 'exiting' &amp;&amp; screen.exitReason == 'dismissed'"/></nux-any>
+    <nux-state name="rest" timeline="rest"/>
+    <nux-state name="leaving" timeline="leave"/>
+  </nux-layer></nux-machine>
+</template></head><body><div id="panel" data-on:click="emit('done')" data-show="screen.phase != 'hidden'" style="width:100px;height:100px;background-color:#00ff00"></div></body></html>
