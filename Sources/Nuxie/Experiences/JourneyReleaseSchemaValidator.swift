@@ -359,7 +359,7 @@ enum JourneyReleaseSchemaValidator {
                   !eventName.hasPrefix("$") else {
                 throw invalid
             }
-        case .delay, .navigate, .back, .video, .requestNotifications,
+        case .delay, .navigate, .back, .requestNotifications,
              .requestPermission, .requestTracking, .openLink, .dismiss,
              .updateCustomer, .submitResponse, .appAction, .exit:
             try Common.validateCanonicalJourneyAction(action, path: "leg.action", screenIDs: screens, placementIDs: placements)
