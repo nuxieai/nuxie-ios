@@ -85,7 +85,10 @@ def options(configuration: str, sdk_platform: str, architecture: str) -> list[st
     jobs = os.environ.get("NUXIE_BAZEL_JOBS", "2")
     if not jobs.isdecimal() or int(jobs) < 1:
         raise ValueError("NUXIE_BAZEL_JOBS must be a positive integer")
-    return ["--compilation_mode=" + ("opt" if configuration == "Release" else "dbg"),
+    # Staging reads configured dependency modules after Bazel completes.
+    # Cached top-level archives alone do not materialize those imports.
+    return ["--remote_download_outputs=all",
+            "--compilation_mode=" + ("opt" if configuration == "Release" else "dbg"),
             "--platforms=@apple_support//platforms:" + cpu,
             "--apple_platforms=@apple_support//platforms:" + cpu,
             ("--macos_cpus=" + architecture if sdk_platform == "macos" else "--ios_multi_cpus=" + cpu.removeprefix("ios_")),
