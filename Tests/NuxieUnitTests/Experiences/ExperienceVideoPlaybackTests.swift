@@ -423,7 +423,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
-    func testPublishedListVideosDecodeAndJourneyCommandsFanOut() async throws {
+    func testPublishedListVideosDecodeAndBoundValuesFanOut() async throws {
         try await verifyPublishedVideo(sceneName: "list", artboardName: "Screen",
             viewNodeID: "item-card", expectedOccurrences: 2, sampleX: 20, sampleY: 30)
     }
