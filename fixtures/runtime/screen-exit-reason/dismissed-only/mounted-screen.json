@@ -1,0 +1,30 @@
+{
+  "state": {},
+  "responses": {},
+  "ruleGroups": [],
+  "leg": {
+    "screens": [
+      {
+        "id": "scr_screens_stap",
+        "defaultViewModelName": "Runtime",
+        "defaultInstanceId": "root-sdk-id"
+      }
+    ]
+  },
+  "render": {
+    "screens": [
+      {
+        "id": "scr_screens_stap",
+        "artboardName": "tap",
+        "width": 100,
+        "height": 100,
+        "exit": {
+          "durationMs": 400,
+          "completeEventName": "nuxie:screen-exit-complete:scr_screens_stap"
+        }
+      }
+    ],
+    "assets": [],
+    "textInputs": []
+  }
+}

@@ -1,0 +1,930 @@
+{
+  "version": 1,
+  "project": {
+    "id": "sdk-screen-reason-field-absent",
+    "userId": null,
+    "workspaceId": null,
+    "appId": null,
+    "name": "Experience",
+    "thumbnailUrl": null,
+    "env": "live",
+    "mode": "repo",
+    "deletedAt": null
+  },
+  "document": {
+    "rootId": "sdk-screen-reason-field-absent",
+    "nodes": [
+      {
+        "id": "sdk-screen-reason-field-absent",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "root",
+        "name": "Experience",
+        "data": {
+          "kind": "root",
+          "meta": {
+            "name": "Experience"
+          }
+        },
+        "type": "root"
+      },
+      {
+        "id": "sdk-screen-reason-field-absent::artboard_tree",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent",
+        "orderKey": "a0",
+        "kind": "artboard_tree",
+        "name": "artboard_tree",
+        "data": {
+          "kind": "artboard_tree"
+        },
+        "type": "artboard_tree",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "sdk-screen-reason-field-absent::experiment_tree",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent",
+        "orderKey": "a1",
+        "kind": "experiment_tree",
+        "name": "experiment_tree",
+        "data": {
+          "kind": "experiment_tree"
+        },
+        "type": "experiment_tree",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "sdk-screen-reason-field-absent::journey_root",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent",
+        "orderKey": null,
+        "kind": "journey_root",
+        "name": "Journey Root",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        },
+        "type": "journey_root",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "sdk-screen-reason-field-absent::journey_canvas_tree",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent",
+        "orderKey": "a3",
+        "kind": "journey_canvas_tree",
+        "name": "journey_canvas_tree",
+        "data": {
+          "kind": "journey_canvas_tree",
+          "version": 1
+        },
+        "type": "journey_canvas_tree",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "sdk-screen-reason-field-absent::experience_intent",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent",
+        "orderKey": null,
+        "kind": "experience_intent",
+        "name": "Entry point",
+        "data": {
+          "kind": "experience_intent",
+          "platforms": [
+            "ios:apple_app_store",
+            "android:google_play"
+          ],
+          "platformsSource": "f70c89afd67ecd9ecc943e83983df798964974d83ce66efd513af901eb6f209f"
+        },
+        "type": "experience_intent",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent::artboard_tree",
+        "orderKey": "c_scr_screens_stap",
+        "kind": "artboard",
+        "name": "tap",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 100,
+              "height": 100
+            },
+            "sizeSource": "custom",
+            "canvasOwnerId": "experience:sdk-screen-reason-field-absent",
+            "dragRole": "member"
+          },
+          "stateDeclarations": [],
+          "viewModelDefaults": {
+            "viewModelId": "vm_runtime_root_scr_screens_stap",
+            "instanceId": "vmi_runtime_scr_screens_stap"
+          }
+        },
+        "type": "artboard",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::view_tree",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap",
+        "orderKey": "a0",
+        "kind": "view_tree",
+        "name": "View Tree",
+        "data": {
+          "kind": "view_tree"
+        },
+        "type": "view_tree",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::animation_tree",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap",
+        "orderKey": "a1",
+        "kind": "animation_tree",
+        "name": "Animation Tree",
+        "data": {
+          "kind": "animation_tree"
+        },
+        "type": "animation_tree",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::capability_tree",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap",
+        "orderKey": "a2",
+        "kind": "capability_tree",
+        "name": "Capability Tree",
+        "data": {
+          "kind": "capability_tree"
+        },
+        "type": "capability_tree",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::v1",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "name": "panel",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "scr_screens_stap::v1",
+            "type": "Projection",
+            "kind": "Conditional",
+            "structuralMode": "layout",
+            "test": {
+              "kind": "Path",
+              "root": "vm",
+              "segments": [
+                {
+                  "type": "prop",
+                  "name": "state"
+                },
+                {
+                  "type": "prop",
+                  "name": "cond:1962a84cf15e1e46"
+                }
+              ],
+              "pathRef": {
+                "kind": "ids",
+                "pathIds": [
+                  248307013,
+                  2173293168,
+                  511123493
+                ]
+              }
+            },
+            "consequent": {
+              "kind": "Nodes",
+              "nodes": [
+                {
+                  "type": "View",
+                  "systemId": "View",
+                  "props": {
+                    "style": {
+                      "backgroundColor": "#00ff00",
+                      "height": 100,
+                      "width": 100
+                    }
+                  },
+                  "id": "scr_screens_stap::v1::shown",
+                  "children": []
+                }
+              ]
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vm_runtime_root_scr_screens_stap",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent",
+        "orderKey": "p_scr_screens_stap",
+        "kind": "view_model",
+        "name": "vm_runtime_root_scr_screens_stap",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 248307013,
+          "properties": {
+            "state": {
+              "type": "object",
+              "propertyId": 2173293168,
+              "schema": {
+                "cond:1962a84cf15e1e46": {
+                  "type": "boolean",
+                  "propertyId": 511123493,
+                  "defaultValue": false
+                }
+              }
+            }
+          }
+        },
+        "type": "view_model",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vmi_runtime_scr_screens_stap",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "vm_runtime_root_scr_screens_stap",
+        "orderKey": "a0",
+        "kind": "view_model_instance",
+        "name": "Untitled",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "state": {
+              "cond:1962a84cf15e1e46": false
+            }
+          }
+        },
+        "type": "view_model_instance",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "jrt_b7be5418424cea9583052804afdd0e0a944c7b6fc3fe30d1a275cce457d6d59f",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent::journey_root",
+        "orderKey": "0000000673637265656e000000107363725f73637265656e735f7374617000000004646f6e65",
+        "kind": "journey_route",
+        "name": "done",
+        "data": {
+          "kind": "journey_route",
+          "host": {
+            "kind": "screen",
+            "screenId": "scr_screens_stap"
+          },
+          "eventName": "done",
+          "payloadSchema": {
+            "type": "object",
+            "fields": [],
+            "additionalProperties": false
+          }
+        },
+        "type": "journey_route",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "sdk-screen-reason-field-absent::journey_root::v1",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "sdk-screen-reason-field-absent::experience_intent",
+        "orderKey": "70726f6772616d:a0",
+        "kind": "journey_action",
+        "name": "navigate",
+        "data": {
+          "kind": "journey_action",
+          "action": {
+            "type": "navigate",
+            "screenId": "scr_screens_stap"
+          }
+        },
+        "type": "journey_action",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "sdk-screen-reason-field-absent::journey_root::v2",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "jrt_b7be5418424cea9583052804afdd0e0a944c7b6fc3fe30d1a275cce457d6d59f",
+        "orderKey": "70726f6772616d:a0",
+        "kind": "journey_action",
+        "name": "dismiss",
+        "data": {
+          "kind": "journey_action",
+          "action": {
+            "type": "dismiss"
+          }
+        },
+        "type": "journey_action",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::animation_tree",
+        "orderKey": "m0",
+        "kind": "state_machine",
+        "name": "Handlers",
+        "data": {
+          "kind": "state_machine",
+          "events": [
+            {
+              "id": "scr_screens_stap::v1::shown::on-click::a0::event",
+              "name": "done",
+              "properties": []
+            },
+            {
+              "id": "scr_screens_stap::event::cond:1962a84cf15e1e46:shown"
+            },
+            {
+              "id": "scr_screens_stap::event::cond:1962a84cf15e1e46:hidden"
+            }
+          ],
+          "inputs": [],
+          "listeners": [
+            {
+              "id": "scr_screens_stap::v1::shown::on-click",
+              "name": "panel click",
+              "targetObjectKey": "scr_screens_stap::v1::shown",
+              "listenerType": "click",
+              "actions": [
+                {
+                  "id": "scr_screens_stap::v1::shown::on-click::a0",
+                  "type": "fireEvent",
+                  "eventId": "scr_screens_stap::v1::shown::on-click::a0::event"
+                }
+              ]
+            },
+            {
+              "id": "scr_screens_stap::v1::shown::on-click::semantic-tap",
+              "name": "panel click",
+              "targetObjectKey": "scr_screens_stap::v1::shown",
+              "listenerType": "semantic",
+              "actions": [
+                {
+                  "id": "scr_screens_stap::v1::shown::on-click::semantic-tap::a0",
+                  "type": "fireEvent",
+                  "eventId": "scr_screens_stap::v1::shown::on-click::a0::event"
+                }
+              ],
+              "semanticAction": "tap"
+            }
+          ],
+          "instantiateOnNestedOccurrence": false,
+          "authoredMachine": false
+        },
+        "type": "state_machine",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::layer",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine",
+        "orderKey": "a0",
+        "kind": "state_machine_layer",
+        "name": "Handlers",
+        "data": {
+          "kind": "state_machine_layer",
+          "generated": true
+        },
+        "type": "state_machine_layer",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::layer::entry",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::layer",
+        "orderKey": "a0",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "entry"
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::layer::any",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::layer",
+        "orderKey": "a1",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "any"
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::layer::exit",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::layer",
+        "orderKey": "a2",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "exit"
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine",
+        "orderKey": "b000",
+        "kind": "state_machine_layer",
+        "name": "Show cond:1962a84cf15e1e46",
+        "data": {
+          "kind": "state_machine_layer",
+          "generated": true
+        },
+        "type": "state_machine_layer",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::entry",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "a0",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "entry"
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::any",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "a1",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "any"
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::exit",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "a2",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "exit"
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "a3",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "animation",
+          "fireActions": [
+            {
+              "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown::visibility",
+              "type": "viewModelChange",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  2173293168
+                ],
+                "propertyId": 511123493,
+                "kind": "boolean"
+              },
+              "value": true,
+              "occurs": "atStart"
+            },
+            {
+              "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown::fire",
+              "type": "fireEvent",
+              "eventId": "scr_screens_stap::event::cond:1962a84cf15e1e46:shown",
+              "occurs": "atStart"
+            }
+          ]
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "a4",
+        "kind": "layer_state",
+        "name": "Untitled",
+        "data": {
+          "kind": "layer_state",
+          "type": "animation",
+          "fireActions": [
+            {
+              "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden::visibility",
+              "type": "viewModelChange",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  2173293168
+                ],
+                "propertyId": 511123493,
+                "kind": "boolean"
+              },
+              "value": false,
+              "occurs": "atStart"
+            },
+            {
+              "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden::fire",
+              "type": "fireEvent",
+              "eventId": "scr_screens_stap::event::cond:1962a84cf15e1e46:hidden",
+              "occurs": "atStart"
+            }
+          ]
+        },
+        "type": "layer_state",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t0",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c000",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::entry",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "entering"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t1",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c001",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "entering"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t2",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c002",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::entry",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "active"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t3",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c003",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "active"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t4",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c004",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::entry",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "exiting"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t5",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c005",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "exiting"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t6",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c006",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::entry",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "hidden"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_stap::machine::cond:1962a84cf15e1e46::t7",
+        "projectId": "sdk-screen-reason-field-absent",
+        "parentId": "scr_screens_stap::machine::cond:1962a84cf15e1e46",
+        "orderKey": "c007",
+        "kind": "state_transition",
+        "name": "Untitled",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::shown",
+          "toStateId": "scr_screens_stap::machine::cond:1962a84cf15e1e46::hidden",
+          "conditions": [
+            {
+              "kind": "bindableProperty",
+              "ref": {
+                "viewModelPathIds": [
+                  248307013,
+                  1
+                ],
+                "propertyId": 2,
+                "kind": "enum"
+              },
+              "comparator": "eq",
+              "value": "hidden"
+            }
+          ],
+          "mix": 0
+        },
+        "type": "state_transition",
+        "screenId": "scr_screens_stap",
+        "userId": null,
+        "appId": null,
+        "path": null
+      }
+    ]
+  },
+  "designSystem": {
+    "screenDesignSystems": [],
+    "designSystems": []
+  }
+}
