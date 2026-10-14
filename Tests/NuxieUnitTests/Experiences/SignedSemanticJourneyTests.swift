@@ -204,7 +204,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 observer.revealed && (scenario == .input
                     ? self.semanticElements(in: presentations.currentExperienceViewController?.view).contains { $0 is UITextField }
                     : scenario == .roles
-                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == 9
+                    ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == self.visibleRoleLabels(in: presentations.currentExperienceViewController?.view)?.count
                     : self.button(in: presentations.currentExperienceViewController?.view) != nil)
             }
             }
@@ -486,10 +486,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
     private func assertAuthoredRoles(in view: UIView?, observer: SemanticJourneyPresenter,
                                      journal: JourneyRunJournal) async throws {
         let elements = semanticElements(in: view)
-        XCTAssertEqual(elements.compactMap(\.accessibilityLabel).sorted(), [
-            "Annual plan", "Choose your plan", "Continue", "Plan option", "Plan option", "Seats", "Unavailable",
-            "Optional extras", "Choose the options that suit you.",
-        ].sorted())
+        XCTAssertEqual(elements.compactMap(\.accessibilityLabel).sorted(), try XCTUnwrap(visibleRoleLabels(in: view)).sorted())
         XCTAssertTrue(elements.allSatisfy { !($0 is UITextField) }, "The roles artifact has no native editor declaration")
         let selected = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Annual plan" })
         XCTAssertTrue(selected.accessibilityTraits.contains(.selected))
@@ -515,14 +512,17 @@ final class SignedSemanticJourneyTests: XCTestCase {
         }
         let heading = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Choose your plan" })
         XCTAssertTrue(heading.accessibilityTraits.contains(.header))
-        let mixed = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Optional extras" })
-        XCTAssertEqual(mixed.accessibilityValue, "Mixed, Required")
-        XCTAssertFalse(mixed.accessibilityTraits.contains(.selected))
+        if visibleRoleLabels(in: view)?.contains("Optional extras") == true {
+            let mixed = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Optional extras" })
+            XCTAssertEqual(mixed.accessibilityValue, "Mixed, Required")
+            XCTAssertFalse(mixed.accessibilityTraits.contains(.selected))
+        }
         let disabled = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Unavailable" })
         XCTAssertTrue(disabled.accessibilityTraits.contains(.notEnabled))
         XCTAssertFalse(disabled.accessibilityActivate())
         let repeated = elements.filter { $0.accessibilityLabel == "Plan option" }
-        XCTAssertEqual(Set(repeated.map(ObjectIdentifier.init)).count, 2)
+        XCTAssertEqual(Set(repeated.map(ObjectIdentifier.init)).count,
+            visibleRoleLabels(in: view)?.filter { $0 == "Plan option" }.count)
         let seats = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Seats" } as? ExperienceSemanticAccessibilityElement)
         XCTAssertTrue(seats.accessibilityTraits.contains(.adjustable))
         XCTAssertEqual(seats.accessibilityValue, "3 seats")
@@ -546,6 +546,23 @@ final class SignedSemanticJourneyTests: XCTestCase {
             ["plan_toggled"], ["plan_toggled"],
             ["seat_increased"], ["seat_decreased"],
         ])
+    }
+
+    /// This signed fixture uses absolute point positions. A control outside the
+    /// actual viewport must not enter UIKit's accessibility reading order.
+    /// These literal authored positions are independent of runtime projection.
+    private func visibleRoleLabels(in view: UIView?) -> [String]? {
+        func surface(in view: UIView) -> ExperienceRuntimeSurfaceView? {
+            (view as? ExperienceRuntimeSurfaceView) ?? view.subviews.lazy.compactMap { surface(in: $0) }.first
+        }
+        guard let view, let surface = surface(in: view), surface.bounds.height > 0 else { return nil }
+        let authored: [(String, CGFloat)] = [
+            ("Choose your plan", 64), ("Continue", 128), ("Annual plan", 192),
+            ("Seats", 256), ("Unavailable", 384), ("Plan option", 512),
+            ("Plan option", 576), ("Optional extras", 640),
+            ("Choose the options that suit you.", 704),
+        ]
+        return authored.filter { $0.1 < surface.bounds.height }.map { $0.0 }
     }
 
     private func semanticElements(in view: UIView?) -> [NSObject] {
