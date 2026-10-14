@@ -9,6 +9,31 @@ import XCTest
 @testable import NuxieRuntime
 
 final class NuxieNativeRuntimeTests: XCTestCase {
+    private func selectedSystemControlAscent() throws -> CGFloat {
+        let base = try XCTUnwrap(CTFontCreateUIFontForLanguage(.system, 17, nil))
+        let selected = CTFontCreateForStringWithLanguage(base, "\n" as CFString,
+            CFRange(location: 0, length: 1), nil)
+        func table(_ tag: String) throws -> Data {
+            let code = tag.utf8.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            return try XCTUnwrap(CTFontCopyTable(selected, code, [])) as Data
+        }
+        func word(_ data: Data, _ offset: Int) throws -> UInt16 {
+            guard data.count >= offset + 2 else {
+                throw NSError(domain: "SystemFontMetricOracle", code: 1)
+            }
+            return UInt16(data[offset]) << 8 | UInt16(data[offset + 1])
+        }
+        let head = try table("head")
+        let os2 = try table("OS/2")
+        let usesTypoMetrics = try word(os2, 62) & 0x80 != 0
+        let metrics = usesTypoMetrics ? os2 : try table("hhea")
+        let ascent = Int16(bitPattern: try word(metrics, usesTypoMetrics ? 68 : 4))
+        let units = try word(head, 18)
+        XCTAssertGreaterThan(units, 0)
+        // Read the OS-selected font's table oracle at the engine's 2048 scale.
+        return (CGFloat(ascent) * 2048 / CGFloat(units)).rounded() / 2048
+    }
+
     #if os(iOS)
     // P038 ordinary native text control. The generated fixture contains only
     // Text/ValueRun rows, no TextInput or UIKit overlay. The publisher example
@@ -327,7 +352,8 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             for name in ["bound Run", "fixed Run", "natural Run"] {
                 let geometry = try XCTUnwrap(fields[name])
                 let size: CGFloat = name == "fixed Run" ? 18 : 18 * CGFloat(item.scale)
-                XCTAssertEqual(try XCTUnwrap(geometry.firstBaseline), 1929 / 2048 * size, accuracy: 0.001)
+                XCTAssertEqual(try XCTUnwrap(geometry.firstBaseline),
+                    max(CGFloat(1929) / 2048, try selectedSystemControlAscent()) * size, accuracy: 0.001)
             }
             let frame = try await renderPixels(runtime, width: 390, height: 844)
             XCTAssertEqual(frame.outcome.disposition, .presented)
@@ -396,8 +422,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 // Production lowering preserves this authored first-line offset.
                 XCTAssertEqual(geometry.worldTransform.ty, expected.y + 1.0458984, accuracy: 0.001)
                 let fontSize = fieldIndex == 0 ? CGFloat(item.fontSize) : 18
-                // The bundled font's independently rounded 2048-unit typo ascent.
-                XCTAssertEqual(try XCTUnwrap(geometry.firstBaseline), CGFloat(1929) / 2048 * fontSize, accuracy: 0.001)
+                // The newline uses the OS-selected fallback font under the process hook.
+                XCTAssertEqual(try XCTUnwrap(geometry.firstBaseline),
+                    max(CGFloat(1929) / 2048, try selectedSystemControlAscent()) * fontSize, accuracy: 0.001)
                 if index == 0 && fieldIndex == 0 { firstGeometry = geometry }
             }
             let snapshot = try await runtime.snapshot()
