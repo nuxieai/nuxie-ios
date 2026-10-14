@@ -1,7 +1,7 @@
 {
   "cases": [
     {
-      "name": "valid 0 play",
+      "name": "refused 0 play",
       "action": {
         "type": "video",
         "target": {
@@ -14,7 +14,7 @@
       }
     },
     {
-      "name": "valid 1 pause",
+      "name": "refused 1 pause",
       "action": {
         "type": "video",
         "target": {
@@ -27,7 +27,7 @@
       }
     },
     {
-      "name": "valid 2 seek",
+      "name": "refused 2 seek",
       "action": {
         "type": "video",
         "target": {
@@ -41,7 +41,7 @@
       }
     },
     {
-      "name": "valid 3 seek",
+      "name": "refused 3 seek",
       "action": {
         "type": "video",
         "target": {
@@ -55,7 +55,7 @@
       }
     },
     {
-      "name": "valid 4 rate",
+      "name": "refused 4 rate",
       "action": {
         "type": "video",
         "target": {
@@ -69,7 +69,7 @@
       }
     },
     {
-      "name": "valid 5 volume",
+      "name": "refused 5 volume",
       "action": {
         "type": "video",
         "target": {
@@ -83,7 +83,7 @@
       }
     },
     {
-      "name": "valid 6 volume",
+      "name": "refused 6 volume",
       "action": {
         "type": "video",
         "target": {
@@ -97,7 +97,7 @@
       }
     },
     {
-      "name": "valid 7 mute",
+      "name": "refused 7 mute",
       "action": {
         "type": "video",
         "target": {
@@ -111,7 +111,7 @@
       }
     },
     {
-      "name": "valid 8 loop",
+      "name": "refused 8 loop",
       "action": {
         "type": "video",
         "target": {
