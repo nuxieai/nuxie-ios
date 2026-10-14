@@ -411,7 +411,7 @@
     },
     {
       "name": "video action signed target",
-      "valid": true,
+      "valid": false,
       "action": {
         "type": "video",
         "target": {
