@@ -563,6 +563,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         if endpointSeekQualification {
             // The final image is at 1.9 s, before the media duration of 2 s.
             // A bound seek must select and compose that final image while paused.
+            try await runtime.setVideoNumber(0.01, path: "current-time")
             let initialDeadline = Date().addingTimeInterval(5)
             while host.deliveredFrames == 0 && Date() < initialDeadline {
                 _ = try await host.tick()
@@ -594,6 +595,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             // end seeking without its authored wrap-to-start behavior.
             try await runtime.setVideoBool(false, path: "loop")
             try await runtime.setVideoBool(true, path: "paused")
+            try await runtime.setVideoNumber(0.01, path: "current-time")
             let initialDeadline = Date().addingTimeInterval(5)
             while host.deliveredFrames == 0 && Date() < initialDeadline {
                 _ = try await host.tick()
@@ -603,7 +605,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             // Repeat the first and final decoded images under new seek owners.
             // Merely acknowledging currentTime is insufficient: pixels must be
             // uploaded again even when AVFoundation says no new buffer exists.
-            for seconds in [0.01, 0.0, 1.99, 2.022, 0.0] {
+            for seconds in [0.02, 0.0, 1.99, 2.022, 0.0] {
                 let before = host.deliveredFrames
                 try await runtime.setVideoNumber(seconds, path: "current-time")
                 let deadline = Date().addingTimeInterval(3)
