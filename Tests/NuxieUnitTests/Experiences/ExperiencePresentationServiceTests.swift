@@ -249,7 +249,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
 
         func makeJourneyRelease(
             versionId: String,
-            screenId: String = "screen-selected"
+            screenId: String = "screen-selected",
+            viewModelValues: [[String: JourneyReleaseJSONValue]] = []
         ) -> AuthenticatedJourneyRelease {
             let identity = JourneyReleaseIdentity(
                 appId: "app",
@@ -285,8 +286,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 routes: [],
                 screens: [Journey.Screen(
                     id: screenId,
-                    defaultViewModelName: nil,
-                    defaultInstanceId: nil,
+                    defaultViewModelName: viewModelValues.isEmpty ? nil : "Runtime",
+                    defaultInstanceId: viewModelValues.isEmpty ? nil : "root-sdk-id",
                     responseCaptures: []
                 )],
                 policy: .init(
@@ -312,7 +313,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 leg: leg,
                 products: [],
                 placements: [],
-                viewModelValues: [],
+                viewModelValues: viewModelValues,
                 screenBehaviors: [],
                 render: nil,
                 requirements: nil,
@@ -959,13 +960,20 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as! [String: Any]
                     let expected = fixture["expected"] as! [String: Any]
                     let purchase = expected["purchase"] as! [String: String]
+                    let valuesURL = fixtureURL.deletingLastPathComponent().deletingLastPathComponent()
+                        .appendingPathComponent("runtime/paywall-status/view-model-values.json")
+                    let values = try JSONDecoder().decode([[String: JourneyReleaseJSONValue]].self,
+                        from: Data(contentsOf: valuesURL)).filter { fields in
+                            guard case .string(let path)? = fields["path"] else { return false }
+                            return path.hasPrefix("paywall/purchase/")
+                        }
                     let versionID = "Journey-no-selection"
                     let screenID = "screen-selected"
                     let controller = CommerceActionRecordingExperienceViewController(mockExperienceVersionId: versionID, mockScreenId: screenID)
                     mockExperienceService.mockViewControllers[versionID] = controller
                     let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
                     let request = JourneyPresentationRequest(fences: testPresentationFences(),
-                        release: makeJourneyRelease(versionId: versionID, screenId: screenID), delivery: journeyDelivery(),
+                        release: makeJourneyRelease(versionId: versionID, screenId: screenID, viewModelValues: values), delivery: journeyDelivery(),
                         screenId: screenID, owner: owner, reservation: service.reserveJourneyPresentation(ownerDistinctId: "user-1"),
                         onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
                     let shown = await service.presentJourney(request)
@@ -976,6 +984,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     expect(controller.purchaseRequests).to(beEmpty())
                     expect(controller.screenValues["paywall/purchase/status"]).to(equal(purchase["status"]))
                     expect(controller.screenValues["paywall/purchase/errorCode"]).to(equal(purchase["errorCode"]))
+                    expect(controller.screenValues["paywall/purchase/invocationId"]).to(equal("buy-no-selection"))
                     expect(service.ownsJourneyPresentation(owner: owner)).to(beTrue())
                     await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
