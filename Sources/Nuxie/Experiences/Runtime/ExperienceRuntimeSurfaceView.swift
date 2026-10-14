@@ -82,7 +82,9 @@ final class ExperienceRuntimeSurfaceView: UIView {
                 case .unknown: state = .unknown
                 default: state = update.hinge == nil ? .unavailable : .unknown
                 }
-                let next = ExperienceFoldEnvironment(angleRadians: update.hinge.map { Double($0.angle) }, state: state)
+                // A queued callback must not revive a detached observation.
+                let next = window == nil ? .unavailable : ExperienceFoldEnvironment(
+                    angleRadians: update.hinge.map { Double($0.angle) }, state: state)
                 guard next != foldEnvironment else { return }
                 foldEnvironment = next
                 onEnvironmentChange?()
