@@ -389,24 +389,6 @@ final class ExperienceVideoPlayback {
         return values
     }
 
-    func apply(_ action: JourneyVideoAction) async throws {
-        guard !closed else { throw ExperienceInteractiveScreenError.stateContract("video playback is closed") }
-        let matches = targets.filter { $0.artboardId == action.artboardId && $0.viewNodeId == action.viewNodeId }
-        let live = try await runtime.videos().filter { occurrence in
-            matches.contains { target in
-                Int(target.sourceArtboardIndex) == occurrence.sourceArtboardIndex &&
-                Int(target.componentId) == occurrence.sourceComponentID
-            }
-        }
-        guard !closed, !live.isEmpty else {
-            throw ExperienceInteractiveScreenError.stateContract("video target is not mounted in this screen")
-        }
-        for occurrence in live {
-            try await runtime.videoCommand(componentID: occurrence.componentID,
-                kind: action.commandKind, value: action.commandValue)
-        }
-    }
-
     private func apply(_ actions: [NuxieNativeVideoAction], to decoder: Decoder) async throws {
         for action in actions {
             if action.kind == 3 { requestedRates[decoder.componentID] = action.value }
@@ -561,7 +543,6 @@ final class ExperienceVideoPlayback {
                 if decoder.frameRequestedAfterSeek || decoder.output.hasNewPixelBuffer(forItemTime: time) {
                     var displayTime = CMTime.invalid
                     if let buffer = decoder.output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime) {
-                        let selectedBySeek = decoder.frameRequestedAfterSeek
                         let generation = decoder.generation
                         decoder.frameRequestedAfterSeek = false
                         let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
@@ -569,25 +550,6 @@ final class ExperienceVideoPlayback {
                             throw ExperienceInteractiveScreenError.assetContract("decoded video frame exceeds limits")
                         }
                         let presentationSeconds = displayTime.seconds.isFinite ? displayTime.seconds : clock
-                        if selectedBySeek && displayTime.seconds.isFinite {
-                            // Only a successfully completed seek can identify
-                            // its selected image at a media-duration endpoint.
-                            // Preserve the decoder's exact PTS, including when
-                            // an audio tail extends beyond the last video frame.
-                            let actions: [NuxieNativeVideoAction]
-                            do {
-                                actions = try await runtime.videoStep(componentID: decoder.componentID,
-                                    observation: 7, generation: generation, value: presentationSeconds)
-                            } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .invalidArgument {
-                                // Published runtimes predating observation 7
-                                // reject this optional receipt. Keep ordinary
-                                // seek presentation compatible with that ABI.
-                                actions = []
-                            }
-                            guard !closed, !decoder.disposed else { continue }
-                            try await apply(actions, to: decoder)
-                            guard !decoder.disposed, !decoder.seeking, decoder.generation == generation else { continue }
-                        }
                         try await runtime.videoPresent(componentID: decoder.componentID, generation: generation,
                             seconds: presentationSeconds, pixelBuffer: NuxieNativeVideoPixelBuffer(buffer))
                         deliveredFrames += 1

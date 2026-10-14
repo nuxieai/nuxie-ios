@@ -1,0 +1,128 @@
+{
+  "cases": [
+    {
+      "name": "valid 0 play",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "play"
+        }
+      }
+    },
+    {
+      "name": "valid 1 pause",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "pause"
+        }
+      }
+    },
+    {
+      "name": "valid 2 seek",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "seek",
+          "seconds": 0
+        }
+      }
+    },
+    {
+      "name": "valid 3 seek",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "seek",
+          "seconds": 12.5
+        }
+      }
+    },
+    {
+      "name": "valid 4 rate",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "rate",
+          "rate": 0.5
+        }
+      }
+    },
+    {
+      "name": "valid 5 volume",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "volume",
+          "volume": 0
+        }
+      }
+    },
+    {
+      "name": "valid 6 volume",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "volume",
+          "volume": 1
+        }
+      }
+    },
+    {
+      "name": "valid 7 mute",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "mute",
+          "muted": true
+        }
+      }
+    },
+    {
+      "name": "valid 8 loop",
+      "action": {
+        "type": "video",
+        "target": {
+          "artboardId": "frame",
+          "viewNodeId": "greeting"
+        },
+        "command": {
+          "type": "loop",
+          "enabled": false
+        }
+      }
+    }
+  ]
+}

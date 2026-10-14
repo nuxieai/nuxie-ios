@@ -94,18 +94,30 @@ ffmpeg -i captions.mp4 -map 0 -vf scale=3840:2160:flags=neighbor,setsar=1,fps=60
 Passing loop/caption/control checks at this size is distinct from sustaining
 60 delivered frames/second; record the measured delivery rate and host.
 
-`endpoint.nux` reuses the interactive video Frame and the checked-in
-`endpoint.luau` controller. The same generator command above emits it and its
-inventory. Its controller requests `scrub(1, 0, video:duration())` and paints a
-green status strip only after the request reports `settled`. The native test
-binds `endpoint-low-fps.mp4`: its 2-second duration extends beyond the last
-10 fps video frame at 1.9 seconds. Metal readback must show both the green strip
-and the final blue image, so an uploaded-but-rejected frame cannot pass.
+The scenes now bind the web properties `paused`, `muted`, `volume`, `loop`,
+`playback-rate` and `current-time` to native video keys. The `paused` binding
+also reads native changes back, so a host audio interruption updates the value.
+List rows resolve the same root values through their parent data context.
 
-The endpoint media is the runtime's `fixtures/video/red-blue-endpoint.mp4`.
-Copy that canonical fixture from `third_party/nuxie-runtime` in the parent repo
-before running the generator; its source-generation recipe is recorded beside it.
+Reproduce the bound scenes from the original published corpus at SDK commit
+`9075900185c9ba9af996bd4a380e9971d3e97aab`:
 
-This covers accepting a frame actually selected by the decoder. A separate
-long audio-tail case where AVFoundation provides no image at all remains tracked
-in [UNIV-3339](https://universe.basis.dev/issue/UNIV-3339).
+```sh
+mkdir -p /tmp/nuxie-video-original
+git archive 9075900185c9ba9af996bd4a380e9971d3e97aab fixtures/video | tar -x -C /tmp/nuxie-video-original
+python3 scripts/generate-video-property-fixtures.py --source /tmp/nuxie-video-original/fixtures/video
+```
+
+The generator keeps the published geometry, assets and component identities,
+then adds native ViewModel properties, defaults and binding records. It requires
+an unmodified source corpus so repeated generation cannot duplicate bindings.
+It does not compile or build a runtime.
+
+`endpoint.nux` uses the ordinary Video Frame scene with paused playback and
+looping disabled. Its old interactive controller and script are deleted. The
+native test writes `current-time = 2` and checks that a new decoded blue image
+reaches Metal. `endpoint-low-fps.mp4` ends at 2 seconds; its final 10 fps image
+is at 1.9 seconds. No request receipts are part of this contract.
+
+A separate long audio-tail case where AVFoundation provides no image at all
+remains tracked in [UNIV-3339](https://universe.basis.dev/issue/UNIV-3339).

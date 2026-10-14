@@ -654,11 +654,6 @@ final class ExperiencePresentationService {
             // before asking the presenter to reveal it.
             result = .navigate(screenId: target)
 
-        case .video:
-            guard let command = try? JourneyVideoAction(action: action),
-                  await controller.applyJourneyVideoCommand(command) else { return .failed }
-            result = .advanced(outlet: "next")
-
         case .purchase:
             guard let placementValue = action["placementId"],
                   let delegate = currentRuntimeDelegate as? JourneyRuntimeDelegate,

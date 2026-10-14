@@ -25,22 +25,6 @@ enum JourneyReleaseSchemaValidator {
             let renderScreens = try array(render["screens"]).map { try identifier(dictionary($0)["id"]) }
             guard Set(renderScreens) == screens, Set(renderScreens).count == renderScreens.count else { throw invalid }
         }
-        let leg = try dictionary(root["leg"])
-        for value in try array(leg["steps"]) {
-            let step = try dictionary(value)
-            guard step["kind"] as? String == "action",
-                  let action = step["action"] as? [String: Any],
-                  action["type"] as? String == "video" else { continue }
-            let target = try dictionary(action["target"])
-            let render = try dictionary(root["render"])
-            let requirements = try dictionary(root["requirements"])
-            guard (requirements["requiredCapabilities"] as? [String] ?? []).contains("video.playback.v1"),
-                  let elements = render["videoElements"] as? [[String: Any]],
-                  elements.contains(where: {
-                      $0["artboardId"] as? String == target["artboardId"] as? String &&
-                      $0["viewNodeId"] as? String == target["viewNodeId"] as? String
-                  }) else { throw invalid }
-        }
         for item in try array(root["viewModelValues"]) {
             let value = try object(item, required: ["viewModelName", "path", "value"], optional: ["instanceId", "instanceName"])
             _ = try identifier(value["viewModelName"])
