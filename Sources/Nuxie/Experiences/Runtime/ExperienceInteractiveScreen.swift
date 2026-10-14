@@ -4,19 +4,6 @@ import Metal
 import NuxieRuntime
 import QuartzCore
 
-private func environmentMutations(reference: NuxieNativeViewModelReference,
-    reduceMotion: Bool?, safeArea: ExperienceSafeAreaInsets?) -> [NuxieNativeViewModelMutation] {
-    var mutations: [NuxieNativeViewModelMutation] = []
-    if let reduceMotion { mutations.append(.setBool(instance: reference, path: "reduceMotion", value: reduceMotion)) }
-    if let safeArea {
-        for (edge, value) in [("top", safeArea.top), ("bottom", safeArea.bottom),
-                              ("left", safeArea.left), ("right", safeArea.right)] {
-            mutations.append(.setNumber(instance: reference, path: "safeArea/" + edge, value: Float(value)))
-        }
-    }
-    return mutations
-}
-
 /// Product-owned player policy. The native wrapper receives only the resolved
 /// generic selector and never learns what a Nuxie screen means.
 enum ExperienceInteractivePlayerSelection: Equatable, Sendable {
@@ -1667,6 +1654,7 @@ actor ExperienceInteractiveScreen {
     private let rootViewModelReference: ExperienceInteractiveViewModelReference?
     private let sharedExperienceRootName: String?
     private let environmentReference: NuxieNativeViewModelReference?
+    private let environmentBindings: ExperienceEnvironmentBindings
     private var snapshotTopology: ExperienceInteractiveSnapshotTopology
     private var latestSnapshot: NuxieNativeViewModelSnapshot?
     private var trackedLists: ExperienceInteractiveTrackedListPlanner
@@ -1722,6 +1710,7 @@ actor ExperienceInteractiveScreen {
         self.rootViewModelReference = rootViewModelReference
         self.sharedExperienceRootName = sharedExperienceRootName
         self.environmentReference = environmentReference
+        self.environmentBindings = ExperienceEnvironmentBindings(catalog: viewModelCatalog)
         self.snapshotTopology = snapshotTopology
         self.latestSnapshot = latestSnapshot
         self.trackedLists = trackedLists
@@ -1833,7 +1822,7 @@ actor ExperienceInteractiveScreen {
             environmentReference = try await runtime.bindGlobalViewModel(named: "env")
             if let environmentReference {
                 // Entry transitions must see host values during the initialization advance.
-                let mutations = environmentMutations(reference: environmentReference,
+                let mutations = ExperienceEnvironmentBindings(catalog: initialState.catalog).mutations(reference: environmentReference,
                     reduceMotion: initialReduceMotion, safeArea: initialSafeArea)
                 if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
             }
@@ -1937,14 +1926,16 @@ actor ExperienceInteractiveScreen {
 
     func environmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
         guard let environmentReference else { return nil }
-        return try await runtime.snapshot(environmentReference)
+        let runtime = runtime
+        return try await operationGate.withLock { try await runtime.snapshot(environmentReference) }
     }
 
-    func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil) async throws {
+    func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil,
+                           viewport: ExperienceViewportEnvironment? = nil, fold: ExperienceFoldEnvironment? = nil) async throws {
         guard let environmentReference else { return }
         let runtime = runtime
-        let batch = environmentMutations(reference: environmentReference,
-            reduceMotion: reduceMotion, safeArea: safeArea)
+        let batch = environmentBindings.mutations(reference: environmentReference,
+            reduceMotion: reduceMotion, safeArea: safeArea, viewport: viewport, fold: fold)
         guard !batch.isEmpty else { return }
         try await operationGate.withLock { _ = try await runtime.mutateViewModel(batch) }
     }
@@ -3634,6 +3625,15 @@ actor ExperienceInteractiveScreen {
             } else {
                 await markLayoutReadbackPending(false)
                 try await videoPlayback?.resizeViewport(bounds: .zero)
+            }
+            // All platform hosts resize here, including macOS. Keep the env
+            // dimensions in the same serial operation as the layout size.
+            if let environmentReference {
+                let viewport = ExperienceViewportEnvironment(
+                    width: Double(Float(pixelWidth) / layoutScaleFactor),
+                    height: Double(Float(pixelHeight) / layoutScaleFactor))
+                let writes = environmentBindings.mutations(reference: environmentReference, viewport: viewport)
+                if !writes.isEmpty { _ = try await runtime.mutateViewModel(writes) }
             }
             let outcome = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
             return Self.renderOutcome(outcome)

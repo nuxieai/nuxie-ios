@@ -1073,6 +1073,42 @@ final class JourneyReleaseTests: XCTestCase {
         }
     }
 
+    func testSignedFoldAndViewportBindingsRequireHostTransportCapabilities() throws {
+        let capabilities = ["environment.fold.v1", "environment.viewport.v1"]
+        XCTAssertTrue(JourneyReleaseRuntime.current.supportedCapabilities.isSuperset(of: capabilities))
+        var root = try systemFontRoot()
+        var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
+        requirements["requiredCapabilities"] = (capabilities + ["system-fonts"]).sorted()
+        root["requirements"] = requirements
+        let envelope = try sign(JSONSerialization.data(withJSONObject: root))
+        let fixture = try golden(entryKey: "renderedEntry")
+        let luau = try XCTUnwrap(requirements["luau"] as? [String: Any])
+        let scene = try XCTUnwrap(requirements["sceneFormat"] as? [String: Any])
+        let timezone = try XCTUnwrap(requirements["timezoneData"] as? [String: Any])
+        for supportsTransport in [false, true] {
+            let supported = JourneyReleaseSupportedRuntime(
+                currentSdkVersion: try XCTUnwrap(requirements["minimumSdkVersion"] as? String),
+                supportedRuntimeRevisions: [try XCTUnwrap(requirements["runtimeRevision"] as? String)],
+                supportedLuauRevisions: [try XCTUnwrap(luau["revision"] as? String): Set(try XCTUnwrap(luau["bytecodeVersions"] as? [Int]))],
+                sceneFormat: .init(major: try XCTUnwrap(scene["major"] as? Int), minor: try XCTUnwrap(scene["minor"] as? Int)),
+                timezoneDataRevision: try XCTUnwrap(timezone["revision"] as? String),
+                timezoneDataSHA256: try XCTUnwrap(timezone["sha256"] as? String),
+                supportedCapabilities: Set(["system-fonts"] + (supportsTransport ? capabilities : [])))
+            let authenticate = {
+                try JourneyReleaseVerifier().authenticateJourney(
+                    envelopeBytes: JSONEncoder().encode(envelope), authorizationKeys: [self.key(self.signingKey.publicKey.rawRepresentation)],
+                    expectedIdentity: fixture.identity, expectedLegId: String(repeating: "a", count: 64),
+                    supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
+            }
+            if supportsTransport { XCTAssertNoThrow(try authenticate()) }
+            else {
+                XCTAssertThrowsError(try authenticate()) { error in
+                    XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .unsupportedCapabilities(capabilities))
+                }
+            }
+        }
+    }
+
     func testSharedVideoActionContract() throws {
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/journeys/planes/video-actions.json")
