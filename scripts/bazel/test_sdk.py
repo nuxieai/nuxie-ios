@@ -458,8 +458,13 @@ class NativeCommandSelectionTests(unittest.TestCase):
             stage.mkdir()
             flags = ["--platforms=simulator"]
             with patch.object(sdk, "outputs", return_value=[module]) as outputs, \
-                    patch.object(sdk, "runtime_root", return_value=runtime):
+                    patch.object(sdk, "runtime_root", return_value=runtime), \
+                    patch.object(sdk, "bazel_command", return_value=["bazel"]), \
+                    patch.object(sdk, "run") as build:
                 sdk.stage_framework_dependencies("NuxieSDK", flags, "ios-simulator", stage)
+            build.assert_called_once_with(["bazel", "build", *flags,
+                "--aspects=//scripts/bazel:sdk.bzl%sdk_runtime_imports_aspect",
+                "--output_groups=sdk_runtime_imports", "//:NuxieSDK"])
             outputs.assert_called_once_with('filter("^//:NuxieRuntime$", deps(//:NuxieSDK))', flags)
             self.assertEqual((stage / "NuxieRuntime.swiftmodule").read_bytes(), module.read_bytes())
             self.assertEqual((stage / "runtime-headers/nux.h").read_text(), "simulator C ABI")
