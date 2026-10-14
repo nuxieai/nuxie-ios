@@ -309,9 +309,14 @@ class NativeCommandSelectionTests(unittest.TestCase):
     def test_make_default_destination_excludes_simctl_status_and_trailing_whitespace(self):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "xcrun"
-            binary.write_text("#!/bin/sh\ncat <<'DEVICES'\n== Devices ==\n-- iOS 27.0 --\n"
-                              "    iPhone 18 Pro Max (0E2E4AD4-728B-4620-BEC4-AA281A5942D0) (Shutdown)  \n"
-                              "DEVICES\n")
+            inventory = {
+                "runtimes": [{"identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "version": "27.0", "isAvailable": True,
+                              "supportedDeviceTypes": [{"identifier": "pro-max"}]}],
+                "devicetypes": [{"identifier": "pro-max", "name": "iPhone 18 Pro Max", "productFamily": "iPhone",
+                                 "minRuntimeVersion": 27 << 16, "maxRuntimeVersion": 0xffffffff}],
+                "devices": {"iOS-27-0": [{"name": "Custom name", "udid": "0E2E4AD4", "state": "Shutdown"}]},
+            }
+            binary.write_text("#!/bin/sh\ncat <<'DEVICES'\n" + json.dumps(inventory) + "\nDEVICES\n")
             binary.chmod(0o755)
             environment = {key: value for key, value in os.environ.items()
                            if key not in {"TEST_DESTINATION", "TEST_SIMULATOR_NAME", "TEST_SIMULATOR_OS"}}

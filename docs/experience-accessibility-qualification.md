@@ -40,6 +40,15 @@ candidate admission. The installed-app UI test
 checks SDK startup, native accessibility exposure, and absence of diagnostic
 probe elements. These are prerequisites, not VoiceOver interaction evidence.
 
+The general `make test` gate selects an ordinary iPhone supported by the newest
+compatible installed runtime, independently of already-created simulators.
+Override `TEST_SIMULATOR_NAME` and `TEST_SIMULATOR_OS` for explicit Duo runs.
+The absolute-position roles fixture exposes only controls intersecting its
+viewport: all nine on the ordinary phone, eight on Duo’s 678-point outer
+portrait display. The description at y=704 is correctly excluded there; this
+fixture does not qualify responsive layout. Native action assertions still run
+on both viewports.
+
 ## Physical VoiceOver evidence
 
 Install the qualified build on the paired iPhone and use actual VoiceOver.
