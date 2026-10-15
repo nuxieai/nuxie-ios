@@ -3748,7 +3748,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let screen = try await preparation.openScreen(screenID: "scr_screens_ssaved", runValues: run,
             pixelWidth: 402, pixelHeight: 700)
         addTeardownBlock { try await screen.close(); await run.retire() }
-        _ = try await screen.setPresentationHeight(fitContent: true, availableSize: CGSize(width: 402, height: 700))
+        let fitsContent = try await screen.setPresentationHeight(fitContent: true, availableSize: CGSize(width: 402, height: 700))
+        XCTAssertTrue(fitsContent, "Saved is the published fit-content sheet")
+        // Env writes reach only slots the artifact declares. Until a published
+        // Parla export declares env width and height there is nothing to observe.
+        let slots = try await screen.environmentSnapshot()?.values.map(\.name) ?? []
+        try XCTSkipUnless(slots.contains("width") && slots.contains("height"),
+            "The published Parla env declares \(slots.sorted()) without width and height")
         for surfaceHeight in [152, 272, 400] {
             _ = try await screen.resize(pixelWidth: 402, pixelHeight: UInt32(surfaceHeight), layoutScaleFactor: 1)
             let env = try await screen.environmentSnapshot()
