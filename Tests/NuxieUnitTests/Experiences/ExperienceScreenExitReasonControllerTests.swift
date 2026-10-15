@@ -250,7 +250,7 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
             }, viewModelValues: []), sceneBytes: base.sceneBytes, assets: base.assets
         )
         let experience = Experience(id: "state-experience", versionId: "exit-reason-version", buildId: "state-build",
-            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .fullScreenDefault,
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
             behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
         let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
             sceneURL: directory.appendingPathComponent("screen.nux"), sceneBytes: payload.sceneBytes,
