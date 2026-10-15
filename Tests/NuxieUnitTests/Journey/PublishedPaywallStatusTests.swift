@@ -144,7 +144,7 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
         let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 320, pixelHeight: 150)
         let definition = try ExperienceDefinition(journeyDescriptor: release.descriptor)
         let experience = Experience(id: "paywall", versionId: release.descriptor.identity.experienceVersionId, buildId: "test", artifactContentHash: nil,
-            authenticatedReleaseID: nil, behaviorPresentation: .fullScreenDefault, behaviorPresentationScreens: ["state-screen": .init(width: 320, height: 150)],
+            authenticatedReleaseID: nil, behaviorPresentation: .standard, behaviorPresentationScreens: ["state-screen": .init(width: 320, height: 150)],
             assetBaseURL: URL(string: "https://test.invalid/")!, journey: .init(screens: definition.screens, viewModelValues: values), definition: definition, products: [product])
         let controller = PaywallEngineController(mockExperienceVersionId: experience.versionId, mockScreenId: "state-screen", mockExperience: experience,
             transactionService: transactions, productService: products, systemEventSink: sink)
