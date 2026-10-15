@@ -394,7 +394,8 @@ final class ExperienceScreenViewController: UIViewController {
         guard let interactiveScreen, let presentationLoop else { throw CancellationError() }
         try await presentationLoop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork { [weak self] in
             let available = try await interactiveScreen.setPresentationHeight(
-                fitContent: presentation.fitsContent, availableSize: availableSize)
+                fitContent: presentation.fitsContent, availableSize: availableSize,
+                fillsPresentationViewport: presentation.fitsContent)
             return .work(requestsFrame: false) { [weak self] in
                 self?.measuresContentHeight = presentation.fitsContent && available
             }
@@ -413,7 +414,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     private func publishContentHeight() {
         guard measuresContentHeight, let target = heightPresentationTarget,
-              let height = interactiveScreen?.artboardBounds.height,
+              let height = interactiveScreen?.intrinsicPresentationHeight,
               height.isFinite, height > 0, lastPresentedHeight != height else { return }
         if let navigation = target as? UINavigationController,
            navigation.topViewController !== self { return }

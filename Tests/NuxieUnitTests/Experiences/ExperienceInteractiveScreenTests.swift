@@ -3739,6 +3739,37 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     }
 
     #if canImport(UIKit)
+    func testFitContentMeasuresHugButDrawsTheWholeNativeViewport() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/fit-content/dynamic-child.riv"))
+        let payload = try await statePayload(defaultViewModelName: "Root", values: [], scene: bytes, artboardName: "Sheet")
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 300, pixelHeight: 600)
+        do {
+            let bound = try await screen.setPresentationHeight(fitContent: true,
+                availableSize: CGSize(width: 300, height: 600), fillsPresentationViewport: true)
+            XCTAssertTrue(bound)
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 16 + 120 + 16)
+            // Supply a native viewport with a synthetic bottom safe-area allowance.
+            // Its value is a test input, never an assumption about the running device.
+            let bottomInset = 34
+            _ = try await screen.resize(pixelWidth: 300, pixelHeight: UInt32(152 + bottomInset), layoutScaleFactor: 1)
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 152)
+            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 300, height: CGFloat(152 + bottomInset)))
+            _ = try await screen.applyStateCommand(.snapshot([.init(viewModelName: "Root", instanceID: "root-sdk-id",
+                instanceName: nil, path: "contentHeight", value: .number(240))]))
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 16 + 240 + 16)
+            _ = try await screen.resize(pixelWidth: 300, pixelHeight: UInt32(272 + bottomInset), layoutScaleFactor: 1)
+            _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 272)
+            XCTAssertEqual(screen.artboardBounds.height, CGFloat(272 + bottomInset))
+            try await screen.close()
+        } catch { try? await screen.close(); throw error }
+    }
+
     func testFitContentEnvironmentHeightUsesAvailableSpaceAcrossSurfaceResizes() async throws {
         let directory = experiencePreparationRepositoryRoot().appendingPathComponent("fixtures/journeys/parla-sheets")
         let (_, artifact) = try await authenticatedFixtureArtifact(at: directory,
