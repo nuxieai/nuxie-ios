@@ -1652,7 +1652,7 @@ actor ExperienceInteractiveScreen {
             let available = try await presentationHeight.apply(to: runtime,
                 fitContent: fitContent && !fillsPresentationViewport,
                 width: Float(availableSize.width), height: Float(availableSize.height))
-            presentationViewportSize = fitContent && available && fillsPresentationViewport ? availableSize : nil
+            await setPresentationViewport(fitContent && available && fillsPresentationViewport ? availableSize : nil)
             await setHeightReadback(fitContent && available, availableHeight: Double(availableSize.height))
             try await updatePresentationViewport(availableSize)
             return available
@@ -2009,36 +2009,37 @@ actor ExperienceInteractiveScreen {
             // Project each committed step with its own snapshot, before the next layout
             // pass can change bindings. Layout passes must not discard saves or events.
             if let eventSnapshot { try? await refreshTrackedTopology(snapshot: eventSnapshot) }
-            let inputResult = projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
+            let inputResult = await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
             var effects = inputResult.effects
             var keepGoing = inputResult.keepGoing
             var finalResult = result
             var finalSnapshot = eventSnapshot
-            if fitsContentHeight, let viewport = presentationViewportSize {
+            if let measurement = await fitContentMeasurement() {
+                let viewport = measurement.viewport
                 // User input is processed in the fixed viewport drawn on the previous frame.
                 // Then measure intrinsic content without publishing an intermediate drawable,
                 // and restore Fixed so the screen paints all of UIKit's assigned space.
                 for measure in [true, false] {
                     _ = try await presentationHeight.apply(to: runtime, fitContent: measure,
                         width: Float(viewport.width),
-                        height: Float(measure ? (availablePresentationHeight ?? Double(viewport.height)) : Double(viewport.height)))
+                        height: Float(measure ? measurement.measureHeight : Double(viewport.height)))
                     let settled = try await runtime.stepWithSnapshot(elapsedSeconds: 0,
                         correlationID: correlationID, textRunNames: [])
                     if measure {
                         intrinsicPresentationBounds.update(size: try await runtime.layoutSize())
                     }
                     if let snapshot = settled.snapshot { try? await refreshTrackedTopology(snapshot: snapshot) }
-                    let projected = projectStep(settled.result, eventSnapshot: settled.snapshot, correlationID: correlationID)
+                    let projected = await projectStep(settled.result, eventSnapshot: settled.snapshot, correlationID: correlationID)
                     effects += projected.effects
                     keepGoing = keepGoing || projected.keepGoing
                     finalResult = settled.result
                     finalSnapshot = settled.snapshot
                 }
                 // Geometry, accessibility and text input all use the restored full viewport.
-                needsLayoutReadback = true
+                await markLayoutReadbackPending(true)
                 try await refreshLayoutBounds()
             }
-            captureTextFrame(finalResult, requested: capturesTextLayout, snapshot: finalSnapshot)
+            await captureTextFrame(finalResult, requested: capturesTextLayout, snapshot: finalSnapshot)
             return ExperienceInteractiveStepResult(keepGoing: keepGoing, pointerHits: inputResult.pointerHits,
                 focusState: finalResult.focusState, effects: effects)
         }
@@ -3682,10 +3683,8 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock { [self] in
             await discardTextFrame()
             if pixelWidth > 0, pixelHeight > 0 {
-                if presentationViewportSize != nil {
-                    presentationViewportSize = CGSize(width: Double(Float(pixelWidth) / layoutScaleFactor),
-                        height: Double(Float(pixelHeight) / layoutScaleFactor))
-                }
+                await resizePresentationViewport(CGSize(width: Double(Float(pixelWidth) / layoutScaleFactor),
+                    height: Double(Float(pixelHeight) / layoutScaleFactor)))
                 try await runtime.setLayoutSize(width: Float(pixelWidth) / layoutScaleFactor,
                     height: Float(pixelHeight) / layoutScaleFactor)
                 await markLayoutReadbackPending(true)
@@ -3712,6 +3711,19 @@ actor ExperienceInteractiveScreen {
     }
 
     private func markLayoutReadbackPending(_ pending: Bool) { needsLayoutReadback = pending }
+
+    private func setPresentationViewport(_ size: CGSize?) { presentationViewportSize = size }
+
+    /// A fit-content sheet that fills its native viewport follows that viewport's resizes.
+    private func resizePresentationViewport(_ size: CGSize) {
+        if presentationViewportSize != nil { presentationViewportSize = size }
+    }
+
+    /// The viewport a fit-content sheet draws in, and the height its content is measured against.
+    private func fitContentMeasurement() -> (viewport: CGSize, measureHeight: Double)? {
+        guard fitsContentHeight, let viewport = presentationViewportSize else { return nil }
+        return (viewport, availablePresentationHeight ?? Double(viewport.height))
+    }
 
     private func refreshLayoutBounds() async throws {
         guard needsLayoutReadback || fitsContentHeight else { return }
