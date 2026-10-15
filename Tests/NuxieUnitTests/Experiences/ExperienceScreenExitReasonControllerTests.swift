@@ -137,6 +137,52 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
         }
     }
 
+    #if NUXIE_HOSTED_INPUT_TESTS
+    func testAuthoredLayerCloseWaitsForDismissedExitWithNativeSheetStillMounted() async throws {
+        try await withCoordinator(useNativeWindow: true) { coordinator, source, probe in
+            try await self.navigate(coordinator, to: source.screenId,
+                transition: ["type": "modal", "present": "sheet", "closedby": "none"])
+            let layers = try self.field(coordinator, "navigationLayers", as: [UINavigationController].self)
+            let sheet = try XCTUnwrap(layers.last)
+            let closing = try XCTUnwrap(sheet.topViewController as? ExperienceScreenViewController)
+            XCTAssertFalse(closing === source)
+            let close = Task { @MainActor in await coordinator.closeTopLayer() }
+            try await self.waitUntil { closing.lifecyclePhase == .exiting }
+            XCTAssertEqual(closing.lifecycleExitReason, .dismissed)
+            XCTAssertNotNil(sheet.presentingViewController, "Authored exit draws in the retained native sheet")
+            XCTAssertEqual(source.lifecyclePhase, .active)
+            let closed = await close.value
+            XCTAssertTrue(closed)
+            XCTAssertEqual(coordinator.layerScreenIds, [[source.screenId]])
+            XCTAssertNil(sheet.presentingViewController)
+            XCTAssertEqual(source.lifecyclePhase, .active)
+            XCTAssertEqual(probe.active.filter { $0 == source.screenId }.count, 2,
+                "One modal activation and one routing reveal, without re-entering the retained screen")
+        }
+    }
+
+    func testCompletedSwipeSupersedesNavigationExitWithoutReactivatingTheRemovedLayer() async throws {
+        try await withCoordinator(useNativeWindow: true) { coordinator, source, probe in
+            try await self.navigate(coordinator, to: source.screenId,
+                transition: ["type": "modal", "present": "sheet"])
+            let layers = try self.field(coordinator, "navigationLayers", as: [UINavigationController].self)
+            let sheet = try XCTUnwrap(layers.last)
+            let closing = try XCTUnwrap(sheet.topViewController as? ExperienceScreenViewController)
+            let presentation = try XCTUnwrap(sheet.presentationController)
+            var result: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "reason-target", transition: nil) { value, _ in result = value })
+            try await self.waitUntil { closing.lifecyclePhase == .exiting }
+            await withCheckedContinuation { continuation in sheet.dismiss(animated: false) { continuation.resume() } }
+            coordinator.presentationControllerDidDismiss(presentation)
+            try await self.waitUntil { result != nil }
+            XCTAssertEqual(result, .superseded)
+            XCTAssertEqual(coordinator.layerScreenIds, [[source.screenId]])
+            XCTAssertEqual(source.lifecyclePhase, .active)
+            XCTAssertFalse(probe.active.contains("reason-target"))
+        }
+    }
+    #endif
+
     private func field<T>(_ value: Any, _ name: String, as type: T.Type) throws -> T {
         try XCTUnwrap(Mirror(reflecting: value).children.first { $0.label == name }?.value as? T)
     }
@@ -164,10 +210,10 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
         throw CocoaError(.coderInvalidValue)
     }
 
-    private func navigate(_ coordinator: ExperienceScreenTransitionCoordinator, to screenID: String) async throws {
+    private func navigate(_ coordinator: ExperienceScreenTransitionCoordinator, to screenID: String, transition: Any? = nil) async throws {
         let finished = expectation(description: "navigate to \(screenID)")
         var result: ExperienceScreenNavigationResult?
-        XCTAssertTrue(coordinator.navigate(to: screenID, transition: nil) { value, _ in
+        XCTAssertTrue(coordinator.navigate(to: screenID, transition: transition) { value, _ in
             result = value
             finished.fulfill()
         })
@@ -193,13 +239,23 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
     }
 
     private func withCoordinator(
+        useNativeWindow: Bool = false,
         body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController, ExitReasonProbe) async throws -> Void
     ) async throws {
         let fixture = try await fixture("dismissed-only")
         let host = UIViewController()
         host.loadViewIfNeeded()
         host.view.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
-        defer { _ = host.view }
+        var window: UIWindow?
+        var previousKey: UIWindow?
+        if useNativeWindow {
+            let scene = try XCTUnwrap(UIApplication.shared.activeWindowScene)
+            previousKey = scene.windows.first(where: \.isKeyWindow)
+            window = UIWindow(windowScene: scene)
+            window?.rootViewController = host
+            window?.makeKeyAndVisible()
+        }
+        defer { window?.isHidden = true; previousKey?.makeKey(); _ = host.view }
         let probe = ExitReasonProbe()
         let coordinator = ExperienceScreenTransitionCoordinator(
             experience: fixture.0, artifact: fixture.1, hostViewController: host, screenDelegate: probe,
@@ -210,6 +266,7 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
             onRuntimeFailure: { _, error in probe.failures.append(error) }
         )
         try await coordinator.install()
+        if useNativeWindow { coordinator.setContentHidden(false) }
         _ = await coordinator.activateInitialScreen()
         probe.active.removeAll()
         // The coordinator keeps one controller cache per presentation layer; the entry screen is in the base layer.

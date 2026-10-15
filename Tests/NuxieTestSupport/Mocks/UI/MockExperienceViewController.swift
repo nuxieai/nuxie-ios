@@ -130,7 +130,7 @@ class MockExperienceViewController: ExperienceViewController {
         await shutdownRuntimeHandler?()
     }
 
-    override func prepareForDismissal(reason: CloseReason? = nil) async {
+    override func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {
         guard !didPrepareForCurrentDismissal else { return }
         didPrepareForCurrentDismissal = true
         prepareForDismissalCallCount += 1

@@ -8,6 +8,19 @@ import XCTest
 final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
+    func testDismissScopeAllIsAcceptedAndOtherScopesAreRejected() throws {
+        let actions: [[String: Any]] = [["type": "dismiss"], ["type": "dismiss", "scope": "all"]]
+        for action in actions {
+            XCTAssertNoThrow(try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(action,
+                path: "action", screenIDs: [], placementIDs: []))
+        }
+        let scopes: [Any] = ["top", "layer", 1, NSNull()]
+        for scope in scopes {
+            XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(
+                ["type": "dismiss", "scope": scope], path: "action", screenIDs: [], placementIDs: []))
+        }
+    }
+
     func testPublishedParlaAuthenticatesAllThreePresentations() throws {
         try assertPublishedParla(variant: "", offerHeight: "medium", offerClosedby: "any")
     }

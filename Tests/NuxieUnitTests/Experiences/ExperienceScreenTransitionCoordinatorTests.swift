@@ -303,35 +303,6 @@ final class ExperienceScreenTransitionCoordinatorTests: XCTestCase {
         XCTAssertFalse(didStartNativeNavigation)
     }
 
-    func testSheetDragUsesPostHocEdgesAndAwaitsHiddenAnalyticsBeforeReveal() async {
-        var order: [String] = []
-
-        await ExperienceScreenLifecycleSheetDismissal.perform(
-            dismissedExiting: { order.append("dismissed:exiting") },
-            dismissedHidden: { order.append("dismissed:hidden") },
-            hiddenAnalytics: {
-                order.append(SystemEventNames.screenDismissed)
-                await Task.yield()
-                order.append("dismissed:analytics-complete")
-            },
-            revealedEntering: { order.append("revealed:entering") },
-            revealedActive: {
-                order.append("revealed:active")
-                order.append(SystemEventNames.screenShown)
-            }
-        )
-
-        XCTAssertEqual(order, [
-            "dismissed:exiting",
-            "dismissed:hidden",
-            SystemEventNames.screenDismissed,
-            "dismissed:analytics-complete",
-            "revealed:entering",
-            "revealed:active",
-            SystemEventNames.screenShown,
-        ])
-    }
-
     func testHiddenEdgeContextCarriesDestinationAndDismissalMethod() {
         XCTAssertEqual(
             ExperienceScreenHiddenContext.navigation(revealingScreenId: "screen-2"),
