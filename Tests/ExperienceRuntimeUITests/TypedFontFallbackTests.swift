@@ -1,3 +1,4 @@
+import CoreText
 import XCTest
 
 final class TypedFontFallbackTests: XCTestCase {
@@ -5,10 +6,11 @@ final class TypedFontFallbackTests: XCTestCase {
         continueAfterFailure = false
         for (script, value) in [("japanese", "日本語"), ("arabic", "مرحبا"),
                                 ("hebrew", "שלום"), ("hindi", "नमस्ते"),
-                                ("latin", "café é"), ("emoji", "😀")] {
+                                ("latin", "café é"), ("emoji", "😀"), ("symbols", "▷ ✶ ●")] {
             let app = XCUIApplication()
             app.launchArguments = ["--nuxie-fixture", "published-two-fields",
-                                   "--nuxie-hide-navigation", "--nuxie-keyboard-qualification"]
+                                   "--nuxie-hide-navigation", "--nuxie-keyboard-qualification",
+                                   "--nuxie-font-fallback-oracle"]
             app.launch()
             let row = app.cells["nuxie-fixture-published-two-fields"]
             XCTAssertTrue(row.waitForExistence(timeout: 10))
@@ -37,6 +39,26 @@ final class TypedFontFallbackTests: XCTestCase {
             fields.element(boundBy: 1).tap()
             XCTAssertEqual(field.value as? String, initialValue + value,
                           "Moving focus must preserve the committed value")
+            var expectedScalar = ["japanese", "arabic", "hebrew", "hindi"].contains(script)
+                ? value.unicodeScalars.first : nil
+            if script == "symbols" {
+                let primary = try XCTUnwrap(CTFontCreateUIFontForLanguage(.system, 17, nil))
+                expectedScalar = value.unicodeScalars.first { scalar in
+                    guard scalar.value != 0x20 else { return false }
+                    var character = UniChar(scalar.value), glyph: CGGlyph = 0
+                    _ = CTFontGetGlyphsForCharacters(primary, &character, &glyph, 1)
+                    return glyph == 0
+                }
+            }
+            if let scalar = expectedScalar {
+                let prefix = String(format: "%04X=", scalar.value)
+                let oracle = app.staticTexts["nuxie-font-fallback-oracle"]
+                let matches = XCTNSPredicateExpectation(predicate: NSPredicate(format:
+                    "label CONTAINS %@ AND NOT label CONTAINS ':wrong'", prefix), object: oracle)
+                XCTAssertEqual(XCTWaiter.wait(for: [matches], timeout: 10), .completed,
+                               "The actual C hook must select CoreText's face for the typed script")
+                XCTAssertTrue(oracle.label.contains(":match"))
+            }
             Thread.sleep(forTimeInterval: 1)
             let committed = XCTAttachment(screenshot: app.screenshot())
             committed.name = "text-fallback-\(script)-committed"

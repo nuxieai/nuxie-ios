@@ -196,9 +196,10 @@ apple_resource_group(
 swift_library(
     name = "experience_host_sources",
     module_name = "NuxieExperienceRuntimeHost",
+    package_name = "Nuxie",
     srcs = glob(["Tests/ExperienceRuntimeHostApp/Sources/**/*.swift"]),
     copts = _TEST_SWIFT,
-    deps = [":Nuxie"],
+    deps = [":Nuxie", ":NuxieRuntime"],
 )
 ios_application(
     name = "NuxieExperienceRuntimeHost",

@@ -1,4 +1,6 @@
 @_spi(Testing) import Nuxie
+import CoreText
+import NuxieRuntime
 import SwiftUI
 import UIKit
 
@@ -194,6 +196,8 @@ private final class ExperienceRuntimeHostRootViewController: UIViewController {
     private let fixtureLabel = UILabel()
     private let statusLabel = UILabel()
     private let safeAreaProbe = UILabel()
+    private let fontFallbackProbe = UILabel()
+    private var fontSelections: [UInt32: String] = [:]
 
     init(fixtureName: String, configuration: ExperienceRuntimeHostConfiguration) {
         self.fixtureName = fixtureName
@@ -213,6 +217,24 @@ private final class ExperienceRuntimeHostRootViewController: UIViewController {
         installProbe(fixtureLabel, identifier: "nuxie-current-fixture", value: fixtureName)
         installProbe(statusLabel, identifier: "nuxie-runtime-status", value: "loading:\(fixtureName)")
         installProbe(safeAreaProbe, identifier: "nuxie-safe-area-probe", value: "")
+        if ProcessInfo.processInfo.arguments.contains("--nuxie-font-fallback-oracle") {
+            installProbe(fontFallbackProbe, identifier: "nuxie-font-fallback-oracle", value: "")
+            ExperienceRuntimeFontFallbackProvider.observeSelections { [weak self] scalar, name in
+                // Compare the actual hook answer with a separate CoreText query.
+                guard let unicode = Unicode.Scalar(scalar),
+                      let base = CTFontCreateUIFontForLanguage(.system, 20, nil) else { return }
+                let text = String(unicode) as CFString
+                let expected = CTFontCreateForStringWithLanguage(base, text,
+                    CFRange(location: 0, length: CFStringGetLength(text)), nil)
+                let matches = name == CTFontCopyPostScriptName(expected) as String
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.fontSelections[scalar] = String(format: "%04X", scalar) + "=" + name + (matches ? ":match" : ":wrong")
+                    self.setProbe(self.fontFallbackProbe, value: self.fontSelections.sorted { $0.key < $1.key }
+                        .map(\.value).joined(separator: ";"))
+                }
+            }
+        }
         loadFixture()
     }
 

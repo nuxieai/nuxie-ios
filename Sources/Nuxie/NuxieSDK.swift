@@ -108,7 +108,7 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
       setupConfiguration.internalConfiguration
     )
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
-    try ExperienceRuntimeFontFallbackProvider.install()
+    ExperienceRuntimeFontFallbackProvider.install()
 #endif
     let runtimeSettings = NuxieRuntimeSettings(
       localeIdentifier: configuration.localeIdentifier,

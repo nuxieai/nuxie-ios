@@ -3294,7 +3294,7 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
         pixelWidth: UInt32,
         pixelHeight: UInt32
     ) throws {
-        try ExperienceRuntimeFontFallbackProvider.install()
+        ExperienceRuntimeFontFallbackProvider.install()
         var renderer: OpaquePointer?
         var result: OpaquePointer?
         let status = nux_renderer_new_metal(pixelWidth, pixelHeight, &renderer, &result)
