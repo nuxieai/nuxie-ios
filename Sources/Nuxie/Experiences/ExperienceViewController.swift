@@ -27,6 +27,7 @@ enum ExperienceScreenNavigationResult: Equatable, Sendable {
     case navigated
     case alreadyActive
     case productsUnavailable
+    case superseded
     case failed
 
     var reachedTarget: Bool {
@@ -809,14 +810,30 @@ class ExperienceViewController: NuxiePlatformViewController {
         await joinRuntimeShutdown()
     }
 
-    func prepareForDismissal(reason: CloseReason? = nil) async {
+    var hasPresentedLayer: Bool {
+        #if canImport(UIKit)
+        screenTransitionCoordinator?.hasPresentedLayer == true
+        #else
+        false
+        #endif
+    }
+
+    func dismissTopJourneyLayer() async -> Bool {
+        #if canImport(UIKit)
+        await screenTransitionCoordinator?.closeTopLayer() ?? false
+        #else
+        false
+        #endif
+    }
+
+    func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {
         #if canImport(UIKit)
         resolveInitialContentHeight(ready: false)
         #endif
         failPendingDisplayPresentationTrace(error: CancellationError())
         await joinPresentationRevealNotification()
         #if canImport(UIKit)
-        await screenTransitionCoordinator?.exitActiveScreenForTeardown(reason: reason)
+        await screenTransitionCoordinator?.exitActiveScreenForTeardown(reason: reason, alreadyDismissed: alreadyDismissed)
         #endif
     }
 
@@ -1023,7 +1040,7 @@ class ExperienceViewController: NuxiePlatformViewController {
             ) else { return }
 
             #if canImport(UIKit)
-            self.dismiss(animated: true) { [weak self] in
+            (self.presentingViewController ?? self).dismiss(animated: true) { [weak self] in
                 self?.invokeOnCloseOnce(reason, generation: generation)
             }
             #elseif canImport(AppKit)
@@ -1037,7 +1054,7 @@ class ExperienceViewController: NuxiePlatformViewController {
     }
 
     /// Completes the ordinary dismissal lifecycle after UIKit has already
-    /// removed an interactively dismissible sheet or drawer.
+    /// removed an interactively dismissible sheet.
     @MainActor
     func performInteractiveDismissal(reason: CloseReason = .userDismissed) {
         guard !didInvokeClose, !hostDismissalRequested else { return }
@@ -1050,7 +1067,8 @@ class ExperienceViewController: NuxiePlatformViewController {
             guard await self.prepareAndAuthorizeDismissal(
                 reason: reason,
                 generation: generation,
-                delegate: dismissalDelegate
+                delegate: dismissalDelegate,
+                alreadyDismissed: true
             ) else { return }
             close?(reason)
         }
@@ -1059,9 +1077,10 @@ class ExperienceViewController: NuxiePlatformViewController {
     private func prepareAndAuthorizeDismissal(
         reason: CloseReason,
         generation: UInt64,
-        delegate: ExperienceRuntimeDelegate?
+        delegate: ExperienceRuntimeDelegate?,
+        alreadyDismissed: Bool = false
     ) async -> Bool {
-        await prepareForDismissal(reason: reason)
+        await prepareForDismissal(reason: reason, alreadyDismissed: alreadyDismissed)
         while closeGeneration == generation,
               !hostDismissalRequested,
               !Task.isCancelled {

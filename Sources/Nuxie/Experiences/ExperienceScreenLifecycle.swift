@@ -304,22 +304,3 @@ enum ExperienceScreenLifecycleNavigation {
         return true
     }
 }
-
-@MainActor
-enum ExperienceScreenLifecycleSheetDismissal {
-    typealias Step = () async -> Void
-
-    static func perform(
-        dismissedExiting: Step,
-        dismissedHidden: Step,
-        hiddenAnalytics: Step,
-        revealedEntering: Step,
-        revealedActive: Step
-    ) async {
-        await dismissedExiting()
-        await dismissedHidden()
-        await hiddenAnalytics()
-        await revealedEntering()
-        await revealedActive()
-    }
-}

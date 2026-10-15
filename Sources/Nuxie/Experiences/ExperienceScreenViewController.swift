@@ -327,7 +327,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func routeHardwarePresses(_ presses: Set<UIPress>, pressed: Bool) -> Set<UIPress> {
-        guard controllerIsVisible else { return presses }
+        guard controllerIsVisible, !coveredByLayer else { return presses }
         var unhandled: Set<UIPress> = []
         for press in presses.sorted(by: { $0.timestamp < $1.timestamp }) {
             guard let key = press.key else { unhandled.insert(press); continue }
@@ -353,7 +353,7 @@ final class ExperienceScreenViewController: UIViewController {
     func receiveHardwareKey(hid: Int, modifiers: UInt8, pressed: Bool, repeated: Bool) -> Bool {
         defer { if !pressed { pressedHardwareKeys.remove(hid) } }
         let isTab = hid == UIKeyboardHIDUsage.keyboardTab.rawValue
-        guard controllerIsVisible, isTab || !hasNativeTextFocus(view),
+        guard controllerIsVisible, !coveredByLayer, isTab || !hasNativeTextFocus(view),
               hid == UIKeyboardHIDUsage.keyboardTab.rawValue || riveFocusState.hasFocus || pressedHardwareKeys.contains(hid),
               let input = ExperienceHardwareKey.input(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeated)
         else { return false }
@@ -376,6 +376,13 @@ final class ExperienceScreenViewController: UIViewController {
 
     private weak var heightPresentationTarget: UIViewController?
     private var measuresContentHeight = false
+    private var coveredByLayer = false
+
+    func setCoveredByLayer(_ covered: Bool) {
+        coveredByLayer = covered
+        view.isUserInteractionEnabled = !covered
+        updatePresentationVisibility()
+    }
     private var lastPresentedHeight: CGFloat?
 
     func configurePresentationHeight(_ presentation: ExperienceLayerPresentation,
@@ -551,7 +558,7 @@ final class ExperienceScreenViewController: UIViewController {
         )
         presentationLoop = loop
         syncFontScale(force: true)
-        loop.setPresentationVisible(controllerIsVisible && !contentHidden)
+        loop.setPresentationVisible((controllerIsVisible || coveredByLayer) && !contentHidden)
 
         do {
             let insets = experienceSafeAreaInsets(for: view)
@@ -993,7 +1000,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private var semanticInputIsEligible: Bool {
-        !isShuttingDown && runtimeFailure == nil && !contentHidden && controllerIsVisible && lifecyclePhase == .active
+        !isShuttingDown && runtimeFailure == nil && !contentHidden && controllerIsVisible && !coveredByLayer && lifecyclePhase == .active
             && ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView)
     }
 
@@ -1370,7 +1377,7 @@ final class ExperienceScreenViewController: UIViewController {
         }
         videoCaptionOverlay.isHidden = !controllerIsVisible || contentHidden || runtimeFailure != nil
         if videoCaptionOverlay.isHidden { videoCaptionOverlay.update([]) }
-        presentationLoop?.setPresentationVisible(controllerIsVisible && !contentHidden)
+        presentationLoop?.setPresentationVisible((controllerIsVisible || coveredByLayer) && !contentHidden)
     }
 
     private func handleTerminalFailure(_ error: Error) {

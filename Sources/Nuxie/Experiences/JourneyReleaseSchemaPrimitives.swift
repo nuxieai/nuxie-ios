@@ -477,7 +477,8 @@ enum JourneyReleaseSchemaPrimitives {
         case "request_permission": required = ["type", "permissionType"]; optional = []
         case "request_tracking": required = ["type"]; optional = []
         case "open_link": required = ["type", "url", "target"]; optional = []
-        case "dismiss", "exit": required = ["type"]; optional = ["reason"]
+        case "dismiss": required = ["type"]; optional = ["reason", "scope"]
+        case "exit": required = ["type"]; optional = ["reason"]
         case "app_action": required = ["type", "name"]; optional = ["nodeId", "payload"]
         case "connector_action": required = ["type", "accountRef", "toolKey", "payload", "timeoutMs", "onSucceeded", "onFailed", "onTimeout"]; optional = []
         default: try invalid("\(path).type")
@@ -488,6 +489,9 @@ enum JourneyReleaseSchemaPrimitives {
         }
         if type == "navigate", let screenID = action["screenId"] as? String, !screenIDs.contains(screenID) {
             try invalid("\(path).screenId")
+        }
+        if type == "dismiss", let scope = action["scope"], scope as? String != "all" {
+            try invalid("\(path).scope")
         }
         if let reason = action["reason"] { try boundedString(reason, minimum: 0, maximumUTF16: 256, path: "\(path).reason") }
         switch type {

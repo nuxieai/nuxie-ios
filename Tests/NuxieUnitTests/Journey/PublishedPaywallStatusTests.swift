@@ -194,7 +194,7 @@ private final class PaywallEngineController: MockExperienceViewController {
         if path.path == "paywall/purchase/status", value as? String == "error" { beforeFailureFeedback?() }
         feedback.append(.init(viewModelName: path.viewModelName ?? "Runtime", instanceId: instanceId, path: path.path, value: AnyCodable(value)))
     }
-    override func prepareForDismissal(reason: CloseReason? = nil) async {
+    override func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {
         // The test window has no native screen dismissal lifecycle.
     }
     func select(_ placement: String) {

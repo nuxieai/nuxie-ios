@@ -220,6 +220,7 @@ sdk_test_library(
         "ExperienceTextInputSemanticsTests", "ExperienceHardwareInputTests", "ExperienceTextInputTypographyTests",
         "SignedSemanticJourneyTests", "ExperienceSharedValuesTests", "ExperienceSharedValuesPresentationTests",
         "ExperienceLayerNavigationTests", "ExperienceFitContentPresentationTests",
+        "ExperienceScreenExitReasonControllerTests", "ExperiencePreparationTestSupport",
     ]],
     defines = ["NUXIE_HOSTED_INPUT_TESTS"],
     deps = _TEST_DEPS,

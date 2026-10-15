@@ -37,8 +37,13 @@ final class ExperienceLayerNavigationTests: XCTestCase {
             let previousKey = scene.windows.first(where: \.isKeyWindow)
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
-            window.rootViewController = host
+            let presenter = UIViewController()
+            window.rootViewController = presenter
             window.makeKeyAndVisible()
+            host.modalPresentationStyle = .fullScreen
+            await withCheckedContinuation { continuation in
+                presenter.present(host, animated: false) { continuation.resume() }
+            }
             let delegate = LayerNavigationDelegate()
             var lifecycle: [String] = []
             var reveal: XCTestExpectation?
@@ -124,10 +129,112 @@ final class ExperienceLayerNavigationTests: XCTestCase {
                 }
             }
             await coordinator.tearDown()
+            XCTAssertTrue(presenter.presentedViewController === host,
+                "Coordinator teardown removes its children and upper layers, not the Experience host")
+            await withCheckedContinuation { continuation in
+                presenter.dismiss(animated: false) { continuation.resume() }
+            }
             window.isHidden = true
             previousKey?.makeKey()
         }
     }
+
+    @MainActor
+    func testAuthoredCloseRetainsActivePresenterAndClosesOnlyTheTopLayer() async throws {
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: true)
+        let scene = try XCTUnwrap(UIApplication.shared.activeWindowScene)
+        let previousKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = PortraitLayerHostController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let delegate = LayerNavigationDelegate()
+        var dismissals: [String] = []
+        var active: [String] = []
+        let coordinator = ExperienceScreenTransitionCoordinator(
+            experience: experience, artifact: artifact, initialScreenID: "screen",
+            hostViewController: host, screenDelegate: delegate,
+            onPresentedScreenDismissed: { hidden, shown in dismissals.append("\(hidden):\(shown ?? "")") },
+            onScreenHidden: { hidden, context in
+                XCTAssertEqual(context.method, "journey", "Covering a screen is not a hidden edge")
+                dismissals.append("\(hidden):\(context.revealingScreenId ?? "")")
+            },
+            onScreenActive: { active.append($0) }, onProductsResolved: { _ in },
+            onProductsUnavailable: { _ in }, onRuntimeFailure: { _, error in XCTFail("\(error)") })
+        try await coordinator.install()
+        coordinator.setContentHidden(false)
+        _ = await coordinator.activateInitialScreen()
+        let base = try XCTUnwrap(host.children.first as? UINavigationController)
+        let lesson = try XCTUnwrap(base.topViewController as? ExperienceScreenViewController)
+        func open(_ screen: String, closedby: String, present: String = "sheet") async {
+            let result = await withCheckedContinuation { continuation in
+                XCTAssertTrue(coordinator.navigate(to: screen, transition: ["type": "modal", "present": present,
+                    "height": "medium", "closedby": closedby]) { result, _ in continuation.resume(returning: result) })
+            }
+            XCTAssertEqual(result, .navigated)
+        }
+        await open("details", closedby: "any")
+        func layers() throws -> [UINavigationController] {
+            try XCTUnwrap(Mirror(reflecting: coordinator).children.first { $0.label == "navigationLayers" }?.value as? [UINavigationController])
+        }
+        let offerLayer = try XCTUnwrap(try layers().last)
+        let offer = try XCTUnwrap(offerLayer.topViewController as? ExperienceScreenViewController)
+        XCTAssertEqual(lesson.lifecyclePhase, .active)
+        XCTAssertTrue(coordinator.applyValue(path: VmPathRef(viewModelName: "Plan", path: "placementId"),
+            value: "covered-plan", screenId: "screen", instanceId: "plan.second"),
+            "Screen-targeted feedback must reach the mounted covered layer")
+        await open("screen", closedby: "none", present: "fullscreen")
+        let savedLayer = try XCTUnwrap(try layers().last)
+        let saved = try XCTUnwrap(savedLayer.topViewController as? ExperienceScreenViewController)
+        XCTAssertEqual(savedLayer.supportedInterfaceOrientations, .portrait)
+        XCTAssertEqual(savedLayer.preferredInterfaceOrientationForPresentation, .portrait)
+        XCTAssertEqual(savedLayer.view.backgroundColor, UIColor(nuxieRGBAHex: experience.behaviorPresentation.backgroundColor))
+        XCTAssertEqual(offer.lifecyclePhase, .active)
+        XCTAssertEqual(lesson.lifecyclePhase, .active)
+        func appearances(_ controller: ExperienceScreenViewController) throws -> UInt64 {
+            let state = try XCTUnwrap(Mirror(reflecting: controller).children.first {
+                $0.label == "lifecycleState"
+            }?.value as? ExperienceScreenLifecycleState)
+            return state.snapshot.appearances
+        }
+        let beforeReveal = try appearances(offer)
+        XCTAssertEqual(beforeReveal, 1)
+        let count = active.count
+        let firstClosed = await coordinator.closeTopLayer()
+        XCTAssertTrue(firstClosed)
+        XCTAssertEqual(coordinator.layerScreenIds, [["screen"], ["details"]])
+        XCTAssertTrue(offerLayer.topViewController === offer)
+        XCTAssertEqual(offer.lifecyclePhase, .active)
+        XCTAssertEqual(saved.lifecyclePhase, .hidden)
+        XCTAssertEqual(Array(active.dropFirst(count)), ["details"])
+        let afterReveal = try appearances(offer)
+        XCTAssertEqual(afterReveal, beforeReveal, "Revealing the retained presenter must not enter it again")
+        XCTAssertEqual(dismissals, ["screen:details"])
+        let secondClosed = await coordinator.closeTopLayer()
+        XCTAssertTrue(secondClosed)
+        XCTAssertTrue(base.topViewController === lesson)
+        XCTAssertEqual(lesson.lifecyclePhase, .active)
+        let baseClosed = await coordinator.closeTopLayer()
+        XCTAssertFalse(baseClosed, "No modal remains: the service completes the Experience")
+        let blocker = UIViewController()
+        await withCheckedContinuation { continuation in lesson.present(blocker, animated: false) { continuation.resume() } }
+        let rejected = await withCheckedContinuation { continuation in
+            XCTAssertTrue(coordinator.navigate(to: "details", transition: ["type": "modal"]) { result, _ in continuation.resume(returning: result) })
+        }
+        XCTAssertEqual(rejected, .failed)
+        XCTAssertEqual(coordinator.layerScreenIds, [["screen"]])
+        XCTAssertEqual(lesson.lifecyclePhase, .active)
+        await withCheckedContinuation { continuation in blocker.dismiss(animated: false) { continuation.resume() } }
+        await coordinator.tearDown()
+        window.isHidden = true
+        previousKey?.makeKey()
+    }
+}
+
+@MainActor
+private final class PortraitLayerHostController: UIViewController {
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .portrait }
 }
 
 @MainActor

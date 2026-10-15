@@ -2686,7 +2686,10 @@ private extension JourneyService {
                 if JourneyActionType(action: action) == .dismiss {
                     let ownsPresentation = await presenter?.ownsJourneyPresentation(
                         owner: .init(journeyId: run.journeyId, distinctId: journal.distinctId))
-                    if run.pendingCommerce != nil || ownsPresentation != true {
+                    let hasLayer = await presenter?.hasPresentedJourneyLayer(owner: .init(
+                        journeyId: run.journeyId, distinctId: journal.distinctId)) == true
+                    let closesLayer = action["scope"] != .string("all") && hasLayer
+                    if !closesLayer && (run.pendingCommerce != nil || ownsPresentation != true) {
                         let outcome: String
                         if case .string(let reason)? = action["reason"], !reason.isEmpty { outcome = reason }
                         else { outcome = "completed" }
@@ -2776,6 +2779,8 @@ private extension JourneyService {
                             release: release,
                             executionFenceToken: executionFenceToken
                         )
+                        return
+                    case .superseded:
                         return
                     case .productsUnavailable:
                         // The runtime delegate owns the authenticated
@@ -3139,6 +3144,9 @@ private extension JourneyService {
                                 screenId, presentedRun: run, release: release,
                                 executionFenceToken: executionFenceToken
                             )
+                            return
+                        case .superseded:
+                            await presenter.cancelJourneyBackNavigation(owner: owner)
                             return
                         case .productsUnavailable:
                             await presenter.cancelJourneyBackNavigation(owner: owner)

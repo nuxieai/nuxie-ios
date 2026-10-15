@@ -72,6 +72,25 @@ final class ExperienceLayerPresentationTests: XCTestCase {
         XCTAssertEqual(controller.preferredContentSize.height, 152)
     }
 
+    func testFirstLayerDelegateForwardsCompletedSwipeOnlyOnceWithoutWaitingForExit() async throws {
+        let controller = CompletedSheetDismissalController()
+        let screenID = try XCTUnwrap(controller.experience.behaviorPresentationScreens.keys.first)
+        let shell = try XCTUnwrap(controller.experience.shellContract(screenId: screenID,
+            transition: ExperienceScreenTransitionSpec(kind: .modal, presentation: .init(height: .medium))))
+        let configurator = ExperienceShellPresentationConfigurator()
+        configurator.configure(controller, shell: shell)
+        let presentation = try XCTUnwrap(controller.presentationController)
+        let delegate = try XCTUnwrap(presentation.delegate)
+        let closed = expectation(description: "completed native swipe reports close")
+        var closeCount = 0
+        controller.onClose = { _ in closeCount += 1; closed.fulfill() }
+        delegate.presentationControllerDidDismiss?(presentation)
+        delegate.presentationControllerDidDismiss?(presentation)
+        await fulfillment(of: [closed], timeout: 2)
+        XCTAssertEqual(closeCount, 1)
+        XCTAssertEqual(controller.completedDismissals, [true])
+    }
+
     func testFullscreenHasNoCustomDismissal() throws {
         let controller = UIViewController()
         let configurator = ExperienceLayerPresentationConfigurator(
@@ -81,5 +100,13 @@ final class ExperienceLayerPresentationTests: XCTestCase {
         XCTAssertNil(controller.transitioningDelegate)
     }
 
+}
+
+@MainActor
+private final class CompletedSheetDismissalController: MockExperienceViewController {
+    var completedDismissals: [Bool] = []
+    override func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {
+        completedDismissals.append(alreadyDismissed)
+    }
 }
 #endif

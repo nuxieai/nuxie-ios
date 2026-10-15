@@ -613,7 +613,7 @@ private final class AuthoredDismissCommerceController: MockExperienceViewControl
 
     var onPreparedDismissal: (() async -> Void)?
     private var preparedDismissal = false
-    override func prepareForDismissal(reason: CloseReason? = nil) async {
+    override func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {
         guard !preparedDismissal else { return }
         preparedDismissal = true
         await runtimeDelegate?.experienceViewController(self, didDismissScreen: "screen_welcome",

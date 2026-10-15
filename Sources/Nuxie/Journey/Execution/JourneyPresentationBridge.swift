@@ -166,6 +166,7 @@ enum JourneyPresentationNavigationResult: Equatable, Sendable {
     case navigated
     case alreadyActive
     case productsUnavailable
+    case superseded
     case noPresentation
     case declined
     case failed
@@ -217,6 +218,9 @@ protocol JourneyPresenting: AnyObject, Sendable {
     ) -> Bool
 
     @MainActor
+    func hasPresentedJourneyLayer(owner: JourneyPresentationOwner) -> Bool
+
+    @MainActor
     func presentJourney(
         _ request: JourneyPresentationRequest
     ) async -> JourneyPresentationResult
@@ -260,6 +264,9 @@ protocol JourneyPresenting: AnyObject, Sendable {
 }
 
 extension JourneyPresenting {
+    @MainActor
+    func hasPresentedJourneyLayer(owner: JourneyPresentationOwner) -> Bool { false }
+
     @MainActor
     func projectJourneyCommerceOutcome(owner: JourneyPresentationOwner, actionType: JourneyActionType,
         outlet: String, errorCode: String, effectId: String) {}

@@ -465,7 +465,7 @@ final class ExperiencePresentationService {
         _ request: JourneyPresentationRequest
     ) async -> JourneyPresentationResult {
         guard request.transition.kind != .modal || request.transition.isAvailable else {
-            LogWarning("ExperiencePresentationService: unsupported modal presentation or content height")
+            LogWarning("ExperiencePresentationService: unsupported modal presentation")
             request.reservation?.release()
             return .failed
         }
@@ -528,6 +528,10 @@ final class ExperiencePresentationService {
         }
     }
 
+    func hasPresentedJourneyLayer(owner: JourneyPresentationOwner) -> Bool {
+        ownsCurrentJourneyPresentation(owner) && currentExperienceViewController?.hasPresentedLayer == true
+    }
+
     func navigateJourneyPresentation(
         owner: JourneyPresentationOwner,
         screenId: String,
@@ -574,6 +578,8 @@ final class ExperiencePresentationService {
             return .alreadyActive
         case .productsUnavailable:
             return .productsUnavailable
+        case .superseded:
+            return .superseded
         case .failed:
             return .failed
         }
@@ -732,12 +738,15 @@ final class ExperiencePresentationService {
             )
 
         case .dismiss:
-            // The executor persists authored completion before tearing down the
-            // screen. A user-close callback must not replace that outcome.
-            if case .string(let reason)? = action["reason"], !reason.isEmpty {
-                result = .completed(outcome: reason)
+            if action["scope"] != .string("all"), controller.hasPresentedLayer {
+                result = await controller.dismissTopJourneyLayer() ? .handled : .failed
             } else {
-                result = .completed(outcome: "completed")
+                // Persist terminal completion before tearing down the surface.
+                if case .string(let reason)? = action["reason"], !reason.isEmpty {
+                    result = .completed(outcome: reason)
+                } else {
+                    result = .completed(outcome: "completed")
+                }
             }
 
         default:

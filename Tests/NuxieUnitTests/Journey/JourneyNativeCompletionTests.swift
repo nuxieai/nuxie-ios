@@ -151,7 +151,7 @@ private final class NativeCompletionController: MockExperienceViewController {
         if let outcomeCorrelation { correlations.append(outcomeCorrelation) }
         super.performPurchase(placementId: placementId, outcomeCorrelation: outcomeCorrelation)
     }
-    override func prepareForDismissal(reason: CloseReason? = nil) async {
+    override func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {
         await runtimeDelegate?.experienceViewController(self, didDismissScreen: "screen_welcome",
             revealingScreenId: nil, method: reason.map { ExperienceScreenDismissalMethod.value(for: $0) } ?? "experience")
     }

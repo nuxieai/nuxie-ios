@@ -958,6 +958,33 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                     await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                 }
 
+                it("dismisses an upper layer and completes only scope all or the base") { @MainActor in
+                    for (hasLayer, scope, expected) in [
+                        (true, Optional<String>.none, JourneyPresentationActionResult.handled),
+                        (true, "all", .completed(outcome: "offer_saved")),
+                        (false, nil, .completed(outcome: "offer_saved"))
+                    ] {
+                        let versionID = "Journey-layer-dismiss-\(hasLayer)-\(scope ?? "top")"
+                        let controller = LayerDismissRecordingExperienceViewController(mockExperienceVersionId: versionID)
+                        controller.layerIsPresented = hasLayer
+                        mockExperienceService.mockViewControllers[versionID] = controller
+                        let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
+                        let request = JourneyPresentationRequest(fences: testPresentationFences(),
+                            release: makeJourneyRelease(versionId: versionID, screenId: "screen-selected"),
+                            delivery: journeyDelivery(), screenId: "screen-selected", owner: owner,
+                            reservation: service.reserveJourneyPresentation(ownerDistinctId: "user-1"),
+                            onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+                        let shown = await service.presentJourney(request)
+                        expect(shown).to(equal(.shown))
+                        var action: [String: JourneyReleaseJSONValue] = ["type": .string("dismiss"), "reason": .string("offer_saved")]
+                        if let scope { action["scope"] = .string(scope) }
+                        let result = await service.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: "done")
+                        expect(result).to(equal(expected))
+                        expect(controller.layerCloseCount).to(equal(expected == .handled ? 1 : 0))
+                        await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
+                    }
+                }
+
                 it("returns the failed purchase outlet when no plan was selected") { @MainActor in
                     let fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                         .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures/events/purchase-without-selection.json")
@@ -1562,5 +1589,17 @@ private actor SuspendedExperienceTestStore: NuxieTestStorePurchasing {
         continuation?.resume(
             returning: NuxieTestStoreRestoreResponse(result: .noPurchases)
         )
+    }
+}
+
+@MainActor
+private final class LayerDismissRecordingExperienceViewController: MockExperienceViewController {
+    var layerIsPresented = false
+    var layerCloseCount = 0
+    override var hasPresentedLayer: Bool { layerIsPresented }
+    override func dismissTopJourneyLayer() async -> Bool {
+        layerCloseCount += 1
+        layerIsPresented = false
+        return true
     }
 }

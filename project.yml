@@ -506,6 +506,8 @@ targets:
       - path: Tests/NuxieUnitTests
         name: NuxieUnitTests
         includes:
+          - Experiences/ExperienceScreenExitReasonControllerTests.swift
+          - Experiences/ExperiencePreparationTestSupport.swift
           - Experiences/ExperienceLayerNavigationTests.swift
           - Experiences/ExperienceTextInputSemanticsTests.swift
           - Experiences/ExperienceHardwareInputTests.swift
