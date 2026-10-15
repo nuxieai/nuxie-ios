@@ -110,7 +110,6 @@ final class ExperienceVideoPlayback {
     private let decoderPool: ExperienceVideoDecoderPool?
     private let decoderBudget: (() -> NuxieNativeVideoDecoderBudget)?
     private var resourceBlocked: Set<Int> = []
-    private var requestedRates: [Int: Double] = [:]
     private var reconciling = false
     private let runtime: NuxieNativeRuntime
     private var viewport: CGRect
@@ -295,7 +294,6 @@ final class ExperienceVideoPlayback {
             }
         }
         resourceBlocked.formIntersection(live)
-        requestedRates = requestedRates.filter { live.contains($0.key) }
         occurrences = try await admit(occurrences, budget: decoderBudget?())
         guard !closed else { return }
         for decoder in decoders where !live.contains(decoder.componentID) { dispose(decoder) }
@@ -392,7 +390,6 @@ final class ExperienceVideoPlayback {
 
     private func apply(_ actions: [NuxieNativeVideoAction], to decoder: Decoder) async throws {
         for action in actions {
-            if action.kind == 3 { requestedRates[decoder.componentID] = action.value }
             switch action.kind {
             case 0:
                 decoder.wantsPlay = true
@@ -446,7 +443,6 @@ final class ExperienceVideoPlayback {
         for video in occurrences where video.state != 7 && video.state != 8 {
             let actions = try await runtime.videoStep(componentID: video.componentID, observation: 0, generation: video.generation)
             guard !closed else { return [] }
-            for action in actions where action.kind == 3 { requestedRates[video.componentID] = action.value }
             if let decoder = decoders.first(where: { $0.componentID == video.componentID && !$0.disposed }) {
                 try await apply(actions, to: decoder)
             }
@@ -455,11 +451,12 @@ final class ExperienceVideoPlayback {
         guard !closed else { return [] }
         visibleOccurrences = try await runtime.visibleVideoIDs(current.map(\.componentID), viewport: viewport)
         guard !closed else { return [] }
+        // A claim is the media's decode cost at normal speed. Like the canvas,
+        // it ignores live playback rate, so changing speed never changes a
+        // claim and never replaces a playing decoder.
         let demands: [Int: ExperienceVideoDecoderPool.Request] = Dictionary(uniqueKeysWithValues: current.map { video in
             let cost = sources[video.assetID]?.media?.decodeCost ?? 0
-            let scaled = ceil(Double(cost) * max(1, requestedRates[video.componentID] ?? 1))
-            let pixels = scaled >= Double(UInt64.max) ? UInt64.max : UInt64(scaled)
-            return (video.componentID, ExperienceVideoDecoderPool.Request(pixelsPerSecond: pixels,
+            return (video.componentID, ExperienceVideoDecoderPool.Request(pixelsPerSecond: cost,
                 priority: video.priority, visible: visibleOccurrences.contains(video.componentID) && suspensionReasons.isEmpty && video.state != 7 && video.state != 8 && cost > 0))
         })
         let choices: [NuxieNativeVideoAllocation]
@@ -637,7 +634,6 @@ final class ExperienceVideoPlayback {
         sources.removeAll()
         admissions.removeAll()
         resourceBlocked.removeAll()
-        requestedRates.removeAll()
     }
 }
 

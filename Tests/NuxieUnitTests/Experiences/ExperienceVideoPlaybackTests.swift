@@ -392,6 +392,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testBoundRateChangesOnConsecutiveFramesKeepOnePlayingAVPlayer() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
+            rateRampQualification: true)
+    }
+
+    @MainActor
     func testPreferredFrenchTrackFollowsActualVideoPlayback() async throws {
         try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, frenchCaptions: true)
@@ -446,7 +453,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false, endpointSeekQualification: Bool = false, hostControlQualification: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false, endpointSeekQualification: Bool = false, hostControlQualification: Bool = false, rateRampQualification: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measurement?.width ?? 64
         let mediaHeight = measurement?.height ?? 32
@@ -597,6 +604,35 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
             } while Date() < rateDeadline
             XCTAssertEqual(player.rate, 1.5, accuracy: 0.001,
                 "Bound speed must reach the playing AVPlayer: \(host.playbackDiagnostics)")
+            return
+        }
+        if rateRampQualification {
+            let player = try XCTUnwrap(host.videoTestPlayers.first)
+            let deadline = Date().addingTimeInterval(5)
+            while player.rate == 0 && Date() < deadline {
+                _ = try await host.tick()
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertGreaterThan(player.rate, 0, "Move the speed while AVPlayer is playing")
+            // A slider or an animation moves the bound speed on consecutive
+            // frames. This test's decoder budget fits only normal speed; the
+            // running player must keep playing through every change.
+            for rate in [1.25, 1.5, 1.75, 2.0] {
+                try await runtime.setVideoNumber(rate, path: "playback-rate")
+                _ = try await host.tick()
+                let players = host.videoTestPlayers
+                XCTAssertEqual(players.count, 1, "Speed \(rate) must not dispose the decoder: \(host.playbackDiagnostics)")
+                XCTAssertTrue(players.first === player, "Speed \(rate) must keep the same AVPlayer")
+            }
+            let rampDeadline = Date().addingTimeInterval(5)
+            repeat {
+                _ = try await host.tick()
+                if player.rate == 2 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            } while Date() < rampDeadline
+            XCTAssertEqual(player.rate, 2, accuracy: 0.001,
+                "The last speed must reach the same playing AVPlayer: \(host.playbackDiagnostics)")
+            XCTAssertTrue(host.videoTestPlayers.first === player, "The ramp must end on the original AVPlayer")
             return
         }
         if endpointSeekQualification {
