@@ -1,5 +1,6 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
+import ImageIO
 import QuartzCore
 import XCTest
 @_spi(Testing) @testable import Nuxie
@@ -18,7 +19,9 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
                     ))
                     _ = try await screen.step(elapsedSeconds: 0)
                 }
-                let activeGreen = try await centerGreen(screen)
+                let activeGreen = try await centerGreen(
+                    screen, attachmentName: reason == .dismissed ? "ios-exit-active" : nil
+                )
                 XCTAssertGreaterThan(activeGreen, 245)
                 _ = try await screen.applyStateCommand(state.move(to: .exiting, exitReason: reason).stateCommand(
                     viewModelName: try modelName(), instanceID: "root-sdk-id"
@@ -32,18 +35,18 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
                     XCTAssertEqual(completions(start, named: eventName), 0)
                     let middle = try await screen.step(elapsedSeconds: 0.2)
                     XCTAssertEqual(completions(middle, named: eventName), 0)
-                    let middleGreen = try await centerGreen(screen)
+                    let middleGreen = try await centerGreen(screen, attachmentName: "ios-exit-middle")
                     XCTAssertGreaterThan(middleGreen, 20)
                     XCTAssertLessThan(Int(middleGreen), Int(activeGreen) - 20)
                     let beforeEnd = try await screen.step(elapsedSeconds: 0.19)
                     XCTAssertEqual(completions(beforeEnd, named: eventName), 0)
                     let completed = try await screen.step(elapsedSeconds: 0.02)
                     XCTAssertEqual(completions(completed, named: eventName), 1)
-                    let finalGreen = try await centerGreen(screen)
+                    let finalGreen = try await centerGreen(screen, attachmentName: "ios-exit-completion")
                     XCTAssertLessThan(finalGreen, 5)
                     let settled = try await screen.step(elapsedSeconds: 0.1)
                     XCTAssertEqual(completions(settled, named: eventName), 0)
-                    let settledGreen = try await centerGreen(screen)
+                    let settledGreen = try await centerGreen(screen, attachmentName: "ios-exit-settled")
                     XCTAssertEqual(settledGreen, finalGreen, "Completion must preserve the terminal pose")
                 }
                 try await screen.close()
@@ -169,7 +172,10 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
         }.count
     }
 
-    private func centerGreen(_ screen: ExperienceInteractiveScreen) async throws -> UInt8 {
+    private func centerGreen(
+        _ screen: ExperienceInteractiveScreen,
+        attachmentName: String? = nil
+    ) async throws -> UInt8 {
         let device = try await screen.metalDevice().value
         let layer = CAMetalLayer()
         layer.device = device
@@ -187,6 +193,26 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
         )
         await fulfillment(of: [rendered], timeout: 2)
         XCTAssertEqual(frame.outcome.disposition, .presented)
+        if let attachmentName {
+            // Preserve the exact native readback used by the pixel assertion.
+            let pixels = Data(bytes: buffer.contents(), count: stride * 100)
+            let provider = try XCTUnwrap(CGDataProvider(data: pixels as CFData))
+            let image = try XCTUnwrap(CGImage(
+                width: 100, height: 100, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: stride, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue
+                    | CGBitmapInfo.byteOrder32Little.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+            ))
+            let bytes = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, "public.png" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, image, nil)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            let attachment = XCTAttachment(data: bytes as Data, uniformTypeIdentifier: "public.png")
+            attachment.name = attachmentName
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         return buffer.contents().assumingMemoryBound(to: UInt8.self)[50 * stride + 50 * 4 + 1]
     }
 
