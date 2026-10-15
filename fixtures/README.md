@@ -4,6 +4,7 @@ These JSON vectors define the contracts shared by SDK implementations.
 
 ## Published runtime values
 
+- `runtime/screen-exit-reason/`: published dismissed-only and field-absent scenes for optional exit-reason binding, navigation skipping, and the retained terminal pose over the default screen backing.
 - `runtime/paywall-selection/`: portable compiled product-ID tap and signed link setup, with native feedback/read-back proof.
 - `runtime/paywall-catalog-selection/` and `runtime/paywall-placement-selection/`: real `valueFrom` taps from the annual child; catalog remapping and placement selection of two rows with one product are SDK-native assertions. They do not establish normal publication or checkout.
 - `journeys/planes/file-paywall-selection.json`: file-made flat rows, dynamic purchase reference, signed identities and at-open cases with duplicate product IDs or a different baked root ID.
