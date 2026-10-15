@@ -79,7 +79,8 @@ func serveSignedFixtureObjects(
 }
 
 /// A canonical profile that arms the single signed release in a fixture's
-/// `release-entry.json`, delivered from `host`.
+/// `release-entry.json`, delivered from `host`. The arm repeats the signed
+/// leg's own entry condition: a profile cannot rewrite the authored trigger.
 func signedReleaseEntryProfileBytes(
     fixture: URL,
     host: String
@@ -88,6 +89,9 @@ func signedReleaseEntryProfileBytes(
         Data(contentsOf: fixture.appendingPathComponent("release-entry.json"))) as? [String: Any])
     let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
     let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
+    let descriptorBytes = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
+    let descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: descriptorBytes) as? [String: Any])
+    let entryCondition = try XCTUnwrap((descriptor["leg"] as? [String: Any])?["entryCondition"])
     let profile: [String: Any] = [
         "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
         "delivery": ["renderBaseUrl": "https://\(host)/",
@@ -101,7 +105,7 @@ func signedReleaseEntryProfileBytes(
                 "descriptorSha256": try XCTUnwrap(envelope["descriptorSha256"]),
             ],
             "binding": ["type": "new"],
-            "entryCondition": ["type": "app_foregrounded"],
+            "entryCondition": entryCondition,
             "context": ["event": [:], "responses": [:]],
         ]], "releases": [entry],
     ]
