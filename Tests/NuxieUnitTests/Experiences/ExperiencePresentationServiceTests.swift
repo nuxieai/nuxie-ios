@@ -965,7 +965,8 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         (false, nil, .completed(outcome: "offer_saved"))
                     ] {
                         let versionID = "Journey-layer-dismiss-\(hasLayer)-\(scope ?? "top")"
-                        let controller = LayerDismissRecordingExperienceViewController(mockExperienceVersionId: versionID)
+                        let controller = LayerDismissRecordingExperienceViewController(mockExperienceVersionId: versionID,
+                            mockScreenId: "screen-selected")
                         controller.layerIsPresented = hasLayer
                         mockExperienceService.mockViewControllers[versionID] = controller
                         let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
