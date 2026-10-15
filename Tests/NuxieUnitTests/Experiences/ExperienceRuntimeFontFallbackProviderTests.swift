@@ -1,0 +1,192 @@
+#if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+import CoreText
+import CryptoKit
+import Foundation
+import XCTest
+@testable import NuxieRuntime
+
+final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
+    private func selected(_ text: String) throws -> CTFont {
+        let base = try XCTUnwrap(CTFontCreateUIFontForLanguage(.system, 20, nil))
+        return CTFontCreateForStringWithLanguage(base, text as CFString,
+            CFRange(location: 0, length: (text as NSString).length), nil)
+    }
+
+    private func glyph(_ character: UniChar, in font: CTFont) -> CGGlyph {
+        var character = character
+        var glyph: CGGlyph = 0
+        _ = CTFontGetGlyphsForCharacters(font, &character, &glyph, 1)
+        return glyph
+    }
+
+    func testSecondMissingCharacterGetsAnotherCoreTextFaceAndStopsAtTwo() throws {
+        let hebrew = try selected("ש")
+        let bracket = try selected("「")
+        XCTAssertNotEqual(glyph(0x05E9, in: hebrew), 0)
+        XCTAssertEqual(glyph(0x300C, in: hebrew), 0,
+                       "The mixed שלום「」 stretch must need a second face")
+        XCTAssertNotEqual(glyph(0x300C, in: bracket), 0)
+        XCTAssertNotEqual(CTFontCopyPostScriptName(hebrew) as String,
+                          CTFontCopyPostScriptName(bracket) as String)
+        XCTAssertNotNil(ExperienceRuntimeFontFallbackProvider.request(missing: 0x05E9, index: 0))
+        XCTAssertNotNil(ExperienceRuntimeFontFallbackProvider.request(missing: 0x300C, index: 1))
+        XCTAssertNil(ExperienceRuntimeFontFallbackProvider.request(missing: 0x300C, index: 2))
+    }
+
+    func testOnlyRiveWeightAndWidthAxesReachRuntime() throws {
+        let face = try ExperienceRuntimeFontFallbackProvider.backing(for: selected("م"))
+        XCTAssertEqual(Set(face.coordinates.map(\.axis)), [0x77676874, 0x77647468])
+        XCTAssertEqual(face.coordinates.first { $0.axis == 0x77676874 }?.value, 400)
+        XCTAssertEqual(face.coordinates.first { $0.axis == 0x77647468 }?.value, 100)
+    }
+
+    func testTwoCharactersOfOneFaceAcquireBackingOnce() throws {
+        let first = try selected("ש"), second = try selected("ל")
+        XCTAssertEqual(CTFontCopyPostScriptName(first) as String, CTFontCopyPostScriptName(second) as String)
+        var acquisitions = 0
+        let cache = ExperienceRuntimeFontFallbackProvider.Cache { font in
+            acquisitions += 1
+            return try ExperienceRuntimeFontFallbackProvider.backing(for: font)
+        }
+        let one = try XCTUnwrap(cache.resolve(0x05E9))
+        let two = try XCTUnwrap(cache.resolve(0x05DC))
+        XCTAssertEqual(one.handle, two.handle)
+        XCTAssertEqual(acquisitions, 1)
+    }
+
+    func testTemporaryBackingFailureIsRetried() throws {
+        struct TemporaryFailure: Error {}
+        var attempts = 0
+        let cache = ExperienceRuntimeFontFallbackProvider.Cache { font in
+            attempts += 1
+            if attempts == 1 { throw TemporaryFailure() }
+            return try ExperienceRuntimeFontFallbackProvider.backing(for: font)
+        }
+        XCTAssertNil(cache.resolve(0x05E9))
+        XCTAssertNotNil(cache.resolve(0x05E9))
+        XCTAssertEqual(attempts, 2)
+    }
+
+    func testSelectedDeviceReferencesReportNativeFacesAndAxes() throws {
+        var records: [[String: Any]] = []
+        for (identity, sample) in [("japanese-kana", "こ"), ("japanese-han", "日"),
+                                   ("korean", "한"), ("arabic", "م"),
+                                   ("devanagari", "न"), ("hebrew", "ש"), ("emoji", "😀"),
+                                   ("symbols-triangle", "▷"), ("symbols-star", "✶"), ("symbols-circle", "●")] {
+            let native = try selected(sample)
+            let face = try ExperienceRuntimeFontFallbackProvider.backing(for: native)
+            var hashes: [String: String] = [:]
+            for tag in ["head", "name", "cmap", "fvar", "maxp"] {
+                let code = tag.utf8.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+                if let table = CTFontCopyTable(native, code, []) {
+                    hashes[tag] = SHA256.hash(data: table as Data).map { String(format: "%02x", $0) }.joined()
+                }
+            }
+            let axes = Dictionary(uniqueKeysWithValues: face.coordinates.map { coordinate in
+                (String(format: "%08x", coordinate.axis), coordinate.value)
+            })
+            records.append(["id": identity, "postScriptName": CTFontCopyPostScriptName(native) as String,
+                            "pointSize": CTFontGetSize(native), "file": face.path, "faceIndex": face.index,
+                            "runtimeAxes": axes, "tableHashes": hashes])
+        }
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: records, options: [.sortedKeys, .prettyPrinted]),
+                                       uniformTypeIdentifier: "public.json")
+        attachment.name = "text-fallback-final-device-reference-faces"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testCollectionFacePostScriptNameMatchesCoreText() throws {
+        for text in ["日", "م", "ש", "न", "▷", "✶", "●"] {
+            let font = try selected(text)
+            let url = try XCTUnwrap(CTFontCopyAttribute(font, kCTFontURLAttribute) as? URL)
+            let data = try Data(contentsOf: url, options: .alwaysMapped)
+            let index = try ExperienceRuntimeFontFallbackProvider.collectionIndex(in: data, font: font)
+            let name = try XCTUnwrap(fontTable(in: data, faceIndex: index, tag: 0x6E616D65))
+            let variations = try fontTable(in: data, faceIndex: index, tag: 0x66766172)
+            let names = try postScriptNames(name, nameIDs: postScriptNameIDs(in: variations))
+            let selectedName = CTFontCopyPostScriptName(font) as String
+            XCTAssertTrue(names.contains(selectedName),
+                          "\(text): face \(index) must name CoreText's \(selectedName); found \(names.sorted())")
+        }
+    }
+
+    // Read just this face's name table without the production font parser or
+    // its whole-container size cap. Large OS collections are valid inputs.
+    private func fontTable(in data: Data, faceIndex: UInt32, tag: Int) throws -> Data? {
+        func word(_ offset: Int, bytes: Int) throws -> Int {
+            guard offset >= 0, offset <= data.count - bytes else {
+                throw NSError(domain: "FontNameOracle", code: 3)
+            }
+            return (0..<bytes).reduce(0) { ($0 << 8) | Int(data[offset + $1]) }
+        }
+        let isCollection = try word(0, bytes: 4) == 0x74746366
+        let count = isCollection ? try word(8, bytes: 4) : 1
+        guard Int(faceIndex) < count else { throw NSError(domain: "FontNameOracle", code: 4) }
+        let start = isCollection ? try word(12 + Int(faceIndex) * 4, bytes: 4) : 0
+        let records = try word(start + 4, bytes: 2)
+        for record in 0..<records {
+            let at = start + 12 + record * 16
+            guard try word(at, bytes: 4) == tag else { continue }
+            let offset = try word(at + 8, bytes: 4), length = try word(at + 12, bytes: 4)
+            guard offset <= data.count, length <= data.count - offset else {
+                throw NSError(domain: "FontNameOracle", code: 5)
+            }
+            return data.subdata(in: offset..<(offset + length))
+        }
+        return nil
+    }
+
+    // A variable face can use a named instance's PostScript name rather than
+    // the base name ID 6. PingFang Display uses -Default for its base and
+    // -Regular for the selected instance. Read the fvar IDs independently:
+    // https://learn.microsoft.com/en-us/typography/opentype/spec/fvar
+    private func postScriptNameIDs(in data: Data?) throws -> Set<Int> {
+        guard let data else { return [6] }
+        func word(_ at: Int) throws -> Int {
+            guard at >= 0, at <= data.count - 2 else {
+                throw NSError(domain: "FontNameOracle", code: 6)
+            }
+            return Int(data[at]) * 256 + Int(data[at + 1])
+        }
+        let axesOffset = try word(4), axisCount = try word(8), axisSize = try word(10)
+        let instanceCount = try word(12), instanceSize = try word(14)
+        let nameOffset = 4 + axisCount * 4
+        var ids: Set<Int> = [6]
+        guard instanceSize >= nameOffset + 2 else { return ids }
+        for instance in 0..<instanceCount {
+            let at = axesOffset + axisCount * axisSize + instance * instanceSize + nameOffset
+            let id = try word(at)
+            if id != 0xFFFF { ids.insert(id) }
+        }
+        return ids
+    }
+
+    // Parse only base or named-instance PostScript names, independently of
+    // collectionIndex's whole-name-table/cmap equality.
+    private func postScriptNames(_ data: Data, nameIDs: Set<Int>) throws -> Set<String> {
+        func word(_ offset: Int) throws -> Int {
+            guard offset >= 0, offset + 2 <= data.count else {
+                throw NSError(domain: "FontNameOracle", code: 1)
+            }
+            return Int(data[offset]) * 256 + Int(data[offset + 1])
+        }
+        let count = try word(2), start = try word(4)
+        var names = Set<String>()
+        for record in 0..<count {
+            let at = 6 + record * 12
+            guard try nameIDs.contains(word(at + 6)) else { continue }
+            let length = try word(at + 8), offset = try word(at + 10)
+            guard start + offset + length <= data.count else {
+                throw NSError(domain: "FontNameOracle", code: 2)
+            }
+            let bytes = data.subdata(in: (start + offset)..<(start + offset + length))
+            let platform = try word(at)
+            if let name = String(data: bytes, encoding: platform == 0 || platform == 3 ? .utf16BigEndian : .macOSRoman) {
+                names.insert(name)
+            }
+        }
+        return names
+    }
+}
+#endif

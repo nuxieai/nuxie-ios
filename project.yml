@@ -408,6 +408,7 @@ targets:
       MARKETING_VERSION: 0.1.0
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
+      SWIFT_PACKAGE_NAME: Nuxie
       INFOPLIST_FILE: Tests/ExperienceRuntimeHostApp/Sources/Info.plist
       SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
       SUPPORTS_MACCATALYST: NO

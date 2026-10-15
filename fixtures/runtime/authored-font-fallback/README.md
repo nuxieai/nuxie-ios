@@ -12,7 +12,8 @@ The System font stays external. Its private source bytes are not present here.
 `Tests/NuxieUnitTests/Fixtures/ordinary_font_fallback_latin.ttf`; its license is
 in `Tests/NuxieUnitTests/Fixtures/LICENSE-ordinary-font-fallback.txt`.
 
-The XCTest baseline records native Metal frames for both authored faces.
-It is an observation, not a claim that fallback already works. Run the
-published-text test together with the separately generated ordinary native
-control before installing any P038 catalog.
+The published-text regression observes the actual C fallback hook and compares
+its selected PostScript names with CoreText. It also checks visible native ink.
+The typed two-field form qualifies Japanese, Arabic, Hebrew, Hindi, Latin,
+emoji and symbols after focus moves. Only iOS 27.0 currently checks the known
+blank Apple emjc emoji row; other OS versions do not inherit that expectation.

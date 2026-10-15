@@ -10,7 +10,7 @@ import XCTest
 
 final class NuxieNativeRuntimeTests: XCTestCase {
     private func selectedSystemControlAscent() throws -> CGFloat {
-        let base = try XCTUnwrap(CTFontCreateUIFontForLanguage(.system, 17, nil))
+        let base = try XCTUnwrap(CTFontCreateUIFontForLanguage(.system, 20, nil))
         let selected = CTFontCreateForStringWithLanguage(base, "\n" as CFString,
             CFRange(location: 0, length: 1), nil)
         func table(_ tag: String) throws -> Data {
@@ -35,36 +35,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
     }
 
     #if os(iOS)
-    // P038 ordinary native text control. The generated fixture contains only
-    // Text/ValueRun rows, no TextInput or UIKit overlay. The publisher example
-    // supplies a separate production-file control for device qualification.
-    func testOrdinaryScreenTextFallbackBaseline() async throws {
-        let scene = try fixture(named: "ordinary_font_fallback", extension: "riv")
-        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
-        XCTAssertEqual(assets.filter { $0.kind == .font }.count, 1)
-        let asset = try XCTUnwrap(assets.first { $0.kind == .font })
-        let system = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
-        let latin = try fixture(named: "ordinary_font_fallback_latin", extension: "ttf")
-        for (name, fontBytes) in [("System", system.bytes), ("Roboto", latin)] {
-            let runtime = try await NuxieNativeRuntime.open(bytes: scene,
-                artboardName: "P038 ordinary text", player: .staticArtboard,
-                pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: false,
-                importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
-                    externalAssets: [asset.ordinal: fontBytes]))
-            do {
-                _ = try await runtime.step(elapsedSeconds: 0)
-                let frame = try await renderPixels(runtime, width: 390, height: 844)
-                XCTAssertEqual(frame.outcome.disposition, .presented)
-                XCTAssertGreaterThan(frame.outcome.drawCalls, 0)
-                try attachMetricPixels(frame.pixels, name: "P038-ordinary-native-baseline-" + name)
-                try await runtime.close()
-            } catch {
-                try? await runtime.close()
-                throw error
-            }
-        }
-    }
-
     func testPublishedOrdinaryScreenTextDrawsInstalledFallbackGlyphs() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -73,6 +43,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let latin = try Data(contentsOf: directory.appendingPathComponent("ordinary-latin.ttf"))
         let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
         let asset = try XCTUnwrap(assets.first { $0.kind == .font })
+        let selections = FontFallbackSelectionRecorder()
+        ExperienceRuntimeFontFallbackProvider.observeSelections { selections.record($0, name: $1) }
+        defer { ExperienceRuntimeFontFallbackProvider.observeSelections(nil) }
         let runtime = try await NuxieNativeRuntime.open(bytes: scene,
             artboardName: "One", player: .staticArtboard,
             pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: false,
@@ -83,12 +56,16 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             let frame = try await renderPixels(runtime, width: 390, height: 844)
             try attachMetricPixels(frame.pixels, name: "P038-ordinary-published-installed-Roboto")
             XCTAssertEqual(frame.outcome.disposition, .presented)
-            // Independent published positions; the Latin-only primary leaves
-            // these rows completely blank without the installed OS fallback.
-            for (script, top) in [("Japanese", 32), ("Arabic", 140),
-                                  ("Hebrew", 248), ("Hindi", 356)] {
-                XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: top), 100,
-                    "Published \(script) must draw visible glyphs")
+            // The actual hook must return CoreText's chosen face. Placeholder
+            // ink or a different face in the same collection cannot satisfy this.
+            for (character, top) in [("日", 32), ("م", 140), ("ש", 248), ("न", 356)] {
+                let scalar = try XCTUnwrap(character.unicodeScalars.first)
+                let base = try XCTUnwrap(CTFontCreateUIFontForLanguage(.system, 20, nil))
+                let expected = CTFontCreateForStringWithLanguage(base, character as CFString,
+                    CFRange(location: 0, length: (character as NSString).length), nil)
+                XCTAssertEqual(selections.name(for: scalar.value), CTFontCopyPostScriptName(expected) as String,
+                               "The published row must exercise the real OS fallback hook")
+                XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: top), 100)
             }
             // Pinned Rive only reads PNG color bitmaps. On qualified iOS 27.0,
             // Apple Color Emoji supplies emjc and CoreText supplies no path.
@@ -108,6 +85,58 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
+    func testSymbolsUseCoreTextFallbackAndDrawFromALatinPrimary() async throws {
+        let scene = try fixture(named: "inline_text_data_binding", extension: "riv")
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let asset = try XCTUnwrap(assets.first { $0.kind == .font })
+        let latin = try fixture(named: "ordinary_font_fallback_latin", extension: "ttf")
+        let provider = try XCTUnwrap(CGDataProvider(data: latin as CFData))
+        let graphics = try XCTUnwrap(CGFont(provider))
+        let primary = CTFontCreateWithGraphicsFont(graphics, 20, nil, nil)
+        for character: UniChar in [0x25B7, 0x2736, 0x25CF] {
+            var character = character
+            var glyph: CGGlyph = 0
+            _ = CTFontGetGlyphsForCharacters(primary, &character, &glyph, 1)
+            XCTAssertEqual(glyph, 0, "The fixture primary must lack every tested symbol")
+        }
+        let selections = FontFallbackSelectionRecorder()
+        ExperienceRuntimeFontFallbackProvider.observeSelections { selections.record($0, name: $1) }
+        defer { ExperienceRuntimeFontFallbackProvider.observeSelections(nil) }
+        let runtime = try await NuxieNativeRuntime.open(bytes: scene,
+            artboardName: "Inline text", player: .staticArtboard,
+            pixelWidth: 320, pixelHeight: 160, bindDefaultViewModel: true,
+            importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
+                externalAssets: [asset.ordinal: latin]))
+        do {
+            let root = try await runtime.rootViewModelReference()
+            for symbol in ["▷", "✶", "●"] {
+                _ = try await runtime.mutateViewModel([
+                    .setString(instance: root, path: "paywall/selectedProductId", value: Data())])
+                _ = try await runtime.step(elapsedSeconds: 0)
+                let empty = try await renderPixels(runtime, width: 320, height: 160)
+                _ = try await runtime.mutateViewModel([
+                    .setString(instance: root, path: "paywall/selectedProductId", value: Data(symbol.utf8))])
+                _ = try await runtime.step(elapsedSeconds: 0)
+                let drawn = try await renderPixels(runtime, width: 320, height: 160)
+                let scalar = try XCTUnwrap(symbol.unicodeScalars.first)
+                let base = try XCTUnwrap(CTFontCreateUIFontForLanguage(.system, 20, nil))
+                let expected = CTFontCreateForStringWithLanguage(base, symbol as CFString,
+                    CFRange(location: 0, length: 1), nil)
+                var character = UniChar(scalar.value), glyph: CGGlyph = 0
+                _ = CTFontGetGlyphsForCharacters(expected, &character, &glyph, 1)
+                XCTAssertNotEqual(glyph, 0)
+                XCTAssertNotNil(CTFontCreatePathForGlyph(expected, glyph, nil))
+                XCTAssertEqual(selections.name(for: scalar.value), CTFontCopyPostScriptName(expected) as String)
+                XCTAssertGreaterThan(changedPixelExtent(between: empty.pixels, and: drawn.pixels, width: 320).pixelCount, 0,
+                                     "The bound symbol must add actual native canvas ink")
+            }
+            try await runtime.close()
+        } catch {
+            try? await runtime.close()
+            throw error
+        }
+    }
+
     private func ordinaryTextInk(_ pixels: Data, top: Int) -> Int {
         (top..<(top + 104)).reduce(0) { sum, y in
             sum + (0..<390).reduce(0) { count, x in
@@ -117,40 +146,6 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             }
         }
     }
-
-    // P038 observation through ordinary text emitted by the real publisher.
-    // There is no TextInput or UIKit editing overlay in either scene. Font and
-    // scene hashes, authored strings and positions are in ordinary-provenance.
-    func testPublishedOrdinaryScreenTextFallbackBaseline() async throws {
-        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("fixtures/runtime/authored-font-fallback")
-        let system = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
-        let latin = try Data(contentsOf: directory.appendingPathComponent("ordinary-latin.ttf"))
-        for (name, fontBytes) in [("System", system.bytes), ("Roboto", latin)] {
-            let scene = try Data(contentsOf: directory.appendingPathComponent("ordinary-" + name.lowercased() + ".nux"))
-            let assets = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
-            XCTAssertEqual(assets.filter { $0.kind == .font }.count, 1)
-            let asset = try XCTUnwrap(assets.first { $0.kind == .font })
-            let runtime = try await NuxieNativeRuntime.open(bytes: scene,
-                artboardName: "One", player: .staticArtboard,
-                pixelWidth: 390, pixelHeight: 844, bindDefaultViewModel: false,
-                importMode: .configured(moduleName: "nuxie", expectedAssets: assets,
-                    externalAssets: [asset.ordinal: fontBytes]))
-            do {
-                _ = try await runtime.step(elapsedSeconds: 0)
-                let frame = try await renderPixels(runtime, width: 390, height: 844)
-                XCTAssertEqual(frame.outcome.disposition, .presented)
-                XCTAssertGreaterThan(frame.outcome.drawCalls, 0)
-                try attachMetricPixels(frame.pixels, name: "P038-ordinary-published-baseline-" + name)
-                try await runtime.close()
-            } catch {
-                try? await runtime.close()
-                throw error
-            }
-        }
-    }
-
 
     func testMixedSystemAndCDNFontsRenderBothTextRows() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -2070,6 +2065,23 @@ private final class RuntimeExecutorHolder: @unchecked Sendable {
         lock.withLock {
             executor = nil
         }
+    }
+}
+#endif
+
+#if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+private final class FontFallbackSelectionRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: [UInt32: String] = [:]
+    func record(_ scalar: UInt32, name: String) {
+        lock.lock()
+        names[scalar] = name
+        lock.unlock()
+    }
+    func name(for scalar: UInt32) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return names[scalar]
     }
 }
 #endif
