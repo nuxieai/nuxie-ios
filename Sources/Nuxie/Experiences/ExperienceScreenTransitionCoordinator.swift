@@ -261,7 +261,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             return
         }
         let reduceMotion = reduceMotionEnabled
-        if controller.lifecyclePhase != .exiting {
+        if controller.lifecyclePhase != .exiting || controller.lifecycleExitReason != .dismissed {
             await controller.performExitHandshake(reduceMotion: reduceMotion, exitReason: .dismissed)
         }
         await controller.hide(reduceMotion: reduceMotion)

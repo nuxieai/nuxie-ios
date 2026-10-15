@@ -200,6 +200,7 @@ final class ExperienceScreenViewController: UIViewController {
         return try await interactiveScreen.environmentSnapshot()
     }
     var lifecyclePhase: ExperienceScreenLifecyclePhase { lifecycleState.phase }
+    var lifecycleExitReason: ExperienceScreenExitReason { lifecycleState.exitReason }
 
     private var journeyScreen: JourneyScreen? {
         experience.screens.screens.first { $0.id == screenId }
