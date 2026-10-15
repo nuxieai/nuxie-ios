@@ -3797,6 +3797,27 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
+    #if canImport(UIKit)
+    func testFitContentEnvironmentHeightUsesAvailableSpaceAcrossSurfaceResizes() async throws {
+        let directory = experiencePreparationRepositoryRoot().appendingPathComponent("fixtures/journeys/parla-sheets")
+        let (_, artifact) = try await authenticatedFixtureArtifact(at: directory,
+            profileBytes: signedReleaseEntryProfileBytes(fixture: directory, host: "parla.sdk-fixtures.nuxie.test"))
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+        let run = ExperienceRunValues()
+        let screen = try await preparation.openScreen(screenID: "scr_screens_ssaved", runValues: run,
+            pixelWidth: 402, pixelHeight: 700)
+        addTeardownBlock { try await screen.close(); await run.retire() }
+        _ = try await screen.setPresentationHeight(fitContent: true, availableSize: CGSize(width: 402, height: 700))
+        for surfaceHeight in [152, 272, 400] {
+            _ = try await screen.resize(pixelWidth: 402, pixelHeight: UInt32(surfaceHeight), layoutScaleFactor: 1)
+            let env = try await screen.environmentSnapshot()
+            XCTAssertEqual(env?.values.first { $0.name == "height" }?.value, .number(700),
+                "Content-derived surface height must not feed back into available env height")
+            XCTAssertEqual(env?.values.first { $0.name == "width" }?.value, .number(402))
+        }
+    }
+    #endif
+
     func testContentHeightReadbackFollowsMutationAndWidthWithoutUsingLastSheetHeight() async throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

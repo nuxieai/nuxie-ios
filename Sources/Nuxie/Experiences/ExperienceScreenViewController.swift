@@ -376,6 +376,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     private weak var heightPresentationTarget: UIViewController?
     private var measuresContentHeight = false
+    private var availablePresentationHeight: CGFloat?
     private var coveredByLayer = false
 
     func setCoveredByLayer(_ covered: Bool) {
@@ -388,6 +389,7 @@ final class ExperienceScreenViewController: UIViewController {
     func configurePresentationHeight(_ presentation: ExperienceLayerPresentation,
                                      target: UIViewController, availableSize: CGSize) async throws {
         heightPresentationTarget = target
+        availablePresentationHeight = availableSize.height
         lastPresentedHeight = nil
         guard let interactiveScreen, let presentationLoop else { throw CancellationError() }
         try await presentationLoop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork { [weak self] in
@@ -850,7 +852,8 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func viewportEnvironment() -> ExperienceViewportEnvironment {
-        ExperienceViewportEnvironment(width: Double(surfaceView.bounds.width), height: Double(surfaceView.bounds.height))
+        ExperienceViewportEnvironment(width: Double(surfaceView.bounds.width),
+            height: Double(measuresContentHeight ? (availablePresentationHeight ?? surfaceView.bounds.height) : surfaceView.bounds.height))
     }
 
     /// Reads at execution time so rapid hinge callbacks cannot grow the queue.

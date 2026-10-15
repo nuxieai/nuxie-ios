@@ -229,6 +229,75 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         window.isHidden = true
         previousKey?.makeKey()
     }
+
+    @MainActor
+    func testFitContentRootStillHugsAfterPushAndBack() async throws {
+        let directory = experiencePreparationRepositoryRoot().appendingPathComponent("fixtures/runtime/fit-content")
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("dynamic-child.riv"))
+        let base = try await statePayload(defaultViewModelName: "Root", values: [], scene: bytes, artboardName: "Sheet")
+        let rootID = base.renderPlan.entry.screenId
+        let screens = base.renderPlan.screens + [NativeExperienceScreen(screenId: "child", artboardId: "Sheet",
+            artboardName: "Sheet", width: 300, height: 700, exit: nil)]
+        let payload = AuthenticatedRuntimePayload(authenticatedKeyID: base.authenticatedKeyID,
+            renderPlan: NativeExperienceRenderPlan(identity: base.renderPlan.identity, scene: base.renderPlan.scene,
+                entry: base.renderPlan.entry, screens: screens, transitions: [], textInputs: [], images: [], fonts: []),
+            journey: JourneyDocument(screens: screens.map {
+                JourneyScreen(id: $0.screenId, defaultViewModelName: "Root", defaultInstanceId: "root-sdk-id")
+            }, viewModelValues: []), sceneBytes: bytes, assets: [])
+        let experience = Experience(id: "state-experience", versionId: "fit-return", buildId: "state-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+            behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
+        let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+            sceneURL: directory.appendingPathComponent("dynamic-child.riv"), sceneBytes: bytes,
+            assetURLsByUniqueName: [:], source: .cache, payload: payload,
+            interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(),
+                provenance: "fit-return-\(UUID().uuidString)", payload: payload), products: [], resourceMetrics: .zero)
+        let scene = try XCTUnwrap(UIApplication.shared.activeWindowScene)
+        let previousKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let delegate = LayerNavigationDelegate()
+        let coordinator = ExperienceScreenTransitionCoordinator(experience: experience,
+            artifact: LoadedExperienceArtifact(acquired: acquired), hostViewController: host, screenDelegate: delegate,
+            onPresentedScreenDismissed: { _, _ in }, onScreenHidden: { _, _ in }, onScreenActive: { _ in },
+            onProductsResolved: { _ in }, onProductsUnavailable: { _ in },
+            onRuntimeFailure: { _, error in XCTFail("\(error)") })
+        addTeardownBlock {
+            await coordinator.tearDown()
+            await MainActor.run { window.isHidden = true; previousKey?.makeKey() }
+        }
+        try await coordinator.install()
+        coordinator.setContentHidden(false)
+        _ = await coordinator.activateInitialScreen()
+        func navigate(_ id: String, transition: [String: String]) async {
+            let result = await withCheckedContinuation { continuation in
+                XCTAssertTrue(coordinator.navigate(to: id, transition: transition) { value, _ in continuation.resume(returning: value) })
+            }
+            XCTAssertEqual(result, .navigated)
+        }
+        await navigate(rootID, transition: ["type": "modal", "present": "sheet", "height": "fit-content"])
+        let layers = try XCTUnwrap(Mirror(reflecting: coordinator).children.first {
+            $0.label == "navigationLayers"
+        }?.value as? [UINavigationController])
+        let sheet = try XCTUnwrap(layers.last)
+        let retainedRoot = try XCTUnwrap(sheet.topViewController)
+        await navigate("child", transition: ["type": "push"])
+        let backed = await withCheckedContinuation { continuation in
+            XCTAssertTrue(coordinator.back(to: rootID, steps: 1) { value, _ in continuation.resume(returning: value) })
+        }
+        XCTAssertEqual(backed, .navigated)
+        XCTAssertTrue(sheet.topViewController === retainedRoot)
+        XCTAssertTrue(coordinator.applyValue(path: .init(viewModelName: "Root", path: "contentHeight"), value: 240,
+            screenId: rootID, instanceId: "root-sdk-id"))
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while sheet.preferredContentSize.height != 272 && ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        // Source dynamic-child layout: 16 top + mutated 240 child + 16 bottom.
+        XCTAssertEqual(sheet.preferredContentSize.height, 272)
+    }
 }
 
 @MainActor
