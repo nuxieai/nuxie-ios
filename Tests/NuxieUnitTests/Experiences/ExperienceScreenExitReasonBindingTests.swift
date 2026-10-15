@@ -14,14 +14,14 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
                 var state = ExperienceScreenLifecycleState(reduceMotion: false)
                 for phase in [ExperienceScreenLifecyclePhase.entering, .active] {
                     _ = try await screen.applyStateCommand(state.move(to: phase).stateCommand(
-                        viewModelName: "Runtime", instanceID: "root-sdk-id"
+                        viewModelName: try modelName(), instanceID: "root-sdk-id"
                     ))
                     _ = try await screen.step(elapsedSeconds: 0)
                 }
                 let activeGreen = try await centerGreen(screen)
                 XCTAssertGreaterThan(activeGreen, 245)
                 _ = try await screen.applyStateCommand(state.move(to: .exiting, exitReason: reason).stateCommand(
-                    viewModelName: "Runtime", instanceID: "root-sdk-id"
+                    viewModelName: try modelName(), instanceID: "root-sdk-id"
                 ))
                 let start = try await screen.step(elapsedSeconds: 0)
                 if reason == .navigation {
@@ -57,7 +57,7 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
     func testDeclaredExitReasonReceivesBothReasonsAndClearsAcrossVisits() async throws {
         let screen = try await openWitness("dismissed-only", player: .stateMachine("lifecycle"))
         do {
-            let supportsReason = await screen.supportsScreenExitReason(viewModelName: "Runtime")
+            let supportsReason = await screen.supportsScreenExitReason(viewModelName: try modelName())
             XCTAssertTrue(supportsReason)
             var state = ExperienceScreenLifecycleState(reduceMotion: false)
             let visits: [(ExperienceScreenLifecyclePhase, ExperienceScreenExitReason, UInt64)] = [
@@ -72,7 +72,7 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
             for (phase, reason, expected) in visits {
                 let snapshot = state.move(to: phase, exitReason: reason)
                 let written = try await screen.applyStateCommand(snapshot.stateCommand(
-                    viewModelName: "Runtime", instanceID: "root-sdk-id"
+                    viewModelName: try modelName(), instanceID: "root-sdk-id"
                 ))
                 XCTAssertGreaterThanOrEqual(written.appliedCount, 4)
                 _ = try await screen.step(elapsedSeconds: 0)
@@ -82,7 +82,7 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
             try await screen.updateEnvironment(reduceMotion: true)
             let reduced = state.updateReduceMotion(true)
             _ = try await screen.applyStateCommand(reduced.stateCommand(
-                viewModelName: "Runtime", instanceID: "root-sdk-id"
+                viewModelName: try modelName(), instanceID: "root-sdk-id"
             ))
             let retainedReason = try await nativeScreenValue(screen, name: "exitReason")
             XCTAssertEqual(retainedReason, .integer(1))
@@ -98,13 +98,13 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
     func testOlderScreenKeepsItsLifecycleWritesWithoutAnExitReasonField() async throws {
         let screen = try await openWitness("field-absent", player: .staticArtboard)
         do {
-            let supportsReason = await screen.supportsScreenExitReason(viewModelName: "Runtime")
+            let supportsReason = await screen.supportsScreenExitReason(viewModelName: try modelName())
             XCTAssertFalse(supportsReason)
             var state = ExperienceScreenLifecycleState(reduceMotion: false)
             for phase in [ExperienceScreenLifecyclePhase.entering, .active, .exiting, .hidden, .entering] {
                 let snapshot = state.move(to: phase, exitReason: .dismissed)
                 let written = try await screen.applyStateCommand(snapshot.stateCommand(
-                    viewModelName: "Runtime", instanceID: "root-sdk-id", includesExitReason: supportsReason
+                    viewModelName: try modelName(), instanceID: "root-sdk-id", includesExitReason: supportsReason
                 ))
                 XCTAssertGreaterThanOrEqual(written.appliedCount, 3)
                 _ = try await screen.step(elapsedSeconds: 0)
@@ -122,6 +122,15 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
         }
     }
 
+    private func modelName(_ variant: String = "dismissed-only") throws -> String {
+        let path = experiencePreparationRepositoryRoot()
+            .appendingPathComponent("fixtures/runtime/screen-exit-reason/\(variant)/mounted-screen.json")
+        let descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
+        let screens = try XCTUnwrap(leg["screens"] as? [[String: Any]])
+        return try XCTUnwrap(screens.first?["defaultViewModelName"] as? String)
+    }
+
     private func openWitness(
         _ variant: String,
         player: ExperienceInteractivePlayerSelection
@@ -129,7 +138,7 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
         let path = experiencePreparationRepositoryRoot()
             .appendingPathComponent("fixtures/runtime/screen-exit-reason/\(variant)/screen.nux")
         let payload = try await statePayload(
-            defaultViewModelName: "Runtime", values: [], scene: Data(contentsOf: path), artboardName: "tap"
+            defaultViewModelName: try modelName(variant), values: [], scene: Data(contentsOf: path), artboardName: "tap"
         )
         return try await ExperienceInteractiveScreen.open(
             payload: payload, player: player, pixelWidth: 100, pixelHeight: 100

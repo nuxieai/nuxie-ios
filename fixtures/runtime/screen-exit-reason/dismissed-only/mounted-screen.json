@@ -6,7 +6,7 @@
     "screens": [
       {
         "id": "scr_screens_stap",
-        "defaultViewModelName": "Runtime",
+        "defaultViewModelName": "vm_runtime_root_scr_screens_stap",
         "defaultInstanceId": "root-sdk-id"
       }
     ]
