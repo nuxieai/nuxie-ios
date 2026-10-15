@@ -7,6 +7,9 @@ import XCTest
 @testable import NuxieRuntime
 
 final class ExperienceScreenExitReasonBindingTests: XCTestCase {
+    // Unauthored screen backgrounds use the compiler's default published backing.
+    private static let defaultPublishedScreenBacking = CenterRGB(red: 19, green: 37, blue: 61)
+
     func testDismissalAnimatesToCompletionWhileNavigationSkipsAndTheFinalPoseStaysHidden() async throws {
         let eventName = "nuxie:screen-exit-complete:scr_screens_stap"
         for reason in [ExperienceScreenExitReason.navigation, .dismissed] {
@@ -42,12 +45,15 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
                     XCTAssertEqual(completions(beforeEnd, named: eventName), 0)
                     let completed = try await screen.step(elapsedSeconds: 0.02)
                     XCTAssertEqual(completions(completed, named: eventName), 1)
-                    let finalGreen = try await centerGreen(screen, attachmentName: "ios-exit-completion")
-                    XCTAssertLessThan(finalGreen, 5)
+                    let finalRGB = try await centerRGB(screen, attachmentName: "ios-exit-completion")
+                    let finalGreen = finalRGB.green
+                    XCTAssertEqual(finalRGB, Self.defaultPublishedScreenBacking)
                     let settled = try await screen.step(elapsedSeconds: 0.1)
                     XCTAssertEqual(completions(settled, named: eventName), 0)
-                    let settledGreen = try await centerGreen(screen, attachmentName: "ios-exit-settled")
+                    let settledRGB = try await centerRGB(screen, attachmentName: "ios-exit-settled")
+                    let settledGreen = settledRGB.green
                     XCTAssertEqual(settledGreen, finalGreen, "Completion must preserve the terminal pose")
+                    XCTAssertEqual(settledRGB, finalRGB, "Completion must preserve the terminal RGB pose")
                 }
                 try await screen.close()
             } catch {
@@ -176,6 +182,19 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
         _ screen: ExperienceInteractiveScreen,
         attachmentName: String? = nil
     ) async throws -> UInt8 {
+        try await centerRGB(screen, attachmentName: attachmentName).green
+    }
+
+    private struct CenterRGB: Equatable {
+        let red: UInt8
+        let green: UInt8
+        let blue: UInt8
+    }
+
+    private func centerRGB(
+        _ screen: ExperienceInteractiveScreen,
+        attachmentName: String? = nil
+    ) async throws -> CenterRGB {
         let device = try await screen.metalDevice().value
         let layer = CAMetalLayer()
         layer.device = device
@@ -213,7 +232,8 @@ final class ExperienceScreenExitReasonBindingTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        return buffer.contents().assumingMemoryBound(to: UInt8.self)[50 * stride + 50 * 4 + 1]
+        let center = buffer.contents().assumingMemoryBound(to: UInt8.self) + 50 * stride + 50 * 4
+        return CenterRGB(red: center[2], green: center[1], blue: center[0])
     }
 
     private enum WitnessError: Error {
