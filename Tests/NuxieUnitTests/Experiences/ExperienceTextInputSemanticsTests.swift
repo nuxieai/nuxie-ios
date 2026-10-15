@@ -265,7 +265,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         await controller.shutdownInteractiveScreen()
     }
 
-    func testSiblingEnvironmentWriteCannotOvertakeFrameSemanticCapture() async throws {
+    func testSiblingEnvironmentWriteStaysInItsOwnSessionBehindFrameSemanticCapture() async throws {
         let directory = PublishedInputFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("forms-saves")
         let geometryPath = "nuxieTextInputs/input_scr_screens_sfeedback_v2_3f92b591"
@@ -295,7 +295,8 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let secondEnv = try await second.environmentSnapshot()
         let firstEnvironment = try XCTUnwrap(firstEnv)
         let secondEnvironment = try XCTUnwrap(secondEnv)
-        XCTAssertEqual(firstEnvironment.rootInstanceID, secondEnvironment.rootInstanceID)
+        XCTAssertNotEqual(firstEnvironment.rootInstanceID, secondEnvironment.rootInstanceID,
+            "Each mounted screen owns its environment")
         try await first.updateEnvironment(reduceMotion: false)
         try await first.enableSemantics()
         let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, valuePolicy: payload.valuePolicy.native)
@@ -331,6 +332,13 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         // F5 authors comment, email and stars; this proof requests the comment occurrence.
         XCTAssertEqual(capture.tree.nodes.filter { $0.role == NuxieNativeSemanticRole.textField.rawValue }.count, 3)
         XCTAssertEqual(capture.nativeInputs[input.textInputName]?.count, 1)
+        let firstAfterSibling = try await first.environmentSnapshot()
+        XCTAssertEqual(firstAfterSibling?.values.first { $0.name == "reduceMotion" }?.value, .bool(false),
+            "The second screen's environment write must stay in its own session")
+        let secondAfterSibling = try await second.environmentSnapshot()
+        XCTAssertEqual(secondAfterSibling?.values.first { $0.name == "reduceMotion" }?.value, .bool(true))
+        // A write to the first screen's own environment invalidates its next semantic capture.
+        try await first.updateEnvironment(reduceMotion: true)
         let changed = try await first.environmentSnapshot()
         XCTAssertEqual(changed?.values.first { $0.name == "reduceMotion" }?.value, .bool(true))
         _ = try await first.step(elapsedSeconds: 0)
