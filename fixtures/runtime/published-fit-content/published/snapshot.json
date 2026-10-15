@@ -1,0 +1,788 @@
+{
+  "version": 1,
+  "project": {
+    "id": "fit-content",
+    "userId": null,
+    "workspaceId": null,
+    "appId": null,
+    "name": "Experience",
+    "thumbnailUrl": null,
+    "env": "live",
+    "mode": "repo",
+    "deletedAt": null
+  },
+  "document": {
+    "rootId": "fit-content",
+    "nodes": [
+      {
+        "id": "fit-content",
+        "projectId": "fit-content",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "root",
+        "name": "Experience",
+        "data": {
+          "kind": "root",
+          "meta": {
+            "name": "Experience"
+          }
+        },
+        "type": "root"
+      },
+      {
+        "id": "fit-content::artboard_tree",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": "a0",
+        "kind": "artboard_tree",
+        "name": "artboard_tree",
+        "data": {
+          "kind": "artboard_tree"
+        },
+        "type": "artboard_tree",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "fit-content::experiment_tree",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": "a1",
+        "kind": "experiment_tree",
+        "name": "experiment_tree",
+        "data": {
+          "kind": "experiment_tree"
+        },
+        "type": "experiment_tree",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "fit-content::journey_root",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": null,
+        "kind": "journey_root",
+        "name": "Journey Root",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        },
+        "type": "journey_root",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "fit-content::journey_canvas_tree",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": "a3",
+        "kind": "journey_canvas_tree",
+        "name": "journey_canvas_tree",
+        "data": {
+          "kind": "journey_canvas_tree",
+          "version": 1
+        },
+        "type": "journey_canvas_tree",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "fit-content::experience_intent",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": null,
+        "kind": "experience_intent",
+        "name": "Entry point",
+        "data": {
+          "kind": "experience_intent"
+        },
+        "type": "experience_intent",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sbackground",
+        "projectId": "fit-content",
+        "parentId": "fit-content::artboard_tree",
+        "orderKey": "c_scr_screens_sbackground",
+        "kind": "artboard",
+        "name": "background",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 300,
+              "height": 700
+            },
+            "sizeSource": "custom",
+            "canvasOwnerId": "screen:screens/background",
+            "dragRole": "loose"
+          },
+          "stateDeclarations": [
+            {
+              "key": "Presentation",
+              "type": "number",
+              "defaultValue": 7
+            },
+            {
+              "key": "isset:Presentation",
+              "type": "boolean",
+              "defaultValue": true
+            }
+          ],
+          "viewModelDefaults": {
+            "viewModelId": "vm_runtime_root_scr_screens_sbackground",
+            "instanceId": "vmi_runtime_scr_screens_sbackground"
+          }
+        },
+        "type": "artboard",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sbackground::view_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sbackground",
+        "orderKey": "a0",
+        "kind": "view_tree",
+        "name": "View Tree",
+        "data": {
+          "kind": "view_tree"
+        },
+        "type": "view_tree",
+        "screenId": "scr_screens_sbackground",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sbackground::animation_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sbackground",
+        "orderKey": "a1",
+        "kind": "animation_tree",
+        "name": "Animation Tree",
+        "data": {
+          "kind": "animation_tree"
+        },
+        "type": "animation_tree",
+        "screenId": "scr_screens_sbackground",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sbackground::capability_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sbackground",
+        "orderKey": "a2",
+        "kind": "capability_tree",
+        "name": "Capability Tree",
+        "data": {
+          "kind": "capability_tree"
+        },
+        "type": "capability_tree",
+        "screenId": "scr_screens_sbackground",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sbackground::v1",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sbackground::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "name": "main",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "display": "flex",
+                "flexDirection": "column",
+                "paddingBottom": 16,
+                "paddingTop": 16,
+                "width": "100%"
+              }
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_sbackground",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sbackground::v2",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sbackground::v1",
+        "orderKey": "a0",
+        "kind": "view",
+        "name": "div",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "backgroundColor": "#ff0000",
+                "flexShrink": 0,
+                "height": 120,
+                "width": "100%"
+              }
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_sbackground",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sbackground::v3",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sbackground::view_tree",
+        "orderKey": "a1",
+        "kind": "view",
+        "name": "div",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "backgroundColor": "#0000ff",
+                "height": 700,
+                "left": 0,
+                "position": "absolute",
+                "top": 0,
+                "width": 300
+              }
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_sbackground",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vm_runtime_root_scr_screens_sbackground",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": "p_scr_screens_sbackground",
+        "kind": "view_model",
+        "name": "vm_runtime_root_scr_screens_sbackground",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 364877772,
+          "properties": {
+            "state": {
+              "type": "object",
+              "propertyId": 2173293168,
+              "schema": {
+                "Presentation": {
+                  "type": "number",
+                  "propertyId": 3646128798,
+                  "defaultValue": 7
+                },
+                "isset:Presentation": {
+                  "type": "boolean",
+                  "propertyId": 3056919052,
+                  "defaultValue": true
+                }
+              }
+            }
+          }
+        },
+        "type": "view_model",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vmi_runtime_scr_screens_sbackground",
+        "projectId": "fit-content",
+        "parentId": "vm_runtime_root_scr_screens_sbackground",
+        "orderKey": "a0",
+        "kind": "view_model_instance",
+        "name": "Untitled",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "state": {
+              "Presentation": 7,
+              "isset:Presentation": true
+            }
+          }
+        },
+        "type": "view_model_instance",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sfill-child",
+        "projectId": "fit-content",
+        "parentId": "fit-content::artboard_tree",
+        "orderKey": "c_scr_screens_sfill-child",
+        "kind": "artboard",
+        "name": "fill-child",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 300,
+              "height": 700
+            },
+            "sizeSource": "custom",
+            "canvasOwnerId": "screen:screens/fill-child",
+            "dragRole": "loose"
+          },
+          "stateDeclarations": [
+            {
+              "key": "Presentation",
+              "type": "number",
+              "defaultValue": 7
+            },
+            {
+              "key": "isset:Presentation",
+              "type": "boolean",
+              "defaultValue": true
+            }
+          ],
+          "viewModelDefaults": {
+            "viewModelId": "vm_runtime_root_scr_screens_sfill-child",
+            "instanceId": "vmi_runtime_scr_screens_sfill-child"
+          }
+        },
+        "type": "artboard",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sfill-child::view_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sfill-child",
+        "orderKey": "a0",
+        "kind": "view_tree",
+        "name": "View Tree",
+        "data": {
+          "kind": "view_tree"
+        },
+        "type": "view_tree",
+        "screenId": "scr_screens_sfill-child",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sfill-child::animation_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sfill-child",
+        "orderKey": "a1",
+        "kind": "animation_tree",
+        "name": "Animation Tree",
+        "data": {
+          "kind": "animation_tree"
+        },
+        "type": "animation_tree",
+        "screenId": "scr_screens_sfill-child",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sfill-child::capability_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sfill-child",
+        "orderKey": "a2",
+        "kind": "capability_tree",
+        "name": "Capability Tree",
+        "data": {
+          "kind": "capability_tree"
+        },
+        "type": "capability_tree",
+        "screenId": "scr_screens_sfill-child",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sfill-child::v1",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sfill-child::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "name": "main",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "display": "flex",
+                "flexDirection": "column",
+                "paddingBottom": 16,
+                "paddingTop": 16,
+                "width": "100%"
+              }
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_sfill-child",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_sfill-child::v2",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_sfill-child::v1",
+        "orderKey": "a0",
+        "kind": "view",
+        "name": "div",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "backgroundColor": "#00ff00",
+                "height": "100%",
+                "width": "100%"
+              }
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_sfill-child",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vm_runtime_root_scr_screens_sfill-child",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": "p_scr_screens_sfill-child",
+        "kind": "view_model",
+        "name": "vm_runtime_root_scr_screens_sfill-child",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 17421040,
+          "properties": {
+            "state": {
+              "type": "object",
+              "propertyId": 2173293168,
+              "schema": {
+                "Presentation": {
+                  "type": "number",
+                  "propertyId": 3646128798,
+                  "defaultValue": 7
+                },
+                "isset:Presentation": {
+                  "type": "boolean",
+                  "propertyId": 3056919052,
+                  "defaultValue": true
+                }
+              }
+            }
+          }
+        },
+        "type": "view_model",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vmi_runtime_scr_screens_sfill-child",
+        "projectId": "fit-content",
+        "parentId": "vm_runtime_root_scr_screens_sfill-child",
+        "orderKey": "a0",
+        "kind": "view_model_instance",
+        "name": "Untitled",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "state": {
+              "Presentation": 7,
+              "isset:Presentation": true
+            }
+          }
+        },
+        "type": "view_model_instance",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_ssheet",
+        "projectId": "fit-content",
+        "parentId": "fit-content::artboard_tree",
+        "orderKey": "c_scr_screens_ssheet",
+        "kind": "artboard",
+        "name": "sheet",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "dimensions": {
+              "width": 300,
+              "height": 700
+            },
+            "sizeSource": "custom",
+            "canvasOwnerId": "experience:fit-content",
+            "dragRole": "member"
+          },
+          "stateDeclarations": [
+            {
+              "key": "Presentation",
+              "type": "number",
+              "defaultValue": 7
+            },
+            {
+              "key": "isset:Presentation",
+              "type": "boolean",
+              "defaultValue": true
+            }
+          ],
+          "viewModelDefaults": {
+            "viewModelId": "vm_runtime_root_scr_screens_ssheet",
+            "instanceId": "vmi_runtime_scr_screens_ssheet"
+          }
+        },
+        "type": "artboard",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_ssheet::view_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_ssheet",
+        "orderKey": "a0",
+        "kind": "view_tree",
+        "name": "View Tree",
+        "data": {
+          "kind": "view_tree"
+        },
+        "type": "view_tree",
+        "screenId": "scr_screens_ssheet",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_ssheet::animation_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_ssheet",
+        "orderKey": "a1",
+        "kind": "animation_tree",
+        "name": "Animation Tree",
+        "data": {
+          "kind": "animation_tree"
+        },
+        "type": "animation_tree",
+        "screenId": "scr_screens_ssheet",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_ssheet::capability_tree",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_ssheet",
+        "orderKey": "a2",
+        "kind": "capability_tree",
+        "name": "Capability Tree",
+        "data": {
+          "kind": "capability_tree"
+        },
+        "type": "capability_tree",
+        "screenId": "scr_screens_ssheet",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_ssheet::v1",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_ssheet::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "name": "main",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "display": "flex",
+                "flexDirection": "column",
+                "paddingBottom": 16,
+                "paddingTop": 16,
+                "width": "100%"
+              }
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_ssheet",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "scr_screens_ssheet::v2",
+        "projectId": "fit-content",
+        "parentId": "scr_screens_ssheet::v1",
+        "orderKey": "a0",
+        "kind": "view",
+        "name": "div",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "backgroundColor": "#ff0000",
+                "flexShrink": 0,
+                "height": 120,
+                "width": "100%"
+              }
+            }
+          }
+        },
+        "type": "view",
+        "screenId": "scr_screens_ssheet",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vm_runtime_root_scr_screens_ssheet",
+        "projectId": "fit-content",
+        "parentId": "fit-content",
+        "orderKey": "p_scr_screens_ssheet",
+        "kind": "view_model",
+        "name": "vm_runtime_root_scr_screens_ssheet",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 443385985,
+          "properties": {
+            "state": {
+              "type": "object",
+              "propertyId": 2173293168,
+              "schema": {
+                "Presentation": {
+                  "type": "number",
+                  "propertyId": 3646128798,
+                  "defaultValue": 7
+                },
+                "isset:Presentation": {
+                  "type": "boolean",
+                  "propertyId": 3056919052,
+                  "defaultValue": true
+                }
+              }
+            }
+          }
+        },
+        "type": "view_model",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "vmi_runtime_scr_screens_ssheet",
+        "projectId": "fit-content",
+        "parentId": "vm_runtime_root_scr_screens_ssheet",
+        "orderKey": "a0",
+        "kind": "view_model_instance",
+        "name": "Untitled",
+        "data": {
+          "kind": "view_model_instance",
+          "values": {
+            "state": {
+              "Presentation": 7,
+              "isset:Presentation": true
+            }
+          }
+        },
+        "type": "view_model_instance",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "fit-content::journey_root::v1",
+        "projectId": "fit-content",
+        "parentId": "fit-content::experience_intent",
+        "orderKey": "70726f6772616d:a0",
+        "kind": "journey_action",
+        "name": "navigate",
+        "data": {
+          "kind": "journey_action",
+          "action": {
+            "type": "navigate",
+            "screenId": "scr_screens_ssheet"
+          }
+        },
+        "type": "journey_action",
+        "screenId": null,
+        "userId": null,
+        "appId": null,
+        "path": null
+      }
+    ]
+  },
+  "designSystem": {
+    "screenDesignSystems": [],
+    "designSystems": []
+  }
+}

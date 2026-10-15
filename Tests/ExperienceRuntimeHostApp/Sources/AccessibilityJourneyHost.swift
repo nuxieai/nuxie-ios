@@ -77,8 +77,10 @@ private struct AccessibilityFixture {
 
     init() throws {
         guard let resource = Bundle.main.resourceURL else { throw CocoaError(.fileNoSuchFile) }
-        let directory = ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification")
-            ? "parla-sheets" : "rendered-semantic-roles"
+        let arguments = ProcessInfo.processInfo.arguments
+        let directory = arguments.contains("--nuxie-sheets-qualification")
+            ? (arguments.contains("--nuxie-sheets-large") ? "parla-sheets/variants/large" : "parla-sheets")
+            : "rendered-semantic-roles"
         root = resource.appendingPathComponent(directory, isDirectory: true)
         let data = try Data(contentsOf: root.appendingPathComponent("release-entry.json"))
         guard let entry = try JSONSerialization.jsonObject(with: data) as? [String: Any],

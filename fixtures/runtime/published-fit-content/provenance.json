@@ -1,27 +1,162 @@
 {
-  "source": "/Users/levi/dev/nuxie-handoff/fixtures/fit-content",
-  "originalProvenanceSha256": "a9f7592b4827b0a410168bce9485c0979abfa2599b686fa1797d7ed149e8b3a8",
-  "fullEvidence": "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/fit-content/compiler-delivery-3b776e0e",
-  "files": {
-    "NOTES.md": "3790543d6b7915ae1c05f656d0f0d56aaebe4ac52c5691b3b15720eb00905fd4",
-    "evidence/fit-capi-probe-False-False.log": "c62f93f4565d8c7b14b071ad04bca6d7531612a98a3d6409b84206191382fdd8",
-    "evidence/fit-capi-probe-False-True.log": "0c123290a4105b95f555500a52a88b35a3b29c056813c92b9c4a39a2532dfffa",
-    "evidence/fit-capi-probe-True-False.log": "645986ba320ef033d70888cb821e302c4ad72ba0d942144ab48b4e616a14167c",
-    "evidence/fit-capi-probe-True-True.log": "90697e312e85fb5cff09b0eac88d0d66e2cf0db9c7d3de7aff80959ce31b4010",
-    "evidence/fit-probe-False-False.log": "1d8e20a3c4d775e922406587bd86ec0265ba5273057a0b399ffd9ca272849213",
-    "evidence/fit-probe-False-True.log": "7949129a676985bfc33c1a0c71b1c4423fb40ddbeda6b25dd7260c6f6295587f",
-    "evidence/fit-probe-True-False.log": "bf5cb6bfbcd874aa71c8d4e27ccc89b8cc5a74c1cbea2d5e4bd4dfba4e0409da",
-    "evidence/fit-probe-True-True.log": "a0bc472b51c88db2550668e9fb72ba546ffca5f5065c5ae7ba4fda9760e8c6be",
-    "expectations.json": "47859ff2830154020c9dad6e4f23f995cacef0fd8d13cf1a9c1e7b1cea9a3127",
-    "published/no-binding.riv": "8aa8c47a7e015dcb6e51fcad112c87f5c90d430010cf3434c149afe5e0bee173",
-    "published/screen.riv": "106288fa9a8997b5590bf20b73911b8db435c70bf58552455ba3ba7937f7a941",
-    "source/experience.json": "20bd6465e3d090d6308669871b4bfada0c8f4405fc2432b26182f14c232464ad",
-    "source/screens/background/frame.json": "03a6dd20550f10213f96d15ada8a6c1caefcf354714691bd1610c8f18b78e4f3",
-    "source/screens/background/index.html": "0ee884ed9dd1c41b3204ea3a300c94030a9db948a80a8f4c8fe6f2afdd39ddc0",
-    "source/screens/fill-child/frame.json": "03a6dd20550f10213f96d15ada8a6c1caefcf354714691bd1610c8f18b78e4f3",
-    "source/screens/fill-child/index.html": "11710f3cea0f39d6a14b2e224852fd295b9250527fe2fcef1b8ee2b56e0756e0",
-    "source/screens/sheet/frame.json": "03a6dd20550f10213f96d15ada8a6c1caefcf354714691bd1610c8f18b78e4f3",
-    "source/screens/sheet/index.html": "46148726283ecc608c78d67025cf9ad1efbd405cf124b8c580c9f52117acc164"
+  "compilerSource": "69790050f3fc53da4e890bcde7eb7b67c1149902",
+  "cleanParentHead": "69790050f3fc53da4e890bcde7eb7b67c1149902",
+  "source": "tools/sdk-fixtures/sheets/published-fit-content",
+  "sources": {
+    "tools/sdk-fixtures/sheets/published-fit-content/experience.json": {
+      "sha256": "cdc32eb8e7b72a158081d14ab87c15a8bc04be25de4d240db3e80e7ff77b3b13",
+      "sizeBytes": 155
+    },
+    "tools/sdk-fixtures/sheets/published-fit-content/screens/background/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "tools/sdk-fixtures/sheets/published-fit-content/screens/background/index.html": {
+      "sha256": "0ee884ed9dd1c41b3204ea3a300c94030a9db948a80a8f4c8fe6f2afdd39ddc0",
+      "sizeBytes": 371
+    },
+    "tools/sdk-fixtures/sheets/published-fit-content/screens/fill-child/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "tools/sdk-fixtures/sheets/published-fit-content/screens/fill-child/index.html": {
+      "sha256": "11710f3cea0f39d6a14b2e224852fd295b9250527fe2fcef1b8ee2b56e0756e0",
+      "sizeBytes": 240
+    },
+    "tools/sdk-fixtures/sheets/published-fit-content/screens/sheet/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "tools/sdk-fixtures/sheets/published-fit-content/screens/sheet/index.html": {
+      "sha256": "46148726283ecc608c78d67025cf9ad1efbd405cf124b8c580c9f52117acc164",
+      "sizeBytes": 257
+    }
   },
-  "compilerCommit": "3b776e0e266421d46be4f23b2821d76002029238"
+  "command": [
+    "node",
+    "--import",
+    "tsx",
+    "apps/nuxie-experience-authority/tests/workerd/sdk-sheets-export-run.mjs",
+    "tests/fixtures/e2e-experience-files/presentation-sheets",
+    "tools/sdk-fixtures/sheets/published-fit-content",
+    "tools/sdk-fixtures/sheets/parla-large/experience.json",
+    "<output-root>",
+    "69790050f3fc53da4e890bcde7eb7b67c1149902"
+  ],
+  "commands": [
+    [
+      "node",
+      "--import",
+      "tsx",
+      "apps/nuxie-experience-authority/tests/workerd/sdk-sheets-export-run.mjs",
+      "tests/fixtures/e2e-experience-files/presentation-sheets",
+      "tools/sdk-fixtures/sheets/published-fit-content",
+      "tools/sdk-fixtures/sheets/parla-large/experience.json",
+      "<output-root>",
+      "69790050f3fc53da4e890bcde7eb7b67c1149902"
+    ],
+    [
+      "bash",
+      "tools/nuxie-editor/scripts/bazel.sh",
+      "run",
+      "-p",
+      "experience-editor-bridge",
+      "--example",
+      "publish_presentation",
+      "--",
+      "tools/sdk-fixtures/sheets/published-fit-content",
+      "<output-root>/runtime/published-fit-content/published"
+    ]
+  ],
+  "signing": {
+    "kind": "unsigned-native-scene"
+  },
+  "qualification": "Full publisher scene plus a control removing only root-height bindings. No native qualification claimed.",
+  "facts": {
+    "oracle": "Authored source arithmetic: 16 + 120 + 16 = 152; supplied Fixed height 700. Never derived from emitted records.",
+    "widths": [
+      300,
+      500
+    ],
+    "fixedHeight": 700,
+    "sheetHugHeight": 152,
+    "unboundHeightForEitherMode": 700,
+    "independentPlayer": {
+      "width": 500,
+      "height": 700
+    },
+    "upstreamEdgeObservations": {
+      "fill-child": 32,
+      "background": 152
+    },
+    "orders": [
+      [
+        0,
+        2,
+        0
+      ],
+      [
+        2,
+        0,
+        2
+      ]
+    ],
+    "screenVisits": [
+      "sheet",
+      "fill-child",
+      "background",
+      "sheet"
+    ]
+  },
+  "files": {
+    "published/screen.riv": {
+      "sha256": "9e41544b7fcc11adb04fe497468785e8d4368fdebb6c74468d0b7d87bbb92dd3",
+      "sizeBytes": 3491
+    },
+    "published/no-binding.riv": {
+      "sha256": "66b7d37fe6ab31eb0ac9b579a82067d0e430180a3df99517df4df3d99b821776",
+      "sizeBytes": 3446
+    },
+    "published/snapshot.json": {
+      "sha256": "e1d2e9c6fad0781978c0bfa85160eea33d667bd16e7d0dcdaeb13cda835aa142",
+      "sizeBytes": 21555
+    },
+    "source/experience.json": {
+      "sha256": "cdc32eb8e7b72a158081d14ab87c15a8bc04be25de4d240db3e80e7ff77b3b13",
+      "sizeBytes": 155
+    },
+    "source/screens/background/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "source/screens/background/index.html": {
+      "sha256": "0ee884ed9dd1c41b3204ea3a300c94030a9db948a80a8f4c8fe6f2afdd39ddc0",
+      "sizeBytes": 371
+    },
+    "source/screens/fill-child/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "source/screens/fill-child/index.html": {
+      "sha256": "11710f3cea0f39d6a14b2e224852fd295b9250527fe2fcef1b8ee2b56e0756e0",
+      "sizeBytes": 240
+    },
+    "source/screens/sheet/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "source/screens/sheet/index.html": {
+      "sha256": "46148726283ecc608c78d67025cf9ad1efbd405cf124b8c580c9f52117acc164",
+      "sizeBytes": 257
+    },
+    "expectations.json": {
+      "sha256": "f8ba4a4bd22dc9cadbdc20183c45c55a2386fc97c7fa5d1b8907d09cddeb1b28",
+      "sizeBytes": 579
+    },
+    "NOTES.md": {
+      "sha256": "f42e0b2b31581ac831d8ea39432740422fe1faef01465c08795ad07ce93f1b58",
+      "sizeBytes": 551
+    }
+  },
+  "inventoryNote": "export-manifest.json additionally hashes this provenance file; a file cannot contain its own hash."
 }
