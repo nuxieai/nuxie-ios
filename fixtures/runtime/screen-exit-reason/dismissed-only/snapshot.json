@@ -2155,6 +2155,8 @@
           "fromStateId": "scr_screens_stap::v16",
           "toStateId": "scr_screens_stap::v18:state:hidden",
           "conditions": [],
+          "mix": 0,
+          "mixTimeMode": "milliseconds",
           "enableExitTime": true,
           "exitTime": 1,
           "exitTimeMode": "normalized"
@@ -2406,11 +2408,11 @@
           "fromStateId": "scr_screens_stap::v16::reduced",
           "toStateId": "scr_screens_stap::v18:state:hidden",
           "conditions": [],
+          "mix": 0,
+          "mixTimeMode": "milliseconds",
           "enableExitTime": false,
           "exitTime": 1,
-          "exitTimeMode": "normalized",
-          "mix": 0,
-          "mixTimeMode": "milliseconds"
+          "exitTimeMode": "normalized"
         },
         "type": "state_transition",
         "screenId": "scr_screens_stap",
