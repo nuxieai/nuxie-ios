@@ -869,7 +869,11 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
         XCTAssertEqual(backTarget, "screen_welcome")
         await MainActor.run {
+            #if canImport(UIKit)
             XCTAssertEqual(delegate.consumeBackNavigation(target: "screen_welcome"), 1)
+            #else
+            XCTAssertNil(delegate.consumeBackNavigation(target: "screen_welcome"))
+            #endif
             XCTAssertNil(delegate.consumeBackNavigation(target: "screen_welcome"))
             _ = delegate.prepareBackNavigation(steps: 2, target: "screen_welcome")
         }
