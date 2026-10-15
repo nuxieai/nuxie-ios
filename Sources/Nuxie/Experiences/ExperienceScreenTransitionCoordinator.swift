@@ -668,6 +668,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let sourceLayer = navigationController
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
         let opensLayer = spec.kind == .modal && !isBack
+        let isRetainedTarget = sourceLayer?.viewControllers.contains(where: { $0 === targetController }) == true
         if opensLayer {
             guard (activeController ?? hostViewController)?.presentedViewController == nil else {
                 throw ExperienceScreenTransitionCoordinatorError.presenterBusy
@@ -684,7 +685,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
             try await targetController.configurePresentationHeight(spec.presentation,
                 target: targetController, availableSize: available)
-        } else if let sourceLayer {
+        } else if !isRetainedTarget, let sourceLayer {
             try await targetController.configurePresentationHeight(.init(kind: .fullscreen),
                 target: sourceLayer, availableSize: sourceLayer.view.bounds.size)
         }

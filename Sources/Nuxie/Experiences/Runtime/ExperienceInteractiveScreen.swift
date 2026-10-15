@@ -1640,18 +1640,28 @@ actor ExperienceInteractiveScreen {
     private var needsLayoutReadback = false
     private let presentationHeight = ExperiencePresentationHeight()
     private var fitsContentHeight = false
+    private var availablePresentationHeight: Double?
 
     func setPresentationHeight(fitContent: Bool, availableSize: CGSize) async throws -> Bool {
         try await operationGate.withLock { [self] in
             await discardTextFrame()
             let available = try await presentationHeight.apply(to: runtime, fitContent: fitContent,
                 width: Float(availableSize.width), height: Float(availableSize.height))
-            await setHeightReadback(fitContent && available)
+            await setHeightReadback(fitContent && available, availableHeight: Double(availableSize.height))
+            try await updatePresentationViewport(availableSize)
             return available
         }
     }
 
-    private func setHeightReadback(_ enabled: Bool) {
+    private func updatePresentationViewport(_ size: CGSize) async throws {
+        guard let environmentReference else { return }
+        let writes = environmentBindings.mutations(reference: environmentReference,
+            viewport: ExperienceViewportEnvironment(width: Double(size.width), height: Double(size.height)))
+        if !writes.isEmpty { _ = try await runtime.mutateViewModel(writes) }
+    }
+
+    private func setHeightReadback(_ enabled: Bool, availableHeight: Double) {
+        availablePresentationHeight = availableHeight
         fitsContentHeight = enabled
         needsLayoutReadback = true
     }
@@ -3649,13 +3659,17 @@ actor ExperienceInteractiveScreen {
             if let environmentReference {
                 let viewport = ExperienceViewportEnvironment(
                     width: Double(Float(pixelWidth) / layoutScaleFactor),
-                    height: Double(Float(pixelHeight) / layoutScaleFactor))
+                    height: await self.environmentHeight(surfaceHeight: Double(Float(pixelHeight) / layoutScaleFactor)))
                 let writes = environmentBindings.mutations(reference: environmentReference, viewport: viewport)
                 if !writes.isEmpty { _ = try await runtime.mutateViewModel(writes) }
             }
             let outcome = try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
             return Self.renderOutcome(outcome)
         }
+    }
+
+    private func environmentHeight(surfaceHeight: Double) -> Double {
+        fitsContentHeight ? (availablePresentationHeight ?? surfaceHeight) : surfaceHeight
     }
 
     private func markLayoutReadbackPending(_ pending: Bool) { needsLayoutReadback = pending }

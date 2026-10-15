@@ -64,14 +64,17 @@ final class ExperienceLayerPresentationConfigurator {
         var ancestors: [UIViewController] = []
         var current = presenter
         while let controller = current {
-            if controller.presentingViewController != nil,
-               controller.modalPresentationStyle == .pageSheet { ancestors.append(controller) }
-            current = controller.presentingViewController ?? controller.parent
+            // Traverse containment before presentation: a base navigation child
+            // belongs to the first-layer sheet, not directly to the window root.
+            if controller.parent == nil, controller.presentingViewController != nil {
+                ancestors.append(controller)
+            }
+            current = controller.parent ?? controller.presentingViewController
         }
         var probePresenter = root
         for source in ancestors.reversed() {
             let probe = UIViewController()
-            probe.modalPresentationStyle = .pageSheet
+            probe.modalPresentationStyle = source.modalPresentationStyle
             probe.preferredContentSize = source.preferredContentSize
             probe.sheetPresentationController?.detents = source.sheetPresentationController?.detents ?? [.large()]
             await withCheckedContinuation { continuation in
@@ -90,9 +93,12 @@ final class ExperienceLayerPresentationConfigurator {
         await withCheckedContinuation { continuation in
             root.dismiss(animated: false) { continuation.resume() }
         }
-        guard !Task.isCancelled, size.width > 0, size.height > 0 else { throw CancellationError() }
+        try Task.checkCancellation()
+        guard size.width > 0, size.height > 0 else { throw SheetMeasurementError.emptyGeometry }
         return size
     }
+
+    private enum SheetMeasurementError: Error { case emptyGeometry }
 
     static func contentHeight(_ measured: CGFloat, maximum: CGFloat) -> CGFloat {
         guard measured.isFinite, measured > 0 else { return maximum }
