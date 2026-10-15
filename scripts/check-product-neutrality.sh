@@ -13,6 +13,8 @@ prohibited+='|github.com/nuxieai/nuxie-'"dev"
 if git grep -nE "$prohibited" -- \
   . \
   ':!scripts/check-product-neutrality.sh' \
+  ':!fixtures/journeys/parla-sheets/provenance.json' \
+  ':!fixtures/runtime/published-fit-content/provenance.json' \
   ':!fixtures/runtime/nested-values/README.md' \
   ':!fixtures/runtime/shared-values/NOTES.md' \
   ':!fixtures/runtime/shared-values/provenance.json' \

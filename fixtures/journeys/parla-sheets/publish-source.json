@@ -1,0 +1,2327 @@
+{
+  "revision": 2,
+  "editSeq": 1,
+  "snapshot": {
+    "version": 1,
+    "project": {
+      "id": "sdk-parla-sheets",
+      "userId": null,
+      "workspaceId": null,
+      "appId": null,
+      "name": "Experience",
+      "thumbnailUrl": null,
+      "env": "live",
+      "mode": "repo",
+      "deletedAt": null
+    },
+    "document": {
+      "rootId": "sdk-parla-sheets",
+      "nodes": [
+        {
+          "id": "sdk-parla-sheets",
+          "projectId": "sdk-parla-sheets",
+          "parentId": null,
+          "orderKey": null,
+          "kind": "root",
+          "name": "Experience",
+          "data": {
+            "kind": "root",
+            "meta": {
+              "name": "Experience"
+            }
+          },
+          "type": "root"
+        },
+        {
+          "id": "sdk-parla-sheets::artboard_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "a0",
+          "kind": "artboard_tree",
+          "name": "artboard_tree",
+          "data": {
+            "kind": "artboard_tree"
+          },
+          "type": "artboard_tree",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::experiment_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "a1",
+          "kind": "experiment_tree",
+          "name": "experiment_tree",
+          "data": {
+            "kind": "experiment_tree"
+          },
+          "type": "experiment_tree",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::journey_root",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": null,
+          "kind": "journey_root",
+          "name": "Journey Root",
+          "data": {
+            "kind": "journey_root",
+            "version": 1
+          },
+          "type": "journey_root",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::journey_canvas_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "a3",
+          "kind": "journey_canvas_tree",
+          "name": "journey_canvas_tree",
+          "data": {
+            "kind": "journey_canvas_tree",
+            "version": 1
+          },
+          "type": "journey_canvas_tree",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::experience_intent",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": null,
+          "kind": "experience_intent",
+          "name": "Entry point",
+          "data": {
+            "kind": "experience_intent",
+            "policy": {
+              "entry": {
+                "trigger": {
+                  "type": "event",
+                  "eventName": "lesson_opened"
+                },
+                "frequency": {
+                  "type": "every_match"
+                }
+              },
+              "exitWhenAny": []
+            },
+            "platforms": [
+              "ios:apple_app_store"
+            ],
+            "platformsSource": "ab7c6e9b2d1e2aae516593e2b5d3daaeda075a66e6bd159e03472ca75f302c66"
+          },
+          "type": "experience_intent",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets::artboard_tree",
+          "orderKey": "c_scr_screens_slesson",
+          "kind": "artboard",
+          "name": "lesson",
+          "data": {
+            "kind": "artboard",
+            "isComponent": false,
+            "canvas": {
+              "dimensions": {
+                "width": 402,
+                "height": 874
+              },
+              "deviceName": "iPhone 17 Pro",
+              "canvasOwnerId": "experience:sdk-parla-sheets",
+              "dragRole": "member"
+            },
+            "stateDeclarations": [],
+            "viewModelDefaults": {
+              "viewModelId": "vm_runtime_root_scr_screens_slesson",
+              "instanceId": "vmi_runtime_scr_screens_slesson"
+            }
+          },
+          "type": "artboard",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::view_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson",
+          "orderKey": "a0",
+          "kind": "view_tree",
+          "name": "View Tree",
+          "data": {
+            "kind": "view_tree"
+          },
+          "type": "view_tree",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::animation_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson",
+          "orderKey": "a1",
+          "kind": "animation_tree",
+          "name": "Animation Tree",
+          "data": {
+            "kind": "animation_tree"
+          },
+          "type": "animation_tree",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::capability_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson",
+          "orderKey": "a2",
+          "kind": "capability_tree",
+          "name": "Capability Tree",
+          "data": {
+            "kind": "capability_tree"
+          },
+          "type": "capability_tree",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v1",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::view_tree",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "root",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "View",
+              "props": {
+                "style": {
+                  "backgroundColor": "#F7F5ED",
+                  "columnGap": 16,
+                  "display": "flex",
+                  "flexDirection": "column",
+                  "height": "100%",
+                  "paddingBottom": 24,
+                  "paddingLeft": 24,
+                  "paddingRight": 24,
+                  "paddingTop": 24,
+                  "rowGap": 16,
+                  "width": "100%"
+                }
+              },
+              "propExpressions": {
+                "style": {
+                  "kind": "Object",
+                  "entries": [
+                    {
+                      "key": "paddingBottom",
+                      "value": {
+                        "kind": "Converter",
+                        "converterId": "scr_screens_slesson::v1::bind::style-padding-bottom::c0",
+                        "expr": {
+                          "kind": "Path",
+                          "root": "vm",
+                          "segments": [
+                            {
+                              "type": "prop",
+                              "name": "safeArea"
+                            },
+                            {
+                              "type": "prop",
+                              "name": "bottom"
+                            }
+                          ],
+                          "pathRef": {
+                            "kind": "ids",
+                            "pathIds": [
+                              1701737984,
+                              3391825480,
+                              384887969
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "key": "paddingTop",
+                      "value": {
+                        "kind": "Converter",
+                        "converterId": "scr_screens_slesson::v1::bind::style-padding-top::c0",
+                        "expr": {
+                          "kind": "Path",
+                          "root": "vm",
+                          "segments": [
+                            {
+                              "type": "prop",
+                              "name": "safeArea"
+                            },
+                            {
+                              "type": "prop",
+                              "name": "top"
+                            }
+                          ],
+                          "pathRef": {
+                            "kind": "ids",
+                            "pathIds": [
+                              1701737984,
+                              3391825480,
+                              4220816405
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v2",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v1",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#567064",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600",
+                  "lineHeight": "18px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "PARLA · LESSON ONE",
+              "fileTextStyle": {
+                "link": {
+                  "designSystemId": "file:styles/common.css",
+                  "styleId": "brand"
+                },
+                "presetClasses": [
+                  "brand"
+                ],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {
+                "color": "#567064",
+                "font-size": "13px",
+                "font-weight": "600",
+                "line-height": "18px"
+              },
+              "fileTextStyleApplyKeeps": {}
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v3",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v1",
+          "orderKey": "a1",
+          "kind": "view",
+          "name": "h1",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "600",
+                  "lineHeight": "38px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "Say hello",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v4",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v1",
+          "orderKey": "a2",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "lineHeight": "24px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "A little Italian, one real conversation at a time.",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v5",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v1",
+          "orderKey": "a3",
+          "kind": "view",
+          "name": "conversation",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "View",
+              "props": {
+                "style": {
+                  "backgroundColor": "#E7EDDC",
+                  "borderBottomLeftRadius": 24,
+                  "borderBottomRightRadius": 24,
+                  "borderTopLeftRadius": 24,
+                  "borderTopRightRadius": 24,
+                  "columnGap": 20,
+                  "display": "flex",
+                  "flexDirection": "column",
+                  "marginTop": 24,
+                  "paddingBottom": 28,
+                  "paddingLeft": 28,
+                  "paddingRight": 28,
+                  "paddingTop": 28,
+                  "rowGap": 20
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v6",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v5",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#567064",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600",
+                  "lineHeight": "18px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "AT THE CAFÉ",
+              "fileTextStyle": {
+                "link": {
+                  "designSystemId": "file:styles/common.css",
+                  "styleId": "brand"
+                },
+                "presetClasses": [
+                  "brand"
+                ],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {
+                "color": "#567064",
+                "font-size": "13px",
+                "font-weight": "600",
+                "line-height": "18px"
+              },
+              "fileTextStyleApplyKeeps": {}
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v7",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v5",
+          "orderKey": "a1",
+          "kind": "view",
+          "name": "h2",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600",
+                  "lineHeight": "30px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "Buongiorno!",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v8",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v5",
+          "orderKey": "a2",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "lineHeight": "24px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "Good morning. You already know how to begin.",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v9",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v1",
+          "orderKey": "a4",
+          "kind": "view",
+          "name": "progress",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#567064",
+                  "flexGrow": 1,
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "lineHeight": "24px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0,
+                  "paddingTop": 24
+                }
+              },
+              "text": "Your first lesson is ready.",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {}
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v10",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v1",
+          "orderKey": "a5",
+          "kind": "view",
+          "name": "offer",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Pressable",
+              "focusable": true,
+              "props": {
+                "style": {
+                  "alignItems": "center",
+                  "backgroundColor": "#173D2F",
+                  "borderBottomLeftRadius": 26,
+                  "borderBottomRightRadius": 26,
+                  "borderTopLeftRadius": 26,
+                  "borderTopRightRadius": 26,
+                  "display": "flex",
+                  "height": 52,
+                  "justifyContent": "center",
+                  "width": "100%"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v11",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::v10",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "Text",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "text": {
+                    "value": "Explore Parla Plus",
+                    "runs": [
+                      {
+                        "id": "scr_screens_slesson::v11~r0",
+                        "text": "Explore Parla Plus",
+                        "style": {
+                          "fontSize": 16,
+                          "fontWeight": "600",
+                          "lineHeight": "24px"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "text": "Explore Parla Plus"
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "vm_runtime_root_scr_screens_slesson",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "p_scr_screens_slesson",
+          "kind": "view_model",
+          "name": "vm_runtime_root_scr_screens_slesson",
+          "data": {
+            "kind": "view_model",
+            "viewModelPathId": 562548438,
+            "properties": {
+              "state": {
+                "type": "object",
+                "propertyId": 2173293168,
+                "schema": {}
+              }
+            }
+          },
+          "type": "view_model",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "vmi_runtime_scr_screens_slesson",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "vm_runtime_root_scr_screens_slesson",
+          "orderKey": "a0",
+          "kind": "view_model_instance",
+          "name": "Untitled",
+          "data": {
+            "kind": "view_model_instance",
+            "values": {
+              "state": {}
+            }
+          },
+          "type": "view_model_instance",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets::artboard_tree",
+          "orderKey": "c_scr_screens_soffer",
+          "kind": "artboard",
+          "name": "offer",
+          "data": {
+            "kind": "artboard",
+            "isComponent": false,
+            "canvas": {
+              "dimensions": {
+                "width": 402,
+                "height": 874
+              },
+              "deviceName": "iPhone 17 Pro",
+              "canvasOwnerId": "experience:sdk-parla-sheets",
+              "dragRole": "member"
+            },
+            "stateDeclarations": [],
+            "viewModelDefaults": {
+              "viewModelId": "vm_runtime_root_scr_screens_soffer",
+              "instanceId": "vmi_runtime_scr_screens_soffer"
+            }
+          },
+          "type": "artboard",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::view_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer",
+          "orderKey": "a0",
+          "kind": "view_tree",
+          "name": "View Tree",
+          "data": {
+            "kind": "view_tree"
+          },
+          "type": "view_tree",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::animation_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer",
+          "orderKey": "a1",
+          "kind": "animation_tree",
+          "name": "Animation Tree",
+          "data": {
+            "kind": "animation_tree"
+          },
+          "type": "animation_tree",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::capability_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer",
+          "orderKey": "a2",
+          "kind": "capability_tree",
+          "name": "Capability Tree",
+          "data": {
+            "kind": "capability_tree"
+          },
+          "type": "capability_tree",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v1",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::view_tree",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "root",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "View",
+              "props": {
+                "style": {
+                  "backgroundColor": "#F7F5ED",
+                  "columnGap": 16,
+                  "display": "flex",
+                  "flexDirection": "column",
+                  "height": "100%",
+                  "paddingBottom": 16,
+                  "paddingLeft": 24,
+                  "paddingRight": 24,
+                  "paddingTop": 28,
+                  "rowGap": 16,
+                  "width": "100%"
+                }
+              },
+              "propExpressions": {
+                "style": {
+                  "kind": "Object",
+                  "entries": [
+                    {
+                      "key": "paddingBottom",
+                      "value": {
+                        "kind": "Converter",
+                        "converterId": "scr_screens_soffer::v1::bind::style-padding-bottom::c0",
+                        "expr": {
+                          "kind": "Path",
+                          "root": "vm",
+                          "segments": [
+                            {
+                              "type": "prop",
+                              "name": "safeArea"
+                            },
+                            {
+                              "type": "prop",
+                              "name": "bottom"
+                            }
+                          ],
+                          "pathRef": {
+                            "kind": "ids",
+                            "pathIds": [
+                              1701737984,
+                              3391825480,
+                              384887969
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v2",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v1",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#567064",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600",
+                  "lineHeight": "18px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "PARLA PLUS",
+              "fileTextStyle": {
+                "link": {
+                  "designSystemId": "file:styles/common.css",
+                  "styleId": "brand"
+                },
+                "presetClasses": [
+                  "brand"
+                ],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {
+                "color": "#567064",
+                "font-size": "13px",
+                "font-weight": "600",
+                "line-height": "18px"
+              },
+              "fileTextStyleApplyKeeps": {}
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v3",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v1",
+          "orderKey": "a1",
+          "kind": "view",
+          "name": "h1",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "600",
+                  "lineHeight": "38px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "Special offer",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v4",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v1",
+          "orderKey": "a2",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "lineHeight": "24px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "Keep your Italian flowing after lesson one.",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v5",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v1",
+          "orderKey": "a3",
+          "kind": "view",
+          "name": "price",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "View",
+              "props": {
+                "style": {
+                  "columnGap": 8,
+                  "display": "flex",
+                  "flexDirection": "column",
+                  "flexGrow": 1,
+                  "paddingTop": 8,
+                  "rowGap": 8
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v6",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v5",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "h2",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600",
+                  "lineHeight": "30px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "30% off your first year",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v7",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v5",
+          "orderKey": "a1",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "lineHeight": "24px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "More everyday conversations. A plan that fits your trip.",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v8",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v1",
+          "orderKey": "a4",
+          "kind": "view",
+          "name": "save",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Pressable",
+              "focusable": true,
+              "props": {
+                "style": {
+                  "alignItems": "center",
+                  "backgroundColor": "#173D2F",
+                  "borderBottomLeftRadius": 26,
+                  "borderBottomRightRadius": 26,
+                  "borderTopLeftRadius": 26,
+                  "borderTopRightRadius": 26,
+                  "display": "flex",
+                  "height": 52,
+                  "justifyContent": "center",
+                  "width": "100%"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v9",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::v8",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "Text",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "text": {
+                    "value": "Save this offer",
+                    "runs": [
+                      {
+                        "id": "scr_screens_soffer::v9~r0",
+                        "text": "Save this offer",
+                        "style": {
+                          "fontSize": 16,
+                          "fontWeight": "600",
+                          "lineHeight": "24px"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "text": "Save this offer"
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "vm_runtime_root_scr_screens_soffer",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "p_scr_screens_soffer",
+          "kind": "view_model",
+          "name": "vm_runtime_root_scr_screens_soffer",
+          "data": {
+            "kind": "view_model",
+            "viewModelPathId": 439633278,
+            "properties": {
+              "state": {
+                "type": "object",
+                "propertyId": 2173293168,
+                "schema": {}
+              }
+            }
+          },
+          "type": "view_model",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "vmi_runtime_scr_screens_soffer",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "vm_runtime_root_scr_screens_soffer",
+          "orderKey": "a0",
+          "kind": "view_model_instance",
+          "name": "Untitled",
+          "data": {
+            "kind": "view_model_instance",
+            "values": {
+              "state": {}
+            }
+          },
+          "type": "view_model_instance",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets::artboard_tree",
+          "orderKey": "c_scr_screens_ssaved",
+          "kind": "artboard",
+          "name": "saved",
+          "data": {
+            "kind": "artboard",
+            "isComponent": false,
+            "canvas": {
+              "dimensions": {
+                "width": 402,
+                "height": 874
+              },
+              "deviceName": "iPhone 17 Pro",
+              "canvasOwnerId": "experience:sdk-parla-sheets",
+              "dragRole": "member"
+            },
+            "stateDeclarations": [],
+            "viewModelDefaults": {
+              "viewModelId": "vm_runtime_root_scr_screens_ssaved",
+              "instanceId": "vmi_runtime_scr_screens_ssaved"
+            }
+          },
+          "type": "artboard",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::view_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved",
+          "orderKey": "a0",
+          "kind": "view_tree",
+          "name": "View Tree",
+          "data": {
+            "kind": "view_tree"
+          },
+          "type": "view_tree",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::animation_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved",
+          "orderKey": "a1",
+          "kind": "animation_tree",
+          "name": "Animation Tree",
+          "data": {
+            "kind": "animation_tree"
+          },
+          "type": "animation_tree",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::capability_tree",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved",
+          "orderKey": "a2",
+          "kind": "capability_tree",
+          "name": "Capability Tree",
+          "data": {
+            "kind": "capability_tree"
+          },
+          "type": "capability_tree",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::v1",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::view_tree",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "root",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "View",
+              "props": {
+                "style": {
+                  "backgroundColor": "#F7F5ED",
+                  "columnGap": 12,
+                  "display": "flex",
+                  "flexDirection": "column",
+                  "paddingBottom": 24,
+                  "paddingLeft": 24,
+                  "paddingRight": 24,
+                  "paddingTop": 24,
+                  "rowGap": 12,
+                  "width": "100%"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::v2",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::v1",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "h1",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 28,
+                  "fontWeight": "600",
+                  "lineHeight": "32px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "Saved!",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::v3",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::v1",
+          "orderKey": "a1",
+          "kind": "view",
+          "name": "p",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#173D2F",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "lineHeight": "24px",
+                  "marginBottom": 0,
+                  "marginLeft": 0,
+                  "marginRight": 0,
+                  "marginTop": 0
+                }
+              },
+              "text": "Your Parla Plus offer is ready when you are.",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#173D2F"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::v4",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::v1",
+          "orderKey": "a2",
+          "kind": "view",
+          "name": "done",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Pressable",
+              "focusable": true,
+              "props": {
+                "style": {
+                  "alignItems": "center",
+                  "backgroundColor": "#173D2F",
+                  "borderBottomLeftRadius": 26,
+                  "borderBottomRightRadius": 26,
+                  "borderTopLeftRadius": 26,
+                  "borderTopRightRadius": 26,
+                  "display": "flex",
+                  "height": 52,
+                  "justifyContent": "center",
+                  "width": "100%"
+                }
+              }
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::v5",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::v4",
+          "orderKey": "a0",
+          "kind": "view",
+          "name": "Text",
+          "data": {
+            "kind": "view",
+            "viewKind": "content",
+            "view": {
+              "type": "View",
+              "systemId": "Text",
+              "props": {
+                "style": {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "text": {
+                    "value": "Back to learning",
+                    "runs": [
+                      {
+                        "id": "scr_screens_ssaved::v5~r0",
+                        "text": "Back to learning",
+                        "style": {
+                          "fontSize": 16,
+                          "fontWeight": "600",
+                          "lineHeight": "24px"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "text": "Back to learning"
+            }
+          },
+          "type": "view",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "vm_runtime_root_scr_screens_ssaved",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "p_scr_screens_ssaved",
+          "kind": "view_model",
+          "name": "vm_runtime_root_scr_screens_ssaved",
+          "data": {
+            "kind": "view_model",
+            "viewModelPathId": 443193769,
+            "properties": {
+              "state": {
+                "type": "object",
+                "propertyId": 2173293168,
+                "schema": {}
+              }
+            }
+          },
+          "type": "view_model",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "vmi_runtime_scr_screens_ssaved",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "vm_runtime_root_scr_screens_ssaved",
+          "orderKey": "a0",
+          "kind": "view_model_instance",
+          "name": "Untitled",
+          "data": {
+            "kind": "view_model_instance",
+            "values": {
+              "state": {}
+            }
+          },
+          "type": "view_model_instance",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "jrt_5053e3edc05ef89c49eed64226bc78b372691121da9c7c6f793baa347284f790",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets::journey_root",
+          "orderKey": "0000000673637265656e000000127363725f73637265656e735f736f666665720000000473617665",
+          "kind": "journey_route",
+          "name": "save",
+          "data": {
+            "kind": "journey_route",
+            "host": {
+              "kind": "screen",
+              "screenId": "scr_screens_soffer"
+            },
+            "eventName": "save",
+            "payloadSchema": {
+              "type": "object",
+              "fields": [],
+              "additionalProperties": false
+            }
+          },
+          "type": "journey_route",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "jrt_7d213d703ef3531130b6de2d8b89e6fee2f650cfb582006bb26e1ff4258274cd",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets::journey_root",
+          "orderKey": "0000000673637265656e000000127363725f73637265656e735f73736176656400000004646f6e65",
+          "kind": "journey_route",
+          "name": "done",
+          "data": {
+            "kind": "journey_route",
+            "host": {
+              "kind": "screen",
+              "screenId": "scr_screens_ssaved"
+            },
+            "eventName": "done",
+            "payloadSchema": {
+              "type": "object",
+              "fields": [],
+              "additionalProperties": false
+            }
+          },
+          "type": "journey_route",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "jrt_81eb0ca0996a8f671f52a85431d31437ca33dd8bce06e0a77d0cfa900eb8fc41",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets::journey_root",
+          "orderKey": "0000000673637265656e000000137363725f73637265656e735f736c6573736f6e000000056f66666572",
+          "kind": "journey_route",
+          "name": "offer",
+          "data": {
+            "kind": "journey_route",
+            "host": {
+              "kind": "screen",
+              "screenId": "scr_screens_slesson"
+            },
+            "eventName": "offer",
+            "payloadSchema": {
+              "type": "object",
+              "fields": [],
+              "additionalProperties": false
+            }
+          },
+          "type": "journey_route",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::journey_root::v1",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets::experience_intent",
+          "orderKey": "70726f6772616d:a0",
+          "kind": "journey_action",
+          "name": "navigate",
+          "data": {
+            "kind": "journey_action",
+            "action": {
+              "type": "navigate",
+              "screenId": "scr_screens_slesson"
+            }
+          },
+          "type": "journey_action",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::journey_root::v2",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "jrt_81eb0ca0996a8f671f52a85431d31437ca33dd8bce06e0a77d0cfa900eb8fc41",
+          "orderKey": "70726f6772616d:a0",
+          "kind": "journey_action",
+          "name": "navigate",
+          "data": {
+            "kind": "journey_action",
+            "action": {
+              "type": "navigate",
+              "screenId": "scr_screens_soffer",
+              "transition": {
+                "type": "modal",
+                "present": "sheet",
+                "height": "medium",
+                "closedby": "any"
+              }
+            }
+          },
+          "type": "journey_action",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::journey_root::v3",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "jrt_5053e3edc05ef89c49eed64226bc78b372691121da9c7c6f793baa347284f790",
+          "orderKey": "70726f6772616d:a0",
+          "kind": "journey_action",
+          "name": "navigate",
+          "data": {
+            "kind": "journey_action",
+            "action": {
+              "type": "navigate",
+              "screenId": "scr_screens_ssaved",
+              "transition": {
+                "type": "modal",
+                "present": "sheet",
+                "height": "fit-content",
+                "closedby": "any"
+              }
+            }
+          },
+          "type": "journey_action",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "sdk-parla-sheets::journey_root::v4",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "jrt_7d213d703ef3531130b6de2d8b89e6fee2f650cfb582006bb26e1ff4258274cd",
+          "orderKey": "70726f6772616d:a0",
+          "kind": "journey_action",
+          "name": "dismiss",
+          "data": {
+            "kind": "journey_action",
+            "action": {
+              "type": "dismiss",
+              "reason": "offer_saved"
+            }
+          },
+          "type": "journey_action",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v1::bind::style-padding-bottom::c0",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "a0",
+          "kind": "converter",
+          "name": "Untitled",
+          "data": {
+            "kind": "converter",
+            "bindingLocal": true,
+            "converter": {
+              "type": "formula",
+              "expr": "(value + 24)"
+            }
+          },
+          "type": "converter",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::v1::bind::style-padding-top::c0",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "a0",
+          "kind": "converter",
+          "name": "Untitled",
+          "data": {
+            "kind": "converter",
+            "bindingLocal": true,
+            "converter": {
+              "type": "formula",
+              "expr": "(value + 24)"
+            }
+          },
+          "type": "converter",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::machine",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::animation_tree",
+          "orderKey": "m0",
+          "kind": "state_machine",
+          "name": "Handlers",
+          "data": {
+            "kind": "state_machine",
+            "events": [
+              {
+                "id": "scr_screens_slesson::v10::on-click::a0::event",
+                "name": "offer",
+                "properties": []
+              }
+            ],
+            "inputs": [],
+            "listeners": [
+              {
+                "id": "scr_screens_slesson::v10::on-click",
+                "name": "offer click",
+                "targetObjectKey": "scr_screens_slesson::v10",
+                "listenerType": "click",
+                "actions": [
+                  {
+                    "id": "scr_screens_slesson::v10::on-click::a0",
+                    "type": "fireEvent",
+                    "eventId": "scr_screens_slesson::v10::on-click::a0::event"
+                  }
+                ]
+              },
+              {
+                "id": "scr_screens_slesson::v10::on-click::semantic-tap",
+                "name": "offer click",
+                "targetObjectKey": "scr_screens_slesson::v10",
+                "listenerType": "semantic",
+                "actions": [
+                  {
+                    "id": "scr_screens_slesson::v10::on-click::semantic-tap::a0",
+                    "type": "fireEvent",
+                    "eventId": "scr_screens_slesson::v10::on-click::a0::event"
+                  }
+                ],
+                "semanticAction": "tap"
+              }
+            ],
+            "instantiateOnNestedOccurrence": false,
+            "authoredMachine": false
+          },
+          "type": "state_machine",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::machine::layer",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::machine",
+          "orderKey": "a0",
+          "kind": "state_machine_layer",
+          "name": "Handlers",
+          "data": {
+            "kind": "state_machine_layer",
+            "generated": true
+          },
+          "type": "state_machine_layer",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::machine::layer::entry",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::machine::layer",
+          "orderKey": "a0",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "entry"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::machine::layer::any",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::machine::layer",
+          "orderKey": "a1",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "any"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_slesson::machine::layer::exit",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_slesson::machine::layer",
+          "orderKey": "a2",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "exit"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_slesson",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::v1::bind::style-padding-bottom::c0",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "sdk-parla-sheets",
+          "orderKey": "a0",
+          "kind": "converter",
+          "name": "Untitled",
+          "data": {
+            "kind": "converter",
+            "bindingLocal": true,
+            "converter": {
+              "type": "formula",
+              "expr": "(value + 16)"
+            }
+          },
+          "type": "converter",
+          "screenId": null,
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::machine",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::animation_tree",
+          "orderKey": "m0",
+          "kind": "state_machine",
+          "name": "Handlers",
+          "data": {
+            "kind": "state_machine",
+            "events": [
+              {
+                "id": "scr_screens_soffer::v8::on-click::a0::event",
+                "name": "save",
+                "properties": []
+              }
+            ],
+            "inputs": [],
+            "listeners": [
+              {
+                "id": "scr_screens_soffer::v8::on-click",
+                "name": "save click",
+                "targetObjectKey": "scr_screens_soffer::v8",
+                "listenerType": "click",
+                "actions": [
+                  {
+                    "id": "scr_screens_soffer::v8::on-click::a0",
+                    "type": "fireEvent",
+                    "eventId": "scr_screens_soffer::v8::on-click::a0::event"
+                  }
+                ]
+              },
+              {
+                "id": "scr_screens_soffer::v8::on-click::semantic-tap",
+                "name": "save click",
+                "targetObjectKey": "scr_screens_soffer::v8",
+                "listenerType": "semantic",
+                "actions": [
+                  {
+                    "id": "scr_screens_soffer::v8::on-click::semantic-tap::a0",
+                    "type": "fireEvent",
+                    "eventId": "scr_screens_soffer::v8::on-click::a0::event"
+                  }
+                ],
+                "semanticAction": "tap"
+              }
+            ],
+            "instantiateOnNestedOccurrence": false,
+            "authoredMachine": false
+          },
+          "type": "state_machine",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::machine::layer",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::machine",
+          "orderKey": "a0",
+          "kind": "state_machine_layer",
+          "name": "Handlers",
+          "data": {
+            "kind": "state_machine_layer",
+            "generated": true
+          },
+          "type": "state_machine_layer",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::machine::layer::entry",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::machine::layer",
+          "orderKey": "a0",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "entry"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::machine::layer::any",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::machine::layer",
+          "orderKey": "a1",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "any"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_soffer::machine::layer::exit",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_soffer::machine::layer",
+          "orderKey": "a2",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "exit"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_soffer",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::machine",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::animation_tree",
+          "orderKey": "m0",
+          "kind": "state_machine",
+          "name": "Handlers",
+          "data": {
+            "kind": "state_machine",
+            "events": [
+              {
+                "id": "scr_screens_ssaved::v4::on-click::a0::event",
+                "name": "done",
+                "properties": []
+              }
+            ],
+            "inputs": [],
+            "listeners": [
+              {
+                "id": "scr_screens_ssaved::v4::on-click",
+                "name": "done click",
+                "targetObjectKey": "scr_screens_ssaved::v4",
+                "listenerType": "click",
+                "actions": [
+                  {
+                    "id": "scr_screens_ssaved::v4::on-click::a0",
+                    "type": "fireEvent",
+                    "eventId": "scr_screens_ssaved::v4::on-click::a0::event"
+                  }
+                ]
+              },
+              {
+                "id": "scr_screens_ssaved::v4::on-click::semantic-tap",
+                "name": "done click",
+                "targetObjectKey": "scr_screens_ssaved::v4",
+                "listenerType": "semantic",
+                "actions": [
+                  {
+                    "id": "scr_screens_ssaved::v4::on-click::semantic-tap::a0",
+                    "type": "fireEvent",
+                    "eventId": "scr_screens_ssaved::v4::on-click::a0::event"
+                  }
+                ],
+                "semanticAction": "tap"
+              }
+            ],
+            "instantiateOnNestedOccurrence": false,
+            "authoredMachine": false
+          },
+          "type": "state_machine",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::machine::layer",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::machine",
+          "orderKey": "a0",
+          "kind": "state_machine_layer",
+          "name": "Handlers",
+          "data": {
+            "kind": "state_machine_layer",
+            "generated": true
+          },
+          "type": "state_machine_layer",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::machine::layer::entry",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::machine::layer",
+          "orderKey": "a0",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "entry"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::machine::layer::any",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::machine::layer",
+          "orderKey": "a1",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "any"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        },
+        {
+          "id": "scr_screens_ssaved::machine::layer::exit",
+          "projectId": "sdk-parla-sheets",
+          "parentId": "scr_screens_ssaved::machine::layer",
+          "orderKey": "a2",
+          "kind": "layer_state",
+          "name": "Untitled",
+          "data": {
+            "kind": "layer_state",
+            "type": "exit"
+          },
+          "type": "layer_state",
+          "screenId": "scr_screens_ssaved",
+          "userId": null,
+          "appId": null,
+          "path": null
+        }
+      ]
+    },
+    "designSystem": {
+      "screenDesignSystems": [
+        {
+          "screenId": "scr_screens_slesson",
+          "designSystemId": null,
+          "designSystemIds": [
+            "file:styles/common.css"
+          ],
+          "tokenSources": {},
+          "overrides": null
+        },
+        {
+          "screenId": "scr_screens_soffer",
+          "designSystemId": null,
+          "designSystemIds": [
+            "file:styles/common.css"
+          ],
+          "tokenSources": {},
+          "overrides": null
+        },
+        {
+          "screenId": "scr_screens_ssaved",
+          "designSystemId": null,
+          "designSystemIds": [
+            "file:styles/common.css"
+          ],
+          "tokenSources": {},
+          "overrides": null
+        }
+      ],
+      "designSystems": [
+        {
+          "id": "file:styles/common.css",
+          "designSystemId": "file:styles/common.css",
+          "name": "styles/common.css",
+          "tokens": {},
+          "textStyles": [
+            {
+              "id": "brand",
+              "key": "brand",
+              "name": "brand",
+              "declarations": {
+                "font-size": "13px",
+                "font-weight": "600",
+                "line-height": "18px"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "problems": [],
+  "platforms": [
+    "ios:apple_app_store"
+  ],
+  "media": [],
+  "keptScreenIds": {}
+}

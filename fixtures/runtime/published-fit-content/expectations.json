@@ -1,5 +1,5 @@
 {
-  "oracle": "Typed from authored source: 16 + 120 + 16 = 152; supplied Fixed height 700. Never derived from emitted records.",
+  "oracle": "Authored source arithmetic: 16 + 120 + 16 = 152; supplied Fixed height 700. Never derived from emitted records.",
   "widths": [
     300,
     500

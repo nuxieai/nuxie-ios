@@ -2,6 +2,47 @@ import XCTest
 import Vision
 
 final class ParlaSheetPresentationTests: XCTestCase {
+    func testPublishedParlaLargeSheetRejectsSwipeDismissal() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--nuxie-sheets-qualification", "--nuxie-sheets-large"]
+        app.launch()
+        let start = app.buttons["start-accessibility-journey"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        start.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "SDK started;")).firstMatch.waitForExistence(timeout: 10))
+        app.buttons["open-parla-lesson"].tap()
+        let lesson = screen("scr_screens_slesson", app: app)
+        waitForPresentation(lesson)
+        let fullHeight = lesson.frame.height
+        let full = try capture("ios-large-underlay", text: "Say hello")
+        try tap("Explore Parla Plus", observations: full, app: app)
+
+        let offer = screen("scr_screens_soffer", app: app)
+        waitForPresentation(offer)
+        let largeFrame = offer.frame
+        // A native large detent fills the available height below platform chrome.
+        // The bound uses the running device, not the authored artboard's size.
+        XCTAssertGreaterThan(largeFrame.height, fullHeight * 0.8)
+        XCTAssertLessThanOrEqual(largeFrame.height, fullHeight)
+        _ = try capture("ios-large", text: "Special offer")
+        swipeSheet(offer, app: app)
+        let afterSwipe = try capture("ios-large-swipe-blocked", text: "Special offer")
+        waitForPresentation(offer)
+        XCTAssertEqual(offer.frame, largeFrame, "closedby none keeps the native large sheet mounted")
+
+        // Blocking system dismissal must leave the authored control usable.
+        try tap("Save this offer", observations: afterSwipe, app: app)
+        let saved = screen("scr_screens_ssaved", app: app)
+        waitForPresentation(saved)
+        XCTAssertLessThan(saved.frame.height, largeFrame.height)
+        _ = try capture("ios-large-fit-content", text: "Saved!")
+        swipeSheet(saved, app: app)
+        _ = try capture("ios-large-revealed", text: "Special offer")
+        XCTAssertFalse(saved.exists)
+        XCTAssertTrue(offer.exists)
+        XCTAssertEqual(offer.frame, largeFrame)
+    }
+
     func testPublishedParlaSheetsAndSwipeDismissal() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--nuxie-sheets-qualification"]

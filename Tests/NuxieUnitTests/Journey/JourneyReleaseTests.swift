@@ -9,9 +9,18 @@ final class JourneyReleaseTests: XCTestCase {
     private let signingKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
 
     func testPublishedParlaAuthenticatesAllThreePresentations() throws {
-        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        try assertPublishedParla(variant: "", offerHeight: "medium", offerClosedby: "any")
+    }
+
+    func testPublishedParlaLargeJourneyAuthenticatesNonDismissibleSheet() throws {
+        try assertPublishedParla(variant: "variants/large", offerHeight: "large", offerClosedby: "none")
+    }
+
+    private func assertPublishedParla(variant: String, offerHeight: String, offerClosedby: String) throws {
+        let base = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/journeys/parla-sheets")
+        let directory = variant.isEmpty ? base : base.appendingPathComponent(variant)
         let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
             from: Data(contentsOf: directory.appendingPathComponent("release-entry.json")))
         let bytes = try Data(contentsOf: directory.appendingPathComponent("descriptor.json"))
@@ -24,16 +33,37 @@ final class JourneyReleaseTests: XCTestCase {
         let descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         let presentation = try XCTUnwrap(descriptor["presentation"] as? [String: String])
         XCTAssertEqual(presentation, ["orientation": "any", "backgroundColor": "#000000FF"])
+        let render = try XCTUnwrap(descriptor["render"] as? [String: Any])
+        let screens = try XCTUnwrap(render["screens"] as? [[String: Any]])
+        XCTAssertEqual(screens.count, 3)
+        for screen in screens {
+            // All three source frames choose iphone-17-pro, whose compiler
+            // preset is 402 x 874 points. Native sheet heights remain host-owned.
+            XCTAssertEqual(screen["width"] as? Int, 402)
+            XCTAssertEqual(screen["height"] as? Int, 874)
+        }
         let leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
         let steps = try XCTUnwrap(leg["steps"] as? [[String: Any]])
         let navigations = steps.compactMap { $0["action"] as? [String: Any] }.filter { $0["type"] as? String == "navigate" }
-        for (screen, height) in [("scr_screens_soffer", "medium"), ("scr_screens_ssaved", "fit-content")] {
+        for (screen, height, closedby) in [("scr_screens_soffer", offerHeight, offerClosedby), ("scr_screens_ssaved", "fit-content", "any")] {
             let action = try XCTUnwrap(navigations.first { $0["screenId"] as? String == screen })
             let transition = try XCTUnwrap(action["transition"] as? [String: String])
-            XCTAssertEqual(transition, ["type": "modal", "present": "sheet", "height": height, "closedby": "any"])
+            XCTAssertEqual(transition, ["type": "modal", "present": "sheet", "height": height, "closedby": closedby])
         }
         let lesson = try XCTUnwrap(navigations.first { $0["screenId"] as? String == "scr_screens_slesson" })
         XCTAssertNil(lesson["transition"])
+        let values = try XCTUnwrap(descriptor["viewModelValues"] as? [[String: Any]])
+        let roots = try XCTUnwrap(leg["screens"] as? [[String: Any]])
+        for root in roots {
+            let instance = try XCTUnwrap(root["defaultInstanceId"] as? String)
+            let defaults = values.filter { $0["instanceId"] as? String == instance }
+            // The shared lifecycle declaration starts hidden, with no prior
+            // appearances or transition. Additional published defaults survive.
+            XCTAssertEqual(defaults.first { $0["path"] as? String == "screen/phase" }?["value"] as? String, "hidden")
+            XCTAssertEqual(defaults.first { $0["path"] as? String == "screen/appearances" }?["value"] as? Int, 0)
+            XCTAssertEqual(defaults.first { $0["path"] as? String == "screen/transition" }?["value"] as? String, "")
+            XCTAssertEqual(defaults.first { $0["path"] as? String == "env/reduceMotion" }?["value"] as? Bool, false)
+        }
     }
 
     func testSignedV3NestedObjectPolicyAuthenticatesExactMetadata() throws {
