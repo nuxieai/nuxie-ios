@@ -170,7 +170,7 @@ shared test fixtures; do not add a service locator or hidden global resolution.
   pixel proofs are not copied into this public SDK.
 - Presentation-shell review uses a separate corpus,
   `Tests/ExperienceRuntimeHostApp/PresentationStates/`, whose fixtures differ
-  only in their signed `presentation` block. Keep presentation-mode and
+  only in their signed presentation background. Keep
   background scenarios there so the cross-SDK renderer contract in
   `Fixtures/` stays about renderer semantics. Both are regenerated from the
   parent repo (`tests/e2e/ios/scripts/refresh-sdk-presentation-state-fixtures.mjs`).
@@ -181,7 +181,7 @@ shared test fixtures; do not add a service locator or hidden global resolution.
 
 ### Reviewing the presentation shell on device
 
-The loading, recovery, warm, and per-mode presentation
+The loading, recovery, and warm presentation
 states are only assessable while presented, and the interesting ones never
 occur on a healthy cache. Drive them through the ordinary authenticated path:
 

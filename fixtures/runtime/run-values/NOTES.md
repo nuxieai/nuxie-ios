@@ -8,7 +8,7 @@ The device screen reads env.reduceMotion and env.safeArea.top. Its motion-note c
 
 The file's env global holds only reduceMotion and safeArea (top, bottom, left, right). env-schema.json is copied byte for byte from packages/models/src/env-schema.json and lists all eight device values. The other six (width, height, fontScale, colorScheme, platform, locale) come with every device value [D2.51] after the merge, per Levi's M7. Empty screen/tips_seen and conditional Journey branches remain outside this cut.
 
-Each platform hands each screen the one env instance by name using nux_player_set_global_view_model from release 0.10.13 and 0.4.11. This fixture's own check uses the host data-context slot at runtime 32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be, whose C API has no global-install call. Catalog shape is checked through the read-only C catalog; behavior is checked through the host layer.
+Each mounted screen owns a separate env instance, bound by name using nux_player_set_global_view_model from release 0.10.13 and 0.4.11. A covered layer retains its mounted screen and env instance; it stays active, and its env dimensions describe its own available space. Revealing the layer reuses that instance. This fixture's own check uses the host data-context slot at runtime 32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be, whose C API has no global-install call. Catalog shape is checked through the read-only C catalog; behavior is checked through the host layer.
 
 ## Publication and provenance
 
