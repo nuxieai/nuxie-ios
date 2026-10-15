@@ -1,6 +1,6 @@
 {
-  "compilerSource": "69790050f3fc53da4e890bcde7eb7b67c1149902",
-  "cleanParentHead": "69790050f3fc53da4e890bcde7eb7b67c1149902",
+  "compilerSource": "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d",
+  "cleanParentHead": "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d",
   "source": "tests/fixtures/e2e-experience-files/presentation-sheets",
   "sources": {
     "tests/fixtures/e2e-experience-files/presentation-sheets/experience.json": {
@@ -65,7 +65,7 @@
     "tools/sdk-fixtures/sheets/published-fit-content",
     "tools/sdk-fixtures/sheets/parla-large/experience.json",
     "<output-root>",
-    "69790050f3fc53da4e890bcde7eb7b67c1149902"
+    "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d"
   ],
   "commands": [
     [
@@ -77,7 +77,7 @@
       "tools/sdk-fixtures/sheets/published-fit-content",
       "tools/sdk-fixtures/sheets/parla-large/experience.json",
       "<output-root>",
-      "69790050f3fc53da4e890bcde7eb7b67c1149902"
+      "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d"
     ]
   ],
   "signing": {
