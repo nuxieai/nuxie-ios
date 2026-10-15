@@ -670,7 +670,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let opensLayer = spec.kind == .modal && !isBack
         let isRetainedTarget = sourceLayer?.viewControllers.contains(where: { $0 === targetController }) == true
         if opensLayer {
-            guard (activeController ?? hostViewController)?.presentedViewController == nil else {
+            guard ((sourceLayer as UIViewController?) ?? hostViewController)?.presentedViewController == nil else {
                 throw ExperienceScreenTransitionCoordinatorError.presenterBusy
             }
             var available = hostViewController?.view.window?.bounds.size
@@ -1041,7 +1041,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         animated: Bool,
         completion: @escaping Completion
     ) throws {
-        guard let presenter = activeController ?? hostViewController,
+        // Present from the retained native layer container, not its screen child.
+        // This makes UIKit's sheet presentation chain match Journey layer ownership.
+        guard let presenter = (navigationController as UIViewController?) ?? hostViewController,
               let cache = pendingModalCache else {
             throw ExperienceScreenTransitionCoordinatorError.hostUnavailable
         }
