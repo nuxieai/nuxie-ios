@@ -356,7 +356,7 @@ final class ExperienceShellRecoveryView: UIView {
         actionButton.addAction(UIAction { _ in onRetry() }, for: .touchUpInside)
 
         // The surface has to survive geometry the descriptor can legitimately
-        // sign. A drawer may take a small fraction of the screen, and Dynamic
+        // sign. A sheet may take a small fraction of the screen, and Dynamic
         // Type can push this copy past even a full screen, so the content
         // scrolls rather than forcing UIKit to break a constraint and overlap
         // the action with the copy exactly when loading has already failed.
@@ -457,7 +457,7 @@ final class ExperienceShellRecoveryView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // A drawer may be narrower than two full gutters; shrink them rather
+        // A sheet may be narrower than two full gutters; shrink them rather
         // than requiring a negative content width.
         let gutter = Self.gutter(for: bounds.width)
         guard let stackWidthConstraint,

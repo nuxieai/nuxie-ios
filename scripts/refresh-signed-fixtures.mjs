@@ -15,14 +15,9 @@ const profilePaths = [
   "Tests/ExperienceRuntimeHostApp/Fixtures/rendered-text-input/profile.json",
   "Tests/ExperienceRuntimeHostApp/Fixtures/multi-screen/profile.json",
   "Tests/ExperienceRuntimeHostApp/Fixtures/scripted-resources/profile.json",
-  "Tests/ExperienceRuntimeHostApp/PresentationStates/drawer-bottom/profile.json",
-  "Tests/ExperienceRuntimeHostApp/PresentationStates/drawer-trailing/profile.json",
   "Tests/ExperienceRuntimeHostApp/PresentationStates/full-screen-dark/profile.json",
   "Tests/ExperienceRuntimeHostApp/PresentationStates/full-screen-light/profile.json",
   "Tests/ExperienceRuntimeHostApp/PresentationStates/full-screen-midtone/profile.json",
-  "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-large/profile.json",
-  "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-medium/profile.json",
-  "Tests/ExperienceRuntimeHostApp/PresentationStates/sheet-non-dismissible/profile.json",
 ];
 const entryPaths = [
   "fixtures/journeys/rendered-text-input/release-entry.json",
