@@ -31,13 +31,32 @@ package enum ExperienceRuntimeFontFallbackProvider {
     /// Owns process-lifetime handles. The backing closure permits a counted
     /// file/table acquisition in tests without replacing CoreText selection.
     package final class Cache: @unchecked Sendable {
+        /// A file or disk failure is retried after this long, not on every shaping call.
+        package static let transientRetryInterval: TimeInterval = 30
+
+        /// What a failed acquisition leaves behind for one face identity.
+        private enum FailedFace {
+            /// Font data that CoreText or the runtime cannot use. OS font
+            /// bytes cannot change while the process runs.
+            case unusable
+            /// File or disk trouble. The face is not tried again until then.
+            case retryAfter(Date)
+        }
+
+        /// Runtime statuses that mean the font data itself was refused.
+        private static let unusableStatuses: Set<NuxieNativeStatus> = [.importError, .invalidArgument, .limitExceeded]
+
         private let lock = NSLock()
         private var characters: [UInt32: Resolution] = [:]
         private var fonts: [String: Resolution] = [:]
+        private var failures: [String: FailedFace] = [:]
         private let prepareBacking: (CTFont) throws -> Face
+        private let now: () -> Date
 
-        package init(prepareBacking: @escaping (CTFont) throws -> Face = ExperienceRuntimeFontFallbackProvider.backing) {
+        package init(prepareBacking: @escaping (CTFont) throws -> Face = ExperienceRuntimeFontFallbackProvider.backing,
+                     now: @escaping () -> Date = { Date() }) {
             self.prepareBacking = prepareBacking
+            self.now = now
         }
 
         package func resolve(_ missing: UInt32) -> Resolution? {
@@ -54,6 +73,14 @@ package enum ExperienceRuntimeFontFallbackProvider {
             let key = name + "#" + (url?.absoluteString ?? "")
             // Identity lookup precedes mapping, collection lookup and table copies.
             if let font = fonts[key] { characters[missing] = font; return font }
+            switch failures[key] {
+            case .unusable?:
+                return nil
+            case .retryAfter(let time)? where now() < time:
+                return nil
+            default:
+                break
+            }
             do {
                 let face = try prepareBacking(selected)
                 let coordinates = face.coordinates.map { NuxFontAxisCoord(axis: $0.axis, value: $0.value) }
@@ -105,16 +132,26 @@ package enum ExperienceRuntimeFontFallbackProvider {
                 }
                 guard status == NuxieNativeStatus.ok.rawValue, let font else {
                     context.release()
+                    let refused = NuxieNativeStatus(rawValue: status).map { Self.unusableStatuses.contains($0) } ?? false
+                    remember(key, unusable: refused)
                     return nil
                 }
+                failures[key] = nil
                 let resolution = Resolution(handle: font, postScriptName: name)
                 fonts[key] = resolution
                 characters[missing] = resolution
                 return resolution
             } catch {
-                // File access, extraction and runtime creation can recover later.
+                // Bad or unsupported table data stays failed; file and disk
+                // errors (writing the rebuilt face, folders) are retried later.
+                remember(key, unusable: error is ExperienceRuntimeFontData.Failure
+                    || error is ExperienceRuntimeSystemFontProvider.Failure)
                 return nil
             }
+        }
+
+        private func remember(_ key: String, unusable: Bool) {
+            failures[key] = unusable ? .unusable : .retryAfter(now().addingTimeInterval(Self.transientRetryInterval))
         }
     }
 
@@ -187,8 +224,13 @@ package enum ExperienceRuntimeFontFallbackProvider {
            let index = try? collectionIndex(in: data, font: font) {
             return Face(path: url.path, index: index, coordinates: coordinates)
         }
-        // Some OS faces expose tables but no readable sfnt. Extract once into
-        // SDK-owned immutable content storage, never once per Experience.
+        return try rebuiltBacking(for: font, coordinates: coordinates) { try rebuiltFontDirectory() }
+    }
+
+    /// Some OS faces expose tables but no readable sfnt. Extract once into
+    /// SDK-owned immutable content storage, never once per Experience.
+    package static func rebuiltBacking(for font: CTFont, coordinates: [Coordinate],
+                                       directory: () throws -> URL) throws -> Face {
         guard let available = CTFontCopyAvailableTables(font, []) else {
             throw ExperienceRuntimeSystemFontProvider.Failure.unavailableTables
         }
@@ -204,29 +246,33 @@ package enum ExperienceRuntimeFontFallbackProvider {
         let data = try ExperienceRuntimeFontData.assemble(.init(version: version, tables: tables),
             maximumBytes: 256 * 1_024 * 1_024)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let root = try rebuiltFontDirectory()
+        let root = try directory()
         let url = root.appendingPathComponent(digest + ".ttf")
         if !FileManager.default.fileExists(atPath: url.path) { try data.write(to: url, options: .atomic) }
         return Face(path: url.path, index: 0, coordinates: coordinates)
     }
 
-    private static func rebuiltFontDirectory() throws -> URL {
+    package static func rebuiltFontDirectory(parent: URL? = nil,
+            operatingSystem os: String = ProcessInfo.processInfo.operatingSystemVersionString) throws -> URL {
         let manager = FileManager.default
-        var parent = try manager.url(for: .cachesDirectory,
+        var parent = try parent ?? manager.url(for: .cachesDirectory,
             in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("Nuxie/SystemFontFallbacks", isDirectory: true)
         try manager.createDirectory(at: parent, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try parent.setResourceValues(values)
-        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        // As DiskCache does: backup exclusion is best effort, never a reason to fail.
+        try? parent.setResourceValues(values)
         let version = SHA256.hash(data: Data(os.utf8)).prefix(12)
             .map { String(format: "%02x", $0) }.joined()
-        let root = parent.appendingPathComponent("os-" + version, isDirectory: true)
+        let current = "os-" + version
+        let root = parent.appendingPathComponent(current, isDirectory: true)
         try manager.createDirectory(at: root, withIntermediateDirectories: true)
         let olderDirectories = (try? manager.contentsOfDirectory(at: parent,
             includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        for older in olderDirectories where older.lastPathComponent.hasPrefix("os-") && older != root {
+        // Compare folder names; listed URLs need not spell the path the same way.
+        for older in olderDirectories
+            where older.lastPathComponent.hasPrefix("os-") && older.lastPathComponent != current {
             if (try? older.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                 try? manager.removeItem(at: older)
             }
