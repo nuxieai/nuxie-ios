@@ -27,6 +27,7 @@ final class ExperienceVideoPlayback {
         var ended = false
         var seeking = false
         var frameRequestedAfterSeek = false
+        var lastPresentedTime: Double?
         var wantsPlay = false
         var failed = false
         var disposed = false
@@ -552,6 +553,7 @@ final class ExperienceVideoPlayback {
                         let presentationSeconds = displayTime.seconds.isFinite ? displayTime.seconds : clock
                         try await runtime.videoPresent(componentID: decoder.componentID, generation: generation,
                             seconds: presentationSeconds, pixelBuffer: NuxieNativeVideoPixelBuffer(buffer))
+                        decoder.lastPresentedTime = presentationSeconds
                         deliveredFrames += 1
                     }
                 }
@@ -618,7 +620,7 @@ final class ExperienceVideoPlayback {
     }
 
     var playbackDiagnostics: String {
-        decoders.map { "id=\($0.componentID) generation=\($0.generation) time=\($0.player.currentTime().seconds) rate=\($0.player.rate) seeking=\($0.seeking) wants=\($0.wantsPlay) failed=\($0.failed) suspension=\(suspensionReasons)" }.joined(separator: "; ")
+        decoders.map { "id=\($0.componentID) generation=\($0.generation) time=\($0.player.currentTime().seconds) presented=\(String(describing: $0.lastPresentedTime)) rate=\($0.player.rate) seeking=\($0.seeking) wants=\($0.wantsPlay) failed=\($0.failed) suspension=\(suspensionReasons)" }.joined(separator: "; ")
     }
 
     func close() {
