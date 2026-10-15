@@ -169,16 +169,33 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
             let sheet = try XCTUnwrap(layers.last)
             let closing = try XCTUnwrap(sheet.topViewController as? ExperienceScreenViewController)
             let presentation = try XCTUnwrap(sheet.presentationController)
+            // Warm the sheet's target, then hold the closing screen's runtime lane
+            // so its navigation exit is still in flight when the swipe completes.
+            try await self.navigate(coordinator, to: "reason-target")
+            try await self.navigate(coordinator, to: closing.screenId)
+            XCTAssertTrue(sheet.topViewController === closing)
+            probe.active.removeAll()
+            let loop = try self.field(closing, "presentationLoop", as: ExperienceRuntimePresentationLoop.self)
+            let gate = AsyncStream<Void>.makeStream()
+            defer { gate.continuation.yield(()); gate.continuation.finish() }
+            XCTAssertTrue(loop.enqueue(ExperienceRuntimePresentationQueuedWork {
+                for await _ in gate.stream { break }
+                return .work(requestsFrame: false) {}
+            }))
             var result: ExperienceScreenNavigationResult?
             XCTAssertTrue(coordinator.navigate(to: "reason-target", transition: nil) { value, _ in result = value })
             try await self.waitUntil { closing.lifecyclePhase == .exiting }
             await withCheckedContinuation { continuation in sheet.dismiss(animated: false) { continuation.resume() } }
             coordinator.presentationControllerDidDismiss(presentation)
-            try await self.waitUntil { result != nil }
+            try await self.waitUntil { coordinator.layerScreenIds.count == 1 }
+            XCTAssertNil(result, "The navigation exit is still held when the swipe completes")
+            gate.continuation.yield(())
+            gate.continuation.finish()
+            try await self.waitUntil { result != nil && probe.active.contains(source.screenId) }
             XCTAssertEqual(result, .superseded)
             XCTAssertEqual(coordinator.layerScreenIds, [[source.screenId]])
             XCTAssertEqual(source.lifecyclePhase, .active)
-            XCTAssertFalse(probe.active.contains("reason-target"))
+            XCTAssertEqual(probe.active, [source.screenId], "One routing reveal, and the removed target never activates")
         }
     }
     #endif
