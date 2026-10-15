@@ -1,5 +1,5 @@
 {
-  "source": "/Users/levi/dev/nuxie-codex/runtime-global-fixture",
+  "source": "nuxieai/nuxie-runtime",
   "commit": "3bbd68e35e8c6f7aa1423c5336203f62fdc58b50",
   "commands": [
     [
@@ -9,24 +9,24 @@
       "nuxie_schema",
       "--crate-type",
       "rlib",
-      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/source/crates/nuxie-schema/src/lib.rs",
+      "source/crates/nuxie-schema/src/lib.rs",
       "-o",
-      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/libnuxie_schema.rlib"
+      "libnuxie_schema.rlib"
     ],
     [
       "rustc",
       "--edition=2024",
       "-A",
       "dead_code",
-      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/export.rs",
+      "export.rs",
       "--extern",
-      "nuxie_schema=/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/libnuxie_schema.rlib",
+      "nuxie_schema=libnuxie_schema.rlib",
       "-o",
-      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/export"
+      "export"
     ],
     [
-      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/export",
-      "/Users/levi/dev/nuxie-codex/codex-sdk-combined-base-notes/global-matrix/globals.riv"
+      "./export",
+      "globals.riv"
     ]
   ],
   "sha256": "b8413e12898cd32469157081befc3d5361afe5e22265cb53edccdaeb295aeca3",
@@ -44,5 +44,8 @@
       },
       "sizeBytes": 341
     }
-  }
+  },
+  "parentRepository": "nuxie-dev",
+  "parentSourcePath": "third_party/nuxie-runtime/crates/nux-capi/tests/support/global_values.rs",
+  "commandWorkingDirectory": "Historical export directory: source/ contains files from the recorded runtime commit; export.rs writes global_values::fixture(false) to argv[1]. The wrapper is not a committed parent tool."
 }
