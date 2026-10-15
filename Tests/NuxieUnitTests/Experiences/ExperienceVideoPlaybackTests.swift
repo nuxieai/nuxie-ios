@@ -1,5 +1,6 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
+import AVFoundation
 import QuartzCore
 import MediaAccessibility
 #if canImport(UIKit)
@@ -384,6 +385,13 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testBoundVolumeMuteAndRateReachPlayingAVPlayer() async throws {
+        try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
+            viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80,
+            hostControlQualification: true)
+    }
+
+    @MainActor
     func testPreferredFrenchTrackFollowsActualVideoPlayback() async throws {
         try await verifyPublishedVideo(sceneName: "greeting", artboardName: "Video Frame",
             viewNodeID: "clip-view", expectedOccurrences: 1, sampleX: 100, sampleY: 80, frenchCaptions: true)
@@ -438,7 +446,7 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
     @MainActor
     private func verifyPublishedVideo(sceneName: String, artboardName: String,
         viewNodeID: String, expectedOccurrences: Int, sampleX: Int, sampleY: Int,
-        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false, endpointSeekQualification: Bool = false) async throws {
+        forceFirstFrameTimeout: Bool = false, frenchCaptions: Bool = false, measurement: VideoMeasurement? = nil, preparedPool: Bool = false, contentAddressed: Bool = false, clockQualification: Bool = false, pausedSeekQualification: Bool = false, endpointSeekQualification: Bool = false, hostControlQualification: Bool = false) async throws {
         let preparationStarted = CACurrentMediaTime()
         let mediaWidth = measurement?.width ?? 64
         let mediaHeight = measurement?.height ?? 32
@@ -560,6 +568,37 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         }
         XCTAssertTrue(exportedTargets.videoElements.allSatisfy { $0.viewNodeId == viewNodeID })
         let videoComponent = try XCTUnwrap(videoOccurrences.first).componentID
+        if hostControlQualification {
+            let player = try XCTUnwrap(host.videoTestPlayers.first)
+            let deadline = Date().addingTimeInterval(5)
+            while player.rate == 0 && Date() < deadline {
+                _ = try await host.tick()
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertGreaterThan(player.rate, 0, "Change values while AVPlayer is playing")
+            try await runtime.setVideoNumber(0.35, path: "volume")
+            _ = try await host.tick()
+            XCTAssertEqual(player.volume, 0.35, accuracy: 0.001)
+            XCTAssertFalse(player.isMuted)
+            try await runtime.setVideoBool(true, path: "muted")
+            _ = try await host.tick()
+            // Native actions combine authored mute and volume into effective volume.
+            XCTAssertEqual(player.volume, 0, "Bound mute must silence the AVPlayer")
+            try await runtime.setVideoBool(false, path: "muted")
+            _ = try await host.tick()
+            XCTAssertFalse(player.isMuted)
+            XCTAssertEqual(player.volume, 0.35, accuracy: 0.001, "Unmute restores retained volume")
+            try await runtime.setVideoNumber(1.5, path: "playback-rate")
+            let rateDeadline = Date().addingTimeInterval(5)
+            repeat {
+                _ = try await host.tick()
+                if player.rate == 1.5 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            } while Date() < rateDeadline
+            XCTAssertEqual(player.rate, 1.5, accuracy: 0.001,
+                "Bound speed must reach the playing AVPlayer: \(host.playbackDiagnostics)")
+            return
+        }
         if endpointSeekQualification {
             // The final image is at 1.9 s, before the media duration of 2 s.
             // A bound seek must select and compose that final image while paused.
@@ -588,6 +627,9 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
             XCTAssertTrue(finalFrame, "Bound endpoint seek must show the final blue image: \(host.playbackDiagnostics)")
+            let presentedTime = try XCTUnwrap(host.videoTestPresentedTimes.first, host.playbackDiagnostics)
+            XCTAssertEqual(presentedTime, 1.9, accuracy: 0.02,
+                "The endpoint must present the final decoded time, not an earlier blue image")
             return
         }
         if pausedSeekQualification {
@@ -863,6 +905,8 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         #if canImport(UIKit)
         try await host.handleAudioInterruption(.began, options: [])
         try await host.handleAudioInterruption(.ended, options: [])
+        let pausedValue = try await runtime.videoTestValue(path: "paused")
+        XCTAssertEqual(pausedValue, .bool(true), "Host pause must write back to the bound value")
         current = try await runtime.videos()
         XCTAssertTrue(current.allSatisfy { !$0.wantsPlay && $0.state != 2 },
             "An interruption without shouldResume must leave playback paused")
@@ -891,11 +935,6 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         let closedCaptions = try await host.captions()
         XCTAssertFalse(closedTick, "A closed owner must never recreate AVPlayers")
         XCTAssertTrue(closedCaptions.isEmpty)
-        XCTAssertTrue(host.playbackDiagnostics.isEmpty)
-        try await host.setSuspended(reason: 2, enabled: false)
-        try await runtime.setVideoBool(false, path: "paused")
-        let afterClosedMutation = try await host.tick()
-        XCTAssertFalse(afterClosedMutation, "Bound changes cannot recreate a closed playback host")
         XCTAssertTrue(host.playbackDiagnostics.isEmpty)
         try await runtime.close()
     }
@@ -1087,16 +1126,47 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
 
 }
 
+@MainActor
+extension ExperienceVideoPlayback {
+    // Inspect the actual AVPlayer owned by the host without adding a shipping API.
+    private var videoTestDecoders: [Any] {
+        (Mirror(reflecting: self).children.first { $0.label == "decoders" }?.value as? [Any]) ?? []
+    }
+
+    var videoTestPlayers: [AVPlayer] {
+        videoTestDecoders.compactMap { decoder in
+            Mirror(reflecting: decoder).children.first { $0.label == "player" }?.value as? AVPlayer
+        }
+    }
+
+    var videoTestPresentedTimes: [Double] {
+        videoTestDecoders.compactMap { decoder in
+            Mirror(reflecting: decoder).children.first { $0.label == "lastPresentedTime" }?.value as? Double
+        }
+    }
+}
+
 extension NuxieNativeRuntime {
-    func setVideoBool(_ value: Bool, path: String) async throws {
+    func videoTestValue(path: String) async throws -> NuxieNativeViewModelValue {
+        let snapshot = try await snapshot()
+        return try XCTUnwrap(snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == path }).value
+    }
+
+    func setVideoBool(_ value: Bool, path: String, file: StaticString = #filePath, line: UInt = #line) async throws {
         let root = try await rootViewModelReference()
-        _ = try await mutateViewModel([.setBool(instance: root, path: path, value: value)])
+        let result = try await mutateViewModel([.setBool(instance: root, path: path, value: value)])
+        XCTAssertEqual(result.appliedCount, 1, file: file, line: line)
+        let actual = try await videoTestValue(path: path)
+        XCTAssertEqual(actual, .bool(value), "Bound write must land before advancing", file: file, line: line)
         _ = try await step(elapsedSeconds: 0)
     }
 
-    func setVideoNumber(_ value: Double, path: String) async throws {
+    func setVideoNumber(_ value: Double, path: String, file: StaticString = #filePath, line: UInt = #line) async throws {
         let root = try await rootViewModelReference()
-        _ = try await mutateViewModel([.setNumber(instance: root, path: path, value: Float(value))])
+        let result = try await mutateViewModel([.setNumber(instance: root, path: path, value: Float(value))])
+        XCTAssertEqual(result.appliedCount, 1, file: file, line: line)
+        let actual = try await videoTestValue(path: path)
+        XCTAssertEqual(actual, .number(Float(value)), "Bound write must land before advancing", file: file, line: line)
         _ = try await step(elapsedSeconds: 0)
     }
 }

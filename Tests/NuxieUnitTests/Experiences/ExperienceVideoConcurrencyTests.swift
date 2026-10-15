@@ -59,7 +59,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
             let occurrences = try await runtime.videos()
             _ = try XCTUnwrap(occurrences.first)
             try await runtime.setVideoBool(true, path: "muted")
-            try await runtime.setVideoBool(true, path: "loop")
+            try await runtime.setVideoBool(false, path: "loop")
             let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
                 artboardBounds: CGRect(x: 0, y: 0, width: 320, height: 640), decoderPool: .shared)
             hosts.append(host)
@@ -82,6 +82,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
         }
         var colors = Array(repeating: Set<String>(), count: 5)
         var retired = false
+        var endedLanes = Set<Int>()
         let deadline = Date().addingTimeInterval(15)
         let started = Date()
         while Date() < deadline {
@@ -102,20 +103,40 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
             if !retired {
                 XCTAssertEqual(hosts[4].activeDecoderCount, 0)
                 XCTAssertEqual(hosts[4].deliveredFrames, 0, "Fifth runtime must wait for an actual decoder disposal")
-                if colors.prefix(4).allSatisfy({ $0.count == 2 }) && Date().timeIntervalSince(started) >= 3 {
+                if colors.prefix(4).allSatisfy({ $0.count == 2 }) {
+                    for lane in 0..<4 {
+                        let videos = try await runtimes[lane].videos()
+                        if videos.first?.state == 6 { endedLanes.insert(lane) }
+                    }
+                }
+                if endedLanes.count == 4 && Date().timeIntervalSince(started) >= 3 {
+                    for lane in 0..<4 {
+                        let videos = try await runtimes[lane].videos()
+                        XCTAssertEqual(try XCTUnwrap(videos.first).state, 6,
+                            "Disabling the bound loop must leave each admitted video ended")
+                        XCTAssertEqual(try XCTUnwrap(hosts[lane].videoTestPlayers.first).volume, 0,
+                            "Bound mute must silence each AVPlayer")
+                    }
                     hosts[0].close()
                     try await runtimes[0].close()
                     layers[0].removeFromSuperlayer()
                     retired = true
                     colors = Array(repeating: [], count: 5)
+                    for lane in 1..<4 {
+                        try await runtimes[lane].setVideoNumber(0, path: "current-time")
+                        try await runtimes[lane].setVideoBool(false, path: "paused")
+                    }
                     label?.text = "First video released • fifth now playing"
                 }
             } else if colors.dropFirst().allSatisfy({ $0.count == 2 }) { break }
             try await Task.sleep(nanoseconds: 30_000_000)
         }
+        XCTAssertEqual(endedLanes.count, 4, "Bound loop=false must let all four videos reach the endpoint")
         XCTAssertTrue(retired, "Four independent runtime lanes must compose red and blue before handoff")
         XCTAssertTrue(colors.dropFirst().allSatisfy({ $0.count == 2 }), "Waiting runtime and retained lanes must compose both colors after handoff")
         XCTAssertGreaterThan(hosts[4].deliveredFrames, 0)
+        XCTAssertEqual(try XCTUnwrap(hosts[4].videoTestPlayers.first).volume, 0,
+            "The waiting runtime must retain its bound mute when admitted")
         label?.text = retired && colors.dropFirst().allSatisfy({ $0.count == 2 })
             ? "Passed: four live videos, fifth admitted after release"
             : "Video concurrency check failed — see test results"
@@ -190,7 +211,7 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
             let occurrences = try await runtime.videos()
             _ = try XCTUnwrap(occurrences.first)
             try await runtime.setVideoBool(true, path: "muted")
-            try await runtime.setVideoBool(true, path: "loop")
+            try await runtime.setVideoBool(false, path: "loop")
             let host = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
                 artboardBounds: CGRect(x: 0, y: 0, width: 320, height: 640), decoderPool: .shared)
             defer { host.close() }
@@ -222,6 +243,15 @@ final class ExperienceVideoConcurrencyTests: XCTestCase {
             }
             XCTAssertEqual(colors.count, 2, "Every new session must actually compose both video phases")
             XCTAssertEqual(host.activeDecoderCount, 1)
+            XCTAssertEqual(try XCTUnwrap(host.videoTestPlayers.first).volume, 0,
+                "Every session must apply bound mute to its AVPlayer")
+            let videos = try await runtime.videos()
+            let video = try XCTUnwrap(videos.first)
+            let actions = try await runtime.videoStep(componentID: video.componentID,
+                observation: 3, generation: video.generation)
+            XCTAssertFalse(actions.contains { $0.kind == 2 }, "A disabled bound loop must not seek to the start")
+            let ended = try await runtime.videos()
+            XCTAssertEqual(try XCTUnwrap(ended.first).state, 6)
             try await runtime.setVideoBool(true, path: "paused")
             _ = try await host.tick()
             host.close()

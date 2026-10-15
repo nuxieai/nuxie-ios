@@ -1115,18 +1115,34 @@ final class JourneyReleaseTests: XCTestCase {
         let corpus = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
         for item in try XCTUnwrap(corpus["cases"] as? [[String: Any]]) {
             let name = try XCTUnwrap(item["name"] as? String)
-            XCTAssertNil(JourneyActionType(rawValue: "video"), name)
+            let action = try XCTUnwrap(item["action"] as? [String: Any])
+            let type = try XCTUnwrap(action["type"] as? String)
+            XCTAssertEqual(type, "video", name)
+            XCTAssertNil(JourneyActionType(rawValue: type), "Video must be an unknown action type: \(name)")
             XCTAssertThrowsError(try JourneyReleaseSchemaPrimitives.validateCanonicalJourneyAction(
-                item["action"], path: "action", screenIDs: [], placementIDs: []), name)
+                action, path: "action", screenIDs: [], placementIDs: []), name) { error in
+                XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .invalidDescriptor, name)
+            }
             var root = try systemFontRoot()
-            XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
             var leg = try XCTUnwrap(root["leg"] as? [String: Any])
             var steps = try XCTUnwrap(leg["steps"] as? [[String: Any]])
-            let index = try XCTUnwrap(steps.firstIndex { $0["kind"] as? String == "action" })
-            steps[index]["action"] = item["action"]
+            let entry = try XCTUnwrap(leg["entryStepId"] as? String)
+            // Add a dedicated step without disturbing the original screen entry,
+            // routes or outlets. The baseline release must be valid first.
+            let index = steps.count
+            steps.append(["kind": "action", "id": "video-refusal",
+                "action": ["type": "send_event", "eventName": "video_check"],
+                "outlets": ["next": entry]])
+            leg["entryStepId"] = "video-refusal"
             leg["steps"] = steps
             root["leg"] = leg
-            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name)
+            XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root), name)
+            steps[index]["action"] = action
+            leg["steps"] = steps
+            root["leg"] = leg
+            XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root), name) { error in
+                XCTAssertEqual(error as? JourneyReleaseAuthenticationError, .invalidDescriptor, name)
+            }
         }
     }
 
