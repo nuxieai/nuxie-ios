@@ -78,6 +78,8 @@ final class ParlaSheetPresentationTests: XCTestCase {
         XCTAssertLessThan(saved.frame.height, mediumFrame.height)
         XCTAssertGreaterThan(saved.frame.minY, mediumFrame.minY)
         let savedText = try capture("ios-fit-content", text: "Saved!")
+        XCTAssertTrue(savedText.contains { $0.topCandidates(1).first?.string == "Special offer" },
+            "The retained Offer sheet must remain visibly painted beneath Saved")
         try tap("Back to learning", observations: savedText, app: app)
         XCTAssertTrue(offer.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertFalse(saved.exists)
