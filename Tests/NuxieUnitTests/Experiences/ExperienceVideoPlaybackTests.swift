@@ -905,6 +905,9 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         #if canImport(UIKit)
         try await host.handleAudioInterruption(.began, options: [])
         try await host.handleAudioInterruption(.ended, options: [])
+        // The runtime writes a host pause back to the two-way bound value when
+        // the scene next advances, one frame later, as an app sees it.
+        _ = try await runtime.step(elapsedSeconds: 0)
         let pausedValue = try await runtime.videoTestValue(path: "paused")
         XCTAssertEqual(pausedValue, .bool(true), "Host pause must write back to the bound value")
         current = try await runtime.videos()
