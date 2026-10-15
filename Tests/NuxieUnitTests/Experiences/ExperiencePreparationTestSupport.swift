@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieRuntime
-#if SWIFT_PACKAGE
+#if SWIFT_PACKAGE || NUXIE_HOSTED_INPUT_TESTS
 @testable import NuxieTestSupport
 #endif
 
