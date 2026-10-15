@@ -1,5 +1,5 @@
 {
-  "source": "/Users/levi/dev/nuxie-codex/runtime-landing-notes/evidence/fit-content",
+  "source": "Historical 2026-10-07 runtime fit-content proof handoff; original bytes retained in proof/",
   "adaptation": "Replace exactly one length-prefixed UTF-8 Presentation global name with $nuxie.presentation. Preserve every other byte. Originals under proof/.",
   "oracle": "Upstream C++ root-height probe; padding16 + child120 + padding16 =152; fixed restores supplied height. Edge provenance in README.",
   "files": {
@@ -33,5 +33,29 @@
       "proofSha256": "89e8f3b4b539e31245e0f834eedbb3d531e7448bb3b6c480b89aee81f759f777",
       "sizeBytes": 377
     }
+  },
+  "generators": [
+    {
+      "source": "fit-content/generate.py",
+      "arguments": []
+    },
+    {
+      "source": "fit-content/edges/generate.py",
+      "arguments": []
+    }
+  ],
+  "generatorAvailability": "Historical handoff paths, not committed parent repository tools. These bytes have not been relabeled as canonical publisher output.",
+  "canonicalPublisherFamily": {
+    "parentRepository": "nuxie-dev",
+    "sourcePath": "tools/sdk-fixtures/sheets/published-fit-content",
+    "generator": "apps/nuxie-experience-authority/tests/workerd/sdk-sheets-export-run.mjs",
+    "arguments": [
+      "tests/fixtures/e2e-experience-files/presentation-sheets",
+      "tools/sdk-fixtures/sheets/published-fit-content",
+      "tools/sdk-fixtures/sheets/parla-large/experience.json",
+      "<output-root>",
+      "<parent-sha>"
+    ],
+    "sdkPath": "fixtures/runtime/published-fit-content"
   }
 }
