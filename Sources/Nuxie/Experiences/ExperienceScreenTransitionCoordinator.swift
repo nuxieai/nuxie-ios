@@ -1278,11 +1278,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         completion: @escaping Completion,
         operation: () -> Void
     ) {
-        CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak self] in
+        // UIKit can start an animated push or pop after this transaction
+        // commits, so the transaction alone may report navigation while the
+        // transition is still running, and an immediate back is then dropped.
+        // Finish on the transition coordinator whenever UIKit provides one.
+        let finish = ExperienceNavigationCompletion { [weak self] in
             self?.completeNavigation(to: screenId, completion: completion)
         }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock {
+            if !finish.awaitsTransition { finish.run() }
+        }
         operation()
+        if let transition = navigationController?.transitionCoordinator {
+            finish.awaitsTransition = transition.animate(alongsideTransition: nil) { _ in finish.run() }
+        }
         CATransaction.commit()
     }
 
@@ -1302,6 +1312,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         for controller in allScreenControllers {
             await controller.updateReduceMotion(value)
         }
+    }
+}
+
+/// Runs one native navigation completion once, from whichever UIKit signal owns it.
+@MainActor
+private final class ExperienceNavigationCompletion {
+    var awaitsTransition = false
+    private var action: (() -> Void)?
+
+    init(_ action: @escaping () -> Void) { self.action = action }
+
+    func run() {
+        let action = self.action
+        self.action = nil
+        action?()
     }
 }
 
