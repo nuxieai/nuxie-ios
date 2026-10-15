@@ -712,7 +712,8 @@ final class ExperienceScreenViewController: UIViewController {
     func writeCustomTransitionPhase(
         _ phase: ExperienceScreenLifecyclePhase,
         transitionId: String,
-        reduceMotion: Bool
+        reduceMotion: Bool,
+        exitReason: ExperienceScreenExitReason
     ) async {
         if phase == .entering {
             presentationLoop?.setTimelineActive(true)
@@ -720,7 +721,8 @@ final class ExperienceScreenViewController: UIViewController {
         let snapshot = lifecycleState.move(
             to: phase,
             transition: transitionId,
-            reduceMotion: reduceMotion
+            reduceMotion: reduceMotion,
+            exitReason: exitReason
         )
         await applyLifecycleSnapshot(snapshot)
         try? await presentationLoop?.advanceZeroDelta()
@@ -745,7 +747,7 @@ final class ExperienceScreenViewController: UIViewController {
         try? await presentationLoop?.advanceZeroDelta()
     }
 
-    func performExitHandshake(reduceMotion: Bool, exitReason: ExperienceScreenExitReason = .navigation) async {
+    func performExitHandshake(reduceMotion: Bool, exitReason: ExperienceScreenExitReason) async {
         let plan = ExperienceScreenExitPlan(
             declaration: screen.exit,
             reduceMotion: reduceMotion
@@ -768,7 +770,7 @@ final class ExperienceScreenViewController: UIViewController {
         removeCompletionWaiter(waiter)
     }
 
-    func markExiting(reduceMotion: Bool, exitReason: ExperienceScreenExitReason = .dismissed) async {
+    func markExiting(reduceMotion: Bool, exitReason: ExperienceScreenExitReason) async {
         let snapshot = lifecycleState.move(
             to: .exiting,
             reduceMotion: reduceMotion,
