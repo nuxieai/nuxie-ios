@@ -1641,12 +1641,18 @@ actor ExperienceInteractiveScreen {
     private let presentationHeight = ExperiencePresentationHeight()
     private var fitsContentHeight = false
     private var availablePresentationHeight: Double?
+    private var presentationViewportSize: CGSize?
+    private nonisolated let intrinsicPresentationBounds = ExperienceLayoutBounds(.zero)
+    nonisolated var intrinsicPresentationHeight: CGFloat { intrinsicPresentationBounds.read().height }
 
-    func setPresentationHeight(fitContent: Bool, availableSize: CGSize) async throws -> Bool {
+    func setPresentationHeight(fitContent: Bool, availableSize: CGSize,
+                               fillsPresentationViewport: Bool = false) async throws -> Bool {
         try await operationGate.withLock { [self] in
             await discardTextFrame()
-            let available = try await presentationHeight.apply(to: runtime, fitContent: fitContent,
+            let available = try await presentationHeight.apply(to: runtime,
+                fitContent: fitContent && !fillsPresentationViewport,
                 width: Float(availableSize.width), height: Float(availableSize.height))
+            presentationViewportSize = fitContent && available && fillsPresentationViewport ? availableSize : nil
             await setHeightReadback(fitContent && available, availableHeight: Double(availableSize.height))
             try await updatePresentationViewport(availableSize)
             return available
@@ -2000,12 +2006,41 @@ actor ExperienceInteractiveScreen {
                 let videoActive = try await videoPlayback.tick()
                 result.keepGoing = result.keepGoing || videoActive
             }
-            // Discover generated state on newly materialized components
-            // before projecting this frame's changes. Native effects have
-            // committed: a recoverable topology failure must not discard them.
+            // Project each committed step with its own snapshot, before the next layout
+            // pass can change bindings. Layout passes must not discard saves or events.
             if let eventSnapshot { try? await refreshTrackedTopology(snapshot: eventSnapshot) }
-            await captureTextFrame(result, requested: capturesTextLayout, snapshot: eventSnapshot)
-            return await projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
+            let inputResult = projectStep(result, eventSnapshot: eventSnapshot, correlationID: correlationID)
+            var effects = inputResult.effects
+            var keepGoing = inputResult.keepGoing
+            var finalResult = result
+            var finalSnapshot = eventSnapshot
+            if fitsContentHeight, let viewport = presentationViewportSize {
+                // User input is processed in the fixed viewport drawn on the previous frame.
+                // Then measure intrinsic content without publishing an intermediate drawable,
+                // and restore Fixed so the screen paints all of UIKit's assigned space.
+                for measure in [true, false] {
+                    _ = try await presentationHeight.apply(to: runtime, fitContent: measure,
+                        width: Float(viewport.width),
+                        height: Float(measure ? (availablePresentationHeight ?? Double(viewport.height)) : Double(viewport.height)))
+                    let settled = try await runtime.stepWithSnapshot(elapsedSeconds: 0,
+                        correlationID: correlationID, textRunNames: [])
+                    if measure {
+                        intrinsicPresentationBounds.update(size: try await runtime.layoutSize())
+                    }
+                    if let snapshot = settled.snapshot { try? await refreshTrackedTopology(snapshot: snapshot) }
+                    let projected = projectStep(settled.result, eventSnapshot: settled.snapshot, correlationID: correlationID)
+                    effects += projected.effects
+                    keepGoing = keepGoing || projected.keepGoing
+                    finalResult = settled.result
+                    finalSnapshot = settled.snapshot
+                }
+                // Geometry, accessibility and text input all use the restored full viewport.
+                needsLayoutReadback = true
+                try await refreshLayoutBounds()
+            }
+            captureTextFrame(finalResult, requested: capturesTextLayout, snapshot: finalSnapshot)
+            return ExperienceInteractiveStepResult(keepGoing: keepGoing, pointerHits: inputResult.pointerHits,
+                focusState: finalResult.focusState, effects: effects)
         }
     }
 
@@ -3647,6 +3682,10 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock { [self] in
             await discardTextFrame()
             if pixelWidth > 0, pixelHeight > 0 {
+                if presentationViewportSize != nil {
+                    presentationViewportSize = CGSize(width: Double(Float(pixelWidth) / layoutScaleFactor),
+                        height: Double(Float(pixelHeight) / layoutScaleFactor))
+                }
                 try await runtime.setLayoutSize(width: Float(pixelWidth) / layoutScaleFactor,
                     height: Float(pixelHeight) / layoutScaleFactor)
                 await markLayoutReadbackPending(true)
