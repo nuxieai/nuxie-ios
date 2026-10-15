@@ -571,7 +571,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 await targetController.enter(reduceMotion: reduceMotion)
             },
             sourceExiting: {
-                await sourceController?.performExitHandshake(reduceMotion: reduceMotion)
+                await sourceController?.performExitHandshake(reduceMotion: reduceMotion, exitReason: .navigation)
             },
             nativeOperation: {
                 guard self.lifecycle == .installed, !Task.isCancelled else {
@@ -679,12 +679,14 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 async let outgoingPhase: Void = sourceController.writeCustomTransitionPhase(
                     .exiting,
                     transitionId: plan.transitionId,
-                    reduceMotion: reduceMotion
+                    reduceMotion: reduceMotion,
+                    exitReason: .navigation
                 )
                 async let incomingPhase: Void = targetController.writeCustomTransitionPhase(
                     .entering,
                     transitionId: plan.transitionId,
-                    reduceMotion: reduceMotion
+                    reduceMotion: reduceMotion,
+                    exitReason: .none
                 )
                 _ = await (outgoingPhase, incomingPhase)
             },
@@ -946,7 +948,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let revealingController = revealingScreenId.flatMap { cachedControllersByScreenId[$0] }
         await ExperienceScreenLifecycleSheetDismissal.perform(
             dismissedExiting: {
-                await dismissedController.markExiting(reduceMotion: reduceMotion)
+                await dismissedController.markExiting(reduceMotion: reduceMotion, exitReason: .dismissed)
             },
             dismissedHidden: {
                 await dismissedController.hide(reduceMotion: reduceMotion)
