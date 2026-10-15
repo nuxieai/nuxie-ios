@@ -174,7 +174,7 @@ final class ExperienceShellShimmerView: UIView {
     /// A gradient's start and end points are expressed in unit coordinates of
     /// its own bounds, so on a non-square layer a given unit vector is skewed
     /// by the aspect ratio. Squaring the layer makes an angle mean the same
-    /// thing on a full screen and on a short drawer.
+    /// thing on a full screen and on a short sheet.
     private func squareGradientLayer() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)

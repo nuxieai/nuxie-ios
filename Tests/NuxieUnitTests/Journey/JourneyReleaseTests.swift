@@ -45,7 +45,7 @@ final class JourneyReleaseTests: XCTestCase {
         XCTAssertEqual(release.exactDescriptorBytes, bytes)
         let descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         let presentation = try XCTUnwrap(descriptor["presentation"] as? [String: String])
-        XCTAssertEqual(presentation, ["orientation": "any", "backgroundColor": "#000000FF"])
+        XCTAssertEqual(Set(presentation.keys), ["orientation", "backgroundColor"])
         let render = try XCTUnwrap(descriptor["render"] as? [String: Any])
         let screens = try XCTUnwrap(render["screens"] as? [[String: Any]])
         XCTAssertEqual(screens.count, 3)

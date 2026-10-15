@@ -312,7 +312,7 @@ test-flow-runtime-ui: test-experience-runtime-ui
 
 # The holistic gate: iOS unit + focused native-runtime + hosted UIKit input + integration
 # (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
-test-all: bazel-contract-test check-sdk-guidance check-provider-adapters check-event-catalog
+test-all: check-presentation-schema bazel-contract-test check-sdk-guidance check-provider-adapters check-event-catalog
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
 	@$(MAKE) test-experience-input
@@ -392,3 +392,7 @@ clean:
 	@rm -rf coverage
 	@./scripts/coverage.sh clean 2>/dev/null || true
 	@echo "Clean complete."
+
+.PHONY: check-presentation-schema
+check-presentation-schema:
+	@python3 scripts/check-presentation-schema.py

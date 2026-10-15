@@ -43,13 +43,6 @@ CAPTURES=(
   "full-screen-light:failure:9:05-fullscreen-light-recovery"
   "full-screen-midtone:slow:4:06-fullscreen-midtone-loading"
   "full-screen-midtone:failure:9:07-fullscreen-midtone-recovery"
-  "sheet-large:slow:4:08-sheet-large-loading"
-  "sheet-large:failure:9:09-sheet-large-recovery"
-  "sheet-medium:slow:4:10-sheet-medium-loading"
-  "sheet-non-dismissible:slow:4:11-sheet-non-dismissible-loading"
-  "drawer-bottom:slow:4:12-drawer-bottom-loading"
-  "drawer-bottom:failure:9:13-drawer-bottom-recovery"
-  "drawer-trailing:slow:4:14-drawer-trailing-loading"
   "full-screen-dark:warm:5:15-fullscreen-dark-warm"
 )
 

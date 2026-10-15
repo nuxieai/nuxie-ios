@@ -868,6 +868,15 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
             delegate.prepareBackNavigation(steps: 1, target: "screen_welcome")
         }
         XCTAssertEqual(backTarget, "screen_welcome")
+        await MainActor.run {
+            XCTAssertEqual(delegate.consumeBackNavigation(target: "screen_welcome"), 1)
+            XCTAssertNil(delegate.consumeBackNavigation(target: "screen_welcome"))
+            _ = delegate.prepareBackNavigation(steps: 2, target: "screen_welcome")
+        }
+        await delegate.experienceViewController(controller, didChangeScreen: "screen_details")
+        await MainActor.run {
+            XCTAssertNil(delegate.consumeBackNavigation(target: "screen_welcome"))
+        }
     }
 
     func testRuntimeDelegateGivesHostDismissalPrecedenceOverTopLevelScreenDismissal() async throws {

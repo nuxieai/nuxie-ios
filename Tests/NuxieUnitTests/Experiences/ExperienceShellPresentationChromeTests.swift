@@ -618,7 +618,7 @@ final class ExperienceShellPresentationChromeTests: XCTestCase {
         )
     }
 
-    /// The contract accepts any extent above zero. A drawer narrower than the
+    /// The contract accepts any extent above zero. A sheet narrower than the
     /// chrome would demand a negative content width and clip the close, and a
     /// non-dismissible one whose acquisition failed would trap the user.
     @MainActor
