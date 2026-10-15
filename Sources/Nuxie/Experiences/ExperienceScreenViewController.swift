@@ -152,6 +152,7 @@ final class ExperienceScreenViewController: UIViewController {
     private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
 
     private var interactiveScreen: ExperienceInteractiveScreen?
+    private var lifecycleIncludesExitReason = false
     private let usesSystemDisplayLink: Bool
     private let acquireDrawable: @MainActor (CAMetalLayer) -> (any CAMetalDrawable)?
     private var presentationLoop: ExperienceRuntimePresentationLoop?
@@ -437,6 +438,11 @@ final class ExperienceScreenViewController: UIViewController {
             initialSafeArea: experienceSafeAreaInsets(for: view),
             videoDecoderPool: videoDecoderPool
         )
+        if let name = journeyScreen?.defaultViewModelName {
+            lifecycleIncludesExitReason = await interactive.supportsScreenExitReason(viewModelName: name)
+        } else {
+            lifecycleIncludesExitReason = false
+        }
         interactiveScreen = interactive
         await runValues.observeSaveDisplays(id: saveDisplayObserverID) { [weak self] in
             guard let self, !self.isShuttingDown else { return }
@@ -528,6 +534,7 @@ final class ExperienceScreenViewController: UIViewController {
         } catch {
             presentationLoop = nil
             interactiveScreen = nil
+            lifecycleIncludesExitReason = false
             await loop.shutdown()
             throw error
         }
@@ -560,6 +567,7 @@ final class ExperienceScreenViewController: UIViewController {
             let loop = self.presentationLoop
             self.presentationLoop = nil
             self.interactiveScreen = nil
+            self.lifecycleIncludesExitReason = false
             self.finishExitWaiters()
             self.semanticContainer.clear()
             self.semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
@@ -1366,12 +1374,11 @@ final class ExperienceScreenViewController: UIViewController {
         guard !lifecycleWritesUnavailable else { return nil }
         // Rootless screens still receive the file's global device values.
         let command: ExperienceInteractiveStateCommand
-        if let name = journeyScreen?.defaultViewModelName, let interactiveScreen {
-            let includesExitReason = await interactiveScreen.supportsScreenExitReason(viewModelName: name)
+        if let name = journeyScreen?.defaultViewModelName {
             command = snapshot.stateCommand(
                 viewModelName: name,
                 instanceID: journeyScreen?.defaultInstanceId,
-                includesExitReason: includesExitReason
+                includesExitReason: lifecycleIncludesExitReason
             )
         } else {
             command = .snapshot([])
