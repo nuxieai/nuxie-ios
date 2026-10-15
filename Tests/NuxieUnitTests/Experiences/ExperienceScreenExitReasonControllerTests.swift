@@ -212,7 +212,10 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
         try await coordinator.install()
         _ = await coordinator.activateInitialScreen()
         probe.active.removeAll()
-        let controllers = try field(coordinator, "cachedControllersByScreenId", as: [String: ExperienceScreenViewController].self)
+        // The coordinator keeps one controller cache per presentation layer; the entry screen is in the base layer.
+        let layerCaches = try field(coordinator, "layerCaches", as: [Any].self)
+        let controllers = try field(XCTUnwrap(layerCaches.first), "controllers",
+                                    as: [String: ExperienceScreenViewController].self)
         let source = try XCTUnwrap(controllers[fixture.1.renderPlan.entry.screenId])
         do { try await body(coordinator, source, probe) }
         catch { await coordinator.tearDown(); throw error }
