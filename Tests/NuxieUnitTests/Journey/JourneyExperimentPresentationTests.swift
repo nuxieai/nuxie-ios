@@ -4,13 +4,13 @@ import XCTest
 @testable import NuxieTestSupport
 
 final class JourneyExperimentPresentationTests: JourneyTestCase {
-    func testExperimentExposureWaitsForTheSelectedVariantToBeShown() async throws {
+    func testExperimentExposurePrecedesPresentationAndRevealDoesNotDuplicateIt() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = renderedExperimentSnapshot(
             try await authenticatedRenderedSnapshot(fixture),
-            assignment: .init(variantId: "variant_b", isHoldout: true)
+            assignment: .init(source: .profile, variantId: "variant_b", isHoldout: false)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -50,18 +50,17 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         XCTAssertEqual(selectedExposure.experimentId, "experiment_checkout")
         XCTAssertEqual(selectedExposure.variantId, "variant_b")
         XCTAssertEqual(selectedExposure.kind, .assigned)
-        XCTAssertNil(selectedExposure.shownAt)
-        XCTAssertFalse(selectedExposure.queued)
-        XCTAssertTrue(events.routedEvents.allSatisfy {
-            $0.name != JourneyEvents.experimentExposure
-        })
+        XCTAssertTrue(selectedExposure.queued)
+        XCTAssertEqual(events.routedEvents.filter {
+            $0.name == JourneyEvents.experimentExposure
+        }.count, 1)
 
         await gate.release()
         await profileCommit.value
 
-        XCTAssertTrue(events.routedEvents.allSatisfy {
-            $0.name != JourneyEvents.experimentExposure
-        })
+        XCTAssertEqual(events.routedEvents.filter {
+            $0.name == JourneyEvents.experimentExposure
+        }.count, 1)
         let capturedRequest = await MainActor.run { presenter.request }
         let presentedRequest = try XCTUnwrap(capturedRequest)
         await presentedRequest.onPresentationRevealed("screen_welcome")
@@ -82,15 +81,14 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             exposures.first?.properties["assignment_source"] as? String,
             "profile"
         )
-        // Exposure metadata comes from the authenticated variant definition,
-        // not the untrusted assignment hint supplied above.
+        // Exposure metadata comes from the authenticated selector.
         XCTAssertEqual(exposures.first?.properties["is_holdout"] as? Bool, false)
         let shownRuns = try await journal.runs()
         let shownRun = try XCTUnwrap(shownRuns.first)
         let shownExposure = try XCTUnwrap(shownRun.experimentExposures.first)
-        XCTAssertNotNil(shownExposure.shownAt)
         XCTAssertTrue(shownExposure.queued)
         XCTAssertEqual(exposures.first?.id, shownExposure.eventId)
+        XCTAssertEqual(exposures.first?.timestamp, shownExposure.selectedAt)
 
         _ = try await JourneyExperimentExposureReporter(
             journal: journal,
@@ -101,7 +99,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         }.count, 1)
     }
 
-    func testVisibleExposureRetriesWhenItsFirstJournalWriteFails() async throws {
+    func testLaterPresentationJournalFailureDoesNotDuplicateSelectorExposure() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(
@@ -109,7 +107,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         )
         let snapshot = renderedExperimentSnapshot(
             try await authenticatedRenderedSnapshot(fixture),
-            assignment: .init(variantId: "variant_b", isHoldout: false)
+            assignment: .init(source: .profile, variantId: "variant_b", isHoldout: false)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -155,7 +153,6 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let persistedExposure = try XCTUnwrap(
             persistedRuns.first?.experimentExposures.first
         )
-        XCTAssertNotNil(persistedExposure.shownAt)
         XCTAssertTrue(persistedExposure.queued)
         await service.shutdown()
     }
@@ -166,7 +163,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = renderedExperimentSnapshot(
             try await authenticatedRenderedSnapshot(fixture),
-            assignment: .init(variantId: "variant_b", isHoldout: false)
+            assignment: .init(source: .profile, variantId: "variant_b", isHoldout: false)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -178,6 +175,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         )
         events.routedCaptureHandler = { event, _ in
             await captureGate.intercept(event: event)
+            if event == JourneyEvents.experimentExposure,
+               await captureGate.observationCount() == 1 {
+                events.routedCaptureFailuresRemaining = 1
+            }
         }
         let presenter = await MainActor.run {
             let value = RecordingJourneyPresenter()
@@ -193,10 +194,6 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        let presentedRequest = await MainActor.run { presenter.request }
-        let request = try XCTUnwrap(presentedRequest)
-        events.routedCaptureFailuresRemaining = 1
-        await request.onPresentationRevealed("screen_welcome")
         for _ in 0..<200 {
             if await captureGate.isSuspended() { break }
             try? await Task.sleep(nanoseconds: 10_000_000)
@@ -231,7 +228,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = renderedVisibleExperimentSnapshot(
             try await authenticatedRenderedSnapshot(fixture),
-            assignment: .init(variantId: "variant_b", isHoldout: false),
+            assignment: .init(source: .profile, variantId: "variant_b", isHoldout: false),
             targetScreenId: "screen_welcome"
         )
         let identity = MockIdentityService()
@@ -252,9 +249,9 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        XCTAssertFalse(events.routedEvents.contains {
+        XCTAssertEqual(events.routedEvents.filter {
             $0.name == JourneyEvents.experimentExposure
-        })
+        }.count, 0)
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
         let exposureCaptured = expectation(description: "selected variant exposed")
@@ -301,6 +298,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             await Task.yield()
         }
         XCTAssertTrue(exposureWasQueued)
+        for _ in 0..<100 {
+            if await MainActor.run(body: { presenter.navigationScreenIds.count }) == 2 { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
         let navigationScreenIds = await MainActor.run {
             presenter.navigationScreenIds
         }
@@ -308,13 +309,13 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         await service.shutdown()
     }
 
-    func testNavigatedExperimentExposureWaitsForTheVisibleScreenCallback() async throws {
+    func testNavigatedExperimentExposesBeforeVisibleScreenCallbacks() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = renderedVisibleExperimentSnapshot(
             try await authenticatedRenderedSnapshot(fixture),
-            assignment: .init(variantId: "variant_b", isHoldout: false)
+            assignment: .init(source: .profile, variantId: "variant_b", isHoldout: false)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -356,17 +357,16 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             if navigationCount == 2 { break }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        XCTAssertFalse(events.routedEvents.contains {
+        XCTAssertEqual(events.routedEvents.filter {
             $0.name == JourneyEvents.experimentExposure
-        })
+        }.count, 1)
 
-        // The decision selected the destination screen. A late lifecycle
-        // callback from the screen being replaced must not expose it.
+        // A late callback from the replaced screen cannot duplicate exposure.
         await request.onPresentationRevealed("screen_welcome")
         for _ in 0..<20 { await Task.yield() }
-        XCTAssertFalse(events.routedEvents.contains {
+        XCTAssertEqual(events.routedEvents.filter {
             $0.name == JourneyEvents.experimentExposure
-        })
+        }.count, 1)
         let journal = try JourneyRunJournal(
             directory: directory,
             distinctId: "customer"
@@ -375,12 +375,9 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let boundExposure = try XCTUnwrap(
             boundRuns.first?.experimentExposures.first
         )
-        XCTAssertEqual(boundExposure.presentationScreenId, "screen_details")
-        XCTAssertNil(boundExposure.shownAt)
+        XCTAssertTrue(boundExposure.queued)
 
-        // Production invokes this callback from the target screen's active
-        // lifecycle boundary. Merely returning `.navigated` above must not
-        // count as an impression.
+        // Target visibility is separate telemetry and cannot duplicate exposure.
         await request.onPresentationRevealed("screen_details")
         for _ in 0..<100 {
             let exposureCount = events.routedEvents.filter {
@@ -395,7 +392,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         XCTAssertEqual(exposureCount, 1)
     }
 
-    func testUnfetchedExperimentReportsFallbackOnlyAfterDefaultVariantIsShown() async throws {
+    func testUnfetchedExperimentReportsFallbackAtSelection() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -422,9 +419,9 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
 
-        XCTAssertTrue(events.routedEvents.allSatisfy {
-            $0.name != JourneyEvents.experimentExposure
-        })
+        XCTAssertEqual(events.routedEvents.filter {
+            $0.name == JourneyEvents.experimentExposure
+        }.count, 1)
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
         await request.onPresentationRevealed("screen_welcome")
@@ -438,13 +435,13 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         )
     }
 
-    func testDeclinedPresentationDoesNotReportExperimentExposure() async throws {
+    func testDeclinedPresentationRetainsExperimentExposure() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = renderedExperimentSnapshot(
             try await authenticatedRenderedSnapshot(fixture),
-            assignment: .init(variantId: "variant_b", isHoldout: false)
+            assignment: .init(source: .profile, variantId: "variant_b", isHoldout: false)
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -462,9 +459,9 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
 
-        XCTAssertTrue(events.routedEvents.allSatisfy {
-            $0.name != JourneyEvents.experimentExposure
-        })
+        XCTAssertEqual(events.routedEvents.filter {
+            $0.name == JourneyEvents.experimentExposure
+        }.count, 1)
     }
 
     func testUnhandledHostDismissalCompletesTheRenderedLeg() async throws {

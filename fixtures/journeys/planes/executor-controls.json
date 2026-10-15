@@ -10,7 +10,8 @@
   "assignments": {
     "experiment_assigned": {
       "variantId": "variant_b",
-      "isHoldout": false
+      "isHoldout": false,
+      "source": "profile"
     }
   },
   "cases": [

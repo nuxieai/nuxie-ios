@@ -25,6 +25,8 @@ struct JourneyControlExecutor {
     struct ExperimentSelection: Equatable, Sendable {
         enum Source: Equatable, Sendable {
             case profile
+            case override
+            case fixed
             case fallback
         }
 
@@ -138,15 +140,22 @@ struct JourneyControlExecutor {
             }
             let assignedVariantId = assignment?.variantId
             let hasAssignedVariant = control.variants.contains {
-                $0.id == assignedVariantId
+                $0.id == assignedVariantId && $0.isHoldout == assignment?.isHoldout
             }
             let selectedVariant = hasAssignedVariant
                 ? control.variants.first { $0.id == assignedVariantId }!
                 : fallbackVariant
             let selected = selectedVariant.id
-            let source: ExperimentSelection.Source = hasAssignedVariant
-                ? .profile
-                : .fallback
+            let source: ExperimentSelection.Source
+            if hasAssignedVariant, let assignment {
+                switch assignment.source {
+                case .profile: source = .profile
+                case .override: source = .override
+                case .fixed: source = .fixed
+                }
+            } else {
+                source = .fallback
+            }
             return advance(
                 outlets,
                 outlet: selected,
