@@ -58,6 +58,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private weak var closingLayer: UINavigationController?
 
     var hasPresentedLayer: Bool { navigationLayers.count > 1 }
+    /// The top Journey layer above the base, where an in-app browser opened from it belongs.
+    var topPresentedLayer: UIViewController? { hasPresentedLayer ? navigationLayers.last : nil }
     private var navigationController: UINavigationController? { navigationLayers.last }
     private var activeController: ExperienceScreenViewController? {
         navigationController?.topViewController as? ExperienceScreenViewController

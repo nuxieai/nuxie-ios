@@ -129,4 +129,18 @@ enum ExperienceLinkRouting {
         return false
         #endif
     }
+
+    #if canImport(UIKit)
+    /// The controller an in-app browser is presented from: the top of the presentation chain
+    /// above `layer`, once it is settled on screen. A sheet opened over a sheet is presented
+    /// from its own window, outside the Experience controller's chain, so callers start from
+    /// the Journey's top layer rather than the Experience controller.
+    @MainActor
+    static func inAppHost(above layer: UIViewController) -> UIViewController? {
+        var top = layer
+        while let presented = top.presentedViewController { top = presented }
+        guard !top.isBeingPresented, !top.isBeingDismissed, top.viewIfLoaded?.window != nil else { return nil }
+        return top
+    }
+    #endif
 }
