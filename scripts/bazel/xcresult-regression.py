@@ -38,6 +38,23 @@ class XcresultAttachmentsTests(unittest.TestCase):
     def test_missing_activity_array_needs_no_exports(self):
         self.assertEqual(self.expose({}), [])
 
+    def test_empty_attachment_array_needs_no_exports(self):
+        self.assertEqual(self.expose({"activitySummaries": {"_values": [
+            {"attachments": {"_type": {"_name": "Array"}}}]}}), [])
+
+    def test_missing_attachment_array_needs_no_exports(self):
+        self.assertEqual(self.expose({"activitySummaries": {"_values": [{}]}}), [])
+
+    def test_empty_attachment_array_keeps_later_screenshots(self):
+        attachment = {"filename": {"_value": "frame.png"},
+                      "payloadRef": {"id": {"_value": "pixels"}}}
+        with patch.object(xcresult_util.os.path, "exists", return_value=True):
+            exports = self.expose({"activitySummaries": {"_values": [
+                {"attachments": {"_type": {"_name": "Array"}}},
+                {"attachments": {"_values": [attachment]}}]}})
+        self.assertEqual(len(exports), 1)
+        self.assertEqual(exports[0].args[0][-1], "pixels")
+
     def test_nonempty_activity_array_exports_its_attachment(self):
         attachment = {"filename": {"_value": "frame.png"},
                       "payloadRef": {"id": {"_value": "pixels"}}}
