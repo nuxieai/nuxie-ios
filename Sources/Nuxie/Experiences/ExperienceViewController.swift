@@ -566,6 +566,9 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        if isBeingDismissed || isMovingFromParent {
+            screenTransitionCoordinator?.dismissStackedSheets(animated: animated)
+        }
     }
 
     public override func viewSafeAreaInsetsDidChange() {

@@ -51,6 +51,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private var navigationLayers: [UINavigationController] = []
+    /// Sheet layers opened over another sheet, each presented from its own window.
+    private var stackedSheetWindows: [ObjectIdentifier: ExperienceStackedSheetWindow] = [:]
     private var layerCaches: [ScreenCache] = [ScreenCache()]
     private var pendingModalCache: ScreenCache?
     private weak var closingLayer: UINavigationController?
@@ -345,6 +347,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             await navigationTask.value
         }
 
+        for layer in navigationLayers.reversed() {
+            guard let window = stackedSheetWindows.removeValue(forKey: ObjectIdentifier(layer)) else { continue }
+            window.presenter.dismiss(animated: false)
+            window.close()
+        }
         navigationLayers.dropFirst().first?.presentingViewController?.dismiss(animated: false)
         if let base = navigationLayers.first {
             base.willMove(toParent: nil)
@@ -677,8 +684,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 ?? hostViewController?.view.bounds.size ?? targetController.view.bounds.size
             if spec.presentation.fitsContent,
                let scene = hostViewController?.view.window?.windowScene ?? UIApplication.shared.activeWindowScene {
-                available = try await ExperienceLayerPresentationConfigurator.availableSheetSize(
-                    in: scene, above: sourceLayer ?? hostViewController)
+                available = try await ExperienceLayerPresentationConfigurator.availableSheetSize(in: scene,
+                    above: opensStackedSheet(spec.presentation) ? nil : sourceLayer ?? hostViewController)
                 guard lifecycle == .installed, !Task.isCancelled else { throw CancellationError() }
                 targetController.view.frame.size = available
                 targetController.view.layoutIfNeeded()
@@ -1061,13 +1068,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         controller.setHeightPresentationTarget(layer)
         layer.presentationController?.delegate = self
         controller.setContentHidden(contentHidden)
-        presenter.present(layer, animated: animated) {
+        let stackedWindow = opensStackedSheet(presentation)
+            ? ExperienceStackedSheetWindow(above: presenter.view.window, orientationHost: hostViewController) : nil
+        (stackedWindow?.presenter ?? presenter).present(layer, animated: animated) {
             controller.advance(delta: 0)
             completion(.navigated, screenId)
         }
         guard layer.presentingViewController != nil else {
+            stackedWindow?.close()
             throw ExperienceScreenTransitionCoordinatorError.presenterBusy
         }
+        if let stackedWindow { stackedSheetWindows[ObjectIdentifier(layer)] = stackedWindow }
         navigationLayers.append(layer)
         layerCaches.append(cache)
         pendingModalCache = nil
@@ -1090,6 +1101,25 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         let preceding = Array(navigationController.viewControllers.dropLast())
         navigationController.setViewControllers(preceding + [controller], animated: false)
+    }
+
+    /// The Experience host is leaving the screen. UIKit takes the sheets it presented with it;
+    /// sheets presented from their own windows go with them instead of waiting for teardown.
+    func dismissStackedSheets(animated: Bool) {
+        for layer in navigationLayers.reversed() {
+            guard let window = stackedSheetWindows.removeValue(forKey: ObjectIdentifier(layer)) else { continue }
+            window.presenter.dismiss(animated: animated) { window.close() }
+        }
+    }
+
+    /// UIKit hides a page sheet whenever another page sheet is presented from it, unless the
+    /// lower sheet is at its large detent. A Journey sheet opened over a sheet leaves the lower
+    /// sheet visible, so it is presented as the first sheet of its own window instead.
+    private func opensStackedSheet(_ presentation: ExperienceLayerPresentation) -> Bool {
+        guard presentation.kind == .sheet,
+              let lower = hasPresentedLayer ? navigationController : hostViewController,
+              lower.presentingViewController != nil else { return false }
+        return lower.modalPresentationStyle == .pageSheet || lower.modalPresentationStyle == .formSheet
     }
 
     nonisolated func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
@@ -1137,6 +1167,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         guard navigationController === layer, hasPresentedLayer else { return }
         layer.presentationController?.delegate = nil
         navigationLayers.removeLast()
+        stackedSheetWindows.removeValue(forKey: ObjectIdentifier(layer))?.close()
         let cache = layerCaches.removeLast()
         let revealingController = activeController
         if alreadyDismissed {
@@ -1334,6 +1365,45 @@ private final class ExperienceNavigationCompletion {
 
 @MainActor
 private final class ExperienceLayerNavigationController: UINavigationController {
+    weak var orientationHost: UIViewController?
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        orientationHost?.supportedInterfaceOrientations ?? super.supportedInterfaceOrientations
+    }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        orientationHost?.preferredInterfaceOrientationForPresentation ?? super.preferredInterfaceOrientationForPresentation
+    }
+}
+
+/// A transparent window whose root presents one Journey sheet above a lower sheet, so UIKit
+/// does not stack the two and the lower sheet stays drawn beneath. The sheet keeps its native
+/// page-sheet presentation, detents, drag dismissal and dismissal rules.
+@MainActor
+private final class ExperienceStackedSheetWindow {
+    let presenter = ExperienceStackedSheetPresenter()
+    private let window: UIWindow
+    private weak var lowerWindow: UIWindow?
+
+    init?(above lowerWindow: UIWindow?, orientationHost: UIViewController?) {
+        guard let lowerWindow, let scene = lowerWindow.windowScene else { return nil }
+        self.lowerWindow = lowerWindow
+        window = UIWindow(windowScene: scene)
+        window.backgroundColor = .clear
+        window.windowLevel = UIWindow.Level(rawValue: lowerWindow.windowLevel.rawValue + 1)
+        presenter.orientationHost = orientationHost
+        presenter.view.backgroundColor = .clear
+        window.rootViewController = presenter
+        window.makeKeyAndVisible()
+    }
+
+    func close() {
+        window.isHidden = true
+        window.rootViewController = nil
+        if let lowerWindow, !lowerWindow.isHidden { lowerWindow.makeKey() }
+    }
+}
+
+@MainActor
+private final class ExperienceStackedSheetPresenter: UIViewController {
     weak var orientationHost: UIViewController?
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
         orientationHost?.supportedInterfaceOrientations ?? super.supportedInterfaceOrientations
