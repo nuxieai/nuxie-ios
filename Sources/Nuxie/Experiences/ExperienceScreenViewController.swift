@@ -381,6 +381,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     func setCoveredByLayer(_ covered: Bool) {
         coveredByLayer = covered
+        interactiveScreen?.setCoveredByLayer(covered)
         view.isUserInteractionEnabled = !covered
         updatePresentationVisibility()
     }

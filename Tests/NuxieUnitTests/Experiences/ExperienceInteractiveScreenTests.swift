@@ -3823,6 +3823,48 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         } catch { try? await screen.close(); throw error }
     }
 
+    func testQuietFitContentScreenRunsOneRuntimeStepPerFrame() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/fit-content/dynamic-child.riv"))
+        let payload = try await statePayload(defaultViewModelName: "Root", values: [], scene: bytes, artboardName: "Sheet")
+        let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 300, pixelHeight: 600)
+        func contentHeight(_ value: Double) async throws {
+            _ = try await screen.applyStateCommand(.snapshot([.init(viewModelName: "Root", instanceID: "root-sdk-id",
+                instanceName: nil, path: "contentHeight", value: .number(value))]))
+        }
+        func runtimeSteps(forFrames frames: Int) async throws -> Int {
+            let before = await screen.runtimeStepCount
+            for _ in 0..<frames { _ = try await screen.step(elapsedSeconds: 1.0 / 120) }
+            return await screen.runtimeStepCount - before
+        }
+        do {
+            let bound = try await screen.setPresentationHeight(fitContent: true,
+                availableSize: CGSize(width: 300, height: 600))
+            XCTAssertTrue(bound)
+            _ = try await runtimeSteps(forFrames: 3)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 16 + 120 + 16)
+            let quiet = try await runtimeSteps(forFrames: 5)
+            XCTAssertEqual(quiet, 5, "A screen that is not changing pays one runtime step per frame")
+            // A write can move the content height, so the next frame measures it again.
+            try await contentHeight(240)
+            let measured = try await runtimeSteps(forFrames: 1)
+            XCTAssertEqual(measured, 3, "The input step, then the zero-time measure and restore passes")
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 16 + 240 + 16)
+            // A covered sheet keeps stepping but measures again only once it is revealed.
+            screen.setCoveredByLayer(true)
+            try await contentHeight(120)
+            let covered = try await runtimeSteps(forFrames: 2)
+            XCTAssertEqual(covered, 2)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 16 + 240 + 16)
+            screen.setCoveredByLayer(false)
+            let revealed = try await runtimeSteps(forFrames: 1)
+            XCTAssertEqual(revealed, 3)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 16 + 120 + 16)
+            try await screen.close()
+        } catch { try? await screen.close(); throw error }
+    }
+
     func testFitContentResizeReflowsWrappingChildrenAndFillsTheViewport() async throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
