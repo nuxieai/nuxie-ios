@@ -105,8 +105,10 @@ final class ExperienceLayerNavigationTests: XCTestCase {
                     await fulfillment(of: [completed], timeout: 10)
                     if step.operation == "modal" {
                         let presenter = try XCTUnwrap(nativeLayers.last?.topViewController)
+                        // A sheet opened over a sheet is presented from its own window.
                         let candidates = [presenter.presentedViewController,
                             nativeLayers.last?.presentedViewController, host.presentedViewController]
+                            + scene.windows.map { $0.rootViewController?.presentedViewController }
                         let layer = try XCTUnwrap(candidates.compactMap { $0 as? UINavigationController }
                             .first { candidate in !nativeLayers.contains(where: { $0 === candidate }) })
                         nativeLayers.append(layer)
@@ -137,6 +139,75 @@ final class ExperienceLayerNavigationTests: XCTestCase {
             window.isHidden = true
             previousKey?.makeKey()
         }
+    }
+
+    @MainActor
+    func testSheetOverSheetLeavesTheLowerSheetDrawnAndRevealsIt() async throws {
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: true)
+        let scene = try XCTUnwrap(UIApplication.shared.activeWindowScene)
+        let previousKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let delegate = LayerNavigationDelegate()
+        var swiped: [String] = []
+        var revealed: XCTestExpectation?
+        let coordinator = ExperienceScreenTransitionCoordinator(
+            experience: experience, artifact: artifact, initialScreenID: "screen",
+            hostViewController: host, screenDelegate: delegate,
+            onPresentedScreenDismissed: { hidden, shown in swiped.append("\(hidden):\(shown ?? "")") },
+            onScreenHidden: { _, _ in }, onScreenActive: { _ in
+                revealed?.fulfill()
+                revealed = nil
+            }, onProductsResolved: { _ in },
+            onProductsUnavailable: { _ in }, onRuntimeFailure: { _, error in XCTFail("\(error)") })
+        addTeardownBlock {
+            await coordinator.tearDown()
+            await MainActor.run { window.isHidden = true; previousKey?.makeKey() }
+        }
+        try await coordinator.install()
+        coordinator.setContentHidden(false)
+        _ = await coordinator.activateInitialScreen()
+        func open(_ screen: String) async {
+            let result = await withCheckedContinuation { continuation in
+                XCTAssertTrue(coordinator.navigate(to: screen, transition: ["type": "modal", "present": "sheet",
+                    "height": "medium", "closedby": "any"]) { result, _ in continuation.resume(returning: result) })
+            }
+            XCTAssertEqual(result, .navigated)
+        }
+        func layers() throws -> [UINavigationController] {
+            try XCTUnwrap(Mirror(reflecting: coordinator).children.first { $0.label == "navigationLayers" }?.value
+                as? [UINavigationController])
+        }
+        await open("details")
+        let lower = try XCTUnwrap(try layers().last)
+        let lowerSheet = try XCTUnwrap(lower.presentationController?.presentedView)
+        let lowerFrame = lowerSheet.convert(lowerSheet.bounds, to: nil)
+        await open("screen")
+        let upper = try XCTUnwrap(try layers().last)
+        XCTAssertFalse(upper === lower)
+        XCTAssertEqual(upper.modalPresentationStyle, .pageSheet)
+        if #available(iOS 16.0, *) {
+            XCTAssertEqual(upper.sheetPresentationController?.detents.map(\.identifier), [.medium])
+        }
+        // A native sheet stack would fade the medium lower sheet out under the upper one.
+        XCTAssertNotNil(lowerSheet.window)
+        XCTAssertFalse(lowerSheet.isHidden)
+        XCTAssertEqual(lowerSheet.alpha, 1)
+        XCTAssertEqual(lowerSheet.convert(lowerSheet.bounds, to: nil), lowerFrame)
+        // A native swipe on the upper sheet reveals the same lower sheet where it was.
+        let presentation = try XCTUnwrap(upper.presentationController)
+        await withCheckedContinuation { continuation in upper.dismiss(animated: false) { continuation.resume() } }
+        let reveal = expectation(description: "The lower sheet is revealed")
+        revealed = reveal
+        coordinator.presentationControllerDidDismiss(presentation)
+        await fulfillment(of: [reveal], timeout: 10)
+        XCTAssertEqual(swiped, ["screen:details"])
+        XCTAssertTrue(try layers().last === lower)
+        XCTAssertEqual(lowerSheet.alpha, 1)
+        XCTAssertEqual(lowerSheet.convert(lowerSheet.bounds, to: nil), lowerFrame)
+        XCTAssertTrue(window.isKeyWindow, "The upper sheet's window is gone and the Experience window is key again")
     }
 
     @MainActor
