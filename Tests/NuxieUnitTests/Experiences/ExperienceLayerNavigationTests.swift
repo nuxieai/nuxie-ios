@@ -166,6 +166,9 @@ final class ExperienceLayerNavigationTests: XCTestCase {
             await coordinator.tearDown()
             await MainActor.run { window.isHidden = true; previousKey?.makeKey() }
         }
+        // The Experience forces its own style; the window that decides the status bar keeps it.
+        let forcedStyle: UIUserInterfaceStyle = window.traitCollection.userInterfaceStyle == .dark ? .light : .dark
+        host.overrideUserInterfaceStyle = forcedStyle
         try await coordinator.install()
         coordinator.setContentHidden(false)
         _ = await coordinator.activateInitialScreen()
@@ -198,6 +201,11 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         XCTAssertEqual(lowerSheet.convert(lowerSheet.bounds, to: nil), lowerFrame)
         // An in-app link on the upper sheet opens above it, in the upper sheet's own window.
         XCTAssertFalse(upper.view.window === window)
+        // The stacked root decides the status bar while it is on top, as the Experience controller
+        // does in one window. The sheets themselves do not take the override in either arrangement.
+        XCTAssertEqual(upper.presentingViewController?.traitCollection.userInterfaceStyle, forcedStyle)
+        XCTAssertEqual(upper.traitCollection.userInterfaceStyle, lower.traitCollection.userInterfaceStyle,
+            "The upper sheet keeps the style a sheet has in one window")
         XCTAssertTrue(ExperienceLinkRouting.inAppHost(above: coordinator.topPresentedLayer ?? host) === upper)
         // A native swipe on the upper sheet reveals the same lower sheet where it was.
         let presentation = try XCTUnwrap(upper.presentationController)
