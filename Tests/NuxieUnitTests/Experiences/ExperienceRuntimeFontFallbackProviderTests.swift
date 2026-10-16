@@ -2,6 +2,8 @@
 import CoreText
 import CryptoKit
 import Foundation
+import ImageIO
+import NuxieRuntimeC
 import XCTest
 @testable import NuxieRuntime
 
@@ -17,6 +19,113 @@ final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
         var glyph: CGGlyph = 0
         _ = CTFontGetGlyphsForCharacters(font, &character, &glyph, 1)
         return glyph
+    }
+
+    private final class PictureAnswer {
+        var png = Data()
+        var width: UInt32 = 0
+        var height: UInt32 = 0
+        var rectangle = CGRect.zero
+        var calls = 0
+    }
+
+    func testOnlyColorFacesInstallPictureCallback() throws {
+        for (text, color) in [("😀", true), ("ש", false)] {
+            let owner = ExperienceRuntimeFontFallbackProvider.OutlineFont(try selected(text))
+            let context = Unmanaged.passRetained(owner)
+            let callbacks = ExperienceRuntimeFontFallbackProvider.callbacks(for: owner, context: context.toOpaque())
+            defer { callbacks.release?(callbacks.user_data) }
+            XCTAssertNotNil(callbacks.get_path)
+            XCTAssertEqual(callbacks.get_picture != nil, color)
+            XCTAssertEqual(callbacks.struct_size, UInt32(MemoryLayout<NuxFontOutlineCallbacks>.size))
+        }
+    }
+
+    func testPictureCallbackDoesNotEmitForMissingOrInklessGlyphs() throws {
+        let font = try selected("😀")
+        let space = glyph(0x20, in: font)
+        XCTAssertNotEqual(space, 0, "The colour face must have a real space glyph")
+        let owner = ExperienceRuntimeFontFallbackProvider.OutlineFont(font)
+        let context = Unmanaged.passRetained(owner)
+        let callbacks = ExperienceRuntimeFontFallbackProvider.callbacks(for: owner, context: context.toOpaque())
+        defer { callbacks.release?(callbacks.user_data) }
+        let answer = PictureAnswer()
+        let sinkContext = Unmanaged.passUnretained(answer).toOpaque()
+        // Cluster code points are context only, even if they describe ink.
+        var cluster: UInt32 = 0x1F600
+        for glyph in [CGGlyph(0), space] {
+            try XCTUnwrap(callbacks.get_picture)(callbacks.user_data, glyph, &cluster, 1, { context, _ in
+                guard let context else { return }
+                Unmanaged<PictureAnswer>.fromOpaque(context).takeUnretainedValue().calls += 1
+            }, sinkContext)
+        }
+        XCTAssertEqual(answer.calls, 0)
+    }
+
+    func testPictureCallbackPNGAndBaselineMatchCoreText() throws {
+        for text in ["😀", "🎉", "👍🏽", "👨‍👩‍👧‍👦"] {
+            let font = CTFontCreateCopyWithAttributes(try selected(text), 160, nil, nil)
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: text,
+                attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font]))
+            let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+            XCTAssertEqual(runs.count, 1, "The sequence must use one font run")
+            let run = try XCTUnwrap(runs.first)
+            XCTAssertEqual(CTRunGetGlyphCount(run), 1, "The sequence must shape to one emoji glyph")
+            var glyph: CGGlyph = 0
+            CTRunGetGlyphs(run, CFRange(location: 0, length: 1), &glyph)
+            XCTAssertNotEqual(glyph, 0)
+            let owner = ExperienceRuntimeFontFallbackProvider.OutlineFont(font)
+            let context = Unmanaged.passRetained(owner)
+            let callbacks = ExperienceRuntimeFontFallbackProvider.callbacks(for: owner, context: context.toOpaque())
+            defer { callbacks.release?(callbacks.user_data) }
+            let answer = PictureAnswer()
+            let sinkContext = Unmanaged.passUnretained(answer).toOpaque()
+            try XCTUnwrap(callbacks.get_picture)(callbacks.user_data, glyph, nil, 0, { context, value in
+                guard let context, let value, let png = value.pointee.png else { return }
+                let answer = Unmanaged<PictureAnswer>.fromOpaque(context).takeUnretainedValue()
+                let picture = value.pointee
+                answer.calls += 1
+                answer.png = Data(bytes: png, count: picture.png_len)
+                answer.width = picture.width
+                answer.height = picture.height
+                answer.rectangle = CGRect(x: CGFloat(picture.bearing_x),
+                    y: CGFloat(picture.top - picture.extent_y),
+                    width: CGFloat(picture.extent_x), height: CGFloat(picture.extent_y))
+            }, sinkContext)
+            XCTAssertEqual(answer.calls, 1)
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(answer.png as CFData, nil))
+            let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(image.width, Int(answer.width))
+            XCTAssertEqual(image.height, Int(answer.height))
+            let bounds = CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, nil, 1).integral
+            XCTAssertEqual(answer.rectangle.minX, bounds.minX / 160, accuracy: 0.000001)
+            XCTAssertEqual(answer.rectangle.minY, bounds.minY / 160, accuracy: 0.000001)
+            XCTAssertEqual(answer.rectangle.width, bounds.width / 160, accuracy: 0.000001)
+            XCTAssertEqual(answer.rectangle.height, bounds.height / 160, accuracy: 0.000001)
+            let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+            func canvas() throws -> CGContext {
+                try XCTUnwrap(CGContext(data: nil, width: 400, height: 400, bitsPerComponent: 8,
+                    bytesPerRow: 1600, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            }
+            let reference = try canvas(), restored = try canvas()
+            var origin = CGPoint(x: 100, y: 100)
+            CTFontDrawGlyphs(font, &glyph, &origin, 1, reference)
+            // Reconstruct from the ABI's em rectangle at the same baseline.
+            restored.draw(image, in: CGRect(x: (answer.rectangle.minX * 160 + 100).rounded(),
+                y: (answer.rectangle.minY * 160 + 100).rounded(),
+                width: CGFloat(image.width), height: CGFloat(image.height)))
+            try withExtendedLifetime((reference, restored)) {
+                let expected = UnsafeBufferPointer(start: try XCTUnwrap(reference.data).assumingMemoryBound(to: UInt8.self), count: 640000)
+                let actual = UnsafeBufferPointer(start: try XCTUnwrap(restored.data).assumingMemoryBound(to: UInt8.self), count: 640000)
+                let mismatch = zip(expected, actual).filter { abs(Int($0.0) - Int($0.1)) > 2 }.count
+                XCTAssertLessThan(mismatch, 100, "PNG placement and pixels must agree with a direct baseline draw for \(text)")
+                let saturated = stride(from: 0, to: actual.count, by: 4).filter {
+                    let rgb = [actual[$0], actual[$0 + 1], actual[$0 + 2]]
+                    return Int(rgb.max()!) - Int(rgb.min()!) > 50 && actual[$0 + 3] > 100
+                }.count
+                XCTAssertGreaterThan(saturated, 100, "The PNG must contain colour artwork")
+            }
+        }
     }
 
     func testSecondMissingCharacterGetsAnotherCoreTextFaceAndStopsAtTwo() throws {

@@ -67,14 +67,8 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                                "The published row must exercise the real OS fallback hook")
                 XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: top), 100)
             }
-            // Pinned Rive only reads PNG color bitmaps. On qualified iOS 27.0,
-            // Apple Color Emoji supplies emjc and CoreText supplies no path.
-            // A blank emoji row therefore matches upstream; this is not emoji support.
-            let os = ProcessInfo.processInfo.operatingSystemVersion
-            if os.majorVersion == 27 && os.minorVersion == 0 {
-                XCTAssertEqual(ordinaryTextInk(frame.pixels, top: 464), 0,
-                    "Qualified iOS 27.0 emjc emoji must match pinned upstream's blank row")
-            }
+            XCTAssertGreaterThan(ordinaryTextColorInk(frame.pixels, top: 464), 100,
+                "Emoji must draw saturated colour artwork, independent of the OS bitmap format")
             // CoreText may select LastResort artwork for U+10FFFF, as rive-ios permits.
             XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: 680), 100,
                 "The primary Latin face must keep drawing")
@@ -134,6 +128,17 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         } catch {
             try? await runtime.close()
             throw error
+        }
+    }
+
+    private func ordinaryTextColorInk(_ pixels: Data, top: Int) -> Int {
+        (top..<(top + 104)).reduce(0) { sum, y in
+            sum + (0..<390).reduce(0) { count, x in
+                let offset = (y * 390 + x) * 4
+                let channels = [pixels[offset], pixels[offset + 1], pixels[offset + 2]]
+                return count + (Int(channels.max()!) - Int(channels.min()!) > 60
+                    && channels.max()! > 120 ? 1 : 0)
+            }
         }
     }
 

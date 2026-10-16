@@ -2,6 +2,7 @@
 import CoreText
 import CryptoKit
 import Foundation
+import ImageIO
 @_implementationOnly import NuxieRuntimeC
 #if os(iOS)
 import UIKit
@@ -89,39 +90,7 @@ package enum ExperienceRuntimeFontFallbackProvider {
                 let face = try prepareBacking(selected)
                 let coordinates = face.coordinates.map { NuxFontAxisCoord(axis: $0.axis, value: $0.value) }
                 let context = Unmanaged.passRetained(OutlineFont(selected))
-                var callbacks = NuxFontOutlineCallbacks()
-                callbacks.struct_size = UInt32(MemoryLayout<NuxFontOutlineCallbacks>.size)
-                callbacks.user_data = context.toOpaque()
-                callbacks.release = { context in
-                    guard let context else { return }
-                    Unmanaged<OutlineFont>.fromOpaque(context).release()
-                }
-                callbacks.get_path = { context, glyph, _, _, sink, sinkContext in
-                    guard let context, let sink else { return }
-                    let owner = Unmanaged<OutlineFont>.fromOpaque(context).takeUnretainedValue()
-                    guard let path = CTFontCreatePathForGlyph(owner.font, glyph, nil) else { return }
-                    // Mirrors font_hb_apple.mm apply_element: normalized 2048
-                    // scale, inverted y, and quadratic converted by the runtime.
-                    path.applyWithBlock { element in
-                        let element = element.pointee
-                        let verb: UInt8
-                        let pointCount: Int
-                        switch element.type {
-                        case .moveToPoint: verb = 0; pointCount = 1
-                        case .addLineToPoint: verb = 1; pointCount = 1
-                        case .addQuadCurveToPoint: verb = 2; pointCount = 2
-                        case .addCurveToPoint: verb = 3; pointCount = 3
-                        case .closeSubpath: verb = 4; pointCount = 0
-                        @unknown default: return
-                        }
-                        var points: [Float] = []
-                        for index in 0..<pointCount {
-                            points.append(Float(element.points[index].x) / 2048)
-                            points.append(-Float(element.points[index].y) / 2048)
-                        }
-                        points.withUnsafeBufferPointer { sink(sinkContext, verb, $0.baseAddress) }
-                    }
-                }
+                var callbacks = ExperienceRuntimeFontFallbackProvider.callbacks(for: context.takeUnretainedValue(), context: context.toOpaque())
                 var font: OpaquePointer?
                 let status = face.path.utf8.map { CChar(bitPattern: $0) }.withUnsafeBufferPointer { path in
                     coordinates.withUnsafeBufferPointer { coords in
@@ -197,12 +166,118 @@ package enum ExperienceRuntimeFontFallbackProvider {
         _ = installation
     }
 
-    private final class OutlineFont {
+    // The immutable CTFonts are safe to share; bitmap, encoder and bytes are
+    // local to each callback. The runtime owns the per-glyph answer cache.
+    final class OutlineFont {
+        static let pixelsPerEm: CGFloat = 160
         let font: CTFont
+        private let pictureFont: CTFont
 
         init(_ font: CTFont) {
             self.font = CTFontCreateCopyWithAttributes(font, 2048, nil, nil)
+            // Apple's largest emoji strike: layout metrics remain in em units.
+            self.pictureFont = CTFontCreateCopyWithAttributes(font, Self.pixelsPerEm, nil, nil)
         }
+
+        struct Picture {
+            let png: Data
+            let width: Int
+            let height: Int
+            /// Pixel coordinates, y up, relative to the CoreText baseline.
+            let bounds: CGRect
+        }
+
+        func picture(_ glyph: CGGlyph) -> Picture? {
+            guard glyph != 0 else { return nil }
+            var glyph = glyph
+            let bounds = CTFontGetBoundingRectsForGlyphs(pictureFont, .default, &glyph, nil, 1)
+            guard !bounds.isNull, !bounds.isInfinite,
+                  bounds.minX.isFinite, bounds.minY.isFinite,
+                  bounds.width > 0, bounds.height > 0 else { return nil }
+            let rect = bounds.integral
+            guard rect.width <= 1024, rect.height <= 1024,
+                  let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let bitmap = CGContext(data: nil, width: Int(rect.width), height: Int(rect.height),
+                      bitsPerComponent: 8, bytesPerRow: Int(rect.width) * 4, space: space,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                          | CGBitmapInfo.byteOrder32Big.rawValue) else { return nil }
+            bitmap.translateBy(x: -rect.minX, y: -rect.minY)
+            var origin = CGPoint.zero
+            CTFontDrawGlyphs(pictureFont, &glyph, &origin, 1, bitmap)
+            // A glyph can have bounds without painted ink. Do not cache a
+            // transparent picture as a successful answer for that glyph.
+            let hasInk = withExtendedLifetime(bitmap) {
+                guard let bytes = bitmap.data?.assumingMemoryBound(to: UInt8.self) else { return false }
+                return stride(from: 3, to: bitmap.bytesPerRow * bitmap.height, by: 4)
+                    .contains { bytes[$0] != 0 }
+            }
+            guard hasInk else { return nil }
+            guard let image = bitmap.makeImage() else { return nil }
+            let png = NSMutableData()
+            guard let encoder = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(encoder, image, nil)
+            guard CGImageDestinationFinalize(encoder), png.length <= 4 * 1024 * 1024 else { return nil }
+            return Picture(png: png as Data, width: image.width, height: image.height, bounds: rect)
+        }
+    }
+
+    // Context ownership still transfers only when nux_font_new_with_outline
+    // succeeds. Exposed internally so tests exercise the actual C callbacks.
+    static func callbacks(for owner: OutlineFont, context: UnsafeMutableRawPointer) -> NuxFontOutlineCallbacks {
+        var callbacks = NuxFontOutlineCallbacks()
+        callbacks.struct_size = UInt32(MemoryLayout<NuxFontOutlineCallbacks>.size)
+        callbacks.user_data = context
+        callbacks.release = { context in
+            guard let context else { return }
+            Unmanaged<OutlineFont>.fromOpaque(context).release()
+        }
+        callbacks.get_path = { context, glyph, _, _, sink, sinkContext in
+            guard let context, let sink else { return }
+            let owner = Unmanaged<OutlineFont>.fromOpaque(context).takeUnretainedValue()
+            guard let path = CTFontCreatePathForGlyph(owner.font, glyph, nil) else { return }
+            // Mirrors font_hb_apple.mm apply_element: normalized 2048
+            // scale, inverted y, and quadratic converted by the runtime.
+            path.applyWithBlock { element in
+                let element = element.pointee
+                let verb: UInt8
+                let pointCount: Int
+                switch element.type {
+                case .moveToPoint: verb = 0; pointCount = 1
+                case .addLineToPoint: verb = 1; pointCount = 1
+                case .addQuadCurveToPoint: verb = 2; pointCount = 2
+                case .addCurveToPoint: verb = 3; pointCount = 3
+                case .closeSubpath: verb = 4; pointCount = 0
+                @unknown default: return
+                }
+                var points: [Float] = []
+                for index in 0..<pointCount {
+                    points.append(Float(element.points[index].x) / 2048)
+                    points.append(-Float(element.points[index].y) / 2048)
+                }
+                points.withUnsafeBufferPointer { sink(sinkContext, verb, $0.baseAddress) }
+            }
+        }
+        if CTFontGetSymbolicTraits(owner.font).contains(.traitColorGlyphs) {
+            callbacks.get_picture = { context, glyph, _, _, sink, sinkContext in
+                guard let context, let sink else { return }
+                let owner = Unmanaged<OutlineFont>.fromOpaque(context).takeUnretainedValue()
+                guard let picture = owner.picture(glyph) else { return }
+                picture.png.withUnsafeBytes { bytes in
+                    var value = NuxFontPicture()
+                    value.struct_size = UInt32(MemoryLayout<NuxFontPicture>.size)
+                    value.png = bytes.bindMemory(to: UInt8.self).baseAddress
+                    value.png_len = bytes.count
+                    value.width = UInt32(picture.width)
+                    value.height = UInt32(picture.height)
+                    value.bearing_x = Float(picture.bounds.minX / OutlineFont.pixelsPerEm)
+                    value.top = Float(picture.bounds.maxY / OutlineFont.pixelsPerEm)
+                    value.extent_x = Float(picture.bounds.width / OutlineFont.pixelsPerEm)
+                    value.extent_y = Float(picture.bounds.height / OutlineFont.pixelsPerEm)
+                    sink(sinkContext, &value)
+                }
+            }
+        }
+        return callbacks
     }
 
     package static func backing(for font: CTFont) throws -> Face {
