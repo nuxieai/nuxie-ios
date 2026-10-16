@@ -1,20 +1,16 @@
 name: Tests
 
+# Manual only: pull requests list their local checks (`make test`) in the
+# pull request body instead of running repository CI.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # The two self-hosted listeners share one Mac and one CoreSimulator service.
-  # Give fork PRs a disposable group while trusted runs serialize through the FIFO queue.
-  group: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('nuxie-ios-fork-{0}', github.run_id) || 'nuxie-ios-shared-simulator' }}
-  queue: max
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   public-api:
@@ -47,8 +43,4 @@ jobs:
 
   apple-ci:
     name: Apple CI
-    # Candidate workflows run on hosted macOS. The protected-main reusable
-    # workflow alone selects persistent Nuxie runners after landing.
     uses: ./.github/workflows/_trusted-macos.yml
-    with:
-      force_hosted: ${{ github.ref != 'refs/heads/main' }}

@@ -2,12 +2,6 @@ name: Trusted macOS CI
 
 on:
   workflow_call:
-    inputs:
-      force_hosted:
-        description: Run Apple jobs on disposable GitHub-hosted macOS.
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -15,7 +9,7 @@ permissions:
 jobs:
   unit:
     name: Unit and native runtime (iOS)
-    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +46,7 @@ jobs:
     name: Build (macOS)
     needs: unit
     if: ${{ !cancelled() }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -89,7 +83,7 @@ jobs:
     name: Unit (macOS)
     needs: macos-build
     if: ${{ !cancelled() }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -126,7 +120,7 @@ jobs:
     name: Experience Runtime UI (iOS)
     needs: macos-unit
     if: ${{ !cancelled() }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -162,8 +156,8 @@ jobs:
   integration:
     name: Integration (iOS)
     needs: flow-runtime-ui
-    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    if: ${{ !cancelled() }}
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -199,8 +193,8 @@ jobs:
   e2e:
     name: E2E (iOS)
     needs: integration
-    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-    runs-on: ${{ fromJSON((!inputs.force_hosted && github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '["self-hosted","macOS","ARM64","nuxie-pr"]' || '["macos-latest"]') }}
+    if: ${{ !cancelled() }}
+    runs-on: macos-latest
     timeout-minutes: 90
     env:
       NUXIE_E2E_PHASE1: "1"
