@@ -16,5 +16,7 @@ in `Tests/NuxieUnitTests/Fixtures/LICENSE-ordinary-font-fallback.txt`.
 The published-text regression observes the actual C fallback hook and compares
 its selected PostScript names with CoreText. It also checks visible native ink.
 The typed two-field form qualifies Japanese, Arabic, Hebrew, Hindi, Latin,
-emoji and symbols after focus moves. Only iOS 27.0 currently checks the known
-blank Apple emjc emoji row; other OS versions do not inherit that expectation.
+emoji and symbols after focus moves. Ordinary and typed emoji must contain
+saturated colour ink on every OS version. CoreText supplies PNG glyph pictures
+for colour fallback faces, including Apple emjc strikes that the runtime cannot
+decode itself; monochrome outlines do not satisfy the emoji checks.
