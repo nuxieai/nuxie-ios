@@ -1397,11 +1397,13 @@ private final class ExperienceStackedSheetWindow {
     let presenter = ExperienceStackedSheetPresenter()
     private let window: UIWindow
     private weak var lowerWindow: UIWindow?
+    private let lowerWindowHidAccessibility: Bool
     private var isClosed = false
 
     init?(above lowerWindow: UIWindow?, host: UIViewController?) {
         guard let lowerWindow, let scene = lowerWindow.windowScene else { return nil }
         self.lowerWindow = lowerWindow
+        lowerWindowHidAccessibility = lowerWindow.accessibilityElementsHidden
         window = UIWindow(windowScene: scene)
         window.backgroundColor = .clear
         window.windowLevel = UIWindow.Level(rawValue: lowerWindow.windowLevel.rawValue + 1)
@@ -1412,6 +1414,10 @@ private final class ExperienceStackedSheetWindow {
         presenter.view.backgroundColor = .clear
         window.rootViewController = presenter
         window.makeKeyAndVisible()
+        // UIKit keeps VoiceOver inside the top sheet only among views of one window. Hide the
+        // window below, so VoiceOver cannot reach, or escape-dismiss, the covered sheets in it.
+        // Each stacked window hides only the one below it, so nested windows unwind in turn.
+        lowerWindow.accessibilityElementsHidden = true
     }
 
     func close() {
@@ -1419,7 +1425,10 @@ private final class ExperienceStackedSheetWindow {
         isClosed = true
         window.isHidden = true
         window.rootViewController = nil
+        lowerWindow?.accessibilityElementsHidden = lowerWindowHidAccessibility
         if let lowerWindow, !lowerWindow.isHidden { lowerWindow.makeKey() }
+        // The revealed sheet is a new screen for VoiceOver to land on.
+        UIAccessibility.post(notification: .screenChanged, argument: nil)
     }
 }
 
