@@ -1,6 +1,6 @@
 {
-  "compilerSource": "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d",
-  "cleanParentHead": "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d",
+  "compilerSource": "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c",
+  "cleanParentHead": "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c",
   "source": "tests/fixtures/e2e-experience-files/presentation-sheets",
   "sources": {
     "tests/fixtures/e2e-experience-files/presentation-sheets/experience.json": {
@@ -16,8 +16,8 @@
       "sizeBytes": 566
     },
     "tests/fixtures/e2e-experience-files/presentation-sheets/screens/lesson/style.css": {
-      "sha256": "cdaa93a0789bb98af34ac850eff1ae9f9b1598ab928d918ede774fd72b1aa20b",
-      "sizeBytes": 345
+      "sha256": "ee5cbafbfb2def9773e876869b214d2ece43cd38ca0508ed658759713e7e053a",
+      "sizeBytes": 326
     },
     "tests/fixtures/e2e-experience-files/presentation-sheets/screens/offer/frame.json": {
       "sha256": "e8f453a26863b3f81017f281752c901e2637c5354d660a42bf94ae7bc4169f2a",
@@ -65,7 +65,7 @@
     "tools/sdk-fixtures/sheets/published-fit-content",
     "tools/sdk-fixtures/sheets/parla-large/experience.json",
     "<output-root>",
-    "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d"
+    "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c"
   ],
   "commands": [
     [
@@ -77,7 +77,7 @@
       "tools/sdk-fixtures/sheets/published-fit-content",
       "tools/sdk-fixtures/sheets/parla-large/experience.json",
       "<output-root>",
-      "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d"
+      "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c"
     ]
   ],
   "signing": {
@@ -134,40 +134,40 @@
   },
   "files": {
     "release-entry.json": {
-      "sha256": "0735910c30db48cf09e04b91b06215ac3295fba770f530e0308853dcd6338c7e",
+      "sha256": "576200f1d0a2b5a010a1432707079b9189758e75b4bd61f772158e9ffeef2c48",
       "sizeBytes": 13017
     },
     "descriptor.json": {
-      "sha256": "82537357395114cbb57d61a63061ff204890650b4551527021b9a001ff72c9de",
+      "sha256": "568b506a321f47b10e79db6006f8d054e1d4eef7b0b2c060f2381b2c323c7fd0",
       "sizeBytes": 9112
     },
     "publish-source.json": {
-      "sha256": "6c203efba1b8fbccc20e5a3ccac29efa40538c81db1fe873d58856afa956bc50",
-      "sizeBytes": 71841
+      "sha256": "8f26f27f31ccbfa89afa5bd4de675ad0d1b0e37c1b60b68d5737357a32ae9165",
+      "sizeBytes": 71805
     },
-    "renders/sha256/bb591c1be8fc988d44d760bb9d153e6fd074d4f8cf21b56365c973f858ff93eb.nux": {
-      "sha256": "bb591c1be8fc988d44d760bb9d153e6fd074d4f8cf21b56365c973f858ff93eb",
-      "sizeBytes": 12300
+    "renders/sha256/136c6eec048d8cdfc9c6f173b206368c9ec8afaa0632a74972b58f12cc57eac0.nux": {
+      "sha256": "136c6eec048d8cdfc9c6f173b206368c9ec8afaa0632a74972b58f12cc57eac0",
+      "sizeBytes": 12648
     },
     "assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": {
       "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
       "sizeBytes": 879708
     },
     "variants/large/release-entry.json": {
-      "sha256": "cbaf2178499dcb0bb6364f6e0ce130d71298cf37e169f6a89b34163090bf4f37",
+      "sha256": "ca0fae052ef186bfa84031b406d56114e08b4ae02bc3b1416d8a27fc9b05375b",
       "sizeBytes": 13017
     },
     "variants/large/descriptor.json": {
-      "sha256": "5c9357145f917913bbc1189e34acecd20c0f1d156009c34ac2406efe1bb49524",
+      "sha256": "fd283b47e4fe32019bf3b9335fe3cd568a0f034cfb7edf2ca99d3aad7c6e4af5",
       "sizeBytes": 9112
     },
     "variants/large/publish-source.json": {
-      "sha256": "dc00e9375d6e59902a307c5673cf00a71cd5927e4ab05b4ad0505bb2793faf7e",
-      "sizeBytes": 72483
+      "sha256": "f3ba05425ed1a7e95b66b1ade55c9693a357380518bbd6add25e9dd07f75a123",
+      "sizeBytes": 72447
     },
-    "variants/large/renders/sha256/bb591c1be8fc988d44d760bb9d153e6fd074d4f8cf21b56365c973f858ff93eb.nux": {
-      "sha256": "bb591c1be8fc988d44d760bb9d153e6fd074d4f8cf21b56365c973f858ff93eb",
-      "sizeBytes": 12300
+    "variants/large/renders/sha256/136c6eec048d8cdfc9c6f173b206368c9ec8afaa0632a74972b58f12cc57eac0.nux": {
+      "sha256": "136c6eec048d8cdfc9c6f173b206368c9ec8afaa0632a74972b58f12cc57eac0",
+      "sizeBytes": 12648
     },
     "variants/large/assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": {
       "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
