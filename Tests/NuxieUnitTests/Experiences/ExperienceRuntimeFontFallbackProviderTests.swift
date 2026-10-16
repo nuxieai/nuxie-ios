@@ -67,18 +67,41 @@ final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
 
     func testFailedRebuildOfAFaceIsNotRepeatedOnEveryRequest() throws {
         // Bad or unsupported font data cannot change while the process runs.
+        var clock: TimeInterval = 1_000
         var rebuilds = 0
         let cache = ExperienceRuntimeFontFallbackProvider.Cache(prepareBacking: { _ in
             rebuilds += 1
             throw ExperienceRuntimeFontData.Failure.excessiveSize
-        })
+        }, now: { clock })
         for _ in 0..<3 { XCTAssertNil(cache.resolve(0x05E9)) }
-        XCTAssertNil(cache.resolve(0x05DC), "Another character from the same face reuses the failure")
+        clock += ExperienceRuntimeFontFallbackProvider.Cache.transientRetryInterval + 1
+        XCTAssertNil(cache.resolve(0x05DC), "Another character from the same face reuses the failure, also after the retry wait")
         XCTAssertEqual(rebuilds, 1)
     }
 
+    func testFontFileTheRuntimeCannotOpenIsRetriedLater() throws {
+        // The runtime reports a file it cannot open or map as ImportError,
+        // the same status as data it refuses, so neither stays failed for good.
+        let junk = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".ttf")
+        try Data("not a font".utf8).write(to: junk)
+        defer { try? FileManager.default.removeItem(at: junk) }
+        var clock: TimeInterval = 1_000
+        var attempts = 0
+        let cache = ExperienceRuntimeFontFallbackProvider.Cache(prepareBacking: { font in
+            attempts += 1
+            if attempts == 1 { return ExperienceRuntimeFontFallbackProvider.Face(path: junk.path, index: 0, coordinates: []) }
+            return try ExperienceRuntimeFontFallbackProvider.backing(for: font)
+        }, now: { clock })
+        XCTAssertNil(cache.resolve(0x05E9))
+        XCTAssertNil(cache.resolve(0x05E9), "Typing again at once must not repeat the refused file")
+        XCTAssertEqual(attempts, 1)
+        clock += ExperienceRuntimeFontFallbackProvider.Cache.transientRetryInterval + 1
+        XCTAssertNotNil(cache.resolve(0x05E9))
+        XCTAssertEqual(attempts, 2)
+    }
+
     func testTransientBackingFailureWaitsBeforeItIsRetried() throws {
-        var clock = Date(timeIntervalSince1970: 1_000)
+        var clock: TimeInterval = 1_000
         var attempts = 0
         let cache = ExperienceRuntimeFontFallbackProvider.Cache(prepareBacking: { font in
             attempts += 1

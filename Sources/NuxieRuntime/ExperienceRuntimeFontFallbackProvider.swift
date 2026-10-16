@@ -39,22 +39,26 @@ package enum ExperienceRuntimeFontFallbackProvider {
             /// Font data that CoreText or the runtime cannot use. OS font
             /// bytes cannot change while the process runs.
             case unusable
-            /// File or disk trouble. The face is not tried again until then.
-            case retryAfter(Date)
+            /// File or disk trouble. The face is not tried again until this
+            /// uptime.
+            case retryAfter(TimeInterval)
         }
 
         /// Runtime statuses that mean the font data itself was refused.
-        private static let unusableStatuses: Set<NuxieNativeStatus> = [.importError, .invalidArgument, .limitExceeded]
+        /// ImportError is not one: the runtime also returns it when opening
+        /// or mapping the file fails, which is retried like any file failure.
+        private static let unusableStatuses: Set<NuxieNativeStatus> = [.invalidArgument, .limitExceeded]
 
         private let lock = NSLock()
         private var characters: [UInt32: Resolution] = [:]
         private var fonts: [String: Resolution] = [:]
         private var failures: [String: FailedFace] = [:]
         private let prepareBacking: (CTFont) throws -> Face
-        private let now: () -> Date
+        /// Uptime rather than the wall clock, so a clock change cannot stretch a wait.
+        private let now: () -> TimeInterval
 
         package init(prepareBacking: @escaping (CTFont) throws -> Face = ExperienceRuntimeFontFallbackProvider.backing,
-                     now: @escaping () -> Date = { Date() }) {
+                     now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
             self.prepareBacking = prepareBacking
             self.now = now
         }
@@ -151,7 +155,7 @@ package enum ExperienceRuntimeFontFallbackProvider {
         }
 
         private func remember(_ key: String, unusable: Bool) {
-            failures[key] = unusable ? .unusable : .retryAfter(now().addingTimeInterval(Self.transientRetryInterval))
+            failures[key] = unusable ? .unusable : .retryAfter(now() + Self.transientRetryInterval)
         }
     }
 
