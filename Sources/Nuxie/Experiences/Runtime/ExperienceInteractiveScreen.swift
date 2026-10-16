@@ -1645,14 +1645,14 @@ actor ExperienceInteractiveScreen {
     private nonisolated let intrinsicPresentationBounds = ExperienceLayoutBounds(.zero)
     nonisolated var intrinsicPresentationHeight: CGFloat { intrinsicPresentationBounds.read().height }
 
-    func setPresentationHeight(fitContent: Bool, availableSize: CGSize,
-                               fillsPresentationViewport: Bool = false) async throws -> Bool {
+    /// A fit-content screen is measured in Hug for its detent, then drawn Fixed in the whole
+    /// viewport the platform gives it, so it always fills its sheet.
+    func setPresentationHeight(fitContent: Bool, availableSize: CGSize) async throws -> Bool {
         try await operationGate.withLock { [self] in
             await discardTextFrame()
-            let available = try await presentationHeight.apply(to: runtime,
-                fitContent: fitContent && !fillsPresentationViewport,
+            let available = try await presentationHeight.apply(to: runtime, fitContent: false,
                 width: Float(availableSize.width), height: Float(availableSize.height))
-            await setPresentationViewport(fitContent && available && fillsPresentationViewport ? availableSize : nil)
+            await setPresentationViewport(fitContent && available ? availableSize : nil)
             await setHeightReadback(fitContent && available, availableHeight: Double(availableSize.height))
             try await updatePresentationViewport(availableSize)
             return available

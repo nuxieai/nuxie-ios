@@ -3747,7 +3747,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let screen = try await ExperienceInteractiveScreen.open(payload: payload, pixelWidth: 300, pixelHeight: 600)
         do {
             let bound = try await screen.setPresentationHeight(fitContent: true,
-                availableSize: CGSize(width: 300, height: 600), fillsPresentationViewport: true)
+                availableSize: CGSize(width: 300, height: 600))
             XCTAssertTrue(bound)
             _ = try await screen.step(elapsedSeconds: 0)
             XCTAssertEqual(screen.intrinsicPresentationHeight, 16 + 120 + 16)
@@ -3807,13 +3807,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 availableSize: CGSize(width: 300, height: 600))
             XCTAssertTrue(bound)
             _ = try await screen.step(elapsedSeconds: 0)
-            XCTAssertEqual(screen.artboardBounds.height, 152)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 152)
             _ = try await screen.applyStateCommand(.snapshot([.init(viewModelName: "Root", instanceID: "root-sdk-id",
                 instanceName: nil, path: "contentHeight", value: .number(240))]))
             _ = try await screen.step(elapsedSeconds: 0)
-            XCTAssertEqual(screen.artboardBounds.height, 272)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 272)
             _ = try await screen.resize(pixelWidth: 500, pixelHeight: 272, layoutScaleFactor: 1)
             _ = try await screen.step(elapsedSeconds: 0)
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 272)
             XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 500, height: 272))
             _ = try await screen.setPresentationHeight(fitContent: false, availableSize: CGSize(width: 500, height: 700))
             _ = try await screen.step(elapsedSeconds: 0)
@@ -3822,7 +3823,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         } catch { try? await screen.close(); throw error }
     }
 
-    func testLiveHugResizeReflowsWrappingChildren() async throws {
+    func testFitContentResizeReflowsWrappingChildrenAndFillsTheViewport() async throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/fit-content/wrapping-children.riv"))
@@ -3831,12 +3832,14 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         do {
             _ = try await screen.setPresentationHeight(fitContent: true, availableSize: CGSize(width: 300, height: 700))
             _ = try await screen.step(elapsedSeconds: 0)
-            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 300, height: 392))
-            // Resize the same live player without reinstalling height mode. Neither
-            // expected result equals the available height, so Fixed cannot pass.
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 392)
+            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 300, height: 700))
+            // Resize the same live player without reinstalling height mode. The wrapping
+            // children reflow at the new width; the screen still draws the whole viewport.
             _ = try await screen.resize(pixelWidth: 500, pixelHeight: 700, layoutScaleFactor: 1)
             _ = try await screen.step(elapsedSeconds: 0)
-            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 500, height: 272))
+            XCTAssertEqual(screen.intrinsicPresentationHeight, 272)
+            XCTAssertEqual(screen.artboardBounds.size, CGSize(width: 500, height: 700))
             try await screen.close()
         } catch { try? await screen.close(); throw error }
     }

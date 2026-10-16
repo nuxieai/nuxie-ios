@@ -394,8 +394,7 @@ final class ExperienceScreenViewController: UIViewController {
         guard let interactiveScreen, let presentationLoop else { throw CancellationError() }
         try await presentationLoop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork { [weak self] in
             let available = try await interactiveScreen.setPresentationHeight(
-                fitContent: presentation.fitsContent, availableSize: availableSize,
-                fillsPresentationViewport: presentation.fitsContent)
+                fitContent: presentation.fitsContent, availableSize: availableSize)
             return .work(requestsFrame: false) { [weak self] in
                 self?.measuresContentHeight = presentation.fitsContent && available
             }
