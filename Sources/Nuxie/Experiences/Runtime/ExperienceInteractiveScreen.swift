@@ -1644,6 +1644,12 @@ actor ExperienceInteractiveScreen {
     private var presentationViewportSize: CGSize?
     private nonisolated let intrinsicPresentationBounds = ExperienceLayoutBounds(.zero)
     nonisolated var intrinsicPresentationHeight: CGFloat { intrinsicPresentationBounds.read().height }
+    private nonisolated let contentMeasurement = ExperienceContentMeasurement()
+    /// Native runtime steps this screen has run, counting the zero-time measurement passes.
+    private(set) var runtimeStepCount = 0
+
+    /// A screen covered by another Journey layer stays active but does not re-measure.
+    nonisolated func setCoveredByLayer(_ covered: Bool) { contentMeasurement.setCovered(covered) }
 
     /// A fit-content screen is measured in Hug for its detent, then drawn Fixed in the whole
     /// viewport the platform gives it, so it always fills its sheet.
@@ -1670,6 +1676,7 @@ actor ExperienceInteractiveScreen {
         availablePresentationHeight = availableHeight
         fitsContentHeight = enabled
         needsLayoutReadback = true
+        contentMeasurement.invalidate()
     }
     private let operationGate = ExperienceInteractiveOperationGate()
     private let stateCommandGate = ExperienceInteractiveOperationGate()
@@ -1971,6 +1978,7 @@ actor ExperienceInteractiveScreen {
         let batch = environmentBindings.mutations(reference: environmentReference,
             reduceMotion: reduceMotion, safeArea: safeArea, viewport: viewport, fold: fold)
         guard !batch.isEmpty else { return }
+        contentMeasurement.invalidate()
         try await operationGate.withLock { _ = try await runtime.mutateViewModel(batch) }
     }
 
@@ -1990,6 +1998,7 @@ actor ExperienceInteractiveScreen {
             if let trigger = confirmedResponseSaveTrigger {
                 let root = try await runtime.rootViewModelReference()
                 _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
+                contentMeasurement.invalidate()
             }
             let frame = try await runtime.stepWithSnapshot(
                 inputs: nativeInputs,
@@ -1999,8 +2008,13 @@ actor ExperienceInteractiveScreen {
                 correlationID: correlationID,
                 textRunNames: []
             )
+            await countRuntimeSteps(1)
             var result = frame.result
             let eventSnapshot = frame.snapshot
+            // The input step itself lays out in the Fixed viewport. Content height can only
+            // have moved if the runtime is still animating or changed state or bound values.
+            let layoutMayHaveChanged = result.keepGoing || !result.stateChanges.isEmpty
+                || !result.viewModelChanges.isEmpty
             try await refreshLayoutBounds()
             if let videoPlayback {
                 let videoActive = try await videoPlayback.tick()
@@ -2014,7 +2028,8 @@ actor ExperienceInteractiveScreen {
             var keepGoing = inputResult.keepGoing
             var finalResult = result
             var finalSnapshot = eventSnapshot
-            if let measurement = await fitContentMeasurement() {
+            if let measurement = await fitContentMeasurement(),
+               contentMeasurement.begin(layoutMayHaveChanged: layoutMayHaveChanged) {
                 let viewport = measurement.viewport
                 // User input is processed in the fixed viewport drawn on the previous frame.
                 // Then measure intrinsic content without publishing an intermediate drawable,
@@ -2025,6 +2040,7 @@ actor ExperienceInteractiveScreen {
                         height: Float(measure ? measurement.measureHeight : Double(viewport.height)))
                     let settled = try await runtime.stepWithSnapshot(elapsedSeconds: 0,
                         correlationID: correlationID, textRunNames: [])
+                    await countRuntimeSteps(1)
                     if measure {
                         intrinsicPresentationBounds.update(size: try await runtime.layoutSize())
                     }
@@ -2044,6 +2060,8 @@ actor ExperienceInteractiveScreen {
                 focusState: finalResult.focusState, effects: effects)
         }
     }
+
+    private func countRuntimeSteps(_ count: Int) { runtimeStepCount += count }
 
     private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool, snapshot: NuxieNativeViewModelSnapshot?) {
         guard requested else {
@@ -2168,6 +2186,7 @@ actor ExperienceInteractiveScreen {
         correlationID: UInt64 = 0
     ) async throws -> ExperienceInteractiveMutationResult {
         let runtime = runtime
+        contentMeasurement.invalidate()
         return try await operationGate.withLock { [self] in
             try await refreshTrackedTopology()
             let materialization = try await materializeListRowsIfNeeded(for: mutations)
@@ -3616,6 +3635,7 @@ actor ExperienceInteractiveScreen {
         }
         guard let ownerInstanceID else { return nil }
         let stateCompiler = self.stateCompiler
+        contentMeasurement.invalidate()
         return try await operationGate.withLock { [self] in
             let current = try await runtime.fieldOwnerSnapshot(ownerInstanceID)
             guard current.rootInstanceID == ownerInstanceID,
@@ -3640,6 +3660,7 @@ actor ExperienceInteractiveScreen {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
         let runtime = runtime
+        contentMeasurement.invalidate()
         try await operationGate.withLock {
             try await runtime.setFieldContentOffset(captureID: captureID, nodeID: nodeID,
                 name: input.textInputName, x: Float(offset.x), y: Float(offset.y))
@@ -3685,6 +3706,7 @@ actor ExperienceInteractiveScreen {
             if pixelWidth > 0, pixelHeight > 0 {
                 await resizePresentationViewport(CGSize(width: Double(Float(pixelWidth) / layoutScaleFactor),
                     height: Double(Float(pixelHeight) / layoutScaleFactor)))
+                contentMeasurement.invalidate()
                 try await runtime.setLayoutSize(width: Float(pixelWidth) / layoutScaleFactor,
                     height: Float(pixelHeight) / layoutScaleFactor)
                 await markLayoutReadbackPending(true)
@@ -3740,6 +3762,7 @@ actor ExperienceInteractiveScreen {
 
     func queueSemanticAction(captureID: UUID, nodeID: UInt32, action: NuxieNativeSemanticAction) async throws {
         let runtime = runtime
+        contentMeasurement.invalidate()
         try await operationGate.withLock {
             try await runtime.queueSemanticAction(captureID: captureID, nodeID: nodeID, action: action)
         }
