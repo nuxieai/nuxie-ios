@@ -1639,7 +1639,8 @@ final class RecordingJourneyPresenter {
     func dispatchJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        effectId: String
+        effectId: String,
+        sourceScreenId: String?
     ) async -> JourneyPresentationActionResult {
         presentationActions.append((
             journeyId: owner.journeyId,

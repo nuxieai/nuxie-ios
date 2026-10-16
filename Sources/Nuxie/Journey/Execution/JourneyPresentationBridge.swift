@@ -243,11 +243,14 @@ protocol JourneyPresenting: AnyObject, Sendable {
         eventSource: ExperienceResolvedEventSource?
     ) -> [String: JourneyReleaseJSONValue]?
 
+    /// `sourceScreenId` is the screen whose emission started the route, when the route
+    /// runs from one; an authored dismiss closes only that screen's layer.
     @MainActor
     func dispatchJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        effectId: String
+        effectId: String,
+        sourceScreenId: String?
     ) async -> JourneyPresentationActionResult
 
     @MainActor

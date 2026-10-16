@@ -616,7 +616,8 @@ final class ExperiencePresentationService {
     func dispatchJourneyPresentationAction(
         owner: JourneyPresentationOwner,
         action: [String: JourneyReleaseJSONValue],
-        effectId: String
+        effectId: String,
+        sourceScreenId: String? = nil
     ) async -> JourneyPresentationActionResult {
         let admission: JourneyPresentationAdmission<JourneyActionType> =
             await admitJourneyPresentation(
@@ -736,9 +737,16 @@ final class ExperiencePresentationService {
             )
 
         case .dismiss:
-            if action["scope"] != .string("all"), controller.hasPresentedLayer {
-                result = await controller.dismissTopJourneyLayer() ? .handled : .failed
-            } else {
+            let layerClose = action["scope"] == .string("all") ? nil
+                : await controller.dismissTopJourneyLayer(issuedFrom: sourceScreenId)
+            switch layerClose {
+            case .navigated?, .alreadyActive?, .superseded?:
+                // Superseded: the person closed the issuing sheet first. The close is
+                // settled, as a superseded navigation is, so the Journey does not abandon.
+                result = .handled
+            case .failed?, .productsUnavailable?:
+                result = .failed
+            case nil:
                 // Persist terminal completion before tearing down the surface.
                 if case .string(let reason)? = action["reason"], !reason.isEmpty {
                     result = .completed(outcome: reason)

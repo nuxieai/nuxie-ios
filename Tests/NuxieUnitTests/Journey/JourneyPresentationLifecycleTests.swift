@@ -1645,9 +1645,9 @@ private final class ObservedLinkPresenter: JourneyPresenting {
     func resolveJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], source: ScreenEmissionSource?, eventSource: ExperienceResolvedEventSource?) -> [String: JourneyReleaseJSONValue]? {
         base.resolveJourneyPresentationAction(owner: owner, action: action, source: source, eventSource: eventSource)
     }
-    func dispatchJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], effectId: String) async -> JourneyPresentationActionResult {
+    func dispatchJourneyPresentationAction(owner: JourneyPresentationOwner, action: [String: JourneyReleaseJSONValue], effectId: String, sourceScreenId: String?) async -> JourneyPresentationActionResult {
         attempts.append("dispatch")
-        return await base.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: effectId)
+        return await base.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: effectId, sourceScreenId: sourceScreenId)
     }
     func finishJourneyPresentation(owner: JourneyPresentationOwner) async {
         attempts.append("finish")

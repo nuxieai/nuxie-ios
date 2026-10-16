@@ -959,15 +959,20 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                 }
 
                 it("dismisses an upper layer and completes only scope all or the base") { @MainActor in
-                    for (hasLayer, scope, expected) in [
-                        (true, Optional<String>.none, JourneyPresentationActionResult.handled),
-                        (true, "all", .completed(outcome: "offer_saved")),
-                        (false, nil, .completed(outcome: "offer_saved"))
+                    // A superseded close found its sheet already closed by the person: it is settled, not failed.
+                    for (hasLayer, scope, closeResult, expected) in [
+                        (true, Optional<String>.none, ExperienceScreenNavigationResult.navigated,
+                            JourneyPresentationActionResult.handled),
+                        (true, nil, .superseded, .handled),
+                        (true, nil, .failed, .failed),
+                        (true, "all", .navigated, .completed(outcome: "offer_saved")),
+                        (false, nil, .navigated, .completed(outcome: "offer_saved"))
                     ] {
-                        let versionID = "Journey-layer-dismiss-\(hasLayer)-\(scope ?? "top")"
+                        let versionID = "Journey-layer-dismiss-\(hasLayer)-\(scope ?? "top")-\(closeResult)"
                         let controller = LayerDismissRecordingExperienceViewController(mockExperienceVersionId: versionID,
                             mockScreenId: "screen-selected")
                         controller.layerIsPresented = hasLayer
+                        controller.layerCloseResult = closeResult
                         mockExperienceService.mockViewControllers[versionID] = controller
                         let owner = JourneyPresentationOwner(journeyId: "journey-owner", distinctId: "user-1")
                         let request = JourneyPresentationRequest(fences: testPresentationFences(),
@@ -979,9 +984,11 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         expect(shown).to(equal(.shown))
                         var action: [String: JourneyReleaseJSONValue] = ["type": .string("dismiss"), "reason": .string("offer_saved")]
                         if let scope { action["scope"] = .string(scope) }
-                        let result = await service.dispatchJourneyPresentationAction(owner: owner, action: action, effectId: "done")
+                        let result = await service.dispatchJourneyPresentationAction(owner: owner, action: action,
+                            effectId: "done", sourceScreenId: "screen-selected")
                         expect(result).to(equal(expected))
-                        expect(controller.layerCloseCount).to(equal(expected == .handled ? 1 : 0))
+                        expect(controller.layerCloseCount).to(equal(hasLayer && scope == nil ? 1 : 0))
+                        expect(controller.issuingScreenIds).to(equal(scope == nil ? ["screen-selected"] : []))
                         await service.shutdownJourneyPresentation(ownerDistinctId: "user-1")
                     }
                 }
@@ -1597,10 +1604,14 @@ private actor SuspendedExperienceTestStore: NuxieTestStorePurchasing {
 private final class LayerDismissRecordingExperienceViewController: MockExperienceViewController {
     var layerIsPresented = false
     var layerCloseCount = 0
+    var layerCloseResult = ExperienceScreenNavigationResult.navigated
+    var issuingScreenIds: [String?] = []
     override var hasPresentedLayer: Bool { layerIsPresented }
-    override func dismissTopJourneyLayer() async -> Bool {
+    override func dismissTopJourneyLayer(issuedFrom screenId: String?) async -> ExperienceScreenNavigationResult? {
+        issuingScreenIds.append(screenId)
+        guard layerIsPresented else { return nil }
         layerCloseCount += 1
         layerIsPresented = false
-        return true
+        return layerCloseResult
     }
 }

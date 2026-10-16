@@ -826,11 +826,20 @@ class ExperienceViewController: NuxiePlatformViewController {
     var topJourneyLayer: UIViewController? { screenTransitionCoordinator?.topPresentedLayer }
     #endif
 
-    func dismissTopJourneyLayer() async -> Bool {
+    /// Closes the top Journey layer for an authored dismiss issued from `screenId`.
+    /// Nil when the dismiss belongs to the whole Experience: no layer is open above
+    /// the base and the issuing screen, when known, is still on it. A dismiss whose
+    /// sheet the person already closed is superseded.
+    func dismissTopJourneyLayer(issuedFrom screenId: String?) async -> ExperienceScreenNavigationResult? {
         #if canImport(UIKit)
-        await screenTransitionCoordinator?.closeTopLayer() ?? false
+        guard let coordinator = screenTransitionCoordinator else { return nil }
+        guard coordinator.hasPresentedLayer else {
+            if let screenId, coordinator.layerScreenIds.first?.contains(screenId) == false { return .superseded }
+            return nil
+        }
+        return await coordinator.closeTopLayer(issuedFrom: screenId)
         #else
-        false
+        return nil
         #endif
     }
 

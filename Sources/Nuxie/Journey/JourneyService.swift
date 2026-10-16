@@ -3077,7 +3077,8 @@ private extension JourneyService {
                                 distinctId: journal.distinctId
                             ),
                             action: resolvedAction,
-                            effectId: effectId
+                            effectId: effectId,
+                            sourceScreenId: presentationSource?.screenId
                         )
                     guard executionFence.isCurrent(executionFenceToken),
                           await isCurrentIdentity(
