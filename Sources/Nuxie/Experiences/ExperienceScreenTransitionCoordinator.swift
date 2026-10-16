@@ -1071,7 +1071,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         layer.presentationController?.delegate = self
         controller.setContentHidden(contentHidden)
         let stackedWindow = opensStackedSheet(presentation)
-            ? ExperienceStackedSheetWindow(above: presenter.view.window, orientationHost: hostViewController) : nil
+            ? ExperienceStackedSheetWindow(above: presenter.view.window, host: hostViewController) : nil
         (stackedWindow?.presenter ?? presenter).present(layer, animated: animated) {
             controller.advance(delta: 0)
             completion(.navigated, screenId)
@@ -1385,13 +1385,16 @@ private final class ExperienceStackedSheetWindow {
     private let window: UIWindow
     private weak var lowerWindow: UIWindow?
 
-    init?(above lowerWindow: UIWindow?, orientationHost: UIViewController?) {
+    init?(above lowerWindow: UIWindow?, host: UIViewController?) {
         guard let lowerWindow, let scene = lowerWindow.windowScene else { return nil }
         self.lowerWindow = lowerWindow
         window = UIWindow(windowScene: scene)
         window.backgroundColor = .clear
         window.windowLevel = UIWindow.Level(rawValue: lowerWindow.windowLevel.rawValue + 1)
-        presenter.orientationHost = orientationHost
+        presenter.orientationHost = host
+        // The root of the topmost full-screen window decides the status bar. In one window that
+        // followed the Experience controller's forced light or dark style, so this root carries it.
+        presenter.overrideUserInterfaceStyle = host?.overrideUserInterfaceStyle ?? .unspecified
         presenter.view.backgroundColor = .clear
         window.rootViewController = presenter
         window.makeKeyAndVisible()
