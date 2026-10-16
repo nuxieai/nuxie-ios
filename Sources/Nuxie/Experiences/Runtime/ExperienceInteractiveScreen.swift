@@ -1647,6 +1647,8 @@ actor ExperienceInteractiveScreen {
     private nonisolated let contentMeasurement = ExperienceContentMeasurement()
     /// Native runtime steps this screen has run, counting the zero-time measurement passes.
     private(set) var runtimeStepCount = 0
+    /// A measurement pass failed after the input step committed; the next step reports it.
+    private var deferredMeasurementFailure: Error?
 
     /// A screen covered by another Journey layer stays active but does not re-measure.
     nonisolated func setCoveredByLayer(_ covered: Bool) { contentMeasurement.setCovered(covered) }
@@ -1995,6 +1997,7 @@ actor ExperienceInteractiveScreen {
         let nativePointers = pointers.map(Self.nativePointer)
         let runtime = runtime
         return try await operationGate.withLock { [self] in
+            if let failure = await takeDeferredMeasurementFailure() { throw failure }
             if let trigger = confirmedResponseSaveTrigger {
                 let root = try await runtime.rootViewModelReference()
                 _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
@@ -2031,29 +2034,39 @@ actor ExperienceInteractiveScreen {
             if let measurement = await fitContentMeasurement(),
                contentMeasurement.begin(layoutMayHaveChanged: layoutMayHaveChanged) {
                 let viewport = measurement.viewport
-                // User input is processed in the fixed viewport drawn on the previous frame.
-                // Then measure intrinsic content without publishing an intermediate drawable,
-                // and restore Fixed so the screen paints all of UIKit's assigned space.
-                for measure in [true, false] {
-                    _ = try await presentationHeight.apply(to: runtime, fitContent: measure,
-                        width: Float(viewport.width),
-                        height: Float(measure ? measurement.measureHeight : Double(viewport.height)))
-                    let settled = try await runtime.stepWithSnapshot(elapsedSeconds: 0,
-                        correlationID: correlationID, textRunNames: [])
-                    await countRuntimeSteps(1)
-                    if measure {
-                        intrinsicPresentationBounds.update(size: try await runtime.layoutSize())
+                do {
+                    // User input is processed in the fixed viewport drawn on the previous frame.
+                    // Then measure intrinsic content without publishing an intermediate drawable,
+                    // and restore Fixed so the screen paints all of UIKit's assigned space.
+                    for measure in [true, false] {
+                        _ = try await presentationHeight.apply(to: runtime, fitContent: measure,
+                            width: Float(viewport.width),
+                            height: Float(measure ? measurement.measureHeight : Double(viewport.height)))
+                        let settled = try await runtime.stepWithSnapshot(elapsedSeconds: 0,
+                            correlationID: correlationID, textRunNames: [])
+                        await countRuntimeSteps(1)
+                        if measure {
+                            intrinsicPresentationBounds.update(size: try await runtime.layoutSize())
+                        }
+                        if let snapshot = settled.snapshot { try? await refreshTrackedTopology(snapshot: snapshot) }
+                        let projected = await projectStep(settled.result, eventSnapshot: settled.snapshot,
+                            correlationID: correlationID)
+                        effects += projected.effects
+                        keepGoing = keepGoing || projected.keepGoing
+                        finalResult = settled.result
+                        finalSnapshot = settled.snapshot
                     }
-                    if let snapshot = settled.snapshot { try? await refreshTrackedTopology(snapshot: snapshot) }
-                    let projected = await projectStep(settled.result, eventSnapshot: settled.snapshot, correlationID: correlationID)
-                    effects += projected.effects
-                    keepGoing = keepGoing || projected.keepGoing
-                    finalResult = settled.result
-                    finalSnapshot = settled.snapshot
+                    // Geometry, accessibility and text input all use the restored full viewport.
+                    await markLayoutReadbackPending(true)
+                    try await refreshLayoutBounds()
+                } catch {
+                    // The runtime already committed this step's saves and events. Return them,
+                    // and fail the screen on its next step instead of discarding the person's input.
+                    contentMeasurement.invalidate()
+                    await deferMeasurementFailure(error)
+                    finalResult = result
+                    finalSnapshot = eventSnapshot
                 }
-                // Geometry, accessibility and text input all use the restored full viewport.
-                await markLayoutReadbackPending(true)
-                try await refreshLayoutBounds()
             }
             await captureTextFrame(finalResult, requested: capturesTextLayout, snapshot: finalSnapshot)
             return ExperienceInteractiveStepResult(keepGoing: keepGoing, pointerHits: inputResult.pointerHits,
@@ -2062,6 +2075,13 @@ actor ExperienceInteractiveScreen {
     }
 
     private func countRuntimeSteps(_ count: Int) { runtimeStepCount += count }
+
+    private func deferMeasurementFailure(_ error: Error) { deferredMeasurementFailure = error }
+
+    private func takeDeferredMeasurementFailure() -> Error? {
+        defer { deferredMeasurementFailure = nil }
+        return deferredMeasurementFailure
+    }
 
     private func captureTextFrame(_ result: NuxieNativePlayerStepResult, requested: Bool, snapshot: NuxieNativeViewModelSnapshot?) {
         guard requested else {
