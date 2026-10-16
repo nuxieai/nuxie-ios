@@ -1398,12 +1398,15 @@ private final class ExperienceStackedSheetWindow {
     private let window: UIWindow
     private weak var lowerWindow: UIWindow?
     private let lowerWindowHidAccessibility: Bool
+    /// The window that was key before this one opened; an embedded host's window may not be.
+    private weak var previousKeyWindow: UIWindow?
     private var isClosed = false
 
     init?(above lowerWindow: UIWindow?, host: UIViewController?) {
         guard let lowerWindow, let scene = lowerWindow.windowScene else { return nil }
         self.lowerWindow = lowerWindow
         lowerWindowHidAccessibility = lowerWindow.accessibilityElementsHidden
+        previousKeyWindow = scene.keyWindow
         window = UIWindow(windowScene: scene)
         window.backgroundColor = .clear
         window.windowLevel = UIWindow.Level(rawValue: lowerWindow.windowLevel.rawValue + 1)
@@ -1426,7 +1429,7 @@ private final class ExperienceStackedSheetWindow {
         window.isHidden = true
         window.rootViewController = nil
         lowerWindow?.accessibilityElementsHidden = lowerWindowHidAccessibility
-        if let lowerWindow, !lowerWindow.isHidden { lowerWindow.makeKey() }
+        if let previousKeyWindow, !previousKeyWindow.isHidden { previousKeyWindow.makeKey() }
         // The revealed sheet is a new screen for VoiceOver to land on.
         UIAccessibility.post(notification: .screenChanged, argument: nil)
     }
