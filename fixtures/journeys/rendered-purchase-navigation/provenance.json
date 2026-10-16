@@ -1,10 +1,6 @@
 {
-  "generatorCheckoutCommit": "bfcdf1aa66116b8943843ea1dceff042f314bf13",
-  "descriptorSha256": "133e7da17f5bd68a1de93ba7805ca41e0d95331a890a6a1c4a63839b96a14102",
+  "generatorCheckoutCommit": "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c",
+  "descriptorSha256": "f53d787484348aa0d9b208c8499c8d08648390bb85229554299d7e833fea4f54",
   "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Test-authored signed Journey over production-publisher render bytes; not a full production release qualification.",
-  "descriptorRefresh": {
-    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
-    "previousDescriptorSha256": "4a6ed8a1ec7198a44495c80d2301057064b7e1baaff6ba53e1e1fef75a40ab06"
-  }
+  "qualification": "Test-authored signed Journey over production-publisher render bytes; not a full production release qualification."
 }
