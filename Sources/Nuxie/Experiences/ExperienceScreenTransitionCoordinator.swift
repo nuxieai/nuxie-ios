@@ -354,6 +354,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             window.presenter.dismiss(animated: false)
             window.close()
         }
+        // Teardown is the backstop for any window a host dismissal could not close.
+        for window in stackedSheetWindows.values {
+            window.presenter.dismiss(animated: false)
+            window.close()
+        }
+        stackedSheetWindows.removeAll()
         navigationLayers.dropFirst().first?.presentingViewController?.dismiss(animated: false)
         if let base = navigationLayers.first {
             base.willMove(toParent: nil)
@@ -1107,10 +1113,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     /// The Experience host is leaving the screen. UIKit takes the sheets it presented with it;
     /// sheets presented from their own windows go with them instead of waiting for teardown.
+    /// Each window keeps its record until the window has really closed, so the swipe path and
+    /// teardown can still find it if UIKit never runs a dismissal completion.
     func dismissStackedSheets(animated: Bool) {
         for layer in navigationLayers.reversed() {
-            guard let window = stackedSheetWindows.removeValue(forKey: ObjectIdentifier(layer)) else { continue }
-            window.presenter.dismiss(animated: animated) { window.close() }
+            guard let window = stackedSheetWindows[ObjectIdentifier(layer)] else { continue }
+            // UIKit skips the completion when the sheet has already left its presenter.
+            if window.presenter.presentedViewController == nil {
+                window.close()
+            } else {
+                window.presenter.dismiss(animated: animated) { window.close() }
+            }
         }
     }
 
@@ -1384,6 +1397,7 @@ private final class ExperienceStackedSheetWindow {
     let presenter = ExperienceStackedSheetPresenter()
     private let window: UIWindow
     private weak var lowerWindow: UIWindow?
+    private var isClosed = false
 
     init?(above lowerWindow: UIWindow?, host: UIViewController?) {
         guard let lowerWindow, let scene = lowerWindow.windowScene else { return nil }
@@ -1401,6 +1415,8 @@ private final class ExperienceStackedSheetWindow {
     }
 
     func close() {
+        guard !isClosed else { return }
+        isClosed = true
         window.isHidden = true
         window.rootViewController = nil
         if let lowerWindow, !lowerWindow.isHidden { lowerWindow.makeKey() }

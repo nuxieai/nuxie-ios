@@ -222,6 +222,63 @@ final class ExperienceLayerNavigationTests: XCTestCase {
     }
 
     @MainActor
+    func testDismissingTheHostClosesItsStackedSheetWindow() async throws {
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: true)
+        let scene = try XCTUnwrap(UIApplication.shared.activeWindowScene)
+        let previousKey = scene.windows.first(where: \.isKeyWindow)
+        // Second pass: the person's swipe has taken the upper sheet away and its callback is still
+        // queued when the host leaves, so the stacked root has nothing left to dismiss.
+        for sheetAlreadyGone in [false, true] {
+            let window = UIWindow(windowScene: scene)
+            let presenter = UIViewController()
+            window.rootViewController = presenter
+            window.makeKeyAndVisible()
+            let baseline = Set(scene.windows.filter { !$0.isHidden }.map(ObjectIdentifier.init))
+            func extraWindows() -> [UIWindow] {
+                scene.windows.filter { !$0.isHidden && !baseline.contains(ObjectIdentifier($0)) }
+            }
+            let host = StackedSheetHostController()
+            host.modalPresentationStyle = .fullScreen
+            await withCheckedContinuation { continuation in presenter.present(host, animated: false) { continuation.resume() } }
+            let delegate = LayerNavigationDelegate()
+            let coordinator = ExperienceScreenTransitionCoordinator(
+                experience: experience, artifact: artifact, initialScreenID: "screen",
+                hostViewController: host, screenDelegate: delegate,
+                onPresentedScreenDismissed: { _, _ in }, onScreenHidden: { _, _ in }, onScreenActive: { _ in },
+                onProductsResolved: { _ in }, onProductsUnavailable: { _ in },
+                onRuntimeFailure: { _, error in XCTFail("\(error)") })
+            host.coordinator = coordinator
+            try await coordinator.install()
+            coordinator.setContentHidden(false)
+            _ = await coordinator.activateInitialScreen()
+            for screen in ["details", "screen"] {
+                let result = await withCheckedContinuation { continuation in
+                    XCTAssertTrue(coordinator.navigate(to: screen, transition: ["type": "modal", "present": "sheet",
+                        "height": "medium", "closedby": "any"]) { result, _ in continuation.resume(returning: result) })
+                }
+                XCTAssertEqual(result, .navigated)
+            }
+            XCTAssertEqual(extraWindows().count, 1, "The upper sheet is presented from its own window")
+            let upper = try XCTUnwrap(coordinator.topPresentedLayer)
+            let presentation = try XCTUnwrap(upper.presentationController)
+            if sheetAlreadyGone {
+                await withCheckedContinuation { continuation in upper.dismiss(animated: false) { continuation.resume() } }
+            }
+            await withCheckedContinuation { continuation in presenter.dismiss(animated: false) { continuation.resume() } }
+            let deadline = ProcessInfo.processInfo.systemUptime + 3
+            while !extraWindows().isEmpty && ProcessInfo.processInfo.systemUptime < deadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertTrue(extraWindows().isEmpty, "Dismissing the Experience takes its stacked sheet window with it")
+            if sheetAlreadyGone { coordinator.presentationControllerDidDismiss(presentation) }
+            await coordinator.tearDown()
+            XCTAssertTrue(extraWindows().isEmpty)
+            window.isHidden = true
+        }
+        previousKey?.makeKey()
+    }
+
+    @MainActor
     func testAuthoredCloseRetainsActivePresenterAndClosesOnlyTheTopLayer() async throws {
         let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: true)
         let scene = try XCTUnwrap(UIApplication.shared.activeWindowScene)
@@ -379,6 +436,16 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         }
         // Source dynamic-child layout: 16 top + mutated 240 child + 16 bottom.
         XCTAssertEqual(sheet.preferredContentSize.height, 272)
+    }
+}
+
+/// Leaves the screen the way ExperienceViewController does, taking its stacked sheet windows along.
+@MainActor
+private final class StackedSheetHostController: UIViewController {
+    weak var coordinator: ExperienceScreenTransitionCoordinator?
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isBeingDismissed || isMovingFromParent { coordinator?.dismissStackedSheets(animated: animated) }
     }
 }
 
