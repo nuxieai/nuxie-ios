@@ -1,6 +1,6 @@
 {
-  "compilerSource": "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d",
-  "cleanParentHead": "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d",
+  "compilerSource": "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c",
+  "cleanParentHead": "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c",
   "source": "tools/sdk-fixtures/sheets/published-fit-content",
   "sources": {
     "tools/sdk-fixtures/sheets/published-fit-content/experience.json": {
@@ -41,7 +41,7 @@
     "tools/sdk-fixtures/sheets/published-fit-content",
     "tools/sdk-fixtures/sheets/parla-large/experience.json",
     "<output-root>",
-    "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d"
+    "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c"
   ],
   "commands": [
     [
@@ -53,7 +53,7 @@
       "tools/sdk-fixtures/sheets/published-fit-content",
       "tools/sdk-fixtures/sheets/parla-large/experience.json",
       "<output-root>",
-      "7c2f30db59c9ec4c20f45ea5a45fec1b54831e8d"
+      "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c"
     ],
     [
       "bash",
@@ -110,12 +110,12 @@
   },
   "files": {
     "published/screen.riv": {
-      "sha256": "9e41544b7fcc11adb04fe497468785e8d4368fdebb6c74468d0b7d87bbb92dd3",
-      "sizeBytes": 3491
+      "sha256": "c01c2a13505cfc3932b7375fba72248fa9ffec6f000165dac6a413aea9137c21",
+      "sizeBytes": 3848
     },
     "published/no-binding.riv": {
-      "sha256": "66b7d37fe6ab31eb0ac9b579a82067d0e430180a3df99517df4df3d99b821776",
-      "sizeBytes": 3446
+      "sha256": "061fe9b3ea350b6bd1085c7da79ee15511db9c572d3d87af5e3f7b74fafbf9aa",
+      "sizeBytes": 3803
     },
     "published/snapshot.json": {
       "sha256": "e1d2e9c6fad0781978c0bfa85160eea33d667bd16e7d0dcdaeb13cda835aa142",
