@@ -150,6 +150,7 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         let host = UIViewController()
         window.rootViewController = host
         window.makeKeyAndVisible()
+        let baseline = Set(scene.windows.filter { !$0.isHidden }.map(ObjectIdentifier.init))
         let delegate = LayerNavigationDelegate()
         var swiped: [String] = []
         var revealed: XCTestExpectation?
@@ -221,6 +222,61 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         XCTAssertEqual(lowerSheet.convert(lowerSheet.bounds, to: nil), lowerFrame)
         XCTAssertTrue(window.isKeyWindow, "The upper sheet's window is gone and the Experience window is key again")
         XCTAssertFalse(window.accessibilityElementsHidden, "The revealed sheet is reachable by VoiceOver again")
+        XCTAssertTrue(scene.windows.filter { !$0.isHidden && !baseline.contains(ObjectIdentifier($0)) }.isEmpty,
+            "The swipe takes the upper sheet's window with it")
+    }
+
+    @MainActor
+    func testStackedSheetWindowsCloseAfterAuthoredCloseAndTeardown() async throws {
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: true)
+        let scene = try XCTUnwrap(UIApplication.shared.activeWindowScene)
+        let previousKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let baseline = Set(scene.windows.filter { !$0.isHidden }.map(ObjectIdentifier.init))
+        func extraWindows() -> [UIWindow] {
+            scene.windows.filter { !$0.isHidden && !baseline.contains(ObjectIdentifier($0)) }
+        }
+        let delegate = LayerNavigationDelegate()
+        let coordinator = ExperienceScreenTransitionCoordinator(
+            experience: experience, artifact: artifact, initialScreenID: "screen",
+            hostViewController: host, screenDelegate: delegate,
+            onPresentedScreenDismissed: { _, _ in }, onScreenHidden: { _, _ in }, onScreenActive: { _ in },
+            onProductsResolved: { _ in }, onProductsUnavailable: { _ in },
+            onRuntimeFailure: { _, error in XCTFail("\(error)") })
+        addTeardownBlock {
+            await coordinator.tearDown()
+            await MainActor.run { window.isHidden = true; previousKey?.makeKey() }
+        }
+        try await coordinator.install()
+        coordinator.setContentHidden(false)
+        _ = await coordinator.activateInitialScreen()
+        func open(_ screen: String) async {
+            let result = await withCheckedContinuation { continuation in
+                XCTAssertTrue(coordinator.navigate(to: screen, transition: ["type": "modal", "present": "sheet",
+                    "height": "medium", "closedby": "any"]) { result, _ in continuation.resume(returning: result) })
+            }
+            XCTAssertEqual(result, .navigated)
+        }
+        await open("details")
+        await open("screen")
+        XCTAssertEqual(extraWindows().count, 1)
+        let closed = await coordinator.closeTopLayer(issuedFrom: "screen")
+        XCTAssertEqual(closed, .navigated)
+        XCTAssertTrue(extraWindows().isEmpty, "An authored close takes the upper sheet's window with it")
+        XCTAssertTrue(window.isKeyWindow)
+        XCTAssertFalse(window.accessibilityElementsHidden)
+        // Two stacked windows, each above the last, closed by teardown.
+        await open("screen")
+        await open("details")
+        XCTAssertEqual(coordinator.layerScreenIds, [["screen"], ["details"], ["screen"], ["details"]])
+        XCTAssertEqual(extraWindows().count, 2)
+        await coordinator.tearDown()
+        XCTAssertTrue(extraWindows().isEmpty, "Teardown closes every stacked window")
+        XCTAssertTrue(window.isKeyWindow)
+        XCTAssertFalse(window.accessibilityElementsHidden)
     }
 
     @MainActor
