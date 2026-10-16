@@ -821,6 +821,11 @@ class ExperienceViewController: NuxiePlatformViewController {
         #endif
     }
 
+    #if canImport(UIKit)
+    /// The Journey sheet on top of the Experience, if one is open over the base layer.
+    var topJourneyLayer: UIViewController? { screenTransitionCoordinator?.topPresentedLayer }
+    #endif
+
     func dismissTopJourneyLayer() async -> Bool {
         #if canImport(UIKit)
         await screenTransitionCoordinator?.closeTopLayer() ?? false

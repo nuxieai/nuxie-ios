@@ -190,9 +190,7 @@ final class ExperiencePresentationService {
                let id = currentPresentationID, !presentationTeardownIDs.contains(id),
                !controller.linkPresentationIsClosing, controller.viewIfLoaded?.window != nil,
                !controller.isBeingPresented, !controller.isBeingDismissed {
-                var top: UIViewController = controller
-                while let presented = top.presentedViewController { top = presented }
-                if !top.isBeingPresented && !top.isBeingDismissed, top.viewIfLoaded?.window != nil {
+                if let top = ExperienceLinkRouting.inAppHost(above: controller.topJourneyLayer ?? controller) {
                     state = .settled
                     host = top
                 }

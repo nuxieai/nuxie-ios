@@ -196,6 +196,9 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         XCTAssertFalse(lowerSheet.isHidden)
         XCTAssertEqual(lowerSheet.alpha, 1)
         XCTAssertEqual(lowerSheet.convert(lowerSheet.bounds, to: nil), lowerFrame)
+        // An in-app link on the upper sheet opens above it, in the upper sheet's own window.
+        XCTAssertFalse(upper.view.window === window)
+        XCTAssertTrue(ExperienceLinkRouting.inAppHost(above: coordinator.topPresentedLayer ?? host) === upper)
         // A native swipe on the upper sheet reveals the same lower sheet where it was.
         let presentation = try XCTUnwrap(upper.presentationController)
         await withCheckedContinuation { continuation in upper.dismiss(animated: false) { continuation.resume() } }
