@@ -686,6 +686,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let sourceLayer = navigationController
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
         let opensLayer = spec.kind == .modal && !isBack
+        // Decided once, so the size measured and the window presented from always agree.
+        let stacksSheet = opensLayer && opensStackedSheet(spec.presentation)
         let isRetainedTarget = sourceLayer?.viewControllers.contains(where: { $0 === targetController }) == true
         if opensLayer {
             guard ((sourceLayer as UIViewController?) ?? hostViewController)?.presentedViewController == nil else {
@@ -696,7 +698,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             if spec.presentation.fitsContent,
                let scene = hostViewController?.view.window?.windowScene ?? UIApplication.shared.activeWindowScene {
                 available = try await ExperienceLayerPresentationConfigurator.availableSheetSize(in: scene,
-                    above: opensStackedSheet(spec.presentation) ? nil : sourceLayer ?? hostViewController)
+                    above: stacksSheet ? nil : sourceLayer ?? hostViewController)
                 guard lifecycle == .installed, !Task.isCancelled else { throw CancellationError() }
                 targetController.view.frame.size = available
                 targetController.view.layoutIfNeeded()
@@ -746,7 +748,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                             to: screenId,
                             transition: rawTransition,
                             reduceMotion: reduceMotion,
-                            isBack: isBack
+                            isBack: isBack,
+                            stacksSheet: stacksSheet
                         ) { result, _ in
                             continuation.resume(returning: result.reachedTarget)
                         }
@@ -784,6 +787,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         transition rawTransition: Any?,
         reduceMotion: Bool,
         isBack: Bool,
+        stacksSheet: Bool,
         completion: @escaping Completion
     ) throws {
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
@@ -798,7 +802,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             if isBack {
                 try pushOrPop(to: screenId, animated: animated, completion: completion)
             } else {
-                try present(screenId: screenId, presentation: spec.presentation, animated: animated, completion: completion)
+                try present(screenId: screenId, presentation: spec.presentation, animated: animated,
+                    stacksSheet: stacksSheet, completion: completion)
             }
         case .fade:
             if animated {
@@ -1057,6 +1062,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         screenId: String,
         presentation: ExperienceLayerPresentation,
         animated: Bool,
+        stacksSheet: Bool,
         completion: @escaping Completion
     ) throws {
         // Present from the retained native layer container, not its screen child.
@@ -1079,7 +1085,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         controller.setHeightPresentationTarget(layer)
         layer.presentationController?.delegate = self
         controller.setContentHidden(contentHidden)
-        let stackedWindow = opensStackedSheet(presentation)
+        let stackedWindow = stacksSheet
             ? ExperienceStackedSheetWindow(above: presenter.view.window, host: hostViewController) : nil
         (stackedWindow?.presenter ?? presenter).present(layer, animated: animated) {
             controller.advance(delta: 0)
