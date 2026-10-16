@@ -152,7 +152,7 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
             XCTAssertNotNil(sheet.presentingViewController, "Authored exit draws in the retained native sheet")
             XCTAssertEqual(source.lifecyclePhase, .active)
             let closed = await close.value
-            XCTAssertTrue(closed)
+            XCTAssertEqual(closed, .navigated)
             XCTAssertEqual(coordinator.layerScreenIds, [[source.screenId]])
             XCTAssertNil(sheet.presentingViewController)
             XCTAssertEqual(source.lifecyclePhase, .active)

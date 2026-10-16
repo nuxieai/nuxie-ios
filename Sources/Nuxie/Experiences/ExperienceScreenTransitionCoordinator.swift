@@ -552,14 +552,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     /// Authored dismissal joins the navigation lane and keeps the native layer
-    /// alive until the top screen's declared exit completes.
-    func closeTopLayer() async -> Bool {
+    /// alive until the top screen's declared exit completes. A dismiss issued from
+    /// a screen belongs to that screen's layer: when the person has already closed
+    /// it, the dismiss is superseded rather than closing the next layer down.
+    func closeTopLayer(issuedFrom issuingScreenId: String? = nil) async -> ExperienceScreenNavigationResult {
         guard lifecycle == .installed, !navigationAdmissionRevoked, hasPresentedLayer,
-              let screenId = activeScreenId, let layer = navigationController else { return false }
+              let screenId = activeScreenId, let layer = navigationController else { return .failed }
+        if let issuingScreenId, layerScreenIds.last?.contains(issuingScreenId) != true { return .superseded }
         return await withCheckedContinuation { continuation in
             navigationRequests.append(NavigationRequest(
                 screenId: screenId, rawTransition: nil,
-                completion: { result, _ in continuation.resume(returning: result.reachedTarget) },
+                completion: { result, _ in continuation.resume(returning: result) },
                 backLayer: layer, dismissLayer: true))
             startNavigationDrainIfNeeded()
         }

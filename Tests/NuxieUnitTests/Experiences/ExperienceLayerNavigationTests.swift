@@ -341,8 +341,11 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         let beforeReveal = try appearances(offer)
         XCTAssertEqual(beforeReveal, 1)
         let count = active.count
-        let firstClosed = await coordinator.closeTopLayer()
-        XCTAssertTrue(firstClosed)
+        let stale = await coordinator.closeTopLayer(issuedFrom: "details")
+        XCTAssertEqual(stale, .superseded, "A dismiss from Offer must not close Saved above it")
+        XCTAssertEqual(coordinator.layerScreenIds, [["screen"], ["details"], ["screen"]])
+        let firstClosed = await coordinator.closeTopLayer(issuedFrom: "screen")
+        XCTAssertEqual(firstClosed, .navigated)
         XCTAssertEqual(coordinator.layerScreenIds, [["screen"], ["details"]])
         XCTAssertTrue(offerLayer.topViewController === offer)
         XCTAssertEqual(offer.lifecyclePhase, .active)
@@ -352,11 +355,11 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         XCTAssertEqual(afterReveal, beforeReveal, "Revealing the retained presenter must not enter it again")
         XCTAssertEqual(dismissals, ["screen:details"])
         let secondClosed = await coordinator.closeTopLayer()
-        XCTAssertTrue(secondClosed)
+        XCTAssertEqual(secondClosed, .navigated)
         XCTAssertTrue(base.topViewController === lesson)
         XCTAssertEqual(lesson.lifecyclePhase, .active)
         let baseClosed = await coordinator.closeTopLayer()
-        XCTAssertFalse(baseClosed, "No modal remains: the service completes the Experience")
+        XCTAssertEqual(baseClosed, .failed, "No modal remains: the service completes the Experience")
         let blocker = UIViewController()
         await withCheckedContinuation { continuation in lesson.present(blocker, animated: false) { continuation.resume() } }
         let rejected = await withCheckedContinuation { continuation in
