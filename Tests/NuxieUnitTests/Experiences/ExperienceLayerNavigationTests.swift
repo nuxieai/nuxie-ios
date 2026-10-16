@@ -206,6 +206,7 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         XCTAssertEqual(upper.presentingViewController?.traitCollection.userInterfaceStyle, forcedStyle)
         XCTAssertEqual(upper.traitCollection.userInterfaceStyle, lower.traitCollection.userInterfaceStyle,
             "The upper sheet keeps the style a sheet has in one window")
+        XCTAssertTrue(window.accessibilityElementsHidden, "VoiceOver stays in the upper sheet's window")
         XCTAssertTrue(ExperienceLinkRouting.inAppHost(above: coordinator.topPresentedLayer ?? host) === upper)
         // A native swipe on the upper sheet reveals the same lower sheet where it was.
         let presentation = try XCTUnwrap(upper.presentationController)
@@ -219,6 +220,7 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         XCTAssertEqual(lowerSheet.alpha, 1)
         XCTAssertEqual(lowerSheet.convert(lowerSheet.bounds, to: nil), lowerFrame)
         XCTAssertTrue(window.isKeyWindow, "The upper sheet's window is gone and the Experience window is key again")
+        XCTAssertFalse(window.accessibilityElementsHidden, "The revealed sheet is reachable by VoiceOver again")
     }
 
     @MainActor
