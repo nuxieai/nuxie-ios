@@ -318,14 +318,20 @@ class NativeCommandSelectionTests(unittest.TestCase):
             }
             binary.write_text("#!/bin/sh\ncat <<'DEVICES'\n" + json.dumps(inventory) + "\nDEVICES\n")
             binary.chmod(0o755)
-            environment = {key: value for key, value in os.environ.items()
-                           if key not in {"TEST_DESTINATION", "TEST_SIMULATOR_NAME", "TEST_SIMULATOR_OS"}}
-            environment["PATH"] = directory + os.pathsep + environment["PATH"]
-            result = subprocess.run(["make", "--no-print-directory", "-n", "test-native-runtime"],
-                                    cwd=sdk.ROOT, env=environment, text=True, capture_output=True, check=True)
-            self.assertIn("--destination 'platform=iOS Simulator,name=iPhone 18 Pro Max,OS=27.0'", result.stdout)
-            self.assertNotIn("0E2E4AD4", result.stdout)
-            self.assertNotIn("Shutdown", result.stdout)
+            for inherited in ({}, {"MAKEFLAGS": " -- TEST_DESTINATION=inherited",
+                                   "MAKEOVERRIDES": "TEST_DESTINATION=inherited"}):
+                with self.subTest(inherited=inherited):
+                    environment = {key: value for key, value in {**os.environ, **inherited}.items()
+                                   if key not in {"TEST_DESTINATION", "TEST_SIMULATOR_NAME", "TEST_SIMULATOR_OS",
+                                                  "MAKEFLAGS", "GNUMAKEFLAGS", "MFLAGS", "MAKEOVERRIDES"}}
+                    # Parent make command-line variables travel through MAKEFLAGS
+                    # too; this dry run must exercise the repository's defaults.
+                    environment["PATH"] = directory + os.pathsep + environment["PATH"]
+                    result = subprocess.run(["make", "--no-print-directory", "-n", "test-native-runtime"],
+                                            cwd=sdk.ROOT, env=environment, text=True, capture_output=True, check=True)
+                    self.assertIn("--destination 'platform=iOS Simulator,name=iPhone 18 Pro Max,OS=27.0'", result.stdout)
+                    self.assertNotIn("0E2E4AD4", result.stdout)
+                    self.assertNotIn("Shutdown", result.stdout)
 
     def command(self, argv):
         with patch("sys.argv", ["sdk.py", *argv]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
