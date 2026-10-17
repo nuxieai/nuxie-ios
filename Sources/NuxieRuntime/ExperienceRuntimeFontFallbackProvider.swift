@@ -171,12 +171,13 @@ package enum ExperienceRuntimeFontFallbackProvider {
     final class OutlineFont {
         static let pixelsPerEm: CGFloat = 160
         let font: CTFont
-        private let pictureFont: CTFont
+        private let pictureFont: CTFont?
 
         init(_ font: CTFont) {
             self.font = CTFontCreateCopyWithAttributes(font, 2048, nil, nil)
             // Apple's largest emoji strike: layout metrics remain in em units.
-            self.pictureFont = CTFontCreateCopyWithAttributes(font, Self.pixelsPerEm, nil, nil)
+            self.pictureFont = CTFontGetSymbolicTraits(font).contains(.traitColorGlyphs)
+                ? CTFontCreateCopyWithAttributes(font, Self.pixelsPerEm, nil, nil) : nil
         }
 
         struct Picture {
@@ -188,7 +189,7 @@ package enum ExperienceRuntimeFontFallbackProvider {
         }
 
         func picture(_ glyph: CGGlyph) -> Picture? {
-            guard glyph != 0 else { return nil }
+            guard glyph != 0, let pictureFont else { return nil }
             var glyph = glyph
             let bounds = CTFontGetBoundingRectsForGlyphs(pictureFont, .default, &glyph, nil, 1)
             guard !bounds.isNull, !bounds.isInfinite,
@@ -196,14 +197,20 @@ package enum ExperienceRuntimeFontFallbackProvider {
                   bounds.width > 0, bounds.height > 0 else { return nil }
             let rect = bounds.integral
             guard rect.width <= 1024, rect.height <= 1024,
-                  let space = CGColorSpace(name: CGColorSpace.sRGB),
-                  let bitmap = CGContext(data: nil, width: Int(rect.width), height: Int(rect.height),
+                  let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+            func draw(fill: CGFloat) -> CGContext? {
+                guard let bitmap = CGContext(data: nil, width: Int(rect.width), height: Int(rect.height),
                       bitsPerComponent: 8, bytesPerRow: Int(rect.width) * 4, space: space,
                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
                           | CGBitmapInfo.byteOrder32Big.rawValue) else { return nil }
-            bitmap.translateBy(x: -rect.minX, y: -rect.minY)
-            var origin = CGPoint.zero
-            CTFontDrawGlyphs(pictureFont, &glyph, &origin, 1, bitmap)
+                bitmap.clear(CGRect(origin: .zero, size: rect.size))
+                bitmap.translateBy(x: -rect.minX, y: -rect.minY)
+                bitmap.setFillColor(gray: fill, alpha: 1)
+                var origin = CGPoint.zero
+                CTFontDrawGlyphs(pictureFont, &glyph, &origin, 1, bitmap)
+                return bitmap
+            }
+            guard let bitmap = draw(fill: 0) else { return nil }
             // A glyph can have bounds without painted ink. Do not cache a
             // transparent picture as a successful answer for that glyph.
             let hasInk = withExtendedLifetime(bitmap) {
@@ -211,7 +218,17 @@ package enum ExperienceRuntimeFontFallbackProvider {
                 return stride(from: 3, to: bitmap.bytesPerRow * bitmap.height, by: 4)
                     .contains { bytes[$0] != 0 }
             }
-            guard hasInk else { return nil }
+            guard hasInk, let comparison = draw(fill: 1) else { return nil }
+            // A colour face also contains ordinary outlines (e.g. # and
+            // unpaired regional indicators). Preserve their text-colour path:
+            // true colour artwork is independent of the context's fill.
+            let samePixels = withExtendedLifetime((bitmap, comparison)) {
+                guard let first = bitmap.data, let second = comparison.data else { return false }
+                let count = bitmap.bytesPerRow * bitmap.height
+                return UnsafeRawBufferPointer(start: first, count: count)
+                    .elementsEqual(UnsafeRawBufferPointer(start: second, count: count))
+            }
+            guard samePixels else { return nil }
             guard let image = bitmap.makeImage() else { return nil }
             let png = NSMutableData()
             guard let encoder = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else { return nil }

@@ -88,14 +88,22 @@ final class TypedFontFallbackTests: XCTestCase {
                 attachment.name = "text-fallback-emoji-committed-field"
                 attachment.lifetime = .keepAlways
                 add(attachment)
-                XCTAssertGreaterThan(try saturatedPixels(crop), 40,
-                    "The committed first field must contain colour emoji, not just a retained string or outline")
+                let ink = try emojiInk(crop, scale: scaleX)
+                let pixelArea = scaleX * scaleY
+                XCTAssertGreaterThan(ink.total, Int(2000 * pixelArea / 9),
+                    "The committed first field must contain all three colour emoji")
+                for (index, count) in ink.columns.enumerated() {
+                    XCTAssertGreaterThan(count, Int(500 * pixelArea / 9),
+                        "Emoji column \(index + 1) must contain colour artwork")
+                }
+                XCTAssertGreaterThan(ink.skinTone, Int(500 * pixelArea / 9),
+                    "The third emoji must be a brown thumb, not a yellow thumb followed by a separate modifier")
             }
             app.terminate()
         }
     }
 
-    private func saturatedPixels(_ image: CGImage) throws -> Int {
+    private func emojiInk(_ image: CGImage, scale: CGFloat) throws -> (total: Int, columns: [Int], skinTone: Int) {
         let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let bitmap = try XCTUnwrap(CGContext(data: nil, width: image.width, height: image.height,
             bitsPerComponent: 8, bytesPerRow: image.width * 4, space: space,
@@ -103,11 +111,23 @@ final class TypedFontFallbackTests: XCTestCase {
         bitmap.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         return try withExtendedLifetime(bitmap) {
             let bytes = try XCTUnwrap(bitmap.data).assumingMemoryBound(to: UInt8.self)
-            return stride(from: 0, to: image.width * image.height * 4, by: 4).reduce(0) { count, at in
-                let channels = [bytes[at], bytes[at + 1], bytes[at + 2]]
-                return count + (Int(channels.max()!) - Int(channels.min()!) > 60
-                    && channels.max()! > 120 ? 1 : 0)
+            var total = 0, columns = [0, 0, 0], skinTone = 0
+            for at in stride(from: 0, to: image.width * image.height * 4, by: 4) {
+                let red = Int(bytes[at]), green = Int(bytes[at + 1]), blue = Int(bytes[at + 2])
+                let saturated = max(red, green, blue) - min(red, green, blue) > 60
+                    && max(red, green, blue) > 120
+                if saturated { total += 1 }
+                // This published fixture uses 16pt text. After Ada, its three
+                // emoji cells occupy x=28..<76pt relative to the inset crop.
+                let x = CGFloat((at / 4) % image.width) / scale
+                for index in 0..<3 where x >= CGFloat(28 + 16 * index) && x < CGFloat(44 + 16 * index) {
+                    if saturated { columns[index] += 1 }
+                }
+                if x >= 60, x < 76, red > 100, red < 230, green > 45, green < 170,
+                   blue > 15, blue < 120, Double(red) > Double(green) * 1.2,
+                   Double(green) > Double(blue) * 1.15 { skinTone += 1 }
             }
+            return (total, columns, skinTone)
         }
     }
 }
