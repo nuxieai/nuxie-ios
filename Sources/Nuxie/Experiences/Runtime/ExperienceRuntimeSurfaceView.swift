@@ -71,6 +71,8 @@ final class ExperienceRuntimeSurfaceView: UIView {
     }
 
     private func configureFoldObservation() {
+        // Runtime availability alone cannot hide this type from older SDKs.
+        #if canImport(UIKit, _version: 9127.0.85)
         if #available(iOS 27.1, *) {
             addInteraction(UIHingeInteraction { [weak self] _, update in
                 guard let self else { return }
@@ -90,6 +92,7 @@ final class ExperienceRuntimeSurfaceView: UIView {
                 onEnvironmentChange?()
             })
         }
+        #endif
     }
 
     override func layoutSubviews() {
