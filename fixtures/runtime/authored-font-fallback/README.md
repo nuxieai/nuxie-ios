@@ -20,3 +20,6 @@ emoji and symbols after focus moves. Ordinary and typed emoji must contain
 saturated colour ink on every OS version. CoreText supplies PNG glyph pictures
 for colour fallback faces, including Apple emjc strikes that the runtime cannot
 decode itself; monochrome outlines do not satisfy the emoji checks.
+Outline glyphs within a colour face (such as `#` and unpaired regional
+indicators) keep using the text-colour path callback. A picture is accepted
+only when its pixels are identical under black and white CoreText fills.

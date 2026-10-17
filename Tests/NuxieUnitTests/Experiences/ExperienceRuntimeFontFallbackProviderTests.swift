@@ -104,8 +104,10 @@ final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
             XCTAssertEqual(answer.rectangle.height, bounds.height / 160, accuracy: 0.000001)
             let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
             func canvas() throws -> CGContext {
-                try XCTUnwrap(CGContext(data: nil, width: 400, height: 400, bitsPerComponent: 8,
+                let bitmap = try XCTUnwrap(CGContext(data: nil, width: 400, height: 400, bitsPerComponent: 8,
                     bytesPerRow: 1600, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                bitmap.clear(CGRect(x: 0, y: 0, width: 400, height: 400))
+                return bitmap
             }
             let reference = try canvas(), restored = try canvas()
             var origin = CGPoint(x: 100, y: 100)
@@ -125,6 +127,39 @@ final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
                 }.count
                 XCTAssertGreaterThan(saturated, 100, "The PNG must contain colour artwork")
             }
+        }
+    }
+
+    func testOutlineGlyphsInColorFaceKeepUsingPaths() throws {
+        let font = CTFontCreateCopyWithAttributes(try selected("😀"), 160, nil, nil)
+        XCTAssertTrue(CTFontGetSymbolicTraits(font).contains(.traitColorGlyphs))
+        let owner = ExperienceRuntimeFontFallbackProvider.OutlineFont(font)
+        let context = Unmanaged.passRetained(owner)
+        let callbacks = ExperienceRuntimeFontFallbackProvider.callbacks(for: owner, context: context.toOpaque())
+        defer { callbacks.release?(callbacks.user_data) }
+        for text in ["#", "🇦"] {
+            let characters = Array(text.utf16)
+            var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+            _ = CTFontGetGlyphsForCharacters(font, characters, &glyphs, characters.count)
+            var glyph = try XCTUnwrap(glyphs.first)
+            XCTAssertNotEqual(glyph, 0)
+            let bounds = CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, nil, 1)
+            XCTAssertGreaterThan(bounds.width, 0, "Must pass the empty-bounds guard for \(text)")
+            XCTAssertGreaterThan(bounds.height, 0)
+            let path = try XCTUnwrap(CTFontCreatePathForGlyph(font, glyph, nil))
+            XCTAssertFalse(path.isEmpty, "The emoji face must have a real outline for \(text)")
+            let answer = PictureAnswer()
+            let sinkContext = Unmanaged.passUnretained(answer).toOpaque()
+            try XCTUnwrap(callbacks.get_picture)(callbacks.user_data, glyph, nil, 0, { context, _ in
+                guard let context else { return }
+                Unmanaged<PictureAnswer>.fromOpaque(context).takeUnretainedValue().calls += 1
+            }, sinkContext)
+            XCTAssertEqual(answer.calls, 0, "Text-colour ink must not become a black picture for \(text)")
+            try XCTUnwrap(callbacks.get_path)(callbacks.user_data, glyph, nil, 0, { context, _, _ in
+                guard let context else { return }
+                Unmanaged<PictureAnswer>.fromOpaque(context).takeUnretainedValue().calls += 1
+            }, sinkContext)
+            XCTAssertGreaterThan(answer.calls, 0, "The runtime must still receive the outline for \(text)")
         }
     }
 
