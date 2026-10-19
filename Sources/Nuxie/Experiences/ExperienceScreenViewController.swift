@@ -169,6 +169,8 @@ final class ExperienceScreenViewController: UIViewController {
     private var lastPushedViewport: ExperienceViewportEnvironment?
     private var lastPushedFold: ExperienceFoldEnvironment?
     private var environmentWriteQueued = false
+    private var lastPushedColorScheme: ExperienceColorScheme?
+    private var colorSchemeWriteQueued = false
     private var lifecycleState: ExperienceScreenLifecycleState
     private var lifecycleWritesUnavailable = false
     private var didLogUnavailableLifecycleWrite = false
@@ -436,6 +438,12 @@ final class ExperienceScreenViewController: UIViewController {
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         syncFontScale()
+        syncColorScheme()
+    }
+
+    /// This screen's own traits, which carry any style the Experience host forces.
+    private var colorScheme: ExperienceColorScheme {
+        ExperienceColorScheme(traitCollection.userInterfaceStyle)
     }
 
     @objc private func contentSizeCategoryDidChange() {
@@ -476,6 +484,7 @@ final class ExperienceScreenViewController: UIViewController {
 
         let initialWidth = Self.pixelDimension(screen.width)
         let initialHeight = Self.pixelDimension(screen.height)
+        let initialColorScheme = colorScheme
         let preparation = try await artifact.acquired.interactivePreparation.preparation()
         let interactive = try await preparation.openScreen(
             screenID: screenId,
@@ -485,6 +494,7 @@ final class ExperienceScreenViewController: UIViewController {
             pixelHeight: initialHeight,
             initialReduceMotion: lifecycleState.snapshot.reduceMotion,
             initialSafeArea: experienceSafeAreaInsets(for: view),
+            initialColorScheme: initialColorScheme,
             videoDecoderPool: videoDecoderPool
         )
         if let name = journeyScreen?.defaultViewModelName {
@@ -493,6 +503,7 @@ final class ExperienceScreenViewController: UIViewController {
             lifecycleIncludesExitReason = false
         }
         interactiveScreen = interactive
+        lastPushedColorScheme = initialColorScheme
         await runValues.observeSaveDisplays(id: saveDisplayObserverID) { [weak self] in
             guard let self, !self.isShuttingDown else { return }
             _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
@@ -578,6 +589,7 @@ final class ExperienceScreenViewController: UIViewController {
             bindTextInputs(to: interactive, loop: loop)
             refreshTextInputLayouts()
             syncSafeAreaInsets(force: true)
+            syncColorScheme()
             loop.setTimelineActive(false)
             await applyLifecycleSnapshot(lifecycleState.snapshot)
             try? await loop.advanceZeroDelta()
@@ -850,6 +862,34 @@ final class ExperienceScreenViewController: UIViewController {
         }) {
             environmentWriteQueued = false
         }
+    }
+
+    /// Writes `env.colorScheme` and binds the matching `Theme` instance when the appearance
+    /// changes. One write is in flight at a time, and it reads the latest appearance when it runs.
+    func syncColorScheme() {
+        guard isViewLoaded, !isShuttingDown, runtimeFailure == nil,
+              !colorSchemeWriteQueued, let interactiveScreen, let presentationLoop,
+              colorScheme != lastPushedColorScheme else { return }
+        colorSchemeWriteQueued = true
+        if !presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
+            guard let colorScheme = await self?.takeLatestColorScheme() else { return .work(requestsFrame: false) }
+            try await interactiveScreen.updateEnvironment(colorScheme: colorScheme)
+            return .work(requestsFrame: true)
+        }, completion: { [weak self] result in
+            guard let self else { return }
+            colorSchemeWriteQueued = false
+            if case .failure(let error) = result { handleTerminalFailure(error) }
+            else { syncColorScheme() }
+        }) {
+            colorSchemeWriteQueued = false
+        }
+    }
+
+    private func takeLatestColorScheme() -> ExperienceColorScheme? {
+        let latest = colorScheme
+        guard !isShuttingDown, runtimeFailure == nil, latest != lastPushedColorScheme else { return nil }
+        lastPushedColorScheme = latest
+        return latest
     }
 
     private func viewportEnvironment() -> ExperienceViewportEnvironment {

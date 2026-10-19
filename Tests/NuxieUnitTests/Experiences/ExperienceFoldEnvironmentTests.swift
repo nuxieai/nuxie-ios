@@ -87,5 +87,99 @@ final class ExperienceFoldEnvironmentTests: XCTestCase {
             .setEnumeration(instance: reference, path: "fold/state", value: 0)
         ])
     }
+
+    func testColorSchemeWritesTheIndexOfItsLabelInTheArtifactsOrder() throws {
+        let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: 1))
+        for labels in [["light", "dark"], ["dark", "light"]] {
+            let catalog = NuxieNativeViewModelCatalog(
+                schemas: [.init(index: 0, name: "env", propertyRange: 0..<2,
+                                authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: true)],
+                properties: [
+                    .init(schemaIndex: 0, index: 0, name: "reduceMotion", kind: .bool,
+                          referencedSchemaIndex: nil, enumLabels: []),
+                    .init(schemaIndex: 0, index: 1, name: "colorScheme", kind: .enumeration,
+                          referencedSchemaIndex: nil, enumLabels: labels)
+                ], authoredInstances: [])
+            let bindings = ExperienceEnvironmentBindings(catalog: catalog)
+            for scheme in ExperienceColorScheme.allCases {
+                let index = UInt64(try XCTUnwrap(labels.firstIndex(of: scheme.label)))
+                XCTAssertEqual(bindings.mutations(reference: reference, reduceMotion: false, colorScheme: scheme), [
+                    .setBool(instance: reference, path: "reduceMotion", value: false),
+                    .setEnumeration(instance: reference, path: "colorScheme", value: index)
+                ])
+            }
+        }
+    }
+
+    func testColorSchemeIsSkippedWhenTheArtifactDoesNotDeclareTheSlot() throws {
+        let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: 1))
+        for property in [
+            nil,
+            NuxieNativeViewModelCatalog.Property(schemaIndex: 0, index: 1, name: "colorScheme", kind: .string,
+                                                 referencedSchemaIndex: nil, enumLabels: []),
+            NuxieNativeViewModelCatalog.Property(schemaIndex: 0, index: 1, name: "colorScheme", kind: .enumeration,
+                                                 referencedSchemaIndex: nil, enumLabels: ["day", "night"])
+        ] {
+            let catalog = NuxieNativeViewModelCatalog(
+                schemas: [.init(index: 0, name: "env", propertyRange: 0..<2,
+                                authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: true)],
+                properties: [.init(schemaIndex: 0, index: 0, name: "reduceMotion", kind: .bool,
+                                   referencedSchemaIndex: nil, enumLabels: [])] + [property].compactMap { $0 },
+                authoredInstances: [])
+            let bindings = ExperienceEnvironmentBindings(catalog: catalog)
+            XCTAssertEqual(bindings.mutations(reference: reference, colorScheme: .dark), [])
+            XCTAssertEqual(bindings.mutations(reference: reference, reduceMotion: true, colorScheme: .light),
+                           [.setBool(instance: reference, path: "reduceMotion", value: true)])
+        }
+    }
+
+    func testThemeSelectionPicksTheInstanceNamedForTheAppearance() {
+        let bindings = ExperienceEnvironmentBindings(catalog: themeCatalog(instances: [
+            .init(schemaIndex: 0, index: 0, name: "dark"),
+            .init(schemaIndex: 1, index: 0, name: "light"),
+            .init(schemaIndex: 1, index: 1, name: "dark")
+        ]))
+        XCTAssertEqual(bindings.themeSelection(for: .light),
+                       NuxieNativeAuthoredGlobalSelection(schemaIndex: 1, authoredInstanceIndex: 0))
+        XCTAssertEqual(bindings.themeSelection(for: .dark),
+                       NuxieNativeAuthoredGlobalSelection(schemaIndex: 1, authoredInstanceIndex: 1),
+                       "Only the Theme schema's own instances are candidates")
+    }
+
+    func testThemeSelectionFallsBackToTheSchemaDefaultWithoutANamedInstance() {
+        let bindings = ExperienceEnvironmentBindings(catalog: themeCatalog(instances: [
+            .init(schemaIndex: 1, index: 0, name: "light"),
+            .init(schemaIndex: 1, index: 1, name: nil)
+        ]))
+        XCTAssertEqual(bindings.themeSelection(for: .light),
+                       NuxieNativeAuthoredGlobalSelection(schemaIndex: 1, authoredInstanceIndex: 0))
+        XCTAssertEqual(bindings.themeSelection(for: .dark),
+                       NuxieNativeAuthoredGlobalSelection(schemaIndex: 1, authoredInstanceIndex: nil))
+    }
+
+    func testThemeSelectionIsAbsentWithoutAGlobalThemeSchema() {
+        let instances: [NuxieNativeViewModelCatalog.AuthoredInstance] = [
+            .init(schemaIndex: 1, index: 0, name: "light"), .init(schemaIndex: 1, index: 1, name: "dark")
+        ]
+        for catalog in [themeCatalog(name: "Brand", instances: instances),
+                        themeCatalog(isGlobal: false, instances: instances)] {
+            let bindings = ExperienceEnvironmentBindings(catalog: catalog)
+            XCTAssertNil(bindings.themeSelection(for: .light))
+            XCTAssertNil(bindings.themeSelection(for: .dark))
+        }
+    }
+
+    private func themeCatalog(name: String = "Theme", isGlobal: Bool = true,
+                              instances: [NuxieNativeViewModelCatalog.AuthoredInstance]) -> NuxieNativeViewModelCatalog {
+        NuxieNativeViewModelCatalog(
+            schemas: [
+                .init(index: 0, name: "env", propertyRange: 0..<0,
+                      authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: true),
+                .init(index: 1, name: name, propertyRange: 0..<1,
+                      authoredInstanceRange: 0..<instances.count, defaultAuthoredInstance: nil, isGlobal: isGlobal)
+            ], properties: [
+                .init(schemaIndex: 1, index: 0, name: "surface", kind: .color, referencedSchemaIndex: nil, enumLabels: [])
+            ], authoredInstances: instances)
+    }
     #endif
 }

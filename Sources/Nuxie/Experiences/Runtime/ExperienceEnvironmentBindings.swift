@@ -4,9 +4,19 @@ import NuxieRuntime
 
 /// Resolves only slots declared by an artifact, preserving older env schemas.
 struct ExperienceEnvironmentBindings: Sendable {
+    /// The global whose authored `light` and `dark` instances carry an Experience's themed colours.
+    static let themeGlobalName = "Theme"
+
     private let properties: [String: NuxieNativeViewModelCatalog.Property]
+    private let themeSelections: [ExperienceColorScheme: NuxieNativeAuthoredGlobalSelection]
 
     init(catalog: NuxieNativeViewModelCatalog) {
+        var themes: [ExperienceColorScheme: NuxieNativeAuthoredGlobalSelection] = [:]
+        for scheme in ExperienceColorScheme.allCases {
+            themes[scheme] = catalog.authoredGlobalSelection(named: Self.themeGlobalName,
+                instanceNamed: scheme.label)
+        }
+        themeSelections = themes
         var resolved: [String: NuxieNativeViewModelCatalog.Property] = [:]
         func walk(_ schema: Int, prefix: String, ancestors: Set<Int>) {
             guard !ancestors.contains(schema) else { return }
@@ -27,7 +37,8 @@ struct ExperienceEnvironmentBindings: Sendable {
     func mutations(reference: NuxieNativeViewModelReference, reduceMotion: Bool? = nil,
                    safeArea: ExperienceSafeAreaInsets? = nil,
                    viewport: ExperienceViewportEnvironment? = nil,
-                   fold: ExperienceFoldEnvironment? = nil) -> [NuxieNativeViewModelMutation] {
+                   fold: ExperienceFoldEnvironment? = nil,
+                   colorScheme: ExperienceColorScheme? = nil) -> [NuxieNativeViewModelMutation] {
         var result: [NuxieNativeViewModelMutation] = []
         func number(_ path: String, _ value: Float) {
             if properties[path]?.kind == .number {
@@ -37,6 +48,13 @@ struct ExperienceEnvironmentBindings: Sendable {
         func boolean(_ path: String, _ value: Bool) {
             if properties[path]?.kind == .bool {
                 result.append(.setBool(instance: reference, path: path, value: value))
+            }
+        }
+        // Enums are written by the index of their label in the artifact's own label order.
+        func enumeration(_ path: String, _ label: String) {
+            if let property = properties[path], property.kind == .enumeration,
+               let index = property.enumLabels.firstIndex(of: label) {
+                result.append(.setEnumeration(instance: reference, path: path, value: UInt64(index)))
             }
         }
         if let reduceMotion { boolean("reduceMotion", reduceMotion) }
@@ -54,12 +72,15 @@ struct ExperienceEnvironmentBindings: Sendable {
             boolean("fold/available", fold.available)
             number("fold/openProgress", fold.openProgress)
             number("fold/foldProgress", fold.foldProgress)
-            if let property = properties["fold/state"], property.kind == .enumeration,
-               let index = property.enumLabels.firstIndex(of: fold.state.label) {
-                result.append(.setEnumeration(instance: reference, path: "fold/state", value: UInt64(index)))
-            }
+            enumeration("fold/state", fold.state.label)
         }
+        if let colorScheme { enumeration("colorScheme", colorScheme.label) }
         return result
+    }
+
+    /// The `Theme` instance to bind for this appearance, or nil when the artifact has no theme.
+    func themeSelection(for colorScheme: ExperienceColorScheme) -> NuxieNativeAuthoredGlobalSelection? {
+        themeSelections[colorScheme]
     }
 }
 #endif
