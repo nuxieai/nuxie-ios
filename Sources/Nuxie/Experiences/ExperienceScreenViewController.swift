@@ -442,14 +442,15 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     /// This screen's own traits, which carry any style the Experience host forces.
-    /// The host's appearance, for the time the screen is mounted but not yet in the
-    /// host's hierarchy, where it would otherwise read the system's.
+    /// The host's appearance, for the time the screen's view is out of a window: before
+    /// it first joins the host, and while it waits behind another screen or in a cache,
+    /// where its own traits are the system's or stale.
     private var detachedHostStyle: UIUserInterfaceStyle?
 
-    /// The screen's own appearance once it is in a hierarchy or forced on it, else the
-    /// host's it will inherit.
+    /// The screen's own appearance while its view is in a window or one is forced on
+    /// it, else the host's.
     private var colorScheme: ExperienceColorScheme {
-        if let detachedHostStyle, overrideUserInterfaceStyle == .unspecified, parent == nil,
+        if let detachedHostStyle, overrideUserInterfaceStyle == .unspecified,
            viewIfLoaded?.window == nil {
             return ExperienceColorScheme(detachedHostStyle)
         }

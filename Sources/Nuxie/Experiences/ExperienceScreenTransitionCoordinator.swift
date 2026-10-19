@@ -684,6 +684,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         isBack: Bool = false
     ) async throws -> Bool {
         let sourceLayer = navigationController
+        // The screen enters in the host's appearance now, though it waited out of the
+        // window (behind another, or in a cache) while it changed.
+        targetController.adoptHostTraits(hostViewController?.traitCollection)
         let spec = ExperienceScreenTransitionSpec(raw: rawTransition)
         let opensLayer = spec.kind == .modal && !isBack
         // Decided once, so the size measured and the window presented from always agree.

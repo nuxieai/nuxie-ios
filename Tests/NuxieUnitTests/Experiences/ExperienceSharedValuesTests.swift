@@ -430,8 +430,10 @@ final class ExperienceSharedValuesTests: XCTestCase {
             _ = try await screen.step(elapsedSeconds: 0)
             let pixels = try await renderCopyPixels(screen)
             XCTAssertEqual(surface(pixels), surfaces[scheme], "The first frame draws the host's \(scheme)")
-            // Cached and shown again after the host changed, it takes the host's new
-            // appearance before it is given any other work.
+            // Waiting out of the window behind another screen, its parent's traits are
+            // stale: it takes the host's new appearance before it is given other work.
+            let stack = UINavigationController(rootViewController: controller)
+            XCTAssertNotNil(controller.parent, "\(stack) holds it out of a window")
             let other: ExperienceColorScheme = scheme == .dark ? .light : .dark
             let loop = try XCTUnwrap(Mirror(reflecting: controller).children
                 .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
