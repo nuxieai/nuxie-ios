@@ -430,6 +430,18 @@ final class ExperienceSharedValuesTests: XCTestCase {
             _ = try await screen.step(elapsedSeconds: 0)
             let pixels = try await renderCopyPixels(screen)
             XCTAssertEqual(surface(pixels), surfaces[scheme], "The first frame draws the host's \(scheme)")
+            // Cached and shown again after the host changed, it takes the host's new
+            // appearance before it is given any other work.
+            let other: ExperienceColorScheme = scheme == .dark ? .light : .dark
+            let loop = try XCTUnwrap(Mirror(reflecting: controller).children
+                .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+            controller.adoptHostTraits(UITraitCollection(userInterfaceStyle: other == .dark ? .dark : .light))
+            try await loop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork { .work(requestsFrame: false) })
+            let adopted = try await screen.environmentSnapshot()
+            XCTAssertEqual(adopted?.values.first { $0.name == "colorScheme" }?.value, .integer(other == .dark ? 1 : 0))
+            _ = try await screen.step(elapsedSeconds: 0)
+            let reentered = try await renderCopyPixels(screen)
+            XCTAssertEqual(surface(reentered), surfaces[other], "Re-entry draws the host's \(other)")
         }
     }
 

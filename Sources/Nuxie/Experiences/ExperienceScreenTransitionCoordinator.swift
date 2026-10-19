@@ -926,6 +926,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         let cache = activeCache
         if let cached = cache.controllers[screenId] {
+            // A cached screen re-enters in the host's appearance now, not the one it
+            // mounted in.
+            cached.adoptHostTraits(hostViewController?.traitCollection)
             return cached
         }
         guard let screen = artifact.renderPlan.screens.first(where: { $0.screenId == screenId }) else {

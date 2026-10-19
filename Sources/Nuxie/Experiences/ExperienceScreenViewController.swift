@@ -878,6 +878,13 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
+    /// Takes the host's current appearance for the time the screen is detached, and
+    /// writes it if it changed, ahead of any work the screen is given next.
+    func adoptHostTraits(_ hostTraits: UITraitCollection?) {
+        detachedHostStyle = hostTraits?.userInterfaceStyle
+        syncColorScheme()
+    }
+
     /// Writes `env.colorScheme` and binds the matching `Theme` instance when the appearance
     /// changes. One write is in flight at a time, and it reads the latest appearance when it runs.
     func syncColorScheme() {
