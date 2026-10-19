@@ -1,0 +1,12 @@
+{
+  "$schema": "https://nuxie.ai/schema/experience/1.json",
+  "platforms": ["ios:apple_app_store"],
+  "entry": {
+    "steps": [{ "type": "navigate", "screen": "screens/plans" }]
+  },
+  "journey": [
+    { "screen": "screens/plans", "on": "purchase", "steps": [{ "type": "dismiss" }] },
+    { "screen": "screens/plans", "on": "restore", "steps": [{ "type": "dismiss" }] },
+    { "screen": "screens/plans", "on": "picked", "steps": [] }
+  ]
+}

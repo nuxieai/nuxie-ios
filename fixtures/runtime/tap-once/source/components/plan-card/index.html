@@ -1,0 +1,8 @@
+<!doctype html>
+<html><head><link rel="stylesheet" href="style.css"></head><body>
+  <button id="plan_card_button" data-on:click="set(props.chosen, props.value); props.select()">
+    <p id="plan_card_name" data-bind="props.name">Plan</p>
+    <p id="plan_card_selected" data-show="props.chosen == props.value">Selected</p>
+    <p id="plan_card_choose" data-show="props.chosen != props.value">Choose</p>
+  </button>
+</body></html>

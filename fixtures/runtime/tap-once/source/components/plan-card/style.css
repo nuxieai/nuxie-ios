@@ -1,0 +1,4 @@
+#plan_card_button { width: 326px; height: 72px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 18px; padding: 12px 18px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; }
+#plan_card_name { width: 200px; height: 22px; color: #0f172a; font-size: 16px; font-weight: 700; line-height: 20px; }
+#plan_card_selected { width: 72px; height: 20px; color: #16a34a; font-size: 13px; font-weight: 800; line-height: 16px; text-align: right; }
+#plan_card_choose { width: 72px; height: 20px; color: #64748b; font-size: 13px; font-weight: 700; line-height: 16px; text-align: right; }
