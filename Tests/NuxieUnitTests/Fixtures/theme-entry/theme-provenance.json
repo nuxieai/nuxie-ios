@@ -1,0 +1,11 @@
+{
+  "fonts": [],
+  "authorship": "SDK-authored dark mode regression; generate-theme.py",
+  "wireSource": "nuxie-runtime a237fc817 defs/upstream-runtime",
+  "sha256": "016056235b2f37b33008a3bbb7fd90e12ddad6263d8f1226e0d5b166fb1f36d1",
+  "expected": {
+    "light": "Theme.light surface 0xFFF2F2F7 at (100,100)",
+    "dark": "Theme.dark surface 0xFF1C1C1E at (100,100)",
+    "lostBinding": "green 0xFF00FF00 fill"
+  }
+}

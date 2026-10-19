@@ -169,6 +169,34 @@ package struct NuxieNativeViewModelCatalog: Equatable, Sendable {
     package let authoredInstances: [AuthoredInstance]
 }
 
+/// One file-authored global and the authored instance a host binds for it.
+package struct NuxieNativeAuthoredGlobalSelection: Hashable, Sendable {
+    package let schemaIndex: Int
+    /// The schema-local authored instance, or nil for the schema default: its
+    /// first authored instance, or generated property defaults when it has none.
+    package let authoredInstanceIndex: Int?
+
+    package init(schemaIndex: Int, authoredInstanceIndex: Int?) {
+        self.schemaIndex = schemaIndex
+        self.authoredInstanceIndex = authoredInstanceIndex
+    }
+}
+
+extension NuxieNativeViewModelCatalog {
+    /// The global schema named `name` and its first authored instance named
+    /// `instanceName`. Falls back to the schema default when no instance has
+    /// that name; nil when the file declares no such global.
+    package func authoredGlobalSelection(named name: String,
+        instanceNamed instanceName: String) -> NuxieNativeAuthoredGlobalSelection? {
+        guard let schema = schemas.first(where: { $0.name == name && $0.isGlobal }) else { return nil }
+        let instance = authoredInstances.first {
+            $0.schemaIndex == schema.index && $0.name == instanceName
+        }
+        return NuxieNativeAuthoredGlobalSelection(schemaIndex: schema.index,
+            authoredInstanceIndex: instance?.index)
+    }
+}
+
 package enum NuxieNativePlayerInput: Equatable, Sendable {
     case bool(name: String, value: Bool)
     case number(name: String, value: Float)
@@ -1045,6 +1073,18 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.bindGlobalViewModel(named: name, sharingAcrossSessions: sharingAcrossSessions) }
     }
 
+    /// Bind a file-authored global to its authored instance named `instanceName`, or to the
+    /// schema default when no instance has that name. Each choice keeps one instance for this
+    /// session, so switching back restores the same values without creating another.
+    /// Returns nil when the file declares no such global.
+    package func bindGlobalViewModel(named name: String,
+        authoredInstanceNamed instanceName: String) async throws -> NuxieNativeViewModelReference? {
+        let state = try requireState()
+        return try await executor.call {
+            try state.bindGlobalViewModel(named: name, authoredInstanceNamed: instanceName)
+        }
+    }
+
     package func makeViewModel(
         schemaIndex: Int,
         authoredInstanceIndex: Int? = nil
@@ -1356,6 +1396,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     private var pixelHeight: UInt32
     private var retainedViewModels: [UInt64: NuxieNativeViewModelHandle] = [:]
     private var globalViewModels: [String: NuxieNativeViewModelReference] = [:]
+    /// One retained instance per authored global choice, kept until the session closes.
+    private var authoredGlobalViewModels: [NuxieNativeAuthoredGlobalSelection: NuxieNativeViewModelReference] = [:]
     private let focusPlayerIndex: Int?
     private var auxiliaryPlayersNeedInitialStep = true
     private var semanticCapture: (id: UUID, handle: NuxieNativeOwnedHandle,
@@ -1472,6 +1514,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             do { try viewModel.close() } catch { firstError = firstError ?? error }
         }
         retainedViewModels.removeAll()
+        authoredGlobalViewModels.removeAll()
         for owner in fieldOwners.values {
             do { try owner.close() } catch { firstError = firstError ?? error }
         }
@@ -1858,12 +1901,43 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 globalViewModels[name] = reference
             }
         }
+        try setGlobalOnStateMachinePlayers(named: name, model: model)
+        return reference
+    }
+
+    func bindGlobalViewModel(named name: String,
+        authoredInstanceNamed instanceName: String) throws -> NuxieNativeViewModelReference? {
+        guard let selection = try file.viewModelCatalog().authoredGlobalSelection(named: name,
+            instanceNamed: instanceName) else { return nil }
+        let reference: NuxieNativeViewModelReference
+        let model: NuxieNativeViewModelHandle
+        if let existing = authoredGlobalViewModels[selection],
+           let retained = retainedViewModels[existing.rawValue] {
+            reference = existing
+            model = retained
+        } else {
+            model = try file.makeViewModel(schemaIndex: selection.schemaIndex,
+                authoredInstanceIndex: selection.authoredInstanceIndex)
+            do {
+                reference = try model.reference()
+            } catch {
+                try? model.close()
+                throw error
+            }
+            retainedViewModels[reference.rawValue] = model
+            authoredGlobalViewModels[selection] = reference
+        }
+        try setGlobalOnStateMachinePlayers(named: name, model: model)
+        return reference
+    }
+
+    private func setGlobalOnStateMachinePlayers(named name: String,
+        model: NuxieNativeViewModelHandle) throws {
         for player in players where try player.info().kind == .stateMachine {
             try requireOK(withStringView(name) {
                 nux_player_set_global_view_model(try player.require(), $0, try model.owned.require())
             }, operation: "bind named global")
         }
-        return reference
     }
 
     func makeViewModel(
