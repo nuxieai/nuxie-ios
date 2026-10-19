@@ -26,6 +26,9 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func finishStartupRouting() async
     func initialize() async
     func handleEvent(_ event: NuxieEvent) async
+    /// `admittedProfileGeneration` is the setup generation sampled when the
+    /// event was captured. Entry no longer depends on it: an event starts
+    /// from the copy installed when it is handled.
     @discardableResult
     func handleEvent(
         _ event: NuxieEvent,
@@ -726,11 +729,12 @@ extension JourneyService {
             await scheduleNextWake()
             return true
         }
-        guard isCurrent(state) else { return true }
-        guard admittedProfileGeneration == state.generation else {
-            await scheduleNextWake()
-            return true
-        }
+        // An event captured before this copy was installed (the first launch,
+        // when EventLog holds events until the first copy arrives, or before a
+        // fresh copy replaced the old one) starts from the copy it is handled
+        // under. Identity can change while routing awaits; one customer's
+        // event never starts another customer's Journey.
+        guard isCurrent(state), state.distinctId == event.distinctId else { return true }
         for arm in state.snapshot.profile.armedLegs
         where arm.entryCondition.type == .event
             && arm.entryCondition.eventName == event.name {
