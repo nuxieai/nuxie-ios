@@ -393,6 +393,46 @@ final class ExperienceSharedValuesTests: XCTestCase {
         }
     }
 
+    /// A screen mounts before it joins the host's hierarchy, so it takes the appearance
+    /// its host forces from the host's traits: the first frame draws in it.
+    @MainActor
+    func testADetachedScreenMountsInTheAppearanceItsHostForces() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/theme-entry")
+        let payload = try SharedValuesFixture.payload(directory: directory, screens: ["theme"],
+            sceneName: "theme.riv", provenanceName: "theme-provenance.json")
+        let experience = Experience(id: "theme-entry", versionId: "theme-version", buildId: "theme-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+            behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
+        let surfaces: [ExperienceColorScheme: [UInt8]] = [.light: [0xF7, 0xF2, 0xF2, 0xFF], .dark: [0x1E, 0x1C, 0x1C, 0xFF]]
+        func surface(_ data: Data) -> [UInt8] { Array(data[(100 * 393 + 100) * 4..<(100 * 393 + 100) * 4 + 4]) }
+        for scheme in ExperienceColorScheme.allCases {
+            let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+                sceneURL: directory.appendingPathComponent("theme.riv"), sceneBytes: payload.sceneBytes,
+                assetURLsByUniqueName: [:], source: .cache, payload: payload,
+                interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(),
+                    provenance: UUID().uuidString, payload: payload), products: [], resourceMetrics: .zero)
+            let run = ExperienceRunValues()
+            let controller = ExperienceScreenViewController(experience: experience, artifact: .init(acquired: acquired),
+                screen: try XCTUnwrap(payload.renderPlan.screens.first), runValues: run, reduceMotion: false,
+                usesSystemDisplayLink: false, delegate: nil)
+            controller.loadViewIfNeeded()
+            controller.view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            controller.view.layoutIfNeeded()
+            addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
+            let host = UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light)
+            try await controller.mountInteractiveScreen(hostTraits: host)
+            let screen = try XCTUnwrap(Mirror(reflecting: controller).children
+                .first { $0.label == "interactiveScreen" }?.value as? ExperienceInteractiveScreen)
+            _ = try await screen.resize(pixelWidth: 393, pixelHeight: 852, layoutScaleFactor: 1)
+            let env = try await screen.environmentSnapshot()
+            XCTAssertEqual(env?.values.first { $0.name == "colorScheme" }?.value, .integer(scheme == .dark ? 1 : 0))
+            _ = try await screen.step(elapsedSeconds: 0)
+            let pixels = try await renderCopyPixels(screen)
+            XCTAssertEqual(surface(pixels), surfaces[scheme], "The first frame draws the host's \(scheme)")
+        }
+    }
+
     func testPublishedDeviceGlobalIsScopedToEachMountedScreen() async throws {
         let expected = try PublishedRunValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,

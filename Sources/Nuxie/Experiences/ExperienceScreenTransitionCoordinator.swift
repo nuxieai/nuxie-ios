@@ -958,7 +958,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         controller.setContentHidden(contentHidden)
         do {
-            try await controller.mountInteractiveScreen()
+            try await controller.mountInteractiveScreen(hostTraits: hostViewController?.traitCollection)
             guard lifecycle != .tearingDown,
                   lifecycle != .tornDown,
                   !Task.isCancelled,
