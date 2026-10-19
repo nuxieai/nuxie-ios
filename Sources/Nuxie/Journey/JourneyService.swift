@@ -211,9 +211,9 @@ actor JourneyService {
     private var profileFetchesInFlight: [String: Int] = [:]
     private static let eventsAwaitingFetchedProfileLimit = 64
     /// Entry evaluation in route order. Kept events join it when their copy
-    /// is installed, so a newer event cannot start a Journey ahead of an
-    /// earlier trigger. Whoever finds it idle drains it; an event that routes
-    /// during a drain joins the queue and the running drain takes it.
+    /// is installed, and routing is held while they are offered, so a newer
+    /// event cannot start a Journey ahead of an earlier trigger. Only an event
+    /// already routing when the copy arrives can join behind them.
     private var queuedEntryEvents: [QueuedEntryEvent] = []
     private var drainingQueuedEntryEvents = false
     private struct QueuedEntryEvent {
@@ -344,7 +344,6 @@ extension JourneyService {
         }
         await resetForegroundStateArmReceiptsIfNeeded()
         await resumeParkedRuns(event: nil)
-        await drainQueuedEntryEvents()
         guard let state = currentProfileState() else { return }
         await evaluateStateArms(state: state, kinds: nil)
     }
@@ -519,6 +518,10 @@ private extension JourneyService {
             .map { QueuedEntryEvent(event: $0, presentationAttempt: nil) }
         eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
         guard initialized else { return }
+        // Hold routing while kept events are offered: everything that routes
+        // after this copy is handled whole, in order, once they have started.
+        let keptEventRouting = queuedEntryEvents.isEmpty
+            ? nil : await events.deferCommittedRouting()
         await ensureJournal(for: distinctId)
         if journal == nil, let routingGeneration {
             await events.resumeCommittedRouting(ifGeneration: routingGeneration)
@@ -539,10 +542,16 @@ private extension JourneyService {
         }
         guard let state = currentProfileState() else {
             await drainQueuedEntryEvents()
+            if let keptEventRouting {
+                await events.resumeCommittedRouting(ifGeneration: keptEventRouting)
+            }
             return
         }
         await resumeParkedRuns(event: nil)
         await drainQueuedEntryEvents()
+        if let keptEventRouting {
+            await events.resumeCommittedRouting(ifGeneration: keptEventRouting)
+        }
         await evaluateStateArms(state: state, kinds: nil)
     }
 }
@@ -837,8 +846,8 @@ private extension JourneyService {
     /// Each event leaves the queue before it is evaluated, so a later copy
     /// cannot start a Journey from it again. Only entry arms see a kept
     /// event: Journeys already waiting took it when it routed. Never wait for
-    /// another caller's drain: starting a Journey flushes its reports, which
-    /// waits for the routing worker that may be delivering to this actor.
+    /// another caller's drain: starting a Journey can wait for the routing
+    /// worker, which may be delivering to this actor.
     private func drainQueuedEntryEvents() async {
         guard initialized, !drainingQueuedEntryEvents else { return }
         drainingQueuedEntryEvents = true

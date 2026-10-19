@@ -112,13 +112,39 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         get { lock.withLock { _resumeRoutingHandler } }
         set { lock.withLock { _resumeRoutingHandler = newValue } }
     }
+    private var _routingDeferralGeneration: UInt64 = 0
+    private var _routingDeferred = false
+    /// Records EventLog's hold on committed routing. Tests that model the
+    /// route worker hold their deliveries while this is true.
+    public var routingDeferred: Bool { lock.withLock { _routingDeferred } }
+
+    @discardableResult
+    public func deferCommittedRouting() async -> UInt64 {
+        lock.withLock {
+            _routingDeferralGeneration &+= 1
+            _routingDeferred = true
+            return _routingDeferralGeneration
+        }
+    }
+
     public func resumeCommittedRouting(ifGeneration: UInt64) async {
+        lock.withLock {
+            if ifGeneration == _routingDeferralGeneration { _routingDeferred = false }
+        }
         resumeRoutingHandler?()
     }
 
     public func replayPendingStableRoutes(distinctId: String) async -> Bool {
+        let generation = lock.withLock { _routingDeferralGeneration }
         let handler = replayPendingRoutesHandler
-        return await handler?() ?? true
+        let replayed = await handler?() ?? true
+        // Like EventLog, a completed replay releases the hold it ran under.
+        if replayed {
+            lock.withLock {
+                if generation == _routingDeferralGeneration { _routingDeferred = false }
+            }
+        }
+        return replayed
     }
 
     public var drainHandler: (@Sendable () async -> Void)? {

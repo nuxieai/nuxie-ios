@@ -220,13 +220,15 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         // routes at that moment.
         dateProvider.advance(by: 2)
         let injected = SwitchOnce()
-        events.routedCaptureHandler = { [service, dateProvider] name, _ in
+        let router = HoldAwareRouter(events: events, service: service)
+        events.routedCaptureHandler = { [router, dateProvider] name, _ in
             guard name == JourneyEvents.journeyCompleted, await injected.claim() else { return }
-            await service.handleEvent(Self.event("trigger", properties: ["order": 2],
-                                                 at: dateProvider.now()))
+            await router.route(Self.event("trigger", properties: ["order": 2],
+                                          at: dateProvider.now()))
         }
         await service.profileDidCommit(freshCopy, distinctId: "customer")
         events.routedCaptureHandler = nil
+        await router.deliverHeld()
         await service.profileFetchDidSettle(distinctId: "customer")
 
         let didInject = await injected.claimed
@@ -237,6 +239,58 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
             return Int(value)
         }
         XCTAssertEqual(startedBy, [1, 2], "The kept trigger starts its Journey first")
+        await service.shutdown()
+    }
+
+    /// Events that route while kept events are offered are handled whole and
+    /// in order afterwards: a Journey started by one of them still takes the
+    /// event that follows it.
+    func testEventsDuringTheKeptOfferAreHandledWholeAndInOrder() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let base = try await authenticatedSnapshot(fixture)
+        let outcomes: [String: Journey.Boundary] = [
+            "took_go": .init(eventFields: [], responseFields: []),
+            "timed_out": .init(eventFields: [], responseFields: []),
+        ]
+        let freshCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
+                                  reentry: .init(type: .everyMatch, window: nil),
+                                  completionOutputs: outcomes, entryStepId: "wait",
+                                  steps: Self.waitForGoSteps(), routes: [])
+        let dateProvider = MockDateProvider()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: directory,
+                                  dateProvider: dateProvider)
+        await service.initialize()
+        await service.profileDidCommit(removingDeliveredReleases(from: freshCopy),
+                                       distinctId: "customer")
+        await service.profileDidWithdraw(authority: nil, distinctId: "customer")
+        await service.profileFetchDidBegin(distinctId: "customer")
+        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
+
+        // While the kept trigger starts its Journey, the app sends another
+        // start_waiting and then go.
+        let injected = SwitchOnce()
+        let router = HoldAwareRouter(events: events, service: service)
+        events.routedCaptureHandler = { [router, dateProvider] name, _ in
+            guard name == JourneyEvents.journeyStarted, await injected.claim() else { return }
+            await router.route(Self.event("start_waiting", at: dateProvider.now()))
+            await router.route(Self.event("go", at: dateProvider.now()))
+        }
+        await service.profileDidCommit(freshCopy, distinctId: "customer")
+        events.routedCaptureHandler = nil
+        await router.deliverHeld()
+        await service.profileFetchDidSettle(distinctId: "customer")
+
+        let didInject = await injected.claimed
+        XCTAssertTrue(didInject)
+        XCTAssertEqual(starts(in: events), 2)
+        XCTAssertEqual(completions(in: events), ["took_go", "took_go"],
+                       "Both Journeys took the go that followed them")
         await service.shutdown()
     }
 
@@ -328,6 +382,33 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
             .init(kind: .complete, id: "took_go", action: nil, outlets: nil, outcome: "took_go"),
             .init(kind: .complete, id: "timed_out", action: nil, outlets: nil, outcome: "timed_out"),
         ]
+    }
+
+    /// Delivers like EventLog's route worker: while routing is held, events
+    /// wait and are delivered in order once it is released.
+    private actor HoldAwareRouter {
+        let events: MockEventLog
+        let service: JourneyService
+        private var held: [NuxieEvent] = []
+
+        init(events: MockEventLog, service: JourneyService) {
+            self.events = events
+            self.service = service
+        }
+
+        func route(_ event: NuxieEvent) async {
+            guard !events.routingDeferred, held.isEmpty else {
+                held.append(event)
+                return
+            }
+            await service.handleEvent(event)
+        }
+
+        func deliverHeld() async {
+            while !held.isEmpty, !events.routingDeferred {
+                await service.handleEvent(held.removeFirst())
+            }
+        }
     }
 
     private actor SwitchOnce {

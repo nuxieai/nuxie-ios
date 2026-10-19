@@ -21,7 +21,7 @@ These JSON vectors define the contracts shared by SDK implementations.
 - `journeys/planes/profile-fact-admission.json`: exact signed fact projection across multiple legs of one publication, including missing and extra delivered keys.
 - `journeys/planes/publication-admission.json`: identical publication replay, equal-sequence conflicts and newer publication admission.
 - `journeys/planes/entry-evaluation.json`: profile fact, membership, event-edge, foreground, and unknown-value admission.
-- `sdk/fetched-profile-event-admission.json`: an event captured before the installed copy of the published setup starts from the copy it routes under; one that routes with no usable copy while a fetch runs is kept and offered once, to entry arms only, by the copy that arrives. iOS consumes it in `JourneyFetchedProfileEventTests`.
+- `sdk/fetched-profile-event-admission.json`: an event is evaluated against the copy installed when its entry is evaluated, never dropped for an earlier capture; one that routes with no usable copy while a fetch runs is kept and offered once, to entry arms only, by the copy that arrives, with routing held meanwhile. iOS consumes it in `JourneyFetchedProfileEventTests`.
 - `journeys/planes/occurrence-evaluation.json`: occurrence queries, aggregates, predicates, windows, and unknown propagation.
 - `journeys/planes/history-coverage.json`: retained-history horizons, gaps, pending captures, restart, and known-empty windows.
 - `journeys/planes/executor-controls.json`: waits, routes, experiments, authored fallback selection, and terminal controls.
