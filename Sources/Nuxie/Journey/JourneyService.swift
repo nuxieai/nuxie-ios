@@ -216,6 +216,9 @@ actor JourneyService {
     /// already routing when the copy arrives can join behind them.
     private var queuedEntryEvents: [QueuedEntryEvent] = []
     private var drainingQueuedEntryEvents = false
+    /// The routing hold taken for queued kept events. Only the drain that
+    /// empties the queue releases it.
+    private var queuedEntryRoutingHold: UInt64?
     private struct QueuedEntryEvent {
         let event: NuxieEvent
         let presentationAttempt: ExperiencePresentationAttempt?
@@ -520,8 +523,9 @@ private extension JourneyService {
         guard initialized else { return }
         // Hold routing while kept events are offered: everything that routes
         // after this copy is handled whole, in order, once they have started.
-        let keptEventRouting = queuedEntryEvents.isEmpty
-            ? nil : await events.deferCommittedRouting()
+        if !queuedEntryEvents.isEmpty {
+            queuedEntryRoutingHold = await events.deferCommittedRouting()
+        }
         await ensureJournal(for: distinctId)
         if journal == nil, let routingGeneration {
             await events.resumeCommittedRouting(ifGeneration: routingGeneration)
@@ -542,16 +546,10 @@ private extension JourneyService {
         }
         guard let state = currentProfileState() else {
             await drainQueuedEntryEvents()
-            if let keptEventRouting {
-                await events.resumeCommittedRouting(ifGeneration: keptEventRouting)
-            }
             return
         }
         await resumeParkedRuns(event: nil)
         await drainQueuedEntryEvents()
-        if let keptEventRouting {
-            await events.resumeCommittedRouting(ifGeneration: keptEventRouting)
-        }
         await evaluateStateArms(state: state, kinds: nil)
     }
 }
@@ -781,6 +779,9 @@ extension JourneyService {
               event.name != JourneyEvents.journeyStarted,
               event.name != JourneyEvents.journeyCompleted else { return true }
 
+        // Kept events start their Journeys before anything that routed after
+        // them reaches waiting Journeys, however routing was released.
+        await drainQueuedEntryEvents()
         guard await recoverConversionOccurrences(throughEventId: event.id) else { return false }
         let directlyRoutedRunId = await presentationPublications
             .consumeDirectRoute(eventId: event.id)
@@ -851,7 +852,18 @@ private extension JourneyService {
     private func drainQueuedEntryEvents() async {
         guard initialized, !drainingQueuedEntryEvents else { return }
         drainingQueuedEntryEvents = true
-        defer { drainingQueuedEntryEvents = false }
+        await runQueuedEntryEvents()
+        drainingQueuedEntryEvents = false
+        // The queue is empty with no await since the loop ended, so every
+        // hold taken for it, including one a newer copy took meanwhile, ends
+        // here.
+        if let hold = queuedEntryRoutingHold {
+            queuedEntryRoutingHold = nil
+            await events.resumeCommittedRouting(ifGeneration: hold)
+        }
+    }
+
+    private func runQueuedEntryEvents() async {
         while !queuedEntryEvents.isEmpty {
             let next = queuedEntryEvents.removeFirst()
             guard let state = currentProfileState(),
