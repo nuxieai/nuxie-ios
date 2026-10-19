@@ -295,6 +295,14 @@ final class ExperienceScreenViewController: UIViewController {
         // Fixture hosts own any qualification-only badge overlays.
     }
 
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        // Back in a window, the screen's own traits are current again: one changed while
+        // it was out of the window (beneath a modal, behind another screen) is written
+        // before it shows.
+        syncColorScheme()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         controllerIsVisible = true
@@ -441,7 +449,6 @@ final class ExperienceScreenViewController: UIViewController {
         syncColorScheme()
     }
 
-    /// This screen's own traits, which carry any style the Experience host forces.
     /// The host's appearance, for the time the screen's view is out of a window: before
     /// it first joins the host, and while it waits behind another screen or in a cache,
     /// where its own traits are the system's or stale.
