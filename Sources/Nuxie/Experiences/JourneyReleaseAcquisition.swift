@@ -936,6 +936,14 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         intent: JourneyReleasePreparationIntent,
         pinnedArtifacts: JourneyPinnedReleaseArtifacts? = nil
     ) async throws -> PreparedRuntimeRelease {
+        // Reads, downloads, and SHA-256 verifies every object of one release.
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Release read",
+            id: signposter.makeSignpostID(),
+            "\(String(describing: intent), privacy: .public) \(String(authority.descriptorSHA256.prefix(12)), privacy: .public)"
+        )
+        defer { signposter.endInterval("Release read", interval) }
         let renderOrigin = try Self.validatedOrigin(delivery.renderBaseUrl)
         let assetOrigin = try Self.validatedOrigin(delivery.assetBaseUrl)
         let manifest = try Self.runtimeReleaseManifest(authority)
@@ -1242,6 +1250,13 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             }
 
             var resourceMetrics = rejectedCacheMetrics
+            let signposter = NuxieSignposts.signposter
+            let downloadInterval = signposter.beginInterval(
+                "Object download",
+                id: signposter.makeSignpostID(),
+                "\(artifact.sizeBytes, privacy: .public) bytes \(artifact.contentType, privacy: .public)"
+            )
+            defer { signposter.endInterval("Object download", downloadInterval) }
             do {
                 let sourceURL = try Self.compose(artifact.key, relativeTo: origin)
                 let download = try await BoundedHTTPAcquisition.download(

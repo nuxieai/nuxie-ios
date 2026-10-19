@@ -583,6 +583,13 @@ package actor NuxieNativePreparedFile {
         importMode: NuxieNativeImportMode = .portable,
         valuePolicy: NuxieNativeValuePolicy = .empty
     ) async throws -> NuxieNativePreparedFile {
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Prepare file",
+            id: signposter.makeSignpostID(),
+            "\(bytes.count, privacy: .public) bytes"
+        )
+        defer { signposter.endInterval("Prepare file", interval) }
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
             let metadata = try await executor.call {
@@ -888,6 +895,13 @@ package actor NuxieNativeRuntime {
     package static func inspectAssets(bytes: Data, videoEnabled: Bool = true) async throws
         -> [NuxieNativeFileAssetDescriptor]
     {
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Inspect assets",
+            id: signposter.makeSignpostID(),
+            "\(bytes.count, privacy: .public) bytes"
+        )
+        defer { signposter.endInterval("Inspect assets", interval) }
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
             return try await executor.callThenShutdown {
@@ -1395,6 +1409,13 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             try? renderer.close()
             throw error
         }
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Artboard instance",
+            id: signposter.makeSignpostID(),
+            "\(artboardName, privacy: .public)"
+        )
+        defer { signposter.endInterval("Artboard instance", interval) }
         let artboard: NuxieNativeArtboardHandle
         do {
             artboard = try file.makeArtboard(named: artboardName)
@@ -1434,6 +1455,13 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         self.renderer = context.renderer
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Artboard instance",
+            id: signposter.makeSignpostID(),
+            "\(artboardName, privacy: .public)"
+        )
+        defer { signposter.endInterval("Artboard instance", interval) }
         let artboard = try context.file.makeArtboard(named: artboardName)
         var root: NuxieNativeViewModelHandle?
         do {
@@ -2301,6 +2329,13 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
         valuePolicy: NuxieNativeValuePolicy = .empty
     ) throws {
         let renderer = try renderer.require()
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "File import",
+            id: signposter.makeSignpostID(),
+            "\(bytes.count, privacy: .public) bytes"
+        )
+        defer { signposter.endInterval("File import", interval) }
         var file: OpaquePointer?
         var result: OpaquePointer?
         let status: UInt32
@@ -3289,6 +3324,8 @@ private final class NuxieNativeViewModelHandle: @unchecked Sendable {
 
 private final class NuxieNativeRendererHandle: @unchecked Sendable {
     private let owned: NuxieNativeOwnedHandle
+    /// Confined to the executor thread, like every renderer call.
+    private var hasRendered = false
 
     init(
         executor: NuxieRuntimePinnedThreadExecutor,
@@ -3296,6 +3333,13 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
         pixelHeight: UInt32
     ) throws {
         ExperienceRuntimeFontFallbackProvider.install()
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Renderer create",
+            id: signposter.makeSignpostID(),
+            "\(pixelWidth, privacy: .public)x\(pixelHeight, privacy: .public)"
+        )
+        defer { signposter.endInterval("Renderer create", interval) }
         var renderer: OpaquePointer?
         var result: OpaquePointer?
         let status = nux_renderer_new_metal(pixelWidth, pixelHeight, &renderer, &result)
@@ -3349,6 +3393,16 @@ private final class NuxieNativeRendererHandle: @unchecked Sendable {
     ) throws -> NuxieNativeRendererOutcome {
         let renderer = try owned.require()
         let player = try player.require()
+        // The first frame on a renderer carries any Metal pipeline compile.
+        // Later frames are not signposted.
+        let signposter = NuxieSignposts.signposter
+        let firstRender = hasRendered
+            ? nil
+            : signposter.beginInterval("First render", id: signposter.makeSignpostID())
+        hasRendered = true
+        defer {
+            if let firstRender { signposter.endInterval("First render", firstRender) }
+        }
         var operation = NuxMetalRenderOperation()
         operation.struct_size = UInt32(MemoryLayout<NuxMetalRenderOperation>.size)
         switch drawable {

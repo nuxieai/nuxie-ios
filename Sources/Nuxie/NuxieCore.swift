@@ -88,8 +88,10 @@ final class NuxieCore: @unchecked Sendable {
     let internalConfiguration = configuration.internalConfiguration
     let dateProvider = overrides.dateProvider ?? SystemDateProvider()
     let sleepProvider = overrides.sleepProvider ?? SystemSleepProvider()
-    let presentationTrace = overrides.presentationTrace
-      ?? DisabledExperiencePresentationTrace()
+    let presentationTrace = ExperiencePresentationSignposts(
+      downstream: overrides.presentationTrace
+        ?? DisabledExperiencePresentationTrace()
+    )
     let journeyPresentationTrace = JourneyPresentationTraceCoordinator(
       recorder: presentationTrace,
       qualificationAttempt: overrides.qualificationPresentationAttempt,
