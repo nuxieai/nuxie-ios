@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head><link rel="component" href="../../components/plan-card/"><link rel="component" href="../../components/buy-button/"><link rel="stylesheet" href="style.css"></head>
+<body>
+<main id="plans_root">
+  <div id="plans_list">
+    <plan-card id="plans_row" data-repeat="state.plans as plan" data-bind:name="plan.name" data-bind:value="plan.id" data-bind:chosen="state.chosen" data-on:select="emit('picked')"></plan-card>
+  </div>
+  <plan-card id="plans_lifetime" name="Lifetime" value="lifetime" data-bind:chosen="state.chosen" data-on:select="emit('picked')"></plan-card>
+  <buy-button id="plans_subscribe" data-on:press="emit('purchase')"></buy-button>
+  <button id="plans_restore" data-on:click="emit('restore')"><p id="plans_restore_label">Restore purchases</p></button>
+</main>
+</body>
+</html>

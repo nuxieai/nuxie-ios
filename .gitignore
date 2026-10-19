@@ -105,7 +105,7 @@ Examples/*/*.xcworkspace
 .xcodegen.inputs
  
 # Internal
-plans/
+/plans/
 .claude/settings.local.json
 
 # macOS
