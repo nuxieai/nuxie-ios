@@ -342,6 +342,9 @@ protocol EventLogProtocol:
   @discardableResult
   func deferCommittedRouting() async -> UInt64
   func resumeCommittedRouting(ifGeneration: UInt64) async
+  /// Retry a committed delivery a subscriber refused. Later routes keep
+  /// waiting behind it, so the retry preserves capture order.
+  func retryFailedCommittedRouting() async
 
   func firstPendingStableRouteEventId(distinctId: String) async throws -> String?
 
@@ -458,6 +461,7 @@ protocol EventLogProtocol:
 extension EventLogProtocol {
   func deferCommittedRouting() async -> UInt64 { 0 }
   func resumeCommittedRouting(ifGeneration: UInt64) async {}
+  func retryFailedCommittedRouting() async {}
 
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
@@ -1420,6 +1424,10 @@ actor EventLog: EventLogProtocol {
   func resumeCommittedRouting(ifGeneration generation: UInt64) async {
     guard generation == routingDeferralGeneration else { return }
     routeContinuation.yield(.resumeAfterRecovery(generation: generation))
+  }
+
+  func retryFailedCommittedRouting() async {
+    routeContinuation.yield(.retryFailedDeliveries)
   }
 
   private func processRoute(_ cmd: RouteCommand) async {

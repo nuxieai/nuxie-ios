@@ -219,9 +219,15 @@ actor JourneyService {
     /// The routing hold taken for queued kept events. Only the drain that
     /// empties the queue releases it.
     private var queuedEntryRoutingHold: UInt64?
+    /// While a kept event starts its Journeys, an event of the same customer
+    /// that was already routing is refused untouched and retried whole after
+    /// the drain, so its waiting-Journey signals cannot overtake them.
+    private var startingKeptEventCustomer: String?
+    private var refusedEventDuringEntryDrain = false
     private struct QueuedEntryEvent {
         let event: NuxieEvent
         let presentationAttempt: ExperiencePresentationAttempt?
+        var kept = false
     }
     private struct RunExecutionKey: Hashable {
         let runID: String
@@ -518,13 +524,16 @@ private extension JourneyService {
         retainReceipts(for: snapshot)
         queuedEntryEvents += eventsAwaitingFetchedProfile
             .filter { $0.distinctId == distinctId }
-            .map { QueuedEntryEvent(event: $0, presentationAttempt: nil) }
+            .map { QueuedEntryEvent(event: $0, presentationAttempt: nil, kept: true) }
         eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
         guard initialized else { return }
         // Hold routing while kept events are offered: everything that routes
         // after this copy is handled whole, in order, once they have started.
         if !queuedEntryEvents.isEmpty {
-            queuedEntryRoutingHold = await events.deferCommittedRouting()
+            let hold = await events.deferCommittedRouting()
+            // Overlapping commits can return here out of order; only the
+            // newest hold can release routing.
+            queuedEntryRoutingHold = max(queuedEntryRoutingHold ?? 0, hold)
         }
         await ensureJournal(for: distinctId)
         if journal == nil, let routingGeneration {
@@ -778,7 +787,12 @@ extension JourneyService {
               event.distinctId == identity.getDistinctId(),
               event.name != JourneyEvents.journeyStarted,
               event.name != JourneyEvents.journeyCompleted else { return true }
-
+        // Untouched until kept events have started their Journeys; EventLog
+        // keeps it, and everything after it, for the retry.
+        if startingKeptEventCustomer == event.distinctId {
+            refusedEventDuringEntryDrain = true
+            return false
+        }
         // Kept events start their Journeys before anything that routed after
         // them reaches waiting Journeys, however routing was released.
         await drainQueuedEntryEvents()
@@ -856,10 +870,14 @@ private extension JourneyService {
         drainingQueuedEntryEvents = false
         // The queue is empty with no await since the loop ended, so every
         // hold taken for it, including one a newer copy took meanwhile, ends
-        // here.
+        // here, and anything refused meanwhile is retried whole.
         if let hold = queuedEntryRoutingHold {
             queuedEntryRoutingHold = nil
             await events.resumeCommittedRouting(ifGeneration: hold)
+        }
+        if refusedEventDuringEntryDrain {
+            refusedEventDuringEntryDrain = false
+            await events.retryFailedCommittedRouting()
         }
     }
 
@@ -871,11 +889,13 @@ private extension JourneyService {
                 keepForFetchedProfile(next.event)
                 continue
             }
+            startingKeptEventCustomer = next.kept ? next.event.distinctId : nil
             await startEventArms(
                 for: next.event,
                 state: state,
                 presentationAttempt: next.presentationAttempt
             )
+            startingKeptEventCustomer = nil
         }
     }
 }

@@ -308,6 +308,34 @@ final class EventLogTests: AsyncSpec {
                     expect(mockStore.pendingStableRouteIds).to(beEmpty())
                 }
 
+                it("retries a refused delivery on request, in order, without a replay") {
+                    let earlier = ReceivedEvents()
+                    let later = ReceivedEvents()
+                    let allow = AdmissionGeneration(0)
+                    await log.subscribeCommitted { event in await earlier.append(event.name) }
+                    let reservation = log.reserveCommittedAdmission { 1 }
+                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { _, _ in
+                        allow.value == 1
+                    }
+                    await log.subscribeCommitted { event in await later.append(event.name) }
+                    try await log.configure(configuration: testConfig)
+                    for name in ["first", "second"] {
+                        _ = await log.captureAndRouteSystemEvent(.init(
+                            name: name, properties: nil, eventId: name, distinctId: "customer-a"
+                        ))
+                    }
+                    _ = await log.drainCommittedRouting()
+                    await expect { await later.names }.to(beEmpty())
+
+                    allow.set(1)
+                    await log.retryFailedCommittedRouting()
+                    let drained = await log.drainCommittedRouting()
+                    expect(drained).to(beTrue())
+                    await expect { await earlier.names }.to(equal(["first", "second"]))
+                    await expect { await later.names }.to(equal(["first", "second"]))
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                }
+
                 it("retries a failed stable-route acknowledgement without rerouting") {
                     let received = ReceivedEvents()
                     await log.subscribeCommitted { event in

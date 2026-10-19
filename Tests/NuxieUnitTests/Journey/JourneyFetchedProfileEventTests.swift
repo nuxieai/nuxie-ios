@@ -387,6 +387,47 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         await service.shutdown()
     }
 
+    /// An event the route worker had already dispatched when kept events
+    /// began starting is refused untouched and retried whole after them, so
+    /// it still reaches the Journey a kept trigger started.
+    func testAnInFlightEventWaitsForKeptEventsAndIsRetriedWhole() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let freshCopy = try await waitingCopy(fixture, entry: "start_waiting")
+        let dateProvider = MockDateProvider()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: directory,
+                                  dateProvider: dateProvider)
+        await service.initialize()
+        await service.profileDidCommit(removingDeliveredReleases(from: freshCopy),
+                                       distinctId: "customer")
+        await service.profileDidWithdraw(authority: nil, distinctId: "customer")
+        await service.profileFetchDidBegin(distinctId: "customer")
+        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
+
+        let injected = SwitchOnce()
+        let router = HoldAwareRouter(events: events, service: service)
+        events.routedCaptureHandler = { [router, dateProvider] name, _ in
+            guard name == JourneyEvents.journeyStarted, await injected.claim() else { return }
+            await router.routeInFlight(Self.event("go", at: dateProvider.now()))
+        }
+        await service.profileDidCommit(freshCopy, distinctId: "customer")
+        events.routedCaptureHandler = nil
+        await router.deliverHeld()
+        await service.profileFetchDidSettle(distinctId: "customer")
+
+        let didInject = await injected.claimed
+        XCTAssertTrue(didInject)
+        XCTAssertEqual(starts(in: events), 1)
+        XCTAssertEqual(completions(in: events), ["took_go"],
+                       "The kept trigger's Journey took the go that was already routing")
+        await service.shutdown()
+    }
+
     /// The user changes while an event of the previous user is still being
     /// routed. The new user's copy must not start a Journey from it.
     func testEventNeverStartsAnotherCustomersJourney() async throws {
@@ -494,7 +535,8 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
     }
 
     /// Delivers like EventLog's route worker: while routing is held, events
-    /// wait and are delivered in order once it is released.
+    /// wait; a refused event is kept first and everything after it waits;
+    /// waiting events are delivered in order once that clears.
     private actor HoldAwareRouter {
         let events: MockEventLog
         let service: JourneyService
@@ -510,12 +552,32 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
                 held.append(event)
                 return
             }
-            await service.handleEvent(event)
+            await deliver(event)
+        }
+
+        /// An event the route worker had already dispatched when the hold
+        /// began: it reaches the service, which may refuse it.
+        func routeInFlight(_ event: NuxieEvent) async {
+            guard held.isEmpty else {
+                held.append(event)
+                return
+            }
+            await deliver(event)
         }
 
         func deliverHeld() async {
-            while !held.isEmpty, !events.routingDeferred {
-                await service.handleEvent(held.removeFirst())
+            while let next = held.first, !events.routingDeferred {
+                held.removeFirst()
+                guard await service.handleEvent(next, admittedProfileGeneration: nil) else {
+                    held.insert(next, at: 0)
+                    return
+                }
+            }
+        }
+
+        private func deliver(_ event: NuxieEvent) async {
+            if !(await service.handleEvent(event, admittedProfileGeneration: nil)) {
+                held.insert(event, at: 0)
             }
         }
     }
