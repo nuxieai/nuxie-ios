@@ -1,5 +1,5 @@
 {
-  "contract": "An app event that arrives while the published setup is being fetched is kept. An event is evaluated for entry against the copy installed when that evaluation runs; it is never dropped because it was captured under an earlier copy or before any copy existed. An event that routes while its customer has no usable copy and a fetch is running is kept, and the copy that arrives offers it once, to its entry arms only: a Journey already waiting took it when it routed. While kept events are offered, routing is held, so every newer event is handled whole and in order after them. An event never starts another customer's Journey. A fetch that settles without a copy uses up what it kept, and with no fetch running nothing is kept.",
+  "contract": "An app event that arrives while the published setup is being fetched is kept. An event is evaluated for entry against the copy installed when it is handled; it is never dropped because it was captured under an earlier copy or before any copy existed. An event that routes while its customer has no usable copy and a fetch is running is refused untouched: the event log keeps it, and everything after it, in capture order. When the copy arrives or the fetch ends, and the app is active, the event is handled whole against the copy then installed, so a Journey already waiting takes it once and the arriving copy can start a Journey from it. A fetch that ends without a copy leaves it to be handled with no copy, and with no fetch running nothing waits. An event never starts another customer's Journey.",
   "operations": {
     "commit-empty": "Install a copy with no entry arm for the trigger.",
     "commit-armed": "Install a copy whose Journey starts on the trigger event.",
@@ -8,7 +8,7 @@
     "fetch-settle": "That fetch ends.",
     "capture": "The trigger event is captured but not routed yet.",
     "route-captured": "The captured trigger routes now.",
-    "trigger": "A trigger event is captured and routes at once."
+    "trigger": "A trigger event is captured and routes; if refused, the event log retries it when asked."
   },
   "cases": [
     {

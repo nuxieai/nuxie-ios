@@ -4,8 +4,9 @@ import XCTest
 @testable import NuxieTestSupport
 
 /// An app event that arrives while the published setup is being fetched is
-/// kept: once the copy arrives it can start Experiences, and no Journey takes
-/// the same event twice (UNIV-4589).
+/// kept: it waits, untouched and in order, and once the copy arrives it is
+/// handled whole, so it can start Experiences and no Journey takes it twice
+/// (UNIV-4589).
 final class JourneyFetchedProfileEventTests: JourneyTestCase {
 
     /// Basis's first launch: setup, then an immediate trigger, before any
@@ -61,6 +62,61 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         await events.close()
     }
 
+    /// The saved copy cannot be used (the language changed in the app) and a
+    /// fresh one is fetched. A trigger and the event after it wait in
+    /// EventLog, in order, and are handled whole once the copy arrives.
+    func testEventsDuringTheFetchWaitInOrderAndRunOnceTheCopyArrives() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let freshCopy = try await waitingCopy(fixture, entry: "start_waiting")
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = MockEventStore()
+        let events = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                              apiClient: MockNuxieApi(), store: store)
+        // EventLog stamps tracked events with the wall clock; the Journey's
+        // wait for go opens on the same clock.
+        let journeys = JourneyService(
+            identity: identity, events: events,
+            dateProvider: MockDateProvider(initialDate: Date()), sleepProvider: MockSleepProvider(),
+            journalDirectory: directory, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
+        )
+        let admission = events.reserveCommittedAdmission { journeys.eventAdmissionGeneration() }
+        await events.subscribeAcknowledgingCommitted(reservation: admission) { event, generation in
+            await journeys.handleEvent(event, admittedProfileGeneration: generation)
+        }
+        await journeys.prepareForEvents()
+        let configuration = NuxieConfiguration(apiKey: "fetched-profile-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await events.configure(configuration: configuration)
+        await journeys.initialize()
+        await journeys.finishStartupRouting()
+        await journeys.profileDidCommit(removingDeliveredReleases(from: freshCopy),
+                                        distinctId: "customer")
+        await journeys.profileDidWithdraw(authority: nil, distinctId: "customer")
+        await journeys.profileFetchDidBegin(distinctId: "customer")
+
+        events.track("start_waiting")
+        events.track("go")
+        _ = await events.flushEvents()
+        XCTAssertEqual(starts(in: store), 0, "Both events wait for the fresh copy")
+
+        await journeys.profileDidCommit(freshCopy, distinctId: "customer")
+        await journeys.profileFetchDidSettle(distinctId: "customer")
+        await events.drain()
+
+        XCTAssertEqual(starts(in: store), 1)
+        XCTAssertEqual(store.storedEvents.filter { $0.name == JourneyEvents.journeyCompleted }
+            .compactMap { $0.getPropertiesDict()["outcome"] as? String }, ["took_go"],
+            "The Journey the trigger started took the go that followed it, once")
+        await journeys.shutdown()
+        await events.close()
+    }
+
     /// The shared contract, replayed operation by operation.
     func testFetchedProfileEventAdmissionVectors() async throws {
         let url = URL(fileURLWithPath: #filePath)
@@ -86,6 +142,8 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
             let events = MockEventLog()
             events.identity = identity
             let service = makeService(identity: identity, events: events, directory: directory)
+            let router = EventLogRouter(service: service)
+            events.retryFailedRoutingHandler = { await router.retry() }
             await service.initialize()
             var captured: (event: NuxieEvent, generation: UInt64)?
             var observed: [Int] = []
@@ -100,10 +158,9 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
                     captured = (Self.event("trigger"), service.eventAdmissionGeneration())
                 case "route-captured":
                     let route = try XCTUnwrap(captured, vector.name)
-                    await service.handleEvent(route.event, admittedProfileGeneration: route.generation)
+                    await router.route(route.event, admittedProfileGeneration: route.generation)
                 case "trigger":
-                    await service.handleEvent(Self.event("trigger"),
-                                              admittedProfileGeneration: service.eventAdmissionGeneration())
+                    await router.route(Self.event("trigger"))
                 default: XCTFail("\(vector.name): unknown operation \(operation)")
                 }
                 observed.append(starts(in: events))
@@ -113,50 +170,32 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         }
     }
 
-    /// A Journey already waiting for the event takes it at once during the
-    /// gap. The copy that arrives offers the event only to its entry arms, so
-    /// the waiting Journey never takes it a second time.
+    /// A Journey already waiting for the event takes it once, after the gap,
+    /// together with the Journey the arriving copy starts from it.
     func testWaitingJourneyTakesTheEventOnceAndTheArrivingCopyStartsFromIt() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
-        let base = try await authenticatedSnapshot(fixture)
-        let waitsForGo = Self.waitForGoSteps()
-        let outcomes: [String: Journey.Boundary] = [
-            "took_go": .init(eventFields: [], responseFields: []),
-            "timed_out": .init(eventFields: [], responseFields: []),
-        ]
-        let savedCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
-                                  reentry: .init(type: .everyMatch, window: nil),
-                                  completionOutputs: outcomes, entryStepId: "wait",
-                                  steps: waitsForGo, routes: [])
-        let freshCopy = replacing(base, entry: Self.eventEntry("go"),
-                                  reentry: .init(type: .everyMatch, window: nil),
-                                  completionOutputs: outcomes, entryStepId: "wait",
-                                  steps: waitsForGo, routes: [])
-        let pinnedRelease = try XCTUnwrap(savedCopy.releasesByDigest.values.first)
+        let savedCopy = try await waitingCopy(fixture, entry: "start_waiting")
+        let freshCopy = try await waitingCopy(fixture, entry: "go")
         let dateProvider = MockDateProvider()
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let events = MockEventLog()
         events.identity = identity
-        let service = makeService(
-            identity: identity, events: events, directory: directory,
-            dateProvider: dateProvider,
-            pinnedReleaseAuthenticator: { _, _ in pinnedRelease }
-        )
+        let service = makeService(identity: identity, events: events, directory: directory,
+                                  dateProvider: dateProvider)
+        let router = EventLogRouter(service: service)
+        events.retryFailedRoutingHandler = { await router.retry() }
         await service.initialize()
         await service.profileDidCommit(savedCopy, distinctId: "customer")
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
+        await router.route(Self.event("start_waiting", at: dateProvider.now()))
         XCTAssertEqual(starts(in: events), 1)
-        XCTAssertEqual(completions(in: events), [], "The started Journey waits for go")
 
         await service.profileDidWithdraw(authority: nil, distinctId: "customer")
         await service.profileFetchDidBegin(distinctId: "customer")
-        await service.handleEvent(Self.event("go", id: "00000000-0000-7000-8000-000000045892",
-                                             at: dateProvider.now()))
-        XCTAssertEqual(completions(in: events), ["took_go"],
-                       "The waiting Journey carries on at once during the gap")
+        await router.route(Self.event("go", at: dateProvider.now()))
+        XCTAssertEqual(completions(in: events), [], "go waits for the fresh copy")
 
         await service.profileDidCommit(freshCopy, distinctId: "customer")
         await service.profileFetchDidSettle(distinctId: "customer")
@@ -169,9 +208,45 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         await service.shutdown()
     }
 
-    /// A kept trigger is older than an event that routes while its copy is
+    /// Rendered Journeys stay closed while the foreground copy is
+    /// revalidated, so waiting events are retried only once the app is active.
+    func testWaitingEventsAreRetriedOnlyOnceTheAppIsActive() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let freshCopy = replacing(try await authenticatedSnapshot(fixture),
+                                  entry: Self.eventEntry("trigger"),
+                                  reentry: .init(type: .everyMatch, window: nil))
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: directory)
+        let router = EventLogRouter(service: service)
+        events.retryFailedRoutingHandler = { await router.retry() }
+        await service.initialize()
+        await service.profileDidCommit(removingDeliveredReleases(from: freshCopy),
+                                       distinctId: "customer")
+        // The language changed in the app; the next foreground fetches.
+        await service.profileDidWithdraw(authority: nil, distinctId: "customer")
+        await service.onAppDidEnterBackground()
+        await service.onAppWillEnterForeground()
+        await service.profileFetchDidBegin(distinctId: "customer")
+        await router.route(Self.event("trigger"))
+        await service.profileDidCommit(freshCopy, distinctId: "customer")
+        await service.profileFetchDidSettle(distinctId: "customer")
+        XCTAssertEqual(events.retryFailedRoutingRequests, 0)
+        XCTAssertEqual(starts(in: events), 0)
+
+        await service.onAppBecameActive()
+        XCTAssertEqual(events.retryFailedRoutingRequests, 1)
+        XCTAssertEqual(starts(in: events), 1)
+        await service.shutdown()
+    }
+
+    /// A waiting trigger is older than an event that routes while its copy is
     /// being installed, so it starts its Journey first.
-    func testKeptTriggerStartsBeforeANewerEventThatRoutesDuringInstall() async throws {
+    func testAWaitingTriggerStartsBeforeANewerEventThatRoutesDuringInstall() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -179,48 +254,41 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         let order: [String: JourneyReleaseJSONValue] = [
             "key": .string("order"), "type": .string("number"), "required": .bool(false),
         ]
-        let outcomes: [String: Journey.Boundary] = [
-            "took_go": .init(eventFields: [], responseFields: []),
-            "timed_out": .init(eventFields: [], responseFields: []),
-        ]
         // One Journey that waits up to a second for go: the saved copy starts
         // it on start_waiting, the fresh copy on trigger.
         let steps = Self.waitForGoSteps(maxTimeMs: 1_000)
         let savedCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
                                   reentry: .init(type: .everyMatch, window: nil),
                                   inputs: .init(eventFields: [order], responseFields: []),
-                                  completionOutputs: outcomes, entryStepId: "wait",
+                                  completionOutputs: Self.waitOutcomes, entryStepId: "wait",
                                   steps: steps, routes: [])
         let freshCopy = replacing(base, entry: Self.eventEntry("trigger"),
                                   reentry: .init(type: .everyMatch, window: nil),
                                   inputs: .init(eventFields: [order], responseFields: []),
-                                  completionOutputs: outcomes, entryStepId: "wait",
+                                  completionOutputs: Self.waitOutcomes, entryStepId: "wait",
                                   steps: steps, routes: [])
-        let pinnedRelease = try XCTUnwrap(savedCopy.releasesByDigest.values.first)
         let dateProvider = MockDateProvider()
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let events = MockEventLog()
         events.identity = identity
         let service = makeService(identity: identity, events: events, directory: directory,
-                                  dateProvider: dateProvider,
-                                  pinnedReleaseAuthenticator: { _, _ in pinnedRelease })
+                                  dateProvider: dateProvider)
+        let router = EventLogRouter(service: service)
+        events.retryFailedRoutingHandler = { await router.retry() }
         await service.initialize()
         await service.profileDidCommit(savedCopy, distinctId: "customer")
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
+        await router.route(Self.event("start_waiting", at: dateProvider.now()))
 
-        // The language changes in the app and the fresh copy is fetched.
         await service.profileDidWithdraw(authority: nil, distinctId: "customer")
         await service.profileFetchDidBegin(distinctId: "customer")
-        await service.handleEvent(Self.event("trigger", properties: ["order": 1],
-                                             at: dateProvider.now()))
+        await router.route(Self.event("trigger", properties: ["order": 1], at: dateProvider.now()))
 
         // By the time the copy arrives the waiting Journey has timed out. Its
         // report is captured while the copy is installed, and a newer trigger
         // routes at that moment.
         dateProvider.advance(by: 2)
         let injected = SwitchOnce()
-        let router = HoldAwareRouter(events: events, service: service)
         events.routedCaptureHandler = { [router, dateProvider] name, _ in
             guard name == JourneyEvents.journeyCompleted, await injected.claim() else { return }
             await router.route(Self.event("trigger", properties: ["order": 2],
@@ -228,7 +296,6 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         }
         await service.profileDidCommit(freshCopy, distinctId: "customer")
         events.routedCaptureHandler = nil
-        await router.deliverHeld()
         await service.profileFetchDidSettle(distinctId: "customer")
 
         let didInject = await injected.claimed
@@ -238,65 +305,13 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
             guard case .number(let value)? = run.context.event["order"] else { return nil }
             return Int(value)
         }
-        XCTAssertEqual(startedBy, [1, 2], "The kept trigger starts its Journey first")
+        XCTAssertEqual(startedBy, [1, 2], "The waiting trigger starts its Journey first")
         await service.shutdown()
     }
 
-    /// Events that route while kept events are offered are handled whole and
-    /// in order afterwards: a Journey started by one of them still takes the
-    /// event that follows it.
-    func testEventsDuringTheKeptOfferAreHandledWholeAndInOrder() async throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load()
-        let base = try await authenticatedSnapshot(fixture)
-        let outcomes: [String: Journey.Boundary] = [
-            "took_go": .init(eventFields: [], responseFields: []),
-            "timed_out": .init(eventFields: [], responseFields: []),
-        ]
-        let freshCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
-                                  reentry: .init(type: .everyMatch, window: nil),
-                                  completionOutputs: outcomes, entryStepId: "wait",
-                                  steps: Self.waitForGoSteps(), routes: [])
-        let dateProvider = MockDateProvider()
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let service = makeService(identity: identity, events: events, directory: directory,
-                                  dateProvider: dateProvider)
-        await service.initialize()
-        await service.profileDidCommit(removingDeliveredReleases(from: freshCopy),
-                                       distinctId: "customer")
-        await service.profileDidWithdraw(authority: nil, distinctId: "customer")
-        await service.profileFetchDidBegin(distinctId: "customer")
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
-
-        // While the kept trigger starts its Journey, the app sends another
-        // start_waiting and then go.
-        let injected = SwitchOnce()
-        let router = HoldAwareRouter(events: events, service: service)
-        events.routedCaptureHandler = { [router, dateProvider] name, _ in
-            guard name == JourneyEvents.journeyStarted, await injected.claim() else { return }
-            await router.route(Self.event("start_waiting", at: dateProvider.now()))
-            await router.route(Self.event("go", at: dateProvider.now()))
-        }
-        await service.profileDidCommit(freshCopy, distinctId: "customer")
-        events.routedCaptureHandler = nil
-        await router.deliverHeld()
-        await service.profileFetchDidSettle(distinctId: "customer")
-
-        let didInject = await injected.claimed
-        XCTAssertTrue(didInject)
-        XCTAssertEqual(starts(in: events), 2)
-        XCTAssertEqual(completions(in: events), ["took_go", "took_go"],
-                       "Both Journeys took the go that followed them")
-        await service.shutdown()
-    }
-
-    /// A second copy arriving while kept events are still being offered must
-    /// not release routing early: events after them still wait their turn.
-    func testASecondCopyDuringTheOfferKeepsRoutingHeldUntilItEnds() async throws {
+    /// A second copy arriving while waiting events are being handled does not
+    /// let later events overtake them.
+    func testASecondCopyWhileWaitingEventsRunKeepsTheirOrder() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -308,18 +323,19 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         events.identity = identity
         let service = makeService(identity: identity, events: events, directory: directory,
                                   dateProvider: dateProvider)
+        let router = EventLogRouter(service: service)
+        events.retryFailedRoutingHandler = { await router.retry() }
         await service.initialize()
         await service.profileDidCommit(removingDeliveredReleases(from: freshCopy),
                                        distinctId: "customer")
         await service.profileDidWithdraw(authority: nil, distinctId: "customer")
         await service.profileFetchDidBegin(distinctId: "customer")
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
+        await router.route(Self.event("start_waiting", at: dateProvider.now()))
+        await router.route(Self.event("start_waiting", at: dateProvider.now()))
 
-        // While the first kept trigger starts its Journey, a second copy
+        // While the first waiting trigger starts its Journey, a second copy
         // arrives, then the app sends another start_waiting and go.
         let injected = SwitchOnce()
-        let router = HoldAwareRouter(events: events, service: service)
         events.routedCaptureHandler = { [service, router, dateProvider] name, _ in
             guard name == JourneyEvents.journeyStarted, await injected.claim() else { return }
             await service.profileDidCommit(freshCopy, distinctId: "customer")
@@ -328,103 +344,12 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         }
         await service.profileDidCommit(freshCopy, distinctId: "customer")
         events.routedCaptureHandler = nil
-        await router.deliverHeld()
         await service.profileFetchDidSettle(distinctId: "customer")
 
         let didInject = await injected.claimed
         XCTAssertTrue(didInject)
         XCTAssertEqual(starts(in: events), 3)
         XCTAssertEqual(completions(in: events), ["took_go", "took_go", "took_go"])
-        await service.shutdown()
-    }
-
-    /// However routing gets released before kept events are offered (journal
-    /// recovery can release it), the next event offers them first, so the
-    /// Journey a kept trigger starts still takes the event that follows.
-    func testAnEventReleasedEarlyOffersKeptEventsBeforeItsOwnSignals() async throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load()
-        let base = try await authenticatedSnapshot(fixture)
-        // A Journey already waiting before the gap times out while the copy
-        // is installed; its report marks the moment an early event arrives.
-        let savedCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
-                                  reentry: .init(type: .everyMatch, window: nil),
-                                  completionOutputs: Self.waitOutcomes, entryStepId: "wait",
-                                  steps: Self.waitForGoSteps(maxTimeMs: 1_000), routes: [])
-        let freshCopy = try await waitingCopy(fixture, entry: "start_waiting")
-        let pinnedRelease = try XCTUnwrap(savedCopy.releasesByDigest.values.first)
-        let dateProvider = MockDateProvider()
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let service = makeService(identity: identity, events: events, directory: directory,
-                                  dateProvider: dateProvider,
-                                  pinnedReleaseAuthenticator: { _, _ in pinnedRelease })
-        await service.initialize()
-        await service.profileDidCommit(savedCopy, distinctId: "customer")
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
-        await service.profileDidWithdraw(authority: nil, distinctId: "customer")
-        await service.profileFetchDidBegin(distinctId: "customer")
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
-        dateProvider.advance(by: 2)
-
-        let injected = SwitchOnce()
-        events.routedCaptureHandler = { [service, dateProvider] name, _ in
-            guard name == JourneyEvents.journeyCompleted, await injected.claim() else { return }
-            // Delivered past any hold, as a released route would be.
-            await service.handleEvent(Self.event("go", at: dateProvider.now()))
-        }
-        await service.profileDidCommit(freshCopy, distinctId: "customer")
-        events.routedCaptureHandler = nil
-        await service.profileFetchDidSettle(distinctId: "customer")
-
-        let didInject = await injected.claimed
-        XCTAssertTrue(didInject)
-        XCTAssertEqual(completions(in: events).sorted(), ["timed_out", "took_go"],
-                       "The kept trigger's Journey took the go that followed it")
-        await service.shutdown()
-    }
-
-    /// An event the route worker had already dispatched when kept events
-    /// began starting is refused untouched and retried whole after them, so
-    /// it still reaches the Journey a kept trigger started.
-    func testAnInFlightEventWaitsForKeptEventsAndIsRetriedWhole() async throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let fixture = try JourneyPlaneProfileTestFixture.load()
-        let freshCopy = try await waitingCopy(fixture, entry: "start_waiting")
-        let dateProvider = MockDateProvider()
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let events = MockEventLog()
-        events.identity = identity
-        let service = makeService(identity: identity, events: events, directory: directory,
-                                  dateProvider: dateProvider)
-        await service.initialize()
-        await service.profileDidCommit(removingDeliveredReleases(from: freshCopy),
-                                       distinctId: "customer")
-        await service.profileDidWithdraw(authority: nil, distinctId: "customer")
-        await service.profileFetchDidBegin(distinctId: "customer")
-        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
-
-        let injected = SwitchOnce()
-        let router = HoldAwareRouter(events: events, service: service)
-        events.routedCaptureHandler = { [router, dateProvider] name, _ in
-            guard name == JourneyEvents.journeyStarted, await injected.claim() else { return }
-            await router.routeInFlight(Self.event("go", at: dateProvider.now()))
-        }
-        await service.profileDidCommit(freshCopy, distinctId: "customer")
-        events.routedCaptureHandler = nil
-        await router.deliverHeld()
-        await service.profileFetchDidSettle(distinctId: "customer")
-
-        let didInject = await injected.claimed
-        XCTAssertTrue(didInject)
-        XCTAssertEqual(starts(in: events), 1)
-        XCTAssertEqual(completions(in: events), ["took_go"],
-                       "The kept trigger's Journey took the go that was already routing")
         await service.shutdown()
     }
 
@@ -435,13 +360,9 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let base = try await authenticatedSnapshot(fixture)
-        let outcomes: [String: Journey.Boundary] = [
-            "took_go": .init(eventFields: [], responseFields: []),
-            "timed_out": .init(eventFields: [], responseFields: []),
-        ]
         let waitingCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
                                     reentry: .init(type: .everyMatch, window: nil),
-                                    completionOutputs: outcomes, entryStepId: "wait",
+                                    completionOutputs: Self.waitOutcomes, entryStepId: "wait",
                                     steps: Self.waitForGoSteps(), routes: [])
         let otherCopy = replacing(base, entry: Self.eventEntry("go"),
                                   reentry: .init(type: .everyMatch, window: nil))
@@ -534,51 +455,43 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         ]
     }
 
-    /// Delivers like EventLog's route worker: while routing is held, events
-    /// wait; a refused event is kept first and everything after it waits;
-    /// waiting events are delivered in order once that clears.
-    private actor HoldAwareRouter {
-        let events: MockEventLog
+    /// Delivers like EventLog's route worker: one event at a time and in
+    /// order; a refused event is kept first with everything after it, until
+    /// the service asks for the retry.
+    private actor EventLogRouter {
         let service: JourneyService
-        private var held: [NuxieEvent] = []
+        private var waiting: [(event: NuxieEvent, generation: UInt64?)] = []
+        private var delivering = false
+        private var refused = false
 
-        init(events: MockEventLog, service: JourneyService) {
-            self.events = events
+        init(service: JourneyService) {
             self.service = service
         }
 
-        func route(_ event: NuxieEvent) async {
-            guard !events.routingDeferred, held.isEmpty else {
-                held.append(event)
-                return
-            }
-            await deliver(event)
+        func route(_ event: NuxieEvent, admittedProfileGeneration: UInt64? = nil) async {
+            waiting.append((event, admittedProfileGeneration))
+            await deliver()
         }
 
-        /// An event the route worker had already dispatched when the hold
-        /// began: it reaches the service, which may refuse it.
-        func routeInFlight(_ event: NuxieEvent) async {
-            guard held.isEmpty else {
-                held.append(event)
-                return
-            }
-            await deliver(event)
+        func retry() async {
+            refused = false
+            await deliver()
         }
 
-        func deliverHeld() async {
-            while let next = held.first, !events.routingDeferred {
-                held.removeFirst()
-                guard await service.handleEvent(next, admittedProfileGeneration: nil) else {
-                    held.insert(next, at: 0)
-                    return
+        private func deliver() async {
+            guard !delivering, !refused else { return }
+            delivering = true
+            while let next = waiting.first {
+                guard await service.handleEvent(
+                    next.event,
+                    admittedProfileGeneration: next.generation
+                ) else {
+                    refused = true
+                    break
                 }
+                waiting.removeFirst()
             }
-        }
-
-        private func deliver(_ event: NuxieEvent) async {
-            if !(await service.handleEvent(event, admittedProfileGeneration: nil)) {
-                held.insert(event, at: 0)
-            }
+            delivering = false
         }
     }
 

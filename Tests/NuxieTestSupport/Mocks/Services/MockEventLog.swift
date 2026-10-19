@@ -112,39 +112,31 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         get { lock.withLock { _resumeRoutingHandler } }
         set { lock.withLock { _resumeRoutingHandler = newValue } }
     }
-    private var _routingDeferralGeneration: UInt64 = 0
-    private var _routingDeferred = false
-    /// Records EventLog's hold on committed routing. Tests that model the
-    /// route worker hold their deliveries while this is true.
-    public var routingDeferred: Bool { lock.withLock { _routingDeferred } }
-
-    @discardableResult
-    public func deferCommittedRouting() async -> UInt64 {
-        lock.withLock {
-            _routingDeferralGeneration &+= 1
-            _routingDeferred = true
-            return _routingDeferralGeneration
-        }
-    }
-
     public func resumeCommittedRouting(ifGeneration: UInt64) async {
-        lock.withLock {
-            if ifGeneration == _routingDeferralGeneration { _routingDeferred = false }
-        }
         resumeRoutingHandler?()
     }
 
-    public func replayPendingStableRoutes(distinctId: String) async -> Bool {
-        let generation = lock.withLock { _routingDeferralGeneration }
-        let handler = replayPendingRoutesHandler
-        let replayed = await handler?() ?? true
-        // Like EventLog, a completed replay releases the hold it ran under.
-        if replayed {
-            lock.withLock {
-                if generation == _routingDeferralGeneration { _routingDeferred = false }
-            }
+    private var _retryFailedRoutingRequests = 0
+    private var _retryFailedRoutingHandler: (@Sendable () async -> Void)?
+    /// How many times a subscriber asked EventLog to retry refused deliveries.
+    public var retryFailedRoutingRequests: Int { lock.withLock { _retryFailedRoutingRequests } }
+    /// Runs as EventLog's route worker would: tests redeliver what was refused.
+    public var retryFailedRoutingHandler: (@Sendable () async -> Void)? {
+        get { lock.withLock { _retryFailedRoutingHandler } }
+        set { lock.withLock { _retryFailedRoutingHandler = newValue } }
+    }
+
+    public func retryFailedCommittedRouting() async {
+        let handler = lock.withLock { () -> (@Sendable () async -> Void)? in
+            _retryFailedRoutingRequests += 1
+            return _retryFailedRoutingHandler
         }
-        return replayed
+        await handler?()
+    }
+
+    public func replayPendingStableRoutes(distinctId: String) async -> Bool {
+        let handler = replayPendingRoutesHandler
+        return await handler?() ?? true
     }
 
     public var drainHandler: (@Sendable () async -> Void)? {
