@@ -1,0 +1,21 @@
+{
+  "contract": "An event is evaluated for entry against the copy of the published setup installed when it is handled. It is never dropped because it was captured under an earlier copy, or before any copy existed: on a first launch the event log holds events until the first copy is installed and then delivers each one once. An event never starts another customer's Journey.",
+  "operations": {
+    "commit-empty": "Install a copy with no entry arm for the trigger.",
+    "commit-armed": "Install a copy whose Journey starts on the trigger event.",
+    "capture": "The trigger event is captured but not routed yet.",
+    "route-captured": "The captured trigger routes now."
+  },
+  "cases": [
+    {
+      "name": "first_launch_trigger_starts_from_the_first_copy",
+      "operations": ["capture", "commit-armed", "route-captured"],
+      "expectedStarts": [0, 0, 1]
+    },
+    {
+      "name": "trigger_captured_before_a_replacement_starts_from_it",
+      "operations": ["commit-empty", "capture", "commit-armed", "route-captured"],
+      "expectedStarts": [0, 0, 0, 1]
+    }
+  ]
+}
