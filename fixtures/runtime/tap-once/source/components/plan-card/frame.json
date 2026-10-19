@@ -1,0 +1,11 @@
+{
+  "$schema": "https://nuxie.ai/schema/frame/1.json",
+  "isComponent": true,
+  "size": { "width": 326, "height": 72 },
+  "props": {
+    "name": { "type": "string", "default": "Plan" },
+    "value": { "type": "string" },
+    "chosen": { "type": "string", "output": true },
+    "select": { "type": "action", "optional": true }
+  }
+}

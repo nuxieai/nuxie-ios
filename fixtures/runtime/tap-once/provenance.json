@@ -1,0 +1,78 @@
+{
+  "publisherSourceCommit": "988acf58cdab3868e35864f70b4ea33fff546185",
+  "superprojectCommit": "988acf58cdab3868e35864f70b4ea33fff546185",
+  "source": "tools/sdk-fixtures/tap-once",
+  "publisher": "the parent repository's full publisher, through its publish_folder example",
+  "sha256": "e4cc0b52b77a41801d4f24315694317e67f0a162cbb5ae401ac4d58da7ffc33a",
+  "sizeBytes": 11217,
+  "fonts": [
+    {
+      "authoredAssetId": 1,
+      "assetUniqueName": "font-system-700-normal-42d2e562-1",
+      "weight": "700",
+      "style": "normal"
+    },
+    {
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-800-normal-4e064eff-0",
+      "weight": "800",
+      "style": "normal"
+    }
+  ],
+  "reportedEventNames": [
+    "picked",
+    "purchase",
+    "restore"
+  ],
+  "qualification": "Real publisher output through the bridge's publish_folder example. The parent's phone_tap_tests checks the same folder and tap points in the native runtime; the native SDK test is separate.",
+  "files": {
+    "NOTES.md": {
+      "sha256": "144a541dfca99f72db23b791f60e73387a67bf32b806f8f79b13e96bb5a120d5",
+      "sizeBytes": 1524
+    },
+    "screen.riv": {
+      "sha256": "e4cc0b52b77a41801d4f24315694317e67f0a162cbb5ae401ac4d58da7ffc33a",
+      "sizeBytes": 11217
+    },
+    "source/components/buy-button/frame.json": {
+      "sha256": "f2aaf6ffab6b76d30b35a03ffa0e8a1164b44515a6aa743c40d9491eea39d11f",
+      "sizeBytes": 191
+    },
+    "source/components/buy-button/index.html": {
+      "sha256": "e1236e90a24d2fcee2cf27a3c2cb4757353d5330ad97e63960b551137a485e9c",
+      "sizeBytes": 207
+    },
+    "source/components/buy-button/style.css": {
+      "sha256": "490b9e8824d5ac3a3955a12d2a6db9e8d02fb43ad2f90d54db44b3163491b215",
+      "sizeBytes": 299
+    },
+    "source/components/plan-card/frame.json": {
+      "sha256": "086c8ba6a4e3459449ab2a31714cdacb14e6e23af1be7ecb9e9ca953b94fb2bb",
+      "sizeBytes": 332
+    },
+    "source/components/plan-card/index.html": {
+      "sha256": "e9a2c4b9b64bb5e1db3f5211f1261f6af3d649201252238cb423146bc226feb7",
+      "sizeBytes": 428
+    },
+    "source/components/plan-card/style.css": {
+      "sha256": "6050100494b7a88823f126dc48a4655a0e993884414d98fe6b965a2bd273f984",
+      "sizeBytes": 630
+    },
+    "source/experience.json": {
+      "sha256": "3f1a76bb9c99a3fbd2ce18e7aa2800e401aeb2ca35f3b2110c4781b5e541f49f",
+      "sizeBytes": 440
+    },
+    "source/screens/plans/frame.json": {
+      "sha256": "f61a5a8eff524abab9067271b8ee0ba3bed0d25ccbb2f45286945394e8814446",
+      "sizeBytes": 489
+    },
+    "source/screens/plans/index.html": {
+      "sha256": "7845b9bacf3b611cf4e63b59d64573196b02f290ee7c56ddc3d5191081d44e1a",
+      "sizeBytes": 818
+    },
+    "source/screens/plans/style.css": {
+      "sha256": "daf3a4987f25bb7f1ccd129d8dd42817d52cde7fd144152771862fc7d881c589",
+      "sizeBytes": 519
+    }
+  }
+}
