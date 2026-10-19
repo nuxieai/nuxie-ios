@@ -442,8 +442,18 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     /// This screen's own traits, which carry any style the Experience host forces.
+    /// The host's appearance, for the time the screen is mounted but not yet in the
+    /// host's hierarchy, where it would otherwise read the system's.
+    private var detachedHostStyle: UIUserInterfaceStyle?
+
+    /// The screen's own appearance once it is in a hierarchy or forced on it, else the
+    /// host's it will inherit.
     private var colorScheme: ExperienceColorScheme {
-        ExperienceColorScheme(traitCollection.userInterfaceStyle)
+        if let detachedHostStyle, overrideUserInterfaceStyle == .unspecified, parent == nil,
+           viewIfLoaded?.window == nil {
+            return ExperienceColorScheme(detachedHostStyle)
+        }
+        return ExperienceColorScheme(traitCollection.userInterfaceStyle)
     }
 
     @objc private func contentSizeCategoryDidChange() {
@@ -473,7 +483,10 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    func mountInteractiveScreen() async throws {
+    /// Mounts the screen. A screen mounts before it joins the host's hierarchy, so
+    /// `hostTraits` gives the appearance it will inherit there: a host that forces light
+    /// or dark draws its first frame in that appearance, not the system's.
+    func mountInteractiveScreen(hostTraits: UITraitCollection? = nil) async throws {
         guard interactiveScreen == nil, presentationLoop == nil else {
             throw ExperienceInteractiveScreenControllerError.alreadyMounted
         }
@@ -484,6 +497,7 @@ final class ExperienceScreenViewController: UIViewController {
 
         let initialWidth = Self.pixelDimension(screen.width)
         let initialHeight = Self.pixelDimension(screen.height)
+        detachedHostStyle = hostTraits?.userInterfaceStyle
         let initialColorScheme = colorScheme
         let preparation = try await artifact.acquired.interactivePreparation.preparation()
         let interactive = try await preparation.openScreen(
