@@ -210,6 +210,16 @@ actor JourneyService {
     private var eventsAwaitingFetchedProfile: [NuxieEvent] = []
     private var profileFetchesInFlight: [String: Int] = [:]
     private static let eventsAwaitingFetchedProfileLimit = 64
+    /// Entry evaluation in route order. Kept events join it when their copy
+    /// is installed, so a newer event cannot start a Journey ahead of an
+    /// earlier trigger. Whoever finds it idle drains it; an event that routes
+    /// during a drain joins the queue and the running drain takes it.
+    private var queuedEntryEvents: [QueuedEntryEvent] = []
+    private var drainingQueuedEntryEvents = false
+    private struct QueuedEntryEvent {
+        let event: NuxieEvent
+        let presentationAttempt: ExperiencePresentationAttempt?
+    }
     private struct RunExecutionKey: Hashable {
         let runID: String
         let owner: String
@@ -334,6 +344,7 @@ extension JourneyService {
         }
         await resetForegroundStateArmReceiptsIfNeeded()
         await resumeParkedRuns(event: nil)
+        await drainQueuedEntryEvents()
         guard let state = currentProfileState() else { return }
         await evaluateStateArms(state: state, kinds: nil)
     }
@@ -503,6 +514,10 @@ private extension JourneyService {
             generation: generation
         )
         retainReceipts(for: snapshot)
+        queuedEntryEvents += eventsAwaitingFetchedProfile
+            .filter { $0.distinctId == distinctId }
+            .map { QueuedEntryEvent(event: $0, presentationAttempt: nil) }
+        eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
         guard initialized else { return }
         await ensureJournal(for: distinctId)
         if journal == nil, let routingGeneration {
@@ -522,9 +537,12 @@ private extension JourneyService {
                 LogWarning("JourneyService: failed to retain journal admission metadata: \(error)")
             }
         }
-        guard let state = currentProfileState() else { return }
+        guard let state = currentProfileState() else {
+            await drainQueuedEntryEvents()
+            return
+        }
         await resumeParkedRuns(event: nil)
-        await offerEventsAwaitingFetchedProfile(distinctId: distinctId)
+        await drainQueuedEntryEvents()
         await evaluateStateArms(state: state, kinds: nil)
     }
 }
@@ -653,6 +671,7 @@ extension JourneyService {
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
         eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
+        queuedEntryEvents.removeAll { $0.event.distinctId == distinctId }
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
@@ -696,6 +715,7 @@ extension JourneyService {
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
         eventsAwaitingFetchedProfile.removeAll()
+        queuedEntryEvents.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
@@ -772,11 +792,11 @@ extension JourneyService {
         // An event caught before this copy was installed (the first launch,
         // or while a fresh copy was fetched) starts from the copy it routes
         // under. Routing delivers each event once, so it is evaluated once.
-        await startEventArms(
-            for: event,
-            state: state,
+        queuedEntryEvents.append(.init(
+            event: event,
             presentationAttempt: presentationAttempt
-        )
+        ))
+        await drainQueuedEntryEvents()
         await scheduleNextWake()
         return true
     }
@@ -788,6 +808,9 @@ private extension JourneyService {
         state: ProfileState,
         presentationAttempt: ExperiencePresentationAttempt? = nil
     ) async {
+        // Identity can change while routing awaits; one customer's event
+        // never starts another customer's Journey.
+        guard state.distinctId == event.distinctId else { return }
         for arm in state.snapshot.profile.armedLegs
         where arm.entryCondition.type == .event
             && arm.entryCondition.eventName == event.name {
@@ -811,19 +834,27 @@ private extension JourneyService {
         eventsAwaitingFetchedProfile.append(event)
     }
 
-    /// Each kept event leaves the list before it is offered, so a later copy
-    /// cannot start a Journey from it again. Only entry arms see it: waiting
-    /// runs already took it when it routed.
-    private func offerEventsAwaitingFetchedProfile(distinctId: String) async {
-        let kept = eventsAwaitingFetchedProfile.filter {
-            $0.distinctId == distinctId
-        }
-        guard !kept.isEmpty else { return }
-        eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
-        for event in kept {
+    /// Each event leaves the queue before it is evaluated, so a later copy
+    /// cannot start a Journey from it again. Only entry arms see a kept
+    /// event: Journeys already waiting took it when it routed. Never wait for
+    /// another caller's drain: starting a Journey flushes its reports, which
+    /// waits for the routing worker that may be delivering to this actor.
+    private func drainQueuedEntryEvents() async {
+        guard initialized, !drainingQueuedEntryEvents else { return }
+        drainingQueuedEntryEvents = true
+        defer { drainingQueuedEntryEvents = false }
+        while !queuedEntryEvents.isEmpty {
+            let next = queuedEntryEvents.removeFirst()
             guard let state = currentProfileState(),
-                  state.distinctId == event.distinctId else { return }
-            await startEventArms(for: event, state: state)
+                  state.distinctId == next.event.distinctId else {
+                keepForFetchedProfile(next.event)
+                continue
+            }
+            await startEventArms(
+                for: next.event,
+                state: state,
+                presentationAttempt: next.presentationAttempt
+            )
         }
     }
 }
@@ -1036,6 +1067,7 @@ extension JourneyService {
     ) async {
         cancelWake()
         eventsAwaitingFetchedProfile.removeAll { $0.distinctId != newDistinctId }
+        queuedEntryEvents.removeAll { $0.event.distinctId != newDistinctId }
         await retireNativeValues(owner: oldDistinctId)
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()

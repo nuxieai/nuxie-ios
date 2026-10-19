@@ -121,7 +121,7 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let base = try await authenticatedSnapshot(fixture)
-        let waitsForGo = Self.waitForGoSteps
+        let waitsForGo = Self.waitForGoSteps()
         let outcomes: [String: Journey.Boundary] = [
             "took_go": .init(eventFields: [], responseFields: []),
             "timed_out": .init(eventFields: [], responseFields: []),
@@ -169,6 +169,124 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
         await service.shutdown()
     }
 
+    /// A kept trigger is older than an event that routes while its copy is
+    /// being installed, so it starts its Journey first.
+    func testKeptTriggerStartsBeforeANewerEventThatRoutesDuringInstall() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let base = try await authenticatedSnapshot(fixture)
+        let order: [String: JourneyReleaseJSONValue] = [
+            "key": .string("order"), "type": .string("number"), "required": .bool(false),
+        ]
+        let outcomes: [String: Journey.Boundary] = [
+            "took_go": .init(eventFields: [], responseFields: []),
+            "timed_out": .init(eventFields: [], responseFields: []),
+        ]
+        // One Journey that waits up to a second for go: the saved copy starts
+        // it on start_waiting, the fresh copy on trigger.
+        let steps = Self.waitForGoSteps(maxTimeMs: 1_000)
+        let savedCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
+                                  reentry: .init(type: .everyMatch, window: nil),
+                                  inputs: .init(eventFields: [order], responseFields: []),
+                                  completionOutputs: outcomes, entryStepId: "wait",
+                                  steps: steps, routes: [])
+        let freshCopy = replacing(base, entry: Self.eventEntry("trigger"),
+                                  reentry: .init(type: .everyMatch, window: nil),
+                                  inputs: .init(eventFields: [order], responseFields: []),
+                                  completionOutputs: outcomes, entryStepId: "wait",
+                                  steps: steps, routes: [])
+        let pinnedRelease = try XCTUnwrap(savedCopy.releasesByDigest.values.first)
+        let dateProvider = MockDateProvider()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: directory,
+                                  dateProvider: dateProvider,
+                                  pinnedReleaseAuthenticator: { _, _ in pinnedRelease })
+        await service.initialize()
+        await service.profileDidCommit(savedCopy, distinctId: "customer")
+        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
+
+        // The language changes in the app and the fresh copy is fetched.
+        await service.profileDidWithdraw(authority: nil, distinctId: "customer")
+        await service.profileFetchDidBegin(distinctId: "customer")
+        await service.handleEvent(Self.event("trigger", properties: ["order": 1],
+                                             at: dateProvider.now()))
+
+        // By the time the copy arrives the waiting Journey has timed out. Its
+        // report is captured while the copy is installed, and a newer trigger
+        // routes at that moment.
+        dateProvider.advance(by: 2)
+        let injected = SwitchOnce()
+        events.routedCaptureHandler = { [service, dateProvider] name, _ in
+            guard name == JourneyEvents.journeyCompleted, await injected.claim() else { return }
+            await service.handleEvent(Self.event("trigger", properties: ["order": 2],
+                                                 at: dateProvider.now()))
+        }
+        await service.profileDidCommit(freshCopy, distinctId: "customer")
+        events.routedCaptureHandler = nil
+        await service.profileFetchDidSettle(distinctId: "customer")
+
+        let didInject = await injected.claimed
+        XCTAssertTrue(didInject, "The newer trigger routed while the copy was installed")
+        let runs = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+        let startedBy = runs.sorted { $0.generation < $1.generation }.compactMap { run -> Int? in
+            guard case .number(let value)? = run.context.event["order"] else { return nil }
+            return Int(value)
+        }
+        XCTAssertEqual(startedBy, [1, 2], "The kept trigger starts its Journey first")
+        await service.shutdown()
+    }
+
+    /// The user changes while an event of the previous user is still being
+    /// routed. The new user's copy must not start a Journey from it.
+    func testEventNeverStartsAnotherCustomersJourney() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let base = try await authenticatedSnapshot(fixture)
+        let outcomes: [String: Journey.Boundary] = [
+            "took_go": .init(eventFields: [], responseFields: []),
+            "timed_out": .init(eventFields: [], responseFields: []),
+        ]
+        let waitingCopy = replacing(base, entry: Self.eventEntry("start_waiting"),
+                                    reentry: .init(type: .everyMatch, window: nil),
+                                    completionOutputs: outcomes, entryStepId: "wait",
+                                    steps: Self.waitForGoSteps(), routes: [])
+        let otherCopy = replacing(base, entry: Self.eventEntry("go"),
+                                  reentry: .init(type: .everyMatch, window: nil))
+        let dateProvider = MockDateProvider()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: directory,
+                                  dateProvider: dateProvider)
+        await service.initialize()
+        await service.profileDidCommit(waitingCopy, distinctId: "customer")
+        await service.handleEvent(Self.event("start_waiting", at: dateProvider.now()))
+
+        // While go is routed, the waiting Journey finishes and reports; at
+        // that moment the app switches to another user whose copy arrives.
+        let switched = SwitchOnce()
+        events.routedCaptureHandler = { [service] name, _ in
+            guard name == JourneyEvents.journeyCompleted, await switched.claim() else { return }
+            identity.setDistinctId("other")
+            await service.profileDidCommit(otherCopy, distinctId: "other")
+        }
+        await service.handleEvent(Self.event("go", at: dateProvider.now()))
+        events.routedCaptureHandler = nil
+
+        let switchedOver = await switched.claimed
+        XCTAssertTrue(switchedOver, "The user switch happened while go was routed")
+        XCTAssertEqual(events.routedEvents.filter {
+            $0.name == JourneyEvents.journeyStarted && $0.distinctId == "other"
+        }.count, 0)
+        await service.shutdown()
+    }
+
     // MARK: - Helpers
 
     private static func eventEntry(_ name: String) -> JourneyEntryCondition {
@@ -178,12 +296,13 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
     private static func event(
         _ name: String,
         id: String = UUID.v7().uuidString,
+        properties: [String: Any] = [:],
         at timestamp: Date = Date()
     ) -> NuxieEvent {
-        NuxieEvent(id: id, name: name, distinctId: "customer", timestamp: timestamp)
+        NuxieEvent(id: id, name: name, distinctId: "customer", properties: properties, timestamp: timestamp)
     }
 
-    private static var waitForGoSteps: [Journey.Step] {
+    private static func waitForGoSteps(maxTimeMs: Double = 60_000) -> [Journey.Step] {
         [
             .init(
                 kind: .action,
@@ -201,7 +320,7 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
                             "value": .bool(true),
                         ]),
                     ]),
-                    "maxTimeMs": .number(60_000),
+                    "maxTimeMs": .number(maxTimeMs),
                 ],
                 outlets: ["satisfied": "took_go", "timeout": "timed_out"],
                 outcome: nil
@@ -209,6 +328,15 @@ final class JourneyFetchedProfileEventTests: JourneyTestCase {
             .init(kind: .complete, id: "took_go", action: nil, outlets: nil, outcome: "took_go"),
             .init(kind: .complete, id: "timed_out", action: nil, outlets: nil, outcome: "timed_out"),
         ]
+    }
+
+    private actor SwitchOnce {
+        private(set) var claimed = false
+        func claim() -> Bool {
+            guard !claimed else { return false }
+            claimed = true
+            return true
+        }
     }
 
     private struct FetchedProfileEventVectors: Decodable {
