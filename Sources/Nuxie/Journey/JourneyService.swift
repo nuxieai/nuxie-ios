@@ -19,6 +19,16 @@ protocol JourneyProfileConsuming: AnyObject, Sendable {
         admissionGeneration: UInt64
     ) async
     func profileDidClearAll(admissionGeneration: UInt64) async
+    /// Brackets one fetch of a customer's published setup. An event that
+    /// routes while that customer has no usable copy and a fetch is running
+    /// is kept for the copy the fetch delivers.
+    func profileFetchDidBegin(distinctId: String) async
+    func profileFetchDidSettle(distinctId: String) async
+}
+
+extension JourneyProfileConsuming {
+    func profileFetchDidBegin(distinctId: String) async {}
+    func profileFetchDidSettle(distinctId: String) async {}
 }
 
 protocol JourneyServiceProtocol: JourneyProfileConsuming {
@@ -26,6 +36,9 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func finishStartupRouting() async
     func initialize() async
     func handleEvent(_ event: NuxieEvent) async
+    /// `admittedProfileGeneration` is the setup generation sampled when the
+    /// event was captured. Entry no longer depends on it: an event starts
+    /// from the copy installed when it routes.
     @discardableResult
     func handleEvent(
         _ event: NuxieEvent,
@@ -190,6 +203,13 @@ actor JourneyService {
     /// profile/identity transition retries it successfully.
     private var revokingCustomers: Set<String> = []
     private var inFlightAttempts: Set<AttemptKey> = []
+    /// Events that routed while their customer had no usable copy of the
+    /// published setup and a fresh copy was being fetched. Journeys already
+    /// waiting took each one when it routed. The copy that arrives offers it
+    /// once more, to its entry arms only, so no waiting Journey takes it twice.
+    private var eventsAwaitingFetchedProfile: [NuxieEvent] = []
+    private var profileFetchesInFlight: [String: Int] = [:]
+    private static let eventsAwaitingFetchedProfileLimit = 64
     private struct RunExecutionKey: Hashable {
         let runID: String
         let owner: String
@@ -504,7 +524,26 @@ private extension JourneyService {
         }
         guard let state = currentProfileState() else { return }
         await resumeParkedRuns(event: nil)
+        await offerEventsAwaitingFetchedProfile(distinctId: distinctId)
         await evaluateStateArms(state: state, kinds: nil)
+    }
+}
+
+extension JourneyService {
+    func profileFetchDidBegin(distinctId: String) async {
+        profileFetchesInFlight[distinctId, default: 0] += 1
+    }
+
+    func profileFetchDidSettle(distinctId: String) async {
+        guard let running = profileFetchesInFlight[distinctId] else { return }
+        guard running <= 1 else {
+            profileFetchesInFlight[distinctId] = running - 1
+            return
+        }
+        profileFetchesInFlight[distinctId] = nil
+        // No copy arrived for what is still kept: it is used up, as an event
+        // with no published setup to start from always is.
+        eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
     }
 }
 
@@ -613,6 +652,7 @@ extension JourneyService {
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
+        eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
@@ -655,6 +695,7 @@ extension JourneyService {
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
+        eventsAwaitingFetchedProfile.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
@@ -723,14 +764,30 @@ extension JourneyService {
             excludingRunId: directlyRoutedRunId
         ) else { return false }
         guard let state = currentProfileState() else {
+            keepForFetchedProfile(event)
             await scheduleNextWake()
             return true
         }
         guard isCurrent(state) else { return true }
-        guard admittedProfileGeneration == state.generation else {
-            await scheduleNextWake()
-            return true
-        }
+        // An event caught before this copy was installed (the first launch,
+        // or while a fresh copy was fetched) starts from the copy it routes
+        // under. Routing delivers each event once, so it is evaluated once.
+        await startEventArms(
+            for: event,
+            state: state,
+            presentationAttempt: presentationAttempt
+        )
+        await scheduleNextWake()
+        return true
+    }
+}
+
+private extension JourneyService {
+    private func startEventArms(
+        for event: NuxieEvent,
+        state: ProfileState,
+        presentationAttempt: ExperiencePresentationAttempt? = nil
+    ) async {
         for arm in state.snapshot.profile.armedLegs
         where arm.entryCondition.type == .event
             && arm.entryCondition.eventName == event.name {
@@ -741,8 +798,33 @@ extension JourneyService {
                 presentationAttempt: presentationAttempt
             )
         }
-        await scheduleNextWake()
-        return true
+    }
+
+    private func keepForFetchedProfile(_ event: NuxieEvent) {
+        guard profileFetchesInFlight[event.distinctId, default: 0] > 0 else {
+            return
+        }
+        if eventsAwaitingFetchedProfile.count
+            >= Self.eventsAwaitingFetchedProfileLimit {
+            eventsAwaitingFetchedProfile.removeFirst()
+        }
+        eventsAwaitingFetchedProfile.append(event)
+    }
+
+    /// Each kept event leaves the list before it is offered, so a later copy
+    /// cannot start a Journey from it again. Only entry arms see it: waiting
+    /// runs already took it when it routed.
+    private func offerEventsAwaitingFetchedProfile(distinctId: String) async {
+        let kept = eventsAwaitingFetchedProfile.filter {
+            $0.distinctId == distinctId
+        }
+        guard !kept.isEmpty else { return }
+        eventsAwaitingFetchedProfile.removeAll { $0.distinctId == distinctId }
+        for event in kept {
+            guard let state = currentProfileState(),
+                  state.distinctId == event.distinctId else { return }
+            await startEventArms(for: event, state: state)
+        }
     }
 }
 
@@ -953,6 +1035,7 @@ extension JourneyService {
         to newDistinctId: String
     ) async {
         cancelWake()
+        eventsAwaitingFetchedProfile.removeAll { $0.distinctId != newDistinctId }
         await retireNativeValues(owner: oldDistinctId)
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()

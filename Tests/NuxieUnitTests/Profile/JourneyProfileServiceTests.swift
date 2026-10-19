@@ -71,6 +71,16 @@ private actor RecordingJourneyProfileConsumer: JourneyProfileConsuming {
     private(set) var withdrawnDistinctIds: [String] = []
     private(set) var clearedDistinctIds: [String] = []
     private(set) var clearAllCount = 0
+    /// Fetch brackets and deliveries in the order the runtime saw them.
+    private(set) var fetchLog: [String] = []
+
+    func profileFetchDidBegin(distinctId: String) {
+        fetchLog.append("begin \(distinctId)")
+    }
+
+    func profileFetchDidSettle(distinctId: String) {
+        fetchLog.append("settle \(distinctId)")
+    }
 
     func profileDidCommit(
         _ snapshot: JourneyProfileCatalog.Snapshot,
@@ -79,11 +89,11 @@ private actor RecordingJourneyProfileConsumer: JourneyProfileConsuming {
         admissionGeneration: UInt64,
         distinctId: String
     ) {
-        _ = distinctId
         _ = artifacts
         _ = admissionGeneration
         commits.append(snapshot)
         authorities.append(authority)
+        fetchLog.append("commit \(distinctId)")
     }
 
     func profileDidWithdraw(
@@ -294,6 +304,42 @@ final class JourneyProfileServiceTests: JourneyTestCase {
         XCTAssertEqual(restoredCommits.last?.profile.armedLegs.count, 1)
         let restoredCache = await reader.getCachedProfile(distinctId: "customer")
         XCTAssertEqual(restoredCache?.planeProfile.releases.count, 1)
+    }
+
+    /// The runtime keeps events that find no usable copy while a fetch runs,
+    /// so the fresh copy must reach it before the fetch settles, and a failed
+    /// fetch must still settle.
+    func testFetchBracketsTheDeliveryOfTheFreshCopy() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let runtime = RecordingJourneyProfileConsumer()
+        let service = makeService(
+            cache: InMemoryCachedProfileStore(ttl: nil),
+            identity: identity,
+            api: JourneyProfileSequenceAPI([
+                .response(ProfileResponse(planeProfile: fixture.profile)),
+                .failure,
+            ], authority: fixture.deliveryAuthority),
+            experiences: MockExperienceService(),
+            catalog: try makeCatalog(
+                fixture,
+                store: InMemoryJourneyReleaseHighWaterStore()
+            ),
+            runtime: runtime
+        )
+
+        _ = try await service.refetchProfile(distinctId: "customer")
+        do {
+            _ = try await service.refetchProfile(distinctId: "customer")
+            XCTFail("The second fetch is offline")
+        } catch {}
+
+        let log = await runtime.fetchLog
+        XCTAssertEqual(log, [
+            "begin customer", "commit customer", "settle customer",
+            "begin customer", "settle customer",
+        ])
     }
 
     func testForegroundAlwaysRevalidatesFreshCanonicalProfile() async throws {

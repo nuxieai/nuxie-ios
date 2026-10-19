@@ -1,0 +1,45 @@
+{
+  "contract": "An app event that arrives while the published setup is being fetched is kept. An event captured before the installed copy was delivered starts from the copy it routes under. An event that routes while its customer has no usable copy and a fetch is running is kept, and the copy that arrives offers it once, to its entry arms only: a Journey already waiting took it when it routed. A fetch that settles without a copy uses up what it kept, and with no fetch running nothing is kept.",
+  "operations": {
+    "commit-empty": "Install a copy with no entry arm for the trigger.",
+    "commit-armed": "Install a copy whose Journey starts on the trigger event.",
+    "withdraw": "The saved copy can no longer be used (the language changed in the app).",
+    "fetch-begin": "A fetch of a fresh copy starts.",
+    "fetch-settle": "That fetch ends.",
+    "capture": "The trigger event is captured but not routed yet.",
+    "route-captured": "The captured trigger routes now.",
+    "trigger": "A trigger event is captured and routes at once."
+  },
+  "cases": [
+    {
+      "name": "first_launch_trigger_routes_under_the_first_copy",
+      "operations": ["capture", "fetch-begin", "commit-armed", "fetch-settle", "route-captured"],
+      "expectedStarts": [0, 0, 0, 0, 1]
+    },
+    {
+      "name": "trigger_captured_before_a_replacement_starts_from_it",
+      "operations": ["commit-empty", "capture", "commit-armed", "route-captured"],
+      "expectedStarts": [0, 0, 0, 1]
+    },
+    {
+      "name": "trigger_during_fetch_starts_once_from_the_arriving_copy",
+      "operations": ["commit-empty", "withdraw", "fetch-begin", "trigger", "commit-armed", "commit-armed", "fetch-settle"],
+      "expectedStarts": [0, 0, 0, 0, 1, 1, 1]
+    },
+    {
+      "name": "trigger_without_a_running_fetch_is_not_kept",
+      "operations": ["commit-armed", "withdraw", "trigger", "commit-armed"],
+      "expectedStarts": [0, 0, 0, 0]
+    },
+    {
+      "name": "fetch_without_a_copy_uses_up_what_it_kept",
+      "operations": ["commit-armed", "withdraw", "fetch-begin", "trigger", "fetch-settle", "commit-armed"],
+      "expectedStarts": [0, 0, 0, 0, 0, 0]
+    },
+    {
+      "name": "overlapping_fetches_keep_until_the_last_settles",
+      "operations": ["commit-empty", "withdraw", "fetch-begin", "fetch-begin", "trigger", "fetch-settle", "commit-armed", "fetch-settle"],
+      "expectedStarts": [0, 0, 0, 0, 0, 0, 1, 1]
+    }
+  ]
+}

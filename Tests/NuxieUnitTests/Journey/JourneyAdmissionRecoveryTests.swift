@@ -447,7 +447,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         })
     }
 
-    func testEventCapturedBeforeProfileReplacementCannotStartANewlyDeliveredArm() async throws {
+    func testEventCapturedBeforeProfileReplacementStartsTheNewlyDeliveredArm() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -485,19 +485,11 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             distinctId: "customer"
         )
 
+        // The fresh copy arrived before the event routed: the event starts
+        // from that copy instead of being used up.
         await service.handleEvent(
             capturedBeforeReplacement,
             admittedProfileGeneration: capturedGeneration
-        )
-        XCTAssertTrue(events.routedEvents.isEmpty)
-
-        await service.handleEvent(
-            NuxieEvent(
-                id: "00000000-0000-7000-8000-000000000104",
-                name: "profile_replacement_trigger",
-                distinctId: "customer"
-            ),
-            admittedProfileGeneration: service.eventAdmissionGeneration()
         )
         XCTAssertEqual(
             events.routedEvents.map(\.name).filter {

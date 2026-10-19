@@ -75,6 +75,9 @@ final class UserTransitionCoordinator: @unchecked Sendable {
 
     private func run(_ transition: Transition) async {
         LogInfo("User transition (\(transition.kind)) \(NuxieLogger.shared.logDistinctID(transition.from)) → \(NuxieLogger.shared.logDistinctID(transition.to))")
+        // The arriving user's setup is being fetched from here on, so an event
+        // of theirs that routes before its copy arrives is kept for it.
+        await journeyService?.profileFetchDidBegin(distinctId: transition.to)
 
         // 1. Local event migration first so downstream evaluation sees the
         //    new user's full history. (Previously raced the service fan-out
@@ -126,6 +129,7 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         } catch {
             LogDebug("Identity profile refresh failed: \(error)")
         }
+        await journeyService?.profileFetchDidSettle(distinctId: transition.to)
         // A valid offline profile can still restore readiness. FeatureService
         // requires an admitted profile and fences publication to its identity.
         await featureService.syncFeatureInfo()

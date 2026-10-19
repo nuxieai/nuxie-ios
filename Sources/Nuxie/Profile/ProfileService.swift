@@ -342,6 +342,30 @@ internal actor ProfileService: ProfileServiceProtocol {
             && cachedProfile?.locale == admission.locale
             ? cachedProfile
             : nil
+        // An event that finds no usable copy while this fetch runs is kept
+        // for the copy it delivers.
+        await journeys?.profileFetchDidBegin(distinctId: distinctId)
+        do {
+            let response = try await fetchAndAdmitProfile(
+                distinctId: distinctId,
+                admission: admission,
+                requestRevision: admittedRequestRevision,
+                previous: previous
+            )
+            await journeys?.profileFetchDidSettle(distinctId: distinctId)
+            return response
+        } catch {
+            await journeys?.profileFetchDidSettle(distinctId: distinctId)
+            throw error
+        }
+    }
+
+    private func fetchAndAdmitProfile(
+        distinctId: String,
+        admission: Admission,
+        requestRevision admittedRequestRevision: UInt64,
+        previous: CachedProfile?
+    ) async throws -> ProfileResponse {
         let result = try await api.fetchProfile(
             for: distinctId,
             locale: admission.locale,
