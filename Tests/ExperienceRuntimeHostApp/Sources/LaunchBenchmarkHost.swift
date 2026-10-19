@@ -71,9 +71,12 @@ final class LaunchBenchmarkHostViewController: UIViewController {
         NuxieSDK.shared.trigger("lesson_opened")
         guard await waitForPresentation(true) else { return finish("first show never presented") }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
+        NSLog("nuxie-launch-benchmark: dismissing first show")
         await NuxieSDK.shared.dismiss()
+        NSLog("nuxie-launch-benchmark: dismiss returned")
         guard await waitForPresentation(false) else { return finish("first show never dismissed") }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
+        NSLog("nuxie-launch-benchmark: second trigger")
         NuxieSDK.shared.trigger("lesson_opened")
         guard await waitForPresentation(true) else { return finish("second show never presented") }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
