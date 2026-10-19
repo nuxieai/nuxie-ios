@@ -1575,6 +1575,7 @@ actor ExperienceInteractivePreparation {
         pixelHeight: UInt32,
         initialReduceMotion: Bool? = nil,
         initialSafeArea: ExperienceSafeAreaInsets? = nil,
+        initialColorScheme: ExperienceColorScheme? = nil,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
@@ -1607,6 +1608,7 @@ actor ExperienceInteractivePreparation {
                 pixelHeight: pixelHeight,
                 initialReduceMotion: initialReduceMotion,
                 initialSafeArea: initialSafeArea,
+                initialColorScheme: initialColorScheme,
                 videoDecoderPool: videoDecoderPool
             )
             systemFontCache.didImport(systemFontLeases)
@@ -1803,6 +1805,7 @@ actor ExperienceInteractiveScreen {
         pixelHeight: UInt32,
         initialReduceMotion: Bool?,
         initialSafeArea: ExperienceSafeAreaInsets?,
+        initialColorScheme: ExperienceColorScheme?,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
@@ -1863,11 +1866,17 @@ actor ExperienceInteractiveScreen {
             )
             environmentReference = try await runtime.bindGlobalViewModel(named: "env",
                 sharingAcrossSessions: false)
+            let environmentBindings = ExperienceEnvironmentBindings(catalog: initialState.catalog)
             if let environmentReference {
                 // Entry transitions must see host values during the initialization advance.
-                let mutations = ExperienceEnvironmentBindings(catalog: initialState.catalog).mutations(reference: environmentReference,
-                    reduceMotion: initialReduceMotion, safeArea: initialSafeArea)
+                let mutations = environmentBindings.mutations(reference: environmentReference,
+                    reduceMotion: initialReduceMotion, safeArea: initialSafeArea, colorScheme: initialColorScheme)
                 if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
+            }
+            // The first frame draws themed colours from the instance for the device's appearance.
+            if let initialColorScheme, environmentBindings.themeSelection(for: initialColorScheme) != nil {
+                _ = try await runtime.bindGlobalViewModel(named: ExperienceEnvironmentBindings.themeGlobalName,
+                    authoredInstanceNamed: initialColorScheme.label)
             }
             if let shared, let root = initialState.rootReference,
                let schemaIndex = initialState.schemaIndexByViewModel[root],
@@ -1973,15 +1982,26 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock { try await runtime.snapshot(environmentReference) }
     }
 
+    /// Writes the declared env slots. A colour scheme also binds the matching `Theme` instance,
+    /// in the same serialized operation, so the next step draws both together.
     func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil,
-                           viewport: ExperienceViewportEnvironment? = nil, fold: ExperienceFoldEnvironment? = nil) async throws {
-        guard let environmentReference else { return }
+                           viewport: ExperienceViewportEnvironment? = nil, fold: ExperienceFoldEnvironment? = nil,
+                           colorScheme: ExperienceColorScheme? = nil) async throws {
         let runtime = runtime
-        let batch = environmentBindings.mutations(reference: environmentReference,
-            reduceMotion: reduceMotion, safeArea: safeArea, viewport: viewport, fold: fold)
-        guard !batch.isEmpty else { return }
+        let batch = environmentReference.map {
+            environmentBindings.mutations(reference: $0, reduceMotion: reduceMotion, safeArea: safeArea,
+                viewport: viewport, fold: fold, colorScheme: colorScheme)
+        } ?? []
+        let theme = colorScheme.flatMap { environmentBindings.themeSelection(for: $0) == nil ? nil : $0 }
+        guard !batch.isEmpty || theme != nil else { return }
         contentMeasurement.invalidate()
-        try await operationGate.withLock { _ = try await runtime.mutateViewModel(batch) }
+        try await operationGate.withLock {
+            if !batch.isEmpty { _ = try await runtime.mutateViewModel(batch) }
+            if let theme {
+                _ = try await runtime.bindGlobalViewModel(named: ExperienceEnvironmentBindings.themeGlobalName,
+                    authoredInstanceNamed: theme.label)
+            }
+        }
     }
 
     func step(

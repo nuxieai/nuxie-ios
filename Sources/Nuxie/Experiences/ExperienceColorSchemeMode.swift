@@ -12,6 +12,24 @@ enum ExperienceColorSchemeMode: String, CaseIterable, Codable, Sendable {
     case dark
 }
 
+/// The appearance a mounted screen draws in. Its label names both the
+/// `env.colorScheme` enum value and the `Theme` global's authored instance.
+enum ExperienceColorScheme: String, CaseIterable, Hashable, Sendable {
+    case light
+    case dark
+
+    var label: String { rawValue }
+}
+
+#if canImport(UIKit)
+extension ExperienceColorScheme {
+    /// Dark only when the traits are dark; an unspecified style draws light.
+    init(_ style: UIUserInterfaceStyle) {
+        self = style == .dark ? .dark : .light
+    }
+}
+#endif
+
 #if canImport(UIKit)
 extension ExperienceColorSchemeMode {
     var userInterfaceStyle: UIUserInterfaceStyle {

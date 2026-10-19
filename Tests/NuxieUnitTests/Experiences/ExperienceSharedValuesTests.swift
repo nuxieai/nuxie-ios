@@ -335,6 +335,64 @@ final class ExperienceSharedValuesTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testThemeFollowsTheScreenAppearanceAtMountAndWhenItChanges() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/theme-entry")
+        let payload = try SharedValuesFixture.payload(directory: directory, screens: ["theme"],
+            sceneName: "theme.riv", provenanceName: "theme-provenance.json")
+        let experience = Experience(id: "theme-entry", versionId: "theme-version", buildId: "theme-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+            behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
+        // BGRA readback of the fixture's Theme.surface instances, sampled inside the bound fill.
+        let surfaces: [ExperienceColorScheme: [UInt8]] = [.light: [0xF7, 0xF2, 0xF2, 0xFF], .dark: [0x1E, 0x1C, 0x1C, 0xFF]]
+        func surface(_ data: Data) -> [UInt8] { Array(data[(100 * 393 + 100) * 4..<(100 * 393 + 100) * 4 + 4]) }
+        func style(_ scheme: ExperienceColorScheme) -> UIUserInterfaceStyle { scheme == .dark ? .dark : .light }
+        for initial in ExperienceColorScheme.allCases {
+            let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+                sceneURL: directory.appendingPathComponent("theme.riv"), sceneBytes: payload.sceneBytes,
+                assetURLsByUniqueName: [:], source: .cache, payload: payload,
+                interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(),
+                    provenance: UUID().uuidString, payload: payload), products: [], resourceMetrics: .zero)
+            let run = ExperienceRunValues()
+            let controller = ExperienceScreenViewController(experience: experience, artifact: .init(acquired: acquired),
+                screen: try XCTUnwrap(payload.renderPlan.screens.first), runValues: run, reduceMotion: false,
+                usesSystemDisplayLink: false, delegate: nil)
+            controller.overrideUserInterfaceStyle = style(initial)
+            controller.loadViewIfNeeded()
+            controller.view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            controller.view.layoutIfNeeded()
+            XCTAssertEqual(controller.traitCollection.userInterfaceStyle, style(initial))
+            addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
+            try await controller.mountInteractiveScreen()
+            let mirror = Mirror(reflecting: controller)
+            let screen = try XCTUnwrap(mirror.children.first { $0.label == "interactiveScreen" }?.value
+                as? ExperienceInteractiveScreen)
+            let loop = try XCTUnwrap(mirror.children.first { $0.label == "presentationLoop" }?.value
+                as? ExperienceRuntimePresentationLoop)
+            _ = try await screen.resize(pixelWidth: 393, pixelHeight: 852, layoutScaleFactor: 1)
+            func assertDraws(_ scheme: ExperienceColorScheme, _ message: String) async throws {
+                let env = try await screen.environmentSnapshot()
+                XCTAssertEqual(env?.values.first { $0.name == "colorScheme" }?.value,
+                    .integer(scheme == .dark ? 1 : 0), message)
+                _ = try await screen.step(elapsedSeconds: 0)
+                let pixels = try await renderCopyPixels(screen)
+                XCTAssertEqual(surface(pixels), surfaces[scheme], message)
+            }
+            try await assertDraws(initial, "The first frame uses the Theme instance for the screen's appearance")
+            // Each appearance change rebinds Theme through the presentation lane; returning
+            // to the first appearance reuses its retained instance.
+            for scheme in [initial == .dark ? ExperienceColorScheme.light : .dark, initial] {
+                controller.overrideUserInterfaceStyle = style(scheme)
+                controller.syncColorScheme()
+                try await loop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork {
+                    .work(requestsFrame: false)
+                })
+                try await assertDraws(scheme, "A live appearance change redraws with the other Theme instance")
+            }
+        }
+    }
+
     func testPublishedDeviceGlobalIsScopedToEachMountedScreen() async throws {
         let expected = try PublishedRunValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,
@@ -594,8 +652,9 @@ enum SharedValuesFixture {
             .appendingPathComponent("fixtures/runtime/shared-values")
     }
 
-    static func payload(directory: URL = SharedValuesFixture.directory, screens: [String] = ["first", "long", "short"], scene suppliedScene: Data? = nil, textInputs: [NativeExperienceTextInput] = []) throws -> AuthenticatedRuntimePayload {
-        let scene = try suppliedScene ?? Data(contentsOf: directory.appendingPathComponent("screen.riv"))
+    static func payload(directory: URL = SharedValuesFixture.directory, screens: [String] = ["first", "long", "short"], scene suppliedScene: Data? = nil, textInputs: [NativeExperienceTextInput] = [],
+                        sceneName: String = "screen.riv", provenanceName: String = "provenance.json") throws -> AuthenticatedRuntimePayload {
+        let scene = try suppliedScene ?? Data(contentsOf: directory.appendingPathComponent(sceneName))
         struct Provenance: Decodable {
             struct Font: Decodable {
                 let authoredAssetId: UInt64
@@ -606,7 +665,7 @@ enum SharedValuesFixture {
             let fonts: [Font]
         }
         let provenance = try JSONDecoder().decode(Provenance.self,
-            from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
+            from: Data(contentsOf: directory.appendingPathComponent(provenanceName)))
         return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
             requiredCapabilities: ["system-fonts"],
             renderPlan: NativeExperienceRenderPlan(
