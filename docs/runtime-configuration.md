@@ -22,7 +22,9 @@ The supported live settings have explicit propagation semantics:
 
 - `try await NuxieSDK.shared.setLocaleIdentifier(...)` changes the locale,
   fetches a new profile immediately, and synchronizes feature state. It
-  completes with `Void`.
+  completes with `Void`. Events sent while that profile is fetched wait for
+  it, then reach Journeys against it; if the fetch fails they go through
+  without one.
 - `try NuxieSDK.shared.setPurchaseDelegate(...)` changes the delegate used by
   subsequent purchase and restore calls.
 - `try NuxieSDK.shared.setPurchaseHandlingMode(...)` changes whether subsequent

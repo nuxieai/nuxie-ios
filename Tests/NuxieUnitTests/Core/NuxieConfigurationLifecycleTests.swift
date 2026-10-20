@@ -268,6 +268,57 @@ private actor ForegroundPresentationAdmissionProbe {
 
 extension ForegroundPresentationAdmissionProbe: JourneyServiceProtocol {}
 
+/// Records the profile refetch bracket around a locale change, with the
+/// profile fetches made by each step.
+private actor LocaleRefetchRecorder: JourneyServiceProtocol {
+    private let api: MockNuxieApi
+    private(set) var steps: [String] = []
+
+    init(api: MockNuxieApi) {
+        self.api = api
+    }
+
+    private func record(_ step: String) async {
+        let fetches = await api.fetchProfileCallCount
+        let locale = await api.lastProfileLocale ?? "none"
+        steps.append("\(step) after \(fetches) fetches, last \(locale)")
+    }
+
+    func profileRefetchWillBegin(distinctId: String) async {
+        await record("refetch-begin")
+    }
+
+    func profileRefetchDidSettle(distinctId: String) async {
+        await record("refetch-settle")
+    }
+
+    func profileDidWithdraw(
+        authority: ProfileDeliveryAuthority?,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) async {
+        await record("withdraw")
+    }
+
+    func initialize() async {}
+    func handleEvent(_ event: NuxieEvent) async {}
+    func handleEvent(_ event: NuxieEvent, admittedProfileGeneration: UInt64?) async -> Bool { true }
+    nonisolated func eventAdmissionGeneration() -> UInt64 { 0 }
+    func onAppDidEnterBackground() async {}
+    func onAppWillEnterForeground() async {}
+    func onAppBecameActive() async {}
+    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
+    func profileDidCommit(
+        _ snapshot: JourneyProfileCatalog.Snapshot,
+        artifacts: PreparedJourneyArtifacts?,
+        authority: ProfileDeliveryAuthority,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) async {}
+    func profileDidClear(distinctId: String, admissionGeneration: UInt64) async {}
+    func profileDidClearAll(admissionGeneration: UInt64) async {}
+}
+
 /// Background preparation in the lifecycle tests never reaches a release.
 private struct UnusedJourneyReleaseAcquirer: JourneyReleaseAcquiring {
     struct Unused: Error {}
@@ -1136,7 +1187,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertTrue(settings.localeIdentifier().hasPrefix("locale-"))
     }
 
-    func testSDKLocaleControlWaitsForNextProfileSyncWhileBuilderMutationIsIgnored() async throws {
+    func testSDKLocaleControlFetchesTheNewLocalesProfileAtOnceWhileBuilderMutationIsIgnored() async throws {
         let sdk = NuxieSDK.shared
         await sdk.shutdown()
         let mocks = MockFactory.shared
@@ -1147,7 +1198,6 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         var overrides = mocks.unitTestOverrides()
         overrides.profile = nil
         try sdk.setup(with: configuration, overrides: overrides)
-        defer { Task { await sdk.shutdown() } }
 
         configuration.localeIdentifier = "es_ES"
         _ = try await sdk.core!.profile.refetchProfile()
@@ -1155,12 +1205,38 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         XCTAssertEqual(localeAfterBuilderMutation, "en_US")
 
         try await sdk.setLocaleIdentifier("fr_FR")
-        let localeBeforeNextSync = await mocks.nuxieApi.lastProfileLocale
-        XCTAssertEqual(localeBeforeNextSync, "en_US")
-
-        await sdk.core!.profile.onAppBecameActive()
         let localeAfterRuntimeControl = await mocks.nuxieApi.lastProfileLocale
         XCTAssertEqual(localeAfterRuntimeControl, "fr_FR")
+        await sdk.shutdown()
+    }
+
+    /// Journey holds the customer's events from before the old locale's
+    /// copy is withdrawn until the new locale's fetch has settled.
+    func testSDKLocaleControlBracketsTheNewLocalesFetchForJourneys() async throws {
+        let sdk = NuxieSDK.shared
+        await sdk.shutdown()
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
+        let journeys = LocaleRefetchRecorder(api: mocks.nuxieApi)
+        let configuration = NuxieConfiguration(apiKey: "runtime-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        configuration.localeIdentifier = "en_US"
+        var overrides = mocks.unitTestOverrides()
+        overrides.profile = nil
+        overrides.journeys = journeys
+        try sdk.setup(with: configuration, overrides: overrides)
+        let fetchesBefore = await mocks.nuxieApi.fetchProfileCallCount
+        let localeBefore = await mocks.nuxieApi.lastProfileLocale ?? "none"
+
+        try await sdk.setLocaleIdentifier("fr_FR")
+
+        let steps = await journeys.steps
+        XCTAssertEqual(steps, [
+            "refetch-begin after \(fetchesBefore) fetches, last \(localeBefore)",
+            "withdraw after \(fetchesBefore) fetches, last \(localeBefore)",
+            "refetch-settle after \(fetchesBefore + 1) fetches, last fr_FR",
+        ])
+        await sdk.shutdown()
     }
 
     private func assertSetupRejects(

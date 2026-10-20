@@ -645,16 +645,29 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
 
   // MARK: - Profile Management
 
-  /// Change the locale used at the next launch or foreground profile sync.
-  /// Pass nil to follow the device locale.
+  /// Change the locale and fetch that locale's profile at once. Events the
+  /// app sends meanwhile wait for the new profile, then reach Journeys
+  /// against it. Pass nil to follow the device locale.
   public func setLocaleIdentifier(_ localeIdentifier: String?) async throws {
     guard let operation = runningOperation() else { throw NuxieError.notConfigured }
     defer { operation.finish() }
     let core = operation.graph.core
     core.runtimeSettings.setLocaleIdentifier(localeIdentifier)
+    let locale = core.runtimeSettings.localeIdentifier()
+    let distinctId = core.identity.getDistinctId()
+    // The customer's events wait while the new locale's profile is fetched,
+    // then replay against it.
+    await core.journeys?.profileRefetchWillBegin(distinctId: distinctId)
     // Invalidate before the replacing fetch so an in-flight fetch under the
     // old locale cannot commit in the settings-to-claim window.
     await core.profile.localeDidChange()
+    // A newer locale or customer asks for its own profile.
+    _ = await core.profile.refetchProfileUntilSettled(distinctId: distinctId) {
+      core.identity.getDistinctId() == distinctId
+        && core.runtimeSettings.localeIdentifier() == locale
+    }
+    await core.journeys?.profileRefetchDidSettle(distinctId: distinctId)
+    await core.features.syncFeatureInfo()
   }
 
   /// Restore purchases using the configured native or external purchase owner.

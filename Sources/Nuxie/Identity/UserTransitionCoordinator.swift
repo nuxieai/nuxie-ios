@@ -35,8 +35,6 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     private let journeyService: (any JourneyServiceProtocol)?
     private let identity: IdentityServiceProtocol?
 
-    private static let supersededRefreshAttempts = 3
-
     init(
         profile: ProfileServiceProtocol,
         eventLog: EventIdentityMigrating,
@@ -126,27 +124,13 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         // Clear the departing customer's projections before admitting the new
         // profile. A remote Feature check cannot establish profile readiness.
         await profileService.handleUserChange(from: transition.from, to: transition.to)
-        // A refresh superseded by another one (the startup prefetch, a
-        // foreground revalidation, a locale change) has not settled this
-        // customer's profile, so ask again, a bounded number of times. Once a
-        // newer identify() has moved the identity on, that transition asks.
-        var profileSettled = true
-        for attempt in 1...Self.supersededRefreshAttempts {
-            do {
-                _ = try await profileService.refetchProfile(distinctId: transition.to)
-                profileSettled = true
-                break
-            } catch is ProfileRefreshCancellationError {
-                // The newer refresh may still bring the profile.
-                profileSettled = false
-                guard attempt < Self.supersededRefreshAttempts, !Task.isCancelled,
-                      (identity?.getDistinctId() ?? transition.to) == transition.to
-                else { break }
-            } catch {
-                LogDebug("Identity profile refresh failed: \(error)")
-                profileSettled = true
-                break
-            }
+        // A superseded refresh has not settled this customer's profile, so it
+        // asks again. Once a newer identify() has moved the identity on, that
+        // transition asks.
+        let profileSettled = await profileService.refetchProfileUntilSettled(
+            distinctId: transition.to
+        ) { [identity] in
+            (identity?.getDistinctId() ?? transition.to) == transition.to
         }
         // Journey held the arriving customer's events for this profile.
         await journeyService?.finishUserChangeRouting(

@@ -144,8 +144,8 @@ public class NuxieConfiguration {
     
     /// Initial locale selected during `setup(with:)`.
     /// When nil, the SDK uses the device locale. After setup, call
-    /// `NuxieSDK.setLocaleIdentifier(_:)` to change it for the next launch or
-    /// foreground profile synchronization.
+    /// `NuxieSDK.setLocaleIdentifier(_:)` to change it; that call fetches the
+    /// new locale's profile at once.
     public var localeIdentifier: String?
 
     /// Optional hook for event transformation and filtering.

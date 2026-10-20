@@ -1,0 +1,82 @@
+{
+  "contract": "While a fresh copy of the published setup is fetched to replace a customer's withdrawn copy (a language change in the app), that customer's events wait, in order. When the fresh copy lands they replay against it, before any wait is resolved: a Journey already waiting takes each event once, an entry arm of the fresh copy starts from it once, and no wait runs out for the time its event spent waiting. If the last fetch settles without a copy, the events go through without one. With no fetch running, nothing waits. An identity transition holds and replays the arriving customer's events the same way, from its first step until their copy opens their journal.",
+  "copies": {
+    "saved": "A Journey starts on start_waiting and waits up to 60 seconds for go, ending took_go or timed_out.",
+    "fresh": "The same Journey, started on go."
+  },
+  "operations": {
+    "commit-saved": "Install the saved copy (or the same copy, fetched again).",
+    "commit-fresh": "Install the fresh copy.",
+    "refetch-begin": "A fetch of a fresh copy begins.",
+    "withdraw": "The installed copy is withdrawn.",
+    "track <event>": "The app sends the event; the event log routes it unless routing is held.",
+    "advance-past-deadline": "70 seconds pass.",
+    "app-active": "The app becomes active.",
+    "refetch-settle": "A fetch settles, with or without a copy."
+  },
+  "cases": [
+    {
+      "name": "events_wait_for_the_fresh_copy_and_replay_against_it",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track go", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "commit-fresh", "starts": 2, "tookGo": 2, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 2, "tookGo": 2, "timedOut": 0 }
+      ]
+    },
+    {
+      "name": "a_wait_that_runs_out_meanwhile_takes_the_event_sent_in_time",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track screen_viewed", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track go", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "advance-past-deadline", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "app-active", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "commit-saved", "starts": 1, "tookGo": 1, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 1, "tookGo": 1, "timedOut": 0 }
+      ]
+    },
+    {
+      "name": "a_failed_fetch_lets_the_events_through_without_a_copy",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track go", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 1, "tookGo": 1, "timedOut": 0 }
+      ]
+    },
+    {
+      "name": "overlapping_fetches_hold_until_the_copy_lands",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track go", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "commit-fresh", "starts": 2, "tookGo": 2, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 2, "tookGo": 2, "timedOut": 0 }
+      ]
+    },
+    {
+      "name": "without_a_fetch_nothing_waits",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track go", "starts": 1, "tookGo": 1, "timedOut": 0 },
+        { "op": "commit-fresh", "starts": 1, "tookGo": 1, "timedOut": 0 }
+      ]
+    }
+  ]
+}

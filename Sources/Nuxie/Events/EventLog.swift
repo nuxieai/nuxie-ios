@@ -342,6 +342,12 @@ protocol EventLogProtocol:
   @discardableResult
   func deferCommittedRouting() async -> UInt64
   func resumeCommittedRouting(ifGeneration: UInt64) async
+  /// `replayPendingStableRoutes(distinctId:)` for the owner of one hold: it
+  /// releases routing only while `generation` still holds it, and returns
+  /// once the routes it held have reached their subscribers. A newer hold
+  /// keeps routing for its own owner.
+  @discardableResult
+  func replayPendingStableRoutes(distinctId: String, ifGeneration: UInt64) async -> Bool
 
   func firstPendingStableRouteEventId(distinctId: String) async throws -> String?
 
@@ -458,6 +464,11 @@ protocol EventLogProtocol:
 extension EventLogProtocol {
   func deferCommittedRouting() async -> UInt64 { 0 }
   func resumeCommittedRouting(ifGeneration: UInt64) async {}
+  @discardableResult
+  func replayPendingStableRoutes(distinctId: String, ifGeneration: UInt64) async -> Bool {
+    _ = ifGeneration
+    return await replayPendingStableRoutes(distinctId: distinctId)
+  }
 
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
     await subscribeCommitted(where: nil, handler: handler)
@@ -3099,10 +3110,20 @@ extension EventLog {
 
   @discardableResult
   func replayPendingStableRoutes(distinctId: String) async -> Bool {
+    await replayPendingStableRoutes(distinctId: distinctId, holdGeneration: nil)
+  }
+
+  @discardableResult
+  func replayPendingStableRoutes(distinctId: String, ifGeneration generation: UInt64) async -> Bool {
+    await replayPendingStableRoutes(distinctId: distinctId, holdGeneration: generation)
+  }
+
+  private func replayPendingStableRoutes(distinctId: String, holdGeneration: UInt64?) async -> Bool {
     guard !closeFlag.isClosed else { return false }
     await ready.wait()
     guard !closeFlag.isClosed else { return false }
     let generation = routingDeferralGeneration
+    guard holdGeneration.map({ $0 == generation }) ?? true else { return false }
     let admissions = committedAdmissionRegistry.capture()
     guard !Self.isOnCommittedRouteWorker else {
       routeContinuation.yield(.recoverStableRoutes(
