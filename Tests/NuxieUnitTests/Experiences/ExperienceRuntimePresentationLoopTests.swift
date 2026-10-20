@@ -41,6 +41,46 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testShutdownCancelsUnpresentedPhaseBarriersWithoutCancellingTheirTasks() async throws {
+        for skipsDrawable in [false, true] {
+            let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+            let recorder = PresentationSessionRecorder(device: device)
+            let (window, view) = makePresentationSurface()
+            var permitsDrawable = true
+            let loop = makeLoop(recorder: recorder, view: view, observesEveryPresentation: true,
+                acquireDrawable: { permitsDrawable ? $0.nextDrawable() : nil },
+                nativeCompletionPresentationFallback: nil)
+            try await loop.start()
+            try await loop.advanceZeroDelta()
+            let before = await recorder.renderDispositions().count
+            permitsDrawable = !skipsDrawable
+            let ended = expectation(description: "shutdown cancels phase, skipped drawable: \(skipsDrawable)")
+            var outcome: Result<Void, Error>?
+            let phase = Task { @MainActor in
+                do {
+                    try await loop.advanceZeroDelta(awaitsPresentation: true)
+                    outcome = .success(())
+                } catch { outcome = .failure(error) }
+                ended.fulfill()
+            }
+            let rendered = await recorder.waitForRenderCount(before + 1)
+            XCTAssertTrue(rendered)
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertNil(outcome, "The phase has not been presented")
+            await loop.shutdown()
+            await fulfillment(of: [ended], timeout: 1)
+            if case .failure(let error)? = outcome {
+                XCTAssertTrue(error is CancellationError)
+            } else {
+                XCTFail("Shutdown must cancel the barrier, without acknowledging a presentation")
+            }
+            phase.cancel()
+            await phase.value
+            _ = window
+        }
+    }
+
+    @MainActor
     func testLayerWatchdogBarrierSurvivesASkippedPhaseDrawable() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let recorder = PresentationSessionRecorder(device: device)

@@ -767,6 +767,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         pendingFocus.removeAll()
         pointerInput.reset()
         cancelPendingWork(with: CancellationError())
+        resumeIdleWaiters()
         invalidateDisplayLink()
         removeApplicationObservers()
         surfaceView?.runtimeObserver = nil
@@ -911,6 +912,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         guard isStarted, !isShuttingDown, terminalError == nil else {
             throw terminalError ?? CancellationError()
         }
+        let lifecycle = lifecycleGeneration
         zeroDeltaRequestGeneration &+= 1
         let generation = zeroDeltaRequestGeneration
         let needsPresentation = awaitsPresentation && shouldPresent
@@ -927,7 +929,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
         try await withTaskCancellationHandler {
             while (completedZeroDeltaGeneration < generation || (needsPresentation && completedPresentedGeneration < generation)),
-                  terminalError == nil, !isShuttingDown {
+                  terminalError == nil, !isShuttingDown, lifecycleGeneration == lifecycle {
                 try Task.checkCancellation()
                 await withCheckedContinuation { idleWaiters.append($0) }
             }
@@ -936,6 +938,9 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             Task { @MainActor [weak self] in self?.resumeIdleWaiters() }
         }
         if let terminalError { throw terminalError }
+        guard isStarted, !isShuttingDown, lifecycleGeneration == lifecycle else {
+            throw CancellationError()
+        }
     }
 
     func runtimeSurfaceViewGeometryDidChange() {
