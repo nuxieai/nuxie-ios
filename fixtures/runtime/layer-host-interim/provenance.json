@@ -5,11 +5,11 @@
   "sourceReleaseSHA256": "e5d99944aeb31dcc7c5739f5368dfd51c61ca0b8063c57c7c5994b0c27c98a86",
   "runtimeDefinitions": "/Users/levi/dev/nuxie-dev/.claude/worktrees/epic-driscoll-f31072/third_party/nuxie-runtime/defs",
   "script": "/Users/levi/dev/nuxie-handoff/recreation-loop/magic-move-sdk-playback/tools/make-interim-layer-host.py",
-  "scriptSHA256": "df0e0e85d7a0c1adccd9d399bda7893ca23be4350592601949fe982bcf57ea6b",
-  "outputSHA256": "620af7ecce24b558c2ec7539422f96e4852f8cc76f3079d9517659ffd1b532fb",
-  "outputBytes": 892634,
+  "scriptSHA256": "98e967216172c34a71d2c8196ce4f50e30e10057541aa509482afc97db6397f4",
+  "outputSHA256": "bfeff40c394ce1307e611ed312c96b297b661d92048d3ca5ed737bfca3e47103",
+  "outputBytes": 892571,
   "interim": true,
-  "rowLayout": "fill stack with all-artboard fill override",
+  "rowLayout": "stage 1 plain Node, authored row sizes, overlapping origins",
   "diagnosticScenes": {
     "removal-probe-quiet.riv": {
       "sha256": "6657faf26a8b00660369a0b76024c049b108cd77669340f0fb1e6e6cbdec3c45",

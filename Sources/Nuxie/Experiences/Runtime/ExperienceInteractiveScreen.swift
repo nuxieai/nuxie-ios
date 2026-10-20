@@ -1622,11 +1622,12 @@ actor ExperienceInteractivePreparation {
 
     func openLayer(runValues: ExperienceRunValues? = nil, pixelWidth: UInt32, pixelHeight: UInt32,
                    reduceMotion: Bool = false, safeArea: ExperienceSafeAreaInsets? = nil,
-                   colorScheme: ExperienceColorScheme? = nil) async throws -> ExperienceInteractiveLayer {
+                   colorScheme: ExperienceColorScheme? = nil, videoDecoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceInteractiveLayer {
         do {
             let layer = try await ExperienceInteractiveLayer.open(payload: payload, preparedFile: preparedFile,
                 runValues: runValues, imageIDsByName: imageIDsByName, pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight, reduceMotion: reduceMotion, safeArea: safeArea, colorScheme: colorScheme)
+                pixelHeight: pixelHeight, reduceMotion: reduceMotion, safeArea: safeArea, colorScheme: colorScheme,
+                videoDecoderPool: videoDecoderPool)
             systemFontCache.didImport(systemFontLeases)
             openedSessionCount += 1
             return layer
@@ -1786,7 +1787,7 @@ actor ExperienceInteractiveScreen {
     }
 
     deinit {
-        let videoPlayback = videoPlayback
+        let videoPlayback = ownsRuntime ? videoPlayback : nil
         Task { @MainActor in videoPlayback?.close() }
     }
 
@@ -1829,7 +1830,8 @@ actor ExperienceInteractiveScreen {
         videoDecoderPool: ExperienceVideoDecoderPool? = nil,
         rowRuntime: NuxieNativeRuntime? = nil,
         rowReference: NuxieNativeViewModelReference? = nil,
-        operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate()
+        operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate(),
+        rowVideoPlayback: ExperienceVideoPlayback? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
         guard let manifestScreen = payload.renderPlan.screens.first(where: {
@@ -1954,7 +1956,7 @@ actor ExperienceInteractiveScreen {
         }
         let videoPlayback: ExperienceVideoPlayback?
         do {
-            videoPlayback = rowRuntime != nil || payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
+            videoPlayback = rowRuntime != nil ? rowVideoPlayback : payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
                 runtime: runtime, payload: payload,
                 artboardBounds: .zero,
                 decoderPool: videoDecoderPool)
@@ -2032,6 +2034,10 @@ actor ExperienceInteractiveScreen {
         }
     }
 
+    typealias RowStepper = @Sendable ([NuxieNativePointerEvent], [NuxieNativeFocusInput], Float, UInt64, Bool) async throws -> ExperienceInteractiveStepResult
+    private var rowStepper: RowStepper?
+    func setRowStepper(_ stepper: @escaping RowStepper) { rowStepper = stepper }
+
     func step(
         inputs: [ExperienceInteractiveInput] = [],
         pointers: [ExperienceInteractivePointerEvent] = [],
@@ -2041,6 +2047,13 @@ actor ExperienceInteractiveScreen {
         capturesTextLayout: Bool = false,
         confirmedResponseSaveTrigger: String? = nil
     ) async throws -> ExperienceInteractiveStepResult {
+        if let rowStepper {
+            if let trigger = confirmedResponseSaveTrigger {
+                let root = try await nativeRootReference()
+                _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
+            }
+            return try await rowStepper(pointers.map(Self.nativePointer), focusInputs, elapsedSeconds, correlationID, capturesTextLayout)
+        }
         let nativeInputs = inputs.map(Self.nativeInput)
         let nativePointers = pointers.map(Self.nativePointer)
         let runtime = runtime
@@ -2204,10 +2217,12 @@ actor ExperienceInteractiveScreen {
     }
 
     func projectRowStep(_ result: NuxieNativePlayerStepResult,
-                        snapshot: NuxieNativeViewModelSnapshot, correlationID: UInt64)
+                        snapshot: NuxieNativeViewModelSnapshot, correlationID: UInt64, capturesTextLayout: Bool = false)
         async throws -> ExperienceInteractiveStepResult {
         // Topology readback cannot discard events from an already committed step.
         try? await refreshTrackedTopology(snapshot: snapshot)
+        layoutBounds.update(size: try await runtime.layoutSize())
+        captureTextFrame(result, requested: capturesTextLayout, snapshot: snapshot)
         return projectStep(result, eventSnapshot: snapshot, correlationID: correlationID)
     }
 
@@ -3932,8 +3947,10 @@ actor ExperienceInteractiveScreen {
         defer { fontScope.close() }
         try await operationGate.withLock { [self] in
             await discardTextFrame()
-            await videoPlayback?.close()
-            if ownsRuntime { try await runtime.close() }
+            if ownsRuntime {
+                await videoPlayback?.close()
+                try await runtime.close()
+            }
         }
     }
 
@@ -3947,7 +3964,7 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    private static func nativePointer(_ pointer: ExperienceInteractivePointerEvent)
+    static func nativePointer(_ pointer: ExperienceInteractivePointerEvent)
         -> NuxieNativePointerEvent
     {
         let kind: NuxieNativePointerKind = switch pointer.kind {

@@ -1,0 +1,10 @@
+{
+  "source": "fixtures/video/greeting.nux",
+  "sourceSHA256": "115ed84e09aeddf4e04b11de519e4d10ab53a411e7334738a34eb9f9146e7205",
+  "generator": "/Users/levi/dev/nuxie-handoff/recreation-loop/magic-move-sdk-playback/tools/make-layer-video-probe.py",
+  "generatorSHA256": "137d74387ebb9f6e817c61600b72a8abd08970aa45371c7b12d50c6e0b5a152d",
+  "readerSHA256": "98e967216172c34a71d2c8196ce4f50e30e10057541aa509482afc97db6397f4",
+  "outputSHA256": "f9544a4e5aaed8e008a9da572ae21768e7286dbe9e66e83f52a875d23af5dd46",
+  "outputBytes": 1503,
+  "interim": true
+}
