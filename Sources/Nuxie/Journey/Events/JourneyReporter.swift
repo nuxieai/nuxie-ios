@@ -164,12 +164,16 @@ struct JourneyExperimentExposureReporter: Sendable {
         properties["assignment_source"] = exposure.kind == .assigned
             ? "profile"
             : "fallback"
+        let isHoldout: Bool
         switch exposure.kind {
         case .assigned:
-            properties["is_holdout"] = exposure.isHoldout
+            isHoldout = exposure.isHoldout
         case .fallback:
-            properties["is_holdout"] = false
+            isHoldout = false
         }
+        properties["is_holdout"] = isHoldout
+        // A treatment was selected; a holdout's treatment was suppressed.
+        properties["exposure_basis"] = isHoldout ? "suppressed" : "selected"
         return Projection(
             eventName: JourneyEvents.experimentExposure,
             properties: properties

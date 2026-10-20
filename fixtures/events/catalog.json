@@ -498,6 +498,11 @@
         "source": "ExperimentAction.experimentId",
         "type": "String"
       },
+      "exposure_basis": {
+        "required": true,
+        "source": "selected for a treatment, suppressed for a holdout",
+        "type": "String"
+      },
       "is_holdout": {
         "required": true,
         "source": "server experiment assignment",
