@@ -3041,11 +3041,25 @@ extension EventLog {
       // of the retained prefix has completed under the same admissions.
       await processRoute(.resumeAfterRecovery(generation: generation))
       guard !hasFailedCommittedRoutes else { return false }
-      return try await store.queryPendingStableRoutes(distinctId: distinctId, limit: 1).isEmpty
+      // A route still pending here may have been captured by this process
+      // while recovery ran: a subscriber taking a released route (a Journey
+      // starting from a first-launch trigger) captures its own events, and
+      // they wait in this session's committed queue for the live worker.
+      // Only a route left by an earlier process must have settled.
+      return try await store.visitPendingStableRoutes(distinctId: distinctId) { [weak self] stored in
+        guard let self else { return false }
+        return await self.isQueuedInThisSession(stored)
+      }
     } catch {
       LogWarning("EventLog: failed to replay pending stable local routes")
       return false
     }
+  }
+
+  private func isQueuedInThisSession(_ stored: StoredEvent) async -> Bool {
+    (try? await store.hasPendingCommittedRoute(
+      eventId: stored.id, sessionId: committedRouteSessionId
+    )) ?? false
   }
 
   private func deliverRecoveredStableRoute(
