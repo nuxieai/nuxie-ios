@@ -359,12 +359,14 @@ class NativeCommandSelectionTests(unittest.TestCase):
         self.assertEqual(command[-1], "//:NuxieExperienceInputTests")
         self.assertEqual(command[1], "test")
 
-    def test_focused_runtime_suite_preserves_all_three_native_classes(self):
+    def test_focused_runtime_suite_preserves_native_and_layer_classes(self):
         command = self.command(["test", "--suite", "native-runtime"])
         selector = next(arg for arg in command if arg.startswith("--test_filter="))
         self.assertEqual(selector, "--test_filter=NuxieSDKUnitTests.NuxieNativeRuntimeTests,"
                          "NuxieSDKUnitTests.ExperienceInteractiveScreenTests,"
-                         "NuxieSDKUnitTests.ExperienceRuntimePresentationLoopTests")
+                         "NuxieSDKUnitTests.ExperienceRuntimePresentationLoopTests,"
+                         "NuxieSDKUnitTests.ExperienceInteractiveLayerTests,"
+                         "NuxieSDKUnitTests.ExperienceLayerHostContractTests")
 
     def test_make_scheme_and_xcode_selector_preserve_destination_and_filter(self):
         command = self.command(["test", "--scheme", "NuxieSDKUnitTests",
