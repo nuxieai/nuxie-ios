@@ -82,6 +82,71 @@ private actor OrderedJourneyProbe: JourneyServiceProtocol {
     func profileDidClearAll(admissionGeneration: UInt64) async {}
 }
 
+/// The first refresh is superseded by another one, as the startup prefetch
+/// or a foreground revalidation can; later refreshes succeed.
+private final class SupersededProfileProbe: ProfileServiceProtocol, @unchecked Sendable {
+    private let base = MockProfileService()
+    private let log: TransitionOrderLog
+    private let lock = NSLock()
+    private var refetches = 0
+
+    init(log: TransitionOrderLog) { self.log = log }
+
+    func getCachedProfile(distinctId: String) async -> ProfileResponse? {
+        await base.getCachedProfile(distinctId: distinctId)
+    }
+    func localeDidChange() async {}
+    func clearCache(distinctId: String) async { await base.clearCache(distinctId: distinctId) }
+    func clearAllCache() async { await base.clearAllCache() }
+    func cleanupExpired() async -> Int { 0 }
+    func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
+        let attempt = lock.withLock { refetches += 1; return refetches }
+        log.append("profile.refetch")
+        guard attempt > 1 else { throw ProfileRefreshCancellationError() }
+        return try await base.refetchProfile(distinctId: distinctId)
+    }
+    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
+        await base.handleUserChange(from: oldDistinctId, to: newDistinctId)
+    }
+    func onAppBecameActive() async {}
+}
+
+private actor FinishRecordingJourneyProbe: JourneyServiceProtocol {
+    private let log: TransitionOrderLog
+
+    init(log: TransitionOrderLog) { self.log = log }
+
+    func initialize() async {}
+    func handleEvent(_ event: NuxieEvent) async { _ = event }
+    func handleEvent(_ event: NuxieEvent, admittedProfileGeneration: UInt64?) async -> Bool {
+        _ = event
+        _ = admittedProfileGeneration
+        return true
+    }
+    nonisolated func eventAdmissionGeneration() -> UInt64 { 0 }
+    func onAppDidEnterBackground() async {}
+    func onAppWillEnterForeground() async {}
+    func onAppBecameActive() async {}
+    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
+    func finishUserChangeRouting(to newDistinctId: String) async {
+        log.append("journeys.finishUserChangeRouting(\(newDistinctId))")
+    }
+    func profileDidCommit(
+        _ snapshot: JourneyProfileCatalog.Snapshot,
+        artifacts: PreparedJourneyArtifacts?,
+        authority: ProfileDeliveryAuthority,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) async {}
+    func profileDidWithdraw(
+        authority: ProfileDeliveryAuthority?,
+        admissionGeneration: UInt64,
+        distinctId: String
+    ) async {}
+    func profileDidClear(distinctId: String, admissionGeneration: UInt64) async {}
+    func profileDidClearAll(admissionGeneration: UInt64) async {}
+}
+
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 /// Serves one signed fixture profile to whoever asks.
 private actor FixtureProfileAPI: ProfileFetching {
@@ -181,6 +246,29 @@ final class FeatureIdentityReadinessTests: XCTestCase {
             await transitions.drain()
             XCTAssertEqual(log.entries, expected, "\(transition.kind) \(transition.from) -> \(transition.to)")
         }
+    }
+
+    /// Journey releases the arriving customer's events when the transition
+    /// finishes. A refresh superseded by another one has not settled their
+    /// profile, so the transition asks again before finishing.
+    func testTransitionFinishesOnlyAfterASettledProfileRefresh() async {
+        let log = TransitionOrderLog()
+        let identity = MockIdentityService()
+        let profile = SupersededProfileProbe(log: log)
+        let features = FeatureService(api: ReadinessFeatureCheck(), identity: identity,
+            profile: profile, dateProvider: MockDateProvider(), featureInfo: FeatureInfo(), cacheTTL: 300)
+        let transitions = UserTransitionCoordinator(profile: profile,
+            eventLog: ReadinessEventMigration(), features: features,
+            experiences: MockExperienceService(),
+            journeys: FinishRecordingJourneyProbe(log: log))
+        identity.setDistinctId("customer")
+        transitions.enqueue(.init(kind: .identify, from: "anonymous", to: "customer", migrateEvents: true))
+        await transitions.drain()
+        XCTAssertEqual(log.entries, [
+            "profile.refetch",
+            "profile.refetch",
+            "journeys.finishUserChangeRouting(customer)",
+        ])
     }
 
     #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
