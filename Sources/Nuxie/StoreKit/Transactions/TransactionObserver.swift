@@ -2195,11 +2195,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     private func scheduleOutboxRetry() {
         guard !isStopped, outboxRetryTask == nil else { return }
-        let attempts = storedEvidence().values
-            .filter(\.isUnsent)
+        // Only entries that failed wait for the timer; one still on its first
+        // send is in flight and schedules its own retry if it fails.
+        guard let attempts = storedEvidence().values
+            .filter({ $0.isUnsent && $0.sendAttempts > 0 })
             .map(\.sendAttempts)
-            .min() ?? 0
-        guard attempts > 0 else { return }
+            .min() else { return }
         let delay = Self.outboxRetryDelay(afterAttempts: attempts)
         outboxRetryTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -2207,6 +2208,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             await self.finishOutboxRetryWait()
         }
     }
+
+    /// Whether a timed outbox retry is waiting.
+    var hasScheduledOutboxRetry: Bool { outboxRetryTask != nil }
 
     private func finishOutboxRetryWait() async {
         outboxRetryTask = nil
