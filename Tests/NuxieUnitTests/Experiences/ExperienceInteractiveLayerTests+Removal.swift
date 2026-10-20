@@ -64,6 +64,21 @@ extension ExperienceInteractiveLayerTests {
                 XCTAssertEqual(detached.rootInstanceID, a.rawValue)
                 let elapsed: Float = sequence == "timed" || sequence == "two" ? 0.5 : 0
                 operation = "first step(\(elapsed)) after removal"
+                if (mode == "marker" || mode == "active") && (sequence == "timed" || sequence == "two") {
+                    var failure: Error?
+                    do { _ = try await runtime.step(elapsedSeconds: elapsed) }
+                    catch { failure = error }
+                    if let failure {
+                        guard case NuxieNativeRuntimeError.callFailed(let diagnostic) = failure else { throw failure }
+                        XCTAssertEqual(diagnostic.status, .limitExceeded)
+                        XCTAssertTrue(diagnostic.message.contains("view-model change journal"))
+                    }
+                    XCTExpectFailure("UNIV-5186: raw remove followed by a timed step loses the detached change owner") {
+                        XCTAssertNil(failure, "\(mode), \(sequence), \(operation)")
+                    }
+                    try? await runtime.close()
+                    continue
+                }
                 _ = try await runtime.step(elapsedSeconds: elapsed)
                 if sequence == "revisit" {
                     operation = "reinsert kept A"

@@ -121,6 +121,14 @@ struct ExperienceScreenLifecycleState: Sendable {
         self.reduceMotion = reduceMotion
     }
 
+    init(snapshot: ExperienceScreenLifecycleSnapshot) {
+        phase = snapshot.phase
+        appearances = snapshot.appearances
+        transition = snapshot.transition
+        exitReason = snapshot.exitReason
+        reduceMotion = snapshot.reduceMotion
+    }
+
     mutating func move(
         to phase: ExperienceScreenLifecyclePhase,
         transition: String = "",

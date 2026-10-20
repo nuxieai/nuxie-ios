@@ -20,10 +20,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let screenId: String
         let rawTransition: Any?
         let completion: Completion
-        var backLayer: UINavigationController? = nil
+        var backLayer: UIViewController? = nil
         var backSteps: Int = 1
         var dismissLayer: Bool = false
-        var admissionLayer: UINavigationController? = nil
+        var admissionLayer: UIViewController? = nil
+        var layerTransition: ExperienceScreenTransitionSpec? = nil
     }
 
     private weak var hostViewController: UIViewController?
@@ -50,19 +51,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         var controllers: [String: ExperienceScreenViewController] = [:]
     }
 
-    private var navigationLayers: [UINavigationController] = []
+    private var navigationLayers: [UIViewController] = []
     /// Sheet layers opened over another sheet, each presented from its own window.
     private var stackedSheetWindows: [ObjectIdentifier: ExperienceStackedSheetWindow] = [:]
     private var layerCaches: [ScreenCache] = [ScreenCache()]
     private var pendingModalCache: ScreenCache?
-    private weak var closingLayer: UINavigationController?
+    private weak var closingLayer: UIViewController?
 
     var hasPresentedLayer: Bool { navigationLayers.count > 1 }
     /// The top Journey layer above the base, where an in-app browser opened from it belongs.
     var topPresentedLayer: UIViewController? { hasPresentedLayer ? navigationLayers.last : nil }
-    private var navigationController: UINavigationController? { navigationLayers.last }
+    private var presentationLayer: UIViewController? { navigationLayers.last }
+    private var navigationController: UINavigationController? { presentationLayer as? UINavigationController }
     private var activeController: ExperienceScreenViewController? {
-        navigationController?.topViewController as? ExperienceScreenViewController
+        (presentationLayer as? ExperienceScreenViewController)
+            ?? navigationController?.topViewController as? ExperienceScreenViewController
     }
     private var activeCache: ScreenCache { pendingModalCache ?? layerCaches[layerCaches.count - 1] }
     private var cachedControllersByScreenId: [String: ExperienceScreenViewController] {
@@ -70,13 +73,19 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         set { activeCache.controllers = newValue }
     }
     private var allScreenControllers: [ExperienceScreenViewController] {
-        layerCaches.flatMap { Array($0.controllers.values) }
-            + Array(pendingModalCache?.controllers.values ?? [:].values)
+        var seen = Set<ObjectIdentifier>()
+        return (layerCaches.flatMap { Array($0.controllers.values) }
+            + Array(pendingModalCache?.controllers.values ?? [:].values)).filter {
+                seen.insert(ObjectIdentifier($0)).inserted
+            }
     }
 
     var layerScreenIds: [[String]] {
         navigationLayers.map { layer in
-            layer.viewControllers.compactMap { ($0 as? ExperienceScreenViewController)?.screenId }
+            if let controller = layer as? ExperienceScreenViewController { return controller.layerHistory.screenIDs }
+            return (layer as? UINavigationController)?.viewControllers.compactMap {
+                ($0 as? ExperienceScreenViewController)?.screenId
+            } ?? []
         }
     }
 
@@ -227,8 +236,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             cachedControllersByScreenId.removeValue(forKey: entryController.screenId)
             throw CancellationError()
         }
-        let navigationController = UINavigationController(rootViewController: entryController)
-        navigationController.setNavigationBarHidden(true, animated: false)
+        let navigationController: UIViewController
+        if entryController.isLayerController { navigationController = entryController }
+        else {
+            let legacy = UINavigationController(rootViewController: entryController)
+            legacy.setNavigationBarHidden(true, animated: false)
+            navigationController = legacy
+        }
         navigationController.view.translatesAutoresizingMaskIntoConstraints = false
         navigationController.view.backgroundColor = .clear
         navigationController.view.isHidden = contentHidden
@@ -525,7 +539,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             screenId: screenId,
             rawTransition: rawTransition,
             completion: completion,
-            admissionLayer: navigationController
+            admissionLayer: presentationLayer
         ))
         startNavigationDrainIfNeeded()
         return true
@@ -535,8 +549,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     func back(to screenId: String, steps: Int, transition: Any? = nil, completion: @escaping Completion) -> Bool {
         guard lifecycle == .installed, !navigationAdmissionRevoked,
               backTarget(steps: steps) == screenId,
-              let layer = navigationController else { return false }
-        if activeScreenId == screenId {
+              let layer = presentationLayer else { return false }
+        if activeScreenId == screenId,
+           activeController?.isLayerController != true || (navigationTask == nil && navigationRequests.isEmpty) {
             completion(.alreadyActive, screenId)
             return true
         }
@@ -545,7 +560,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             rawTransition: transition ?? ["type": "push"],
             completion: completion,
             backLayer: layer,
-            backSteps: steps
+            backSteps: steps,
+            layerTransition: activeController?.isLayerController == true
+                ? transition.map { ExperienceScreenTransitionSpec(raw: $0) } : nil
         ))
         startNavigationDrainIfNeeded()
         return true
@@ -557,7 +574,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     /// it, the dismiss is superseded rather than closing the next layer down.
     func closeTopLayer(issuedFrom issuingScreenId: String? = nil) async -> ExperienceScreenNavigationResult {
         guard lifecycle == .installed, !navigationAdmissionRevoked, hasPresentedLayer,
-              let screenId = activeScreenId, let layer = navigationController else { return .failed }
+              let screenId = activeScreenId, let layer = presentationLayer else { return .failed }
         if let issuingScreenId, layerScreenIds.last?.contains(issuingScreenId) != true { return .superseded }
         return await withCheckedContinuation { continuation in
             navigationRequests.append(NavigationRequest(
@@ -595,11 +612,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 continue
             }
             if let backLayer = request.backLayer,
-               (backLayer !== navigationController || (!request.dismissLayer && backTarget(steps: request.backSteps) != request.screenId)) {
+               (backLayer !== presentationLayer || (!request.dismissLayer && backTarget(steps: request.backSteps) != request.screenId)) {
                 request.completion(.superseded, request.screenId)
                 continue
             }
-            let sourceLayer = navigationController
+            let sourceLayer = presentationLayer
             do {
                 if request.dismissLayer {
                     let closed = await performAuthoredLayerDismissal()
@@ -607,30 +624,38 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     continue
                 }
                 let spec = ExperienceScreenTransitionSpec(raw: request.rawTransition)
+                if activeController?.isLayerController == true, activeScreenId == request.screenId,
+                   spec.kind != .modal {
+                    request.completion(.alreadyActive, request.screenId)
+                    continue
+                }
                 let opensLayer = request.backLayer == nil && spec.kind == .modal
                 if opensLayer { pendingModalCache = ScreenCache() }
                 _ = try await ensureScreenController(for: request.screenId)
                 guard lifecycle == .installed, !Task.isCancelled,
-                      !navigationAdmissionRevoked, navigationController === sourceLayer else {
+                      !navigationAdmissionRevoked, presentationLayer === sourceLayer else {
                     await discardPendingModal()
-                    request.completion(navigationController !== sourceLayer ? .superseded : .failed, request.screenId)
+                    request.completion(presentationLayer !== sourceLayer ? .superseded : .failed, request.screenId)
                     continue
                 }
                 let didNavigate = try await performMountedNavigation(
                     to: request.screenId,
                     transition: request.rawTransition,
-                    isBack: request.backLayer != nil
+                    isBack: request.backLayer != nil,
+                    layerSpec: request.layerTransition ?? (request.backLayer != nil && activeController?.isLayerController == true
+                        ? activeController?.layerHistory.backTransition(steps: request.backSteps, target: request.screenId,
+                            declarations: artifact.renderPlan.transitions) : nil)
                 )
                 if pendingModalCache != nil { await discardPendingModal() }
                 let completed = lifecycle == .installed && !Task.isCancelled
                     && !navigationAdmissionRevoked && didNavigate
                 request.completion(
-                    completed ? .navigated : (navigationController !== sourceLayer ? .superseded : .failed),
+                    completed ? .navigated : (presentationLayer !== sourceLayer ? .superseded : .failed),
                     request.screenId
                 )
             } catch {
                 await discardPendingModal()
-                if navigationController !== sourceLayer {
+                if presentationLayer !== sourceLayer {
                     request.completion(.superseded, request.screenId)
                     continue
                 }
@@ -646,7 +671,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 LogWarning(
                     "ExperienceScreenTransitionCoordinator: failed to navigate to screen \(request.screenId): \(error)"
                 )
-                request.completion(navigationController !== sourceLayer ? .superseded : .failed, request.screenId)
+                request.completion(presentationLayer !== sourceLayer ? .superseded : .failed, request.screenId)
             }
         }
         navigationTask = nil
@@ -658,8 +683,22 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private func performMountedNavigation(
         to screenId: String,
         transition rawTransition: Any?,
-        isBack: Bool
+        isBack: Bool,
+        layerSpec: ExperienceScreenTransitionSpec? = nil
     ) async throws -> Bool {
+        if let controller = activeController, controller.isLayerController {
+            let spec = layerSpec ?? ExperienceScreenTransitionSpec(raw: rawTransition)
+            if spec.kind != .modal || isBack {
+                let sourceID = controller.screenId
+                try await controller.navigateLayer(to: screenId, spec: spec, isBack: isBack,
+                    reduceMotion: reduceMotionEnabled,
+                    isEligible: { [self] in lifecycle == .installed && !navigationAdmissionRevoked
+                        && presentationLayer === controller && !terminalScreenIds.contains(screenId) },
+                    onHidden: { [self] in await onScreenHidden(sourceID, .navigation(revealingScreenId: screenId)) },
+                    onActive: { [self] in await onScreenActive(screenId) })
+                return true
+            }
+        }
         let sourceController = activeController
         let targetController = try screenController(for: screenId)
         let reduceMotion = reduceMotionEnabled
@@ -683,7 +722,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         reduceMotion: Bool,
         isBack: Bool = false
     ) async throws -> Bool {
-        let sourceLayer = navigationController
+        let sourceLayer = presentationLayer
         // The screen enters in the host's appearance now, though it waited out of the
         // window (behind another, or in a cache) while it changed.
         targetController.adoptHostTraits(hostViewController?.traitCollection)
@@ -691,7 +730,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let opensLayer = spec.kind == .modal && !isBack
         // Decided once, so the size measured and the window presented from always agree.
         let stacksSheet = opensLayer && opensStackedSheet(spec.presentation)
-        let isRetainedTarget = sourceLayer?.viewControllers.contains(where: { $0 === targetController }) == true
+        let isRetainedTarget = (sourceLayer as? UINavigationController)?.viewControllers.contains(where: { $0 === targetController }) == true
         if opensLayer {
             guard ((sourceLayer as UIViewController?) ?? hostViewController)?.presentedViewController == nil else {
                 throw ExperienceScreenTransitionCoordinatorError.presenterBusy
@@ -742,7 +781,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             },
             nativeOperation: {
                 guard self.lifecycle == .installed, !Task.isCancelled,
-                      self.navigationController === sourceLayer else {
+                      self.presentationLayer === sourceLayer else {
                     throw CancellationError()
                 }
                 return try await withCheckedThrowingContinuation { continuation in
@@ -777,7 +816,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             restoreAfterFailure: {
                 await targetController.hide(reduceMotion: reduceMotion)
                 if opensLayer { sourceController?.setCoveredByLayer(false) }
-                if !opensLayer, self.navigationController === sourceLayer,
+                if !opensLayer, self.presentationLayer === sourceLayer,
                    let sourceController, sourceController !== targetController {
                     await sourceController.activate(reduceMotion: reduceMotion)
                 }
@@ -928,6 +967,14 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             throw ExperienceScreenTransitionCoordinatorError.terminalScreen(screenId)
         }
         let cache = activeCache
+        if let controller = cache.controllers.values.first, controller.isLayerController {
+            let rowArtifact = try await artifact.resolvingProducts(for: screenId)
+            onProductsResolved(rowArtifact.acquired.products)
+            try await controller.prepareLayerRow(screenID: screenId, products: rowArtifact.acquired.products)
+            cache.controllers[screenId] = controller
+            if let latestSnapshot { _ = controller.applySnapshot(latestSnapshot, screenId: screenId) }
+            return controller
+        }
         if let cached = cache.controllers[screenId] {
             // A cached screen re-enters in the host's appearance now, not the one it
             // mounted in.
@@ -957,9 +1004,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         controller.onRuntimeFailure = { [weak self, weak controller] error in
             guard let self, let controller else { return }
-            Task { @MainActor [weak self, weak controller] in
-                guard let self, let controller else { return }
-                await self.reportTerminalFailure(error, for: controller.screenId)
+            let screenIDs = controller.retainedScreenIDs
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for id in screenIDs { await self.reportTerminalFailure(error, for: id) }
             }
         }
         controller.setContentHidden(contentHidden)
@@ -1073,7 +1121,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     ) throws {
         // Present from the retained native layer container, not its screen child.
         // This makes UIKit's sheet presentation chain match Journey layer ownership.
-        guard let presenter = (navigationController as UIViewController?) ?? hostViewController,
+        guard let presenter = presentationLayer ?? hostViewController,
               let cache = pendingModalCache else {
             throw ExperienceScreenTransitionCoordinatorError.hostUnavailable
         }
@@ -1081,10 +1129,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             throw ExperienceScreenTransitionCoordinatorError.presenterBusy
         }
         let controller = try screenController(for: screenId)
-        let layer = ExperienceLayerNavigationController(rootViewController: controller)
-        layer.orientationHost = hostViewController
+        let layer: UIViewController
+        if controller.isLayerController {
+            controller.orientationHost = hostViewController
+            layer = controller
+        } else {
+            let legacy = ExperienceLayerNavigationController(rootViewController: controller)
+            legacy.orientationHost = hostViewController
+            legacy.setNavigationBarHidden(true, animated: false)
+            layer = legacy
+        }
         layer.view.backgroundColor = UIColor(nuxieRGBAHex: experience.behaviorPresentation.backgroundColor)
-        layer.setNavigationBarHidden(true, animated: false)
         let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation)
         layer.preferredContentSize = controller.preferredContentSize
         configurator.configure(layer)
@@ -1147,7 +1202,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     /// sheet visible, so it is presented as the first sheet of its own window instead.
     private func opensStackedSheet(_ presentation: ExperienceLayerPresentation) -> Bool {
         guard presentation.kind == .sheet,
-              let lower = hasPresentedLayer ? navigationController : hostViewController,
+              let lower = hasPresentedLayer ? presentationLayer : hostViewController,
               lower.presentingViewController != nil else { return false }
         return lower.modalPresentationStyle == .pageSheet || lower.modalPresentationStyle == .formSheet
     }
@@ -1161,7 +1216,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func performAuthoredLayerDismissal() async -> Bool {
-        guard hasPresentedLayer, let layer = navigationController,
+        guard hasPresentedLayer, let layer = presentationLayer,
               let controller = activeController, closingLayer == nil else { return false }
         closingLayer = layer
         layer.view.isUserInteractionEnabled = false
@@ -1169,7 +1224,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         // remove its surface while the declared exit is still drawing.
         layer.isModalInPresentation = true
         await controller.performExitHandshake(reduceMotion: reduceMotionEnabled, exitReason: .dismissed)
-        guard lifecycle == .installed, !Task.isCancelled, navigationController === layer else {
+        guard lifecycle == .installed, !Task.isCancelled, presentationLayer === layer else {
             closingLayer = nil
             return false
         }
@@ -1185,16 +1240,18 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private func handlePresentedControllerDidDismiss(
         _ presentationController: UIPresentationController
     ) async {
-        guard let layer = presentationController.presentedViewController as? UINavigationController,
-              hasPresentedLayer, navigationController === layer, closingLayer !== layer,
-              let controller = layer.topViewController as? ExperienceScreenViewController else { return }
+        let layer = presentationController.presentedViewController
+        guard
+              hasPresentedLayer, presentationLayer === layer, closingLayer !== layer,
+              let controller = (layer as? ExperienceScreenViewController)
+                ?? (layer as? UINavigationController)?.topViewController as? ExperienceScreenViewController else { return }
         await finishLayerDismissal(layer, controller: controller, alreadyDismissed: true)
     }
 
-    private func finishLayerDismissal(_ layer: UINavigationController,
+    private func finishLayerDismissal(_ layer: UIViewController,
                                       controller: ExperienceScreenViewController,
                                       alreadyDismissed: Bool) async {
-        guard navigationController === layer, hasPresentedLayer else { return }
+        guard presentationLayer === layer, hasPresentedLayer else { return }
         layer.presentationController?.delegate = nil
         navigationLayers.removeLast()
         stackedSheetWindows.removeValue(forKey: ObjectIdentifier(layer))?.close()
@@ -1214,7 +1271,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         // The retained screen never left active. This callback restores Journey
         // routing, without an entering edge, appearance increment or remount.
         if let screenId = revealingController?.screenId { await onScreenActive(screenId) }
-        for controller in cache.controllers.values { await controller.shutdownInteractiveScreen() }
+        var retired = Set<ObjectIdentifier>()
+        for controller in cache.controllers.values where retired.insert(ObjectIdentifier(controller)).inserted {
+            await controller.shutdownInteractiveScreen()
+        }
     }
 
     private func installLiveReplacementSurface(

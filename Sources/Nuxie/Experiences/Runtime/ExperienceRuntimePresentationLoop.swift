@@ -494,6 +494,44 @@ extension ExperienceInteractiveScreen {
     }
 }
 
+extension ExperienceInteractiveLayer {
+    nonisolated func presentationSession(
+        onSemantics: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)?,
+        onTextFrame: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)?,
+        onCaptions: (@MainActor @Sendable ([ExperienceInteractiveVideoCaption]) -> Void)?,
+        onFocus: @escaping @MainActor @Sendable (NuxieNativeFocusState) -> Void,
+        onStep: @escaping @MainActor @Sendable (Step) async -> Void
+    ) -> ExperienceRuntimePresentationSession {
+        ExperienceRuntimePresentationSession(artboardBounds: { self.artboardBounds },
+            observesEveryPresentation: onSemantics != nil || onTextFrame != nil || onCaptions != nil) { operation in
+            switch operation {
+            case .step(let step):
+                let result = try await self.step(pointers: step.pointers.map(ExperienceInteractiveScreen.nativePointer),
+                    focusInputs: step.focusInputs, elapsedSeconds: step.elapsedSeconds,
+                    capturesTextLayout: onTextFrame != nil)
+                return .session {
+                    if let state = result.native.focusState { onFocus(state) }
+                    await onStep(result)
+                }
+            case .close:
+                try await self.close()
+                return .none
+            case .resize(let size):
+                if size.pixelWidth > 0, size.pixelHeight > 0, size.layoutScaleFactor > 0 {
+                    try await self.setLayoutSize(width: Float(size.pixelWidth) / size.layoutScaleFactor,
+                        height: Float(size.pixelHeight) / size.layoutScaleFactor)
+                }
+                fallthrough
+            default:
+                let binding = try await self.activeBinding()
+                return try await binding.presentationSession(onSemantics: onSemantics,
+                    onTextFrame: onTextFrame, onCaptions: onCaptions, onFocus: onFocus,
+                    onStep: { _ in }).perform(operation)
+            }
+        }
+    }
+}
+
 private final class ExperienceRuntimePresentationWorkCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var callback: (@MainActor @Sendable (Result<Void, Error>) -> Void)?
@@ -549,6 +587,18 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var pointerInput = ExperienceRuntimePointerInputRouter()
     private var pendingPointers = ExperienceRuntimePresentationPointerQueue()
     private var pendingFocus = ExperienceFocusInputQueue()
+    private var inputEnabled = true
+
+    func setInputEnabled(_ enabled: Bool) {
+        guard inputEnabled != enabled else { return }
+        inputEnabled = enabled
+        semanticPresentationEpoch &+= 1
+        if !enabled {
+            pendingPointers.removeAll()
+            pendingFocus = ExperienceFocusInputQueue()
+            pointerInput = ExperienceRuntimePointerInputRouter()
+        }
+    }
     private var pendingWork: [PendingWork] = []
     private var inFlightWork: PendingWork?
     private nonisolated(unsafe) var displayLink: CADisplayLink?
@@ -568,6 +618,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var zeroDeltaRenderGeneration: UInt64?
     private var zeroDeltaGenerationByFrameID: [UInt64: UInt64] = [:]
     private var completedZeroDeltaGeneration: UInt64 = 0
+    private var requestedPresentedGeneration: UInt64 = 0
+    private var completedPresentedGeneration: UInt64 = 0
     private var pendingRender = false
     private var submittedPresentationContext: (epoch: UInt64, generation: UInt64)?
     private var applicationIsActive = true
@@ -768,7 +820,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         isEligible: @escaping @MainActor @Sendable () -> Bool,
         completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void = { _ in }
     ) -> Bool {
-        guard shouldPresent, isEligible() else {
+        guard inputEnabled, shouldPresent, isEligible() else {
             completion(.failure(CancellationError()))
             return false
         }
@@ -776,7 +828,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         let generation = lifecycleGeneration
         return enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
             let eligible = await MainActor.run { [weak self] in
-                guard let self, self.shouldPresent,
+                guard let self, self.inputEnabled, self.shouldPresent,
                       self.semanticPresentationEpoch == epoch,
                       self.lifecycleGeneration == generation else { return false }
                 return isEligible()
@@ -793,7 +845,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     @discardableResult
     func enqueueFocus(_ input: NuxieNativeFocusInput) -> Bool {
-        guard shouldPresent, terminalError == nil else { return false }
+        guard inputEnabled, shouldPresent, terminalError == nil else { return false }
         pendingFocus.append(input)
         return true
     }
@@ -855,12 +907,14 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         hasCompletedLatestFrame && lastSemanticFrame == frameSequence && semanticDeliveriesInFlight == 0
     }
 
-    func advanceZeroDelta(after work: ExperienceRuntimePresentationQueuedWork? = nil) async throws {
+    func advanceZeroDelta(after work: ExperienceRuntimePresentationQueuedWork? = nil, awaitsPresentation: Bool = false) async throws {
         guard isStarted, !isShuttingDown, terminalError == nil else {
             throw terminalError ?? CancellationError()
         }
         zeroDeltaRequestGeneration &+= 1
         let generation = zeroDeltaRequestGeneration
+        let needsPresentation = awaitsPresentation && shouldPresent
+        if needsPresentation { requestedPresentedGeneration = generation }
         pendingZeroDeltaFrame = true
         if let work {
             // Reserve the zero step in the same MainActor turn as its write.
@@ -871,8 +925,15 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         } else {
             reconcile()
         }
-        while completedZeroDeltaGeneration < generation, terminalError == nil {
-            await withCheckedContinuation { idleWaiters.append($0) }
+        try await withTaskCancellationHandler {
+            while (completedZeroDeltaGeneration < generation || (needsPresentation && completedPresentedGeneration < generation)),
+                  terminalError == nil, !isShuttingDown {
+                try Task.checkCancellation()
+                await withCheckedContinuation { idleWaiters.append($0) }
+            }
+            try Task.checkCancellation()
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.resumeIdleWaiters() }
         }
         if let terminalError { throw terminalError }
     }
@@ -1157,15 +1218,21 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
         let firstPresentedDrawableGate = firstPresentedDrawableGate
-        let shouldObservePresentation = session.observesEveryPresentation || !firstPresentedDrawableGate.isClaimed
+        // A later frame still carries the phase writes if their first drawable was skipped.
+        let phaseGeneration = max(zeroDeltaGenerationByFrameID.values.max() ?? 0, completedZeroDeltaGeneration)
+        let shouldNotifyPresentation = !firstPresentedDrawableGate.isClaimed
+            || requestedPresentedGeneration > completedPresentedGeneration
+        let shouldObservePresentation = session.observesEveryPresentation || shouldNotifyPresentation
         let presentedDrawableCallback: (@Sendable (
             ExperienceRuntimePresentedDrawable
-        ) -> Void)? = if shouldObservePresentation {
+        ) -> Void)? = if shouldNotifyPresentation {
             { [weak self] drawable in
-                guard drawable.isComplete else { return }
-                guard firstPresentedDrawableGate.claim() else { return }
+                let isFirst = drawable.isComplete && firstPresentedDrawableGate.claim()
                 Task { @MainActor [weak self] in
-                    self?.onPresentedDrawable(drawable)
+                    guard let self else { return }
+                    self.completedPresentedGeneration = max(self.completedPresentedGeneration, phaseGeneration)
+                    self.resumeIdleWaiters()
+                    if isFirst { self.onPresentedDrawable(drawable) }
                 }
             }
         } else {
@@ -1465,7 +1532,7 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
     func runtimeSurfaceViewDidReceivePointerEvents(
         _ events: [ExperienceRuntimeViewPointerEvent]
     ) {
-        guard isStarted,
+        guard inputEnabled, isStarted,
               !isShuttingDown,
               terminalError == nil,
               let surfaceView,

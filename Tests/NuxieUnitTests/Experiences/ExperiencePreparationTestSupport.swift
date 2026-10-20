@@ -571,3 +571,31 @@ actor RecordingJourneyReleaseAcquirer: JourneyReleaseAcquiring {
     }
 }
 #endif
+
+#if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+func interimLayerTransition() -> NativeExperienceTransition {
+    .init(id: "transition.native-contract", kind: .layer,
+        sourceScreenId: "screen_1", destinationScreenId: "screen_2", durationMs: 450,
+        incomingOnTop: true, source: .init(completeEventName: "nx_exit_done:transition.native-contract"),
+        destination: .init(completeEventName: "nx_enter_done:transition.native-contract"),
+        reverse: .init(durationMs: nil, incomingOnTop: nil,
+            source: .init(completeEventName: "nx_exit_done:transition.native-contract.reverse"),
+            destination: .init(completeEventName: "nx_enter_done:transition.native-contract.reverse")))
+}
+
+func interimLayerPayload() async throws -> AuthenticatedRuntimePayload {
+    let bytes = try Data(contentsOf: experiencePreparationRepositoryRoot()
+        .appendingPathComponent("fixtures/runtime/layer-host-interim/layer-host.riv"))
+    let base = try await statePayload(defaultViewModelName: nil, values: [], scene: bytes)
+    let screens = [JourneyScreen(id: "screen_1", defaultViewModelName: "Runtime", defaultInstanceId: "row-a"),
+                   JourneyScreen(id: "screen_2", defaultViewModelName: "Runtime_Upsell", defaultInstanceId: "row-b")]
+    let definition = ExperienceDefinition(screens: screens, viewModelValues: [], controlsByScreen: [:])
+    return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
+        renderPlan: .init(identity: base.renderPlan.identity, scene: base.renderPlan.scene,
+            entry: .init(screenId: "screen_1"), layerHost: .init(artboardName: "LayerList", listPath: "screens"),
+            screens: [.init(screenId: "screen_1", artboardId: "screen_1", artboardName: "Paywall", width: 390, height: 844, exit: nil),
+                      .init(screenId: "screen_2", artboardId: "screen_2", artboardName: "Upsell", width: 430, height: 932, exit: nil)],
+            transitions: [interimLayerTransition()], textInputs: [], images: base.renderPlan.images, fonts: base.renderPlan.fonts),
+        journey: definition.renderShell, definition: definition, sceneBytes: bytes, assets: base.assets)
+}
+#endif
