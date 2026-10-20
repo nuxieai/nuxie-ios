@@ -968,11 +968,14 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         let cache = activeCache
         if let controller = cache.controllers.values.first, controller.isLayerController {
+            let isFirstPreparation = !controller.retainedScreenIDs.contains(screenId)
             let rowArtifact = try await artifact.resolvingProducts(for: screenId)
             onProductsResolved(rowArtifact.acquired.products)
             try await controller.prepareLayerRow(screenID: screenId, products: rowArtifact.acquired.products)
             cache.controllers[screenId] = controller
-            if let latestSnapshot { _ = controller.applySnapshot(latestSnapshot, screenId: screenId) }
+            if isFirstPreparation, let latestSnapshot {
+                _ = controller.applySnapshot(latestSnapshot, screenId: screenId)
+            }
             return controller
         }
         if let cached = cache.controllers[screenId] {
