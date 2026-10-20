@@ -655,8 +655,9 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     core.runtimeSettings.setLocaleIdentifier(localeIdentifier)
     let locale = core.runtimeSettings.localeIdentifier()
     let distinctId = core.identity.getDistinctId()
-    // The customer's events wait while the new locale's profile is fetched,
-    // then replay against it.
+    // The whole change counts as one fetch, so the withdrawal below already
+    // holds the customer's events; they replay against the new locale's
+    // profile, or go through once the last fetch for them settles.
     await core.journeys?.profileRefetchWillBegin(distinctId: distinctId)
     // Invalidate before the replacing fetch so an in-flight fetch under the
     // old locale cannot commit in the settings-to-claim window.

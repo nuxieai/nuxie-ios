@@ -71,6 +71,8 @@ private actor RecordingJourneyProfileConsumer: JourneyProfileConsuming {
     private(set) var withdrawnDistinctIds: [String] = []
     private(set) var clearedDistinctIds: [String] = []
     private(set) var clearAllCount = 0
+    /// Fetch brackets and the commits between them, in order.
+    private(set) var fetchLog: [String] = []
 
     func profileDidCommit(
         _ snapshot: JourneyProfileCatalog.Snapshot,
@@ -79,11 +81,19 @@ private actor RecordingJourneyProfileConsumer: JourneyProfileConsuming {
         admissionGeneration: UInt64,
         distinctId: String
     ) {
-        _ = distinctId
         _ = artifacts
         _ = admissionGeneration
         commits.append(snapshot)
         authorities.append(authority)
+        fetchLog.append("commit \(distinctId)")
+    }
+
+    func profileRefetchWillBegin(distinctId: String) {
+        fetchLog.append("begin \(distinctId)")
+    }
+
+    func profileRefetchDidSettle(distinctId: String) {
+        fetchLog.append("settle \(distinctId)")
     }
 
     func profileDidWithdraw(
@@ -643,6 +653,36 @@ final class JourneyProfileServiceTests: JourneyTestCase {
         XCTAssertNotNil(retainedSnapshot)
         XCTAssertTrue(withdrawnDistinctIds.isEmpty)
         XCTAssertEqual(retainedProfile?.planeProfile.releases.count, 1)
+    }
+
+    /// Every fetch tells Journey when it begins and when it settles, after
+    /// the commit of what it fetched, and a failed fetch settles too. While
+    /// a customer has no usable copy, Journey holds their events in between.
+    func testEveryFetchIsBracketedForJourney() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let runtime = RecordingJourneyProfileConsumer()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let service = makeService(
+            cache: InMemoryCachedProfileStore(ttl: nil),
+            identity: identity,
+            api: JourneyProfileSequenceAPI([
+                .response(ProfileResponse(planeProfile: fixture.profile)),
+                .failure,
+            ], authority: fixture.deliveryAuthority),
+            experiences: MockExperienceService(),
+            catalog: try makeCatalog(fixture, store: InMemoryJourneyReleaseHighWaterStore()),
+            runtime: runtime
+        )
+
+        _ = try await service.refetchProfile(distinctId: "customer")
+        _ = try? await service.refetchProfile(distinctId: "customer")
+
+        let log = await runtime.fetchLog
+        XCTAssertEqual(log, [
+            "begin customer", "commit customer", "settle customer",
+            "begin customer", "settle customer",
+        ])
     }
 
     func testCancellingProfilePreparationPreservesActiveVideoLease() async throws {

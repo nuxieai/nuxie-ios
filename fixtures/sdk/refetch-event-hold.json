@@ -1,5 +1,5 @@
 {
-  "contract": "While a fresh copy of the published setup is fetched to replace a customer's withdrawn copy (a language change in the app), that customer's events wait, in order. When the fresh copy lands they replay against it, before any wait is resolved: a Journey already waiting takes each event once, an entry arm of the fresh copy starts from it once, and no wait runs out for the time its event spent waiting. If the last fetch settles without a copy, the events go through without one. With no fetch running, nothing waits. An identity transition holds and replays the arriving customer's events the same way, from its first step until their copy opens their journal.",
+  "contract": "While a customer has no usable copy of the published setup (it was withdrawn after a language change in the app) and a fetch of their copy is running, that customer's events wait, in order. When a copy lands they replay against it before any wait is resolved, including while they replay: a Journey already waiting takes each event once, an entry arm of the copy starts from it once, and no wait runs out for the time its event spent waiting. The hold lasts until a copy lands or the customer's last running fetch settles, so a fetch superseded by a newer one keeps it; if none brings a copy, the events go through without one. With no fetch running, nothing waits. An identity transition holds and replays the arriving customer's events the same way, from its first step until their copy opens their journal.",
   "copies": {
     "saved": "A Journey starts on start_waiting and waits up to 60 seconds for go, ending took_go or timed_out.",
     "fresh": "The same Journey, started on go."
@@ -7,12 +7,12 @@
   "operations": {
     "commit-saved": "Install the saved copy (or the same copy, fetched again).",
     "commit-fresh": "Install the fresh copy.",
-    "refetch-begin": "A fetch of a fresh copy begins.",
+    "refetch-begin": "A fetch of the customer's copy begins (the language change itself, or any fetch it starts or that supersedes it).",
     "withdraw": "The installed copy is withdrawn.",
     "track <event>": "The app sends the event; the event log routes it unless routing is held.",
     "advance-past-deadline": "70 seconds pass.",
     "app-active": "The app becomes active.",
-    "refetch-settle": "A fetch settles, with or without a copy."
+    "refetch-settle": "One running fetch settles, with or without a copy."
   },
   "cases": [
     {
@@ -54,18 +54,42 @@
       ]
     },
     {
-      "name": "overlapping_fetches_hold_until_the_copy_lands",
+      "name": "a_superseded_fetch_holds_until_the_newer_fetch_lands",
       "steps": [
         { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
         { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
         { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
         { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
         { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
-        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
         { "op": "track go", "starts": 1, "tookGo": 0, "timedOut": 0 },
         { "op": "refetch-settle", "starts": 1, "tookGo": 0, "timedOut": 0 },
         { "op": "commit-fresh", "starts": 2, "tookGo": 2, "timedOut": 0 },
         { "op": "refetch-settle", "starts": 2, "tookGo": 2, "timedOut": 0 }
+      ]
+    },
+    {
+      "name": "a_fetch_that_begins_after_the_withdrawal_holds_too",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track go", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "commit-fresh", "starts": 2, "tookGo": 2, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 2, "tookGo": 2, "timedOut": 0 }
+      ]
+    },
+    {
+      "name": "superseded_fetches_that_bring_no_copy_let_the_events_through",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "track go", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 1, "tookGo": 1, "timedOut": 0 }
       ]
     },
     {

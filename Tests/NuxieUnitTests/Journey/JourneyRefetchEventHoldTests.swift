@@ -121,6 +121,42 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         await launch.close()
     }
 
+    /// The app becomes active while the held events replay, after the
+    /// wait's minute ran out. The wait still takes the go sent in time.
+    func testActivationWhileHeldEventsReplayDoesNotTimeOutTheWait() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let savedCopy = try await waitingCopy(fixture, entry: "start_waiting")
+        let dateProvider = MockDateProvider(initialDate: Date())
+        let activated = ActivateOnce()
+        let launch = try await settledLaunch(
+            directory: directory, distinctId: "customer", dateProvider: dateProvider,
+            pinned: try pinnedRelease(savedCopy)
+        ) { name, journeys in
+            guard name == "screen_viewed", await activated.claim() else { return }
+            await journeys.onAppBecameActive()
+        }
+        await launch.journeys.profileDidCommit(savedCopy, distinctId: "customer")
+        launch.events.track("start_waiting")
+        await launch.routeWhatCanRoute()
+
+        await launch.journeys.profileRefetchWillBegin(distinctId: "customer")
+        await launch.journeys.profileDidWithdraw(authority: nil, distinctId: "customer")
+        launch.events.track("screen_viewed")
+        launch.events.track("go")
+        await launch.routeWhatCanRoute()
+        dateProvider.advance(by: 70)
+        await launch.journeys.profileDidCommit(savedCopy, distinctId: "customer")
+        await launch.journeys.profileRefetchDidSettle(distinctId: "customer")
+        await launch.events.drain()
+
+        let didActivate = await activated.claimed
+        XCTAssertTrue(didActivate, "The app became active during the replay")
+        XCTAssertEqual(launch.outcomes(), ["took_go"])
+        await launch.close()
+    }
+
     /// The fetch fails: the held go goes through without a copy, and the
     /// Journey already waiting takes it.
     func testAFailedRefetchLetsTheHeldEventsThroughWithoutACopy() async throws {
@@ -255,12 +291,14 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
     }
 
     /// `pinned` stands in for the release a parked Journey re-authenticates
-    /// from its pin while no copy is installed.
+    /// from its pin while no copy is installed. `beforeHandling` runs as
+    /// each routed event reaches Journey.
     private func settledLaunch(
         directory: URL,
         distinctId: String,
         dateProvider: MockDateProvider,
-        pinned: AuthenticatedJourneyRelease
+        pinned: AuthenticatedJourneyRelease,
+        beforeHandling: (@Sendable (String, JourneyService) async -> Void)? = nil
     ) async throws -> Launch {
         let identity = MockIdentityService()
         identity.setDistinctId(distinctId)
@@ -277,7 +315,8 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         )
         let reservation = events.reserveCommittedAdmission { journeys.eventAdmissionGeneration() }
         await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, admitted in
-            await journeys.handleEvent(event, admittedProfileGeneration: admitted)
+            await beforeHandling?(event.name, journeys)
+            return await journeys.handleEvent(event, admittedProfileGeneration: admitted)
         }
         await journeys.prepareForEvents()
         let configuration = NuxieConfiguration(apiKey: "refetch-event-hold-test")
@@ -339,6 +378,15 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         .init(kind: .complete, id: "took_go", action: nil, outlets: nil, outcome: "took_go"),
         .init(kind: .complete, id: "timed_out", action: nil, outlets: nil, outcome: "timed_out"),
     ]
+
+    private actor ActivateOnce {
+        private(set) var claimed = false
+        func claim() -> Bool {
+            guard !claimed else { return false }
+            claimed = true
+            return true
+        }
+    }
 
     private struct RefetchEventHoldVectors: Decodable {
         struct Case: Decodable {

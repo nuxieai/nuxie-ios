@@ -19,6 +19,18 @@ protocol JourneyProfileConsuming: AnyObject, Sendable {
         admissionGeneration: UInt64
     ) async
     func profileDidClearAll(admissionGeneration: UInt64) async
+    /// A fetch of the customer's copy of the setup begins. While they have
+    /// no usable copy (it was withdrawn after a language change) their
+    /// events wait, then replay against the copy when it lands.
+    func profileRefetchWillBegin(distinctId: String) async
+    /// That fetch has settled, with or without a copy. Once the customer's
+    /// last fetch has settled, events still waiting go through.
+    func profileRefetchDidSettle(distinctId: String) async
+}
+
+extension JourneyProfileConsuming {
+    func profileRefetchWillBegin(distinctId: String) async {}
+    func profileRefetchDidSettle(distinctId: String) async {}
 }
 
 protocol JourneyServiceProtocol: JourneyProfileConsuming {
@@ -40,14 +52,6 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func onAppBecameActive() async
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
     func finishUserChangeRouting(to newDistinctId: String, profileSettled: Bool) async
-    /// A fresh copy of the customer's setup is being fetched to replace the
-    /// saved one (a language change in the app). While the saved copy is
-    /// withdrawn their events wait, then replay against the fresh copy when
-    /// it lands.
-    func profileRefetchWillBegin(distinctId: String) async
-    /// That fetch has settled, with or without a copy. Events still waiting
-    /// go through now.
-    func profileRefetchDidSettle(distinctId: String) async
     func shutdown() async
 }
 
@@ -55,8 +59,6 @@ extension JourneyServiceProtocol {
     func prepareForEvents() async {}
     func finishStartupRouting() async {}
     func finishUserChangeRouting(to newDistinctId: String, profileSettled: Bool) async {}
-    func profileRefetchWillBegin(distinctId: String) async {}
-    func profileRefetchDidSettle(distinctId: String) async {}
     /// A transition whose profile refresh settled, admitted or failed.
     func finishUserChangeRouting(to newDistinctId: String) async {
         await finishUserChangeRouting(to: newDistinctId, profileSettled: true)
@@ -174,6 +176,8 @@ actor JourneyService {
     /// Holds a customer's events while a refetch replaces their withdrawn
     /// copy, until the fresh copy lands or the last fetch settles.
     private var refetchRoutingDeferral: (distinctId: String, generation: UInt64)?
+    /// Customers whose held events are replaying after a refetch.
+    private var refetchReplaysInFlight: [String: Int] = [:]
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
@@ -362,6 +366,7 @@ extension JourneyService {
         transitionInFlight = nil
         profileRefetchesInFlight.removeAll()
         refetchRoutingDeferral = nil
+        refetchReplaysInFlight.removeAll()
         foreground = false
         cancelWake()
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
@@ -604,8 +609,12 @@ extension JourneyService {
               identity.getDistinctId() == distinctId,
               profileState?.distinctId == distinctId
                 || journal?.distinctId == distinctId else {
-            // A newer copy or customer outran this withdrawal.
-            await releaseRefetchRouting(for: distinctId)
+            // A newer copy or customer outran this withdrawal. A newer
+            // withdrawal keeps the hold for its own fetch.
+            if profileState?.distinctId == distinctId
+                || identity.getDistinctId() != distinctId {
+                await releaseRefetchRouting(for: distinctId)
+            }
             return
         }
         _ = profileFence.advance()
@@ -1096,6 +1105,10 @@ extension JourneyService {
 
     func profileRefetchWillBegin(distinctId: String) async {
         profileRefetchesInFlight[distinctId, default: 0] += 1
+        // A fetch for a customer whose copy was already withdrawn.
+        if profileState?.distinctId != distinctId {
+            await holdEventsWhileRefetching(distinctId)
+        }
     }
 
     func profileRefetchDidSettle(distinctId: String) async {
@@ -1141,16 +1154,21 @@ extension JourneyService {
             await events.resumeCommittedRouting(ifGeneration: held.generation)
             return
         }
+        refetchReplaysInFlight[distinctId, default: 0] += 1
         _ = await events.replayPendingStableRoutes(
             distinctId: distinctId,
             ifGeneration: held.generation
         )
+        let replays = (refetchReplaysInFlight[distinctId] ?? 1) - 1
+        refetchReplaysInFlight[distinctId] = replays > 0 ? replays : nil
     }
 
-    /// While a refetch holds the current customer's events, their waits
-    /// resolve only once those events have replayed.
+    /// While a refetch holds the current customer's events, and until they
+    /// have replayed, their waits do not resolve.
     private var refetchHoldsCurrentCustomer: Bool {
-        refetchRoutingDeferral?.distinctId == identity.getDistinctId()
+        let distinctId = identity.getDistinctId()
+        return refetchRoutingDeferral?.distinctId == distinctId
+            || refetchReplaysInFlight[distinctId] != nil
     }
 
     /// identify() while the SDK starts can leave the departing customer's
