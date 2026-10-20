@@ -14,7 +14,7 @@ Answers produced by response controls stay in the Journey journal until completi
 
 The server supplies durable assignments in the profile fact table. Assignment does not mean exposure. `$experiment_exposure` is captured only after the selected variant reaches a visible screen.
 
-Every experiment action has an authored `fallbackVariantId`. If an assignment is absent, malformed, or points to a variant unavailable in the authenticated release, the SDK runs that authored fallback. It still presents the Experience and emits one exposure for the variant actually shown, with `assignment_source: "fallback"` and `is_holdout: false`: a fallback is never a holdout.
+Every experiment action has an authored `fallbackVariantId`. If an assignment is absent, malformed, or points to a variant unavailable in the authenticated release, the SDK runs that authored fallback. It still presents the Experience and emits one exposure for the variant actually shown, with `assignment_source: "fallback"`. Every exposure's `is_holdout` is the selected variant's flag from the authenticated release, a fallback's included; publishing never signs a holdout fallback, so for a published release it is `false`.
 
 ## Purchases
 
