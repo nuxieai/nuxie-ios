@@ -40,6 +40,14 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func onAppBecameActive() async
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
     func finishUserChangeRouting(to newDistinctId: String, profileSettled: Bool) async
+    /// A fresh copy of the customer's setup is being fetched to replace the
+    /// saved one (a language change in the app). While the saved copy is
+    /// withdrawn their events wait, then replay against the fresh copy when
+    /// it lands.
+    func profileRefetchWillBegin(distinctId: String) async
+    /// That fetch has settled, with or without a copy. Events still waiting
+    /// go through now.
+    func profileRefetchDidSettle(distinctId: String) async
     func shutdown() async
 }
 
@@ -47,6 +55,8 @@ extension JourneyServiceProtocol {
     func prepareForEvents() async {}
     func finishStartupRouting() async {}
     func finishUserChangeRouting(to newDistinctId: String, profileSettled: Bool) async {}
+    func profileRefetchWillBegin(distinctId: String) async {}
+    func profileRefetchDidSettle(distinctId: String) async {}
     /// A transition whose profile refresh settled, admitted or failed.
     func finishUserChangeRouting(to newDistinctId: String) async {
         await finishUserChangeRouting(to: newDistinctId, profileSettled: true)
@@ -159,6 +169,11 @@ actor JourneyService {
     /// step until it finishes. Startup leaves their journal and routing to
     /// that transition.
     private var transitionInFlight: String?
+    /// Fetches replacing a customer's saved copy that have not settled.
+    private var profileRefetchesInFlight: [String: Int] = [:]
+    /// Holds a customer's events while a refetch replaces their withdrawn
+    /// copy, until the fresh copy lands or the last fetch settles.
+    private var refetchRoutingDeferral: (distinctId: String, generation: UInt64)?
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
@@ -345,6 +360,8 @@ extension JourneyService {
         startupProfileSettled = false
         userChangeRoutingDeferral = nil
         transitionInFlight = nil
+        profileRefetchesInFlight.removeAll()
+        refetchRoutingDeferral = nil
         foreground = false
         cancelWake()
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
@@ -520,6 +537,9 @@ private extension JourneyService {
                 LogWarning("JourneyService: failed to retain journal admission metadata: \(error)")
             }
         }
+        // Events held while this copy was fetched replay against it before
+        // any wait they could satisfy is resolved.
+        await releaseRefetchRouting(for: distinctId)
         guard let state = currentProfileState() else { return }
         await resumeParkedRuns(event: nil)
         await evaluateStateArms(state: state, kinds: nil)
@@ -577,11 +597,17 @@ extension JourneyService {
         if initialized {
             await ensureJournal(for: distinctId)
         }
+        // While a fresh copy is fetched, the customer's events wait for it.
+        await holdEventsWhileRefetching(distinctId)
         guard profileDeliveryGenerationsByDistinctId[distinctId]
                 == admissionGeneration,
               identity.getDistinctId() == distinctId,
               profileState?.distinctId == distinctId
-                || journal?.distinctId == distinctId else { return }
+                || journal?.distinctId == distinctId else {
+            // A newer copy or customer outran this withdrawal.
+            await releaseRefetchRouting(for: distinctId)
+            return
+        }
         _ = profileFence.advance()
         profileState = nil
         stateArmReceipts.removeAll()
@@ -975,6 +1001,12 @@ extension JourneyService {
         // arriving customer's journal and routing to this transition.
         transitionInFlight = newDistinctId
         cancelWake()
+        // This transition holds and replays the arriving customer's events
+        // itself, so a refetch's hold for the departing one ends here.
+        if let held = refetchRoutingDeferral {
+            refetchRoutingDeferral = nil
+            await events.resumeCommittedRouting(ifGeneration: held.generation)
+        }
         await retireNativeValues(owner: oldDistinctId)
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
@@ -1060,6 +1092,65 @@ extension JourneyService {
         for generation in [held, startupRoutingDeferral].compactMap({ $0 }) {
             await events.resumeCommittedRouting(ifGeneration: generation)
         }
+    }
+
+    func profileRefetchWillBegin(distinctId: String) async {
+        profileRefetchesInFlight[distinctId, default: 0] += 1
+    }
+
+    func profileRefetchDidSettle(distinctId: String) async {
+        guard let inFlight = profileRefetchesInFlight[distinctId] else { return }
+        guard inFlight == 1 else {
+            profileRefetchesInFlight[distinctId] = inFlight - 1
+            return
+        }
+        profileRefetchesInFlight[distinctId] = nil
+        guard refetchRoutingDeferral?.distinctId == distinctId else { return }
+        // No fresh copy landed: the held events go through without one, as
+        // they would have, and then the waits that ran out meanwhile resolve.
+        await releaseRefetchRouting(for: distinctId)
+        await resumeParkedRuns(event: nil)
+    }
+
+    /// The customer's withdrawn copy is being replaced: EventLog holds their
+    /// events until the fresh copy lands or the last fetch settles. An
+    /// identity transition holds and replays the arriving customer's events
+    /// itself, and without a recovered journal EventLog keeps them anyway.
+    private func holdEventsWhileRefetching(_ distinctId: String) async {
+        guard profileRefetchesInFlight[distinctId] != nil,
+              refetchRoutingDeferral == nil,
+              transitionInFlight == nil,
+              identity.getDistinctId() == distinctId,
+              let journal, journal.distinctId == distinctId,
+              recoveredJournalGeneration == journalGeneration else { return }
+        let generation = await events.deferCommittedRouting()
+        if refetchRoutingDeferral.map({ $0.generation < generation }) ?? true {
+            refetchRoutingDeferral = (distinctId, generation)
+        }
+    }
+
+    /// Ends a refetch's hold. While the customer is still current their held
+    /// events replay inline, so a waiting Journey takes them before any of
+    /// its deadlines is resolved. A newer hold keeps them for its owner.
+    private func releaseRefetchRouting(for distinctId: String) async {
+        guard let held = refetchRoutingDeferral,
+              held.distinctId == distinctId else { return }
+        refetchRoutingDeferral = nil
+        guard identity.getDistinctId() == distinctId,
+              transitionInFlight == nil else {
+            await events.resumeCommittedRouting(ifGeneration: held.generation)
+            return
+        }
+        _ = await events.replayPendingStableRoutes(
+            distinctId: distinctId,
+            ifGeneration: held.generation
+        )
+    }
+
+    /// While a refetch holds the current customer's events, their waits
+    /// resolve only once those events have replayed.
+    private var refetchHoldsCurrentCustomer: Bool {
+        refetchRoutingDeferral?.distinctId == identity.getDistinctId()
     }
 
     /// identify() while the SDK starts can leave the departing customer's
@@ -1562,6 +1653,7 @@ private extension JourneyService {
         excludingRunId: String? = nil
     ) async {
         guard event != nil || foreground,
+              event != nil || !refetchHoldsCurrentCustomer,
               let journal,
               isCurrentIdentity(journal: journal) else { return }
         do {
@@ -1643,7 +1735,12 @@ private extension JourneyService {
                     parked.park?.candidateEvents = nil
                 }
                 if !foreground, !release.descriptor.leg.screens.isEmpty { continue }
-                if acceptedEvent == nil, let wake = parked.park?.wakeAt, wake > dateProvider.now() { continue }
+                // An event resolves only the timeouts already due when it
+                // happened: one held and replayed later must not time out a
+                // wait that a held event after it satisfies.
+                let now = dateProvider.now()
+                let timeoutClock = event.map { min($0.timestamp, now) } ?? now
+                if acceptedEvent == nil, let wake = parked.park?.wakeAt, wake > timeoutClock { continue }
                 guard let expectedPark = parked.park,
                       let resumed = try await journal.resumeParked(
                     parked.id,

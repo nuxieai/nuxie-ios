@@ -27,6 +27,30 @@ extension ProfileServiceProtocol {
     func refetchProfile() async throws -> ProfileResponse {
         try await refetchProfile(distinctId: nil)
     }
+
+    /// Fetches the customer's profile. A fetch superseded by another one (the
+    /// startup prefetch, a foreground revalidation, a locale change) has not
+    /// settled it, so this asks again, a bounded number of times, while
+    /// `stillWanted` holds. Returns whether a fetch settled, admitted or
+    /// failed, rather than being superseded every time.
+    func refetchProfileUntilSettled(
+        distinctId: String,
+        attempts: Int = 3,
+        while stillWanted: () -> Bool
+    ) async -> Bool {
+        for attempt in 1...max(1, attempts) {
+            do {
+                _ = try await refetchProfile(distinctId: distinctId)
+                return true
+            } catch is ProfileRefreshCancellationError {
+                guard attempt < attempts, !Task.isCancelled, stillWanted() else { return false }
+            } catch {
+                LogDebug("Profile refresh failed: \(error)")
+                return true
+            }
+        }
+        return false
+    }
 }
 
 struct CachedProfile: Codable, Sendable {
