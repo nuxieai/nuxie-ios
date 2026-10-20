@@ -41,7 +41,7 @@ final class ExperienceVideoPlayback {
             // frame in place, with the colors the byte path produced.
             output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Bool](),
                 kCVPixelBufferMetalCompatibilityKey as String: true,
             ])
             let item = AVPlayerItem(asset: asset)

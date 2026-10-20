@@ -290,25 +290,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let exit: Exit?
     }
 
-    struct Transition: Decodable {
-        struct Endpoint: Decodable { let completeEventName: String }
-        struct Reverse: Decodable {
-            let durationMs: Int?
-            let incomingOnTop: Bool?
-            let source: Endpoint
-            let destination: Endpoint
-        }
-
-        let id: String
-        let kind: String
-        let sourceScreenId: String
-        let destinationScreenId: String
-        let durationMs: Int
-        let incomingOnTop: Bool
-        let source: Endpoint
-        let destination: Endpoint
-        let reverse: Reverse?
-    }
+    typealias Transition = ExperienceLayerHostContract.Transition
 
     struct TextInput: Decodable {
         struct Geometry: Decodable {
@@ -406,6 +388,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
     }
 
     let renderer: String
+    let layerHost: NativeExperienceLayerHost?
     let scene: Artifact
 
     private enum CodingKeys: String, CodingKey {
@@ -414,6 +397,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
 
     init(from decoder: Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
+        layerHost = try ExperienceLayerHostContract.decode(from: decoder)
         renderer = try fields.decode(String.self, forKey: .renderer)
         switch renderer {
         case "nux": scene = try fields.decode(Artifact.self, forKey: .nux)
@@ -1687,6 +1671,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 sizeBytes: render.scene.sizeBytes
             ),
             entry: .init(screenId: initialScreenID),
+            layerHost: render.layerHost,
             screens: render.screens.map {
                 NativeExperienceScreen(
                     screenId: $0.id,
@@ -1705,6 +1690,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             transitions: render.transitions.map {
                 NativeExperienceTransition(
                     id: $0.id,
+                    kind: $0.planKind,
                     sourceScreenId: $0.sourceScreenId,
                     destinationScreenId: $0.destinationScreenId,
                     durationMs: $0.durationMs,

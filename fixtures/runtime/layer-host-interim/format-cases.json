@@ -1,0 +1,284 @@
+{
+  "layerHosts": [
+    {
+      "value": {
+        "artboardName": "LayerList",
+        "list": "screens"
+      },
+      "accept": true
+    },
+    {
+      "value": null,
+      "accept": false
+    },
+    {
+      "value": "LayerList",
+      "accept": false
+    },
+    {
+      "value": {},
+      "accept": false
+    },
+    {
+      "value": {
+        "artboardName": "LayerList"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "artboardName": "",
+        "list": "screens"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "artboardName": 1,
+        "list": "screens"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "artboardName": "LayerList",
+        "list": "items"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "artboardName": "LayerList",
+        "list": "screens",
+        "schema": 6
+      },
+      "accept": false
+    }
+  ],
+  "transitionKinds": [
+    {
+      "value": "layer",
+      "accept": true
+    },
+    {
+      "value": "choreographed",
+      "accept": true
+    },
+    {
+      "value": "unknown",
+      "accept": false
+    },
+    {
+      "value": null,
+      "accept": false
+    }
+  ],
+  "journeyTransitions": [
+    {
+      "value": {
+        "type": "magic-move"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "magic-move",
+        "transitionId": "transition.native-contract"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "magic-move",
+        "transitionId": ""
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "magic-move",
+        "transitionId": 1
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "magic-move",
+        "transitionId": null
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "magic-move",
+        "durationMs": 450
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "magic-move",
+        "present": "sheet"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "push"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "push",
+        "transitionId": "transition.native-contract"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "push",
+        "transitionId": ""
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "push",
+        "transitionId": 1
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "push",
+        "transitionId": null
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "push",
+        "durationMs": 450
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "push",
+        "present": "sheet"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "fade"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "fade",
+        "transitionId": "transition.native-contract"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "fade",
+        "transitionId": ""
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "fade",
+        "transitionId": 1
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "fade",
+        "transitionId": null
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "fade",
+        "durationMs": 450
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "fade",
+        "present": "sheet"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "none"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "none",
+        "transitionId": "transition.native-contract"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "none",
+        "transitionId": ""
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "none",
+        "transitionId": 1
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "none",
+        "transitionId": null
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "none",
+        "durationMs": 450
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "none",
+        "present": "sheet"
+      },
+      "accept": false
+    },
+    {
+      "value": {
+        "type": "custom",
+        "transitionId": "transition.native-contract"
+      },
+      "accept": true
+    },
+    {
+      "value": {
+        "type": "modal",
+        "transitionId": "transition.native-contract"
+      },
+      "accept": false
+    }
+  ]
+}

@@ -1624,6 +1624,22 @@ actor ExperienceInteractivePreparation {
         return screen
     }
 
+    func openLayer(runValues: ExperienceRunValues? = nil, pixelWidth: UInt32, pixelHeight: UInt32,
+                   reduceMotion: Bool = false, safeArea: ExperienceSafeAreaInsets? = nil,
+                   colorScheme: ExperienceColorScheme? = nil) async throws -> ExperienceInteractiveLayer {
+        do {
+            let layer = try await ExperienceInteractiveLayer.open(payload: payload, preparedFile: preparedFile,
+                runValues: runValues, imageIDsByName: imageIDsByName, pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight, reduceMotion: reduceMotion, safeArea: safeArea, colorScheme: colorScheme)
+            systemFontCache.didImport(systemFontLeases)
+            openedSessionCount += 1
+            return layer
+        } catch {
+            systemFontCache.didFailImport(systemFontLeases)
+            throw error
+        }
+    }
+
     func metrics() async -> ExperienceInteractivePreparationMetrics {
         let nativeMetrics = await preparedFile.metrics()
         return ExperienceInteractivePreparationMetrics(
@@ -1634,9 +1650,8 @@ actor ExperienceInteractivePreparation {
     }
 }
 
-/// Owns one authenticated screen's native objects, product interpretation,
-/// and exactly-once ordering. Presentation code receives only the generic
-/// screen actor and copied Swift values.
+/// Owns one authenticated Screen's bindings, product interpretation and routing.
+/// Its root is either the standalone player's model or a retained layer row.
 actor ExperienceInteractiveScreen {
     private let runtime: NuxieNativeRuntime
     private let videoPlayback: ExperienceVideoPlayback?
@@ -1686,7 +1701,8 @@ actor ExperienceInteractiveScreen {
         needsLayoutReadback = true
         contentMeasurement.invalidate()
     }
-    private let operationGate = ExperienceInteractiveOperationGate()
+    private let operationGate: ExperienceInteractiveOperationGate
+    private let ownsRuntime: Bool
     private let stateCommandGate = ExperienceInteractiveOperationGate()
     private let valuePolicy: JourneyReleaseValuePolicy
     private let controlActionIds: Set<String>
@@ -1720,6 +1736,8 @@ actor ExperienceInteractiveScreen {
 
     private init(
         runtime: NuxieNativeRuntime,
+        operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate(),
+        ownsRuntime: Bool = true,
         videoPlayback: ExperienceVideoPlayback?,
         fontScope: ExperienceRuntimeFontScope,
         artboardBounds: CGRect,
@@ -1742,6 +1760,8 @@ actor ExperienceInteractiveScreen {
         trackedLists: ExperienceInteractiveTrackedListPlanner
     ) {
         self.runtime = runtime
+        self.operationGate = operationGate
+        self.ownsRuntime = ownsRuntime
         self.videoPlayback = videoPlayback
         self.fontScope = fontScope
         self.layoutBounds = ExperienceLayoutBounds(artboardBounds)
@@ -1797,7 +1817,7 @@ actor ExperienceInteractiveScreen {
         )
     }
 
-    fileprivate static func openPrepared(
+    static func openPrepared(
         payload: AuthenticatedRuntimePayload,
         preparedFile: NuxieNativePreparedFile,
         runValues: ExperienceRunValues?,
@@ -1811,7 +1831,10 @@ actor ExperienceInteractiveScreen {
         initialFontScale: Double?,
         initialSafeArea: ExperienceSafeAreaInsets?,
         initialColorScheme: ExperienceColorScheme?,
-        videoDecoderPool: ExperienceVideoDecoderPool? = nil
+        videoDecoderPool: ExperienceVideoDecoderPool? = nil,
+        rowRuntime: NuxieNativeRuntime? = nil,
+        rowReference: NuxieNativeViewModelReference? = nil,
+        operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate()
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
         guard let manifestScreen = payload.renderPlan.screens.first(where: {
@@ -1834,7 +1857,9 @@ actor ExperienceInteractiveScreen {
 
         let shared = try await runValues?.native(in: preparedFile)
         let runtime: NuxieNativeRuntime
-        if let shared {
+        if let rowRuntime {
+            runtime = rowRuntime
+        } else if let shared {
             runtime = try await shared.sessions.openSession(
                 artboardName: manifestScreen.artboardName, player: player.native,
                 pixelWidth: pixelWidth, pixelHeight: pixelHeight,
@@ -1853,7 +1878,7 @@ actor ExperienceInteractiveScreen {
                 in: fontScope
             )
         } catch {
-            try? await runtime.close()
+            if rowRuntime == nil { try? await runtime.close() }
             fontScope.close()
             throw error
         }
@@ -1867,10 +1892,11 @@ actor ExperienceInteractiveScreen {
                 screen: journeyScreen,
                 renderPlan: payload.renderPlan,
                 products: products,
-                runtime: runtime
+                runtime: runtime,
+                rootReference: rowReference
             )
-            environmentReference = try await runtime.bindGlobalViewModel(named: "env",
-                sharingAcrossSessions: false)
+            environmentReference = rowRuntime == nil
+                ? try await runtime.bindGlobalViewModel(named: "env", sharingAcrossSessions: false) : nil
             let environmentBindings = ExperienceEnvironmentBindings(catalog: initialState.catalog)
             if let environmentReference {
                 // Entry transitions must see host values during the initialization advance.
@@ -1880,7 +1906,7 @@ actor ExperienceInteractiveScreen {
                 if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
             }
             // The first frame draws themed colours from the instance for the device's appearance.
-            if let initialColorScheme, environmentBindings.themeSelection(for: initialColorScheme) != nil {
+            if rowRuntime == nil, let initialColorScheme, environmentBindings.themeSelection(for: initialColorScheme) != nil {
                 _ = try await runtime.bindGlobalViewModel(named: ExperienceEnvironmentBindings.themeGlobalName,
                     authoredInstanceNamed: initialColorScheme.label)
             }
@@ -1894,10 +1920,10 @@ actor ExperienceInteractiveScreen {
                 _ = try await runtime.mutateViewModel([
                     .setViewModel(instance: nativeRoot, path: "experience", value: shared.reference),
                 ])
-                _ = try await runtime.step(elapsedSeconds: 0)
+                if rowRuntime == nil { _ = try await runtime.step(elapsedSeconds: 0) }
             }
         } catch {
-            try? await runtime.close()
+            if rowRuntime == nil { try? await runtime.close() }
             fontScope.close()
             throw error
         }
@@ -1905,7 +1931,7 @@ actor ExperienceInteractiveScreen {
         var textInputs: [String: NativeExperienceTextInput] = [:]
         for input in payload.renderPlan.textInputs where input.screenId == screenID {
             guard textInputs.updateValue(input, forKey: input.inputId) == nil else {
-                try? await runtime.close()
+                if rowRuntime == nil { try? await runtime.close() }
                 fontScope.close()
                 throw ExperienceInteractiveScreenError.invalidScreen(screenID)
             }
@@ -1916,7 +1942,7 @@ actor ExperienceInteractiveScreen {
         var latestSnapshot: NuxieNativeViewModelSnapshot?
         do {
             if let rootReference = initialState.rootReference {
-                let snapshot = try await runtime.snapshot()
+                let snapshot = try await runtime.snapshot(NuxieNativeViewModelReference(rawValue: rootReference.rawValue)!)
                 latestSnapshot = snapshot
                 trackedLists = try snapshotTopology.reconcile(
                     snapshot: snapshot,
@@ -1928,23 +1954,25 @@ actor ExperienceInteractiveScreen {
                 )
             }
         } catch {
-            try? await runtime.close()
+            if rowRuntime == nil { try? await runtime.close() }
             fontScope.close()
             throw error
         }
         let videoPlayback: ExperienceVideoPlayback?
         do {
-            videoPlayback = payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
+            videoPlayback = rowRuntime != nil || payload.renderPlan.videos.isEmpty ? nil : try await ExperienceVideoPlayback.open(
                 runtime: runtime, payload: payload,
                 artboardBounds: .zero,
                 decoderPool: videoDecoderPool)
         } catch {
-            try? await runtime.close()
+            if rowRuntime == nil { try? await runtime.close() }
             fontScope.close()
             throw error
         }
         return ExperienceInteractiveScreen(
             runtime: runtime,
+            operationGate: operationGate,
+            ownsRuntime: rowRuntime == nil,
             videoPlayback: videoPlayback,
             fontScope: fontScope,
             artboardBounds: CGRect(
@@ -2029,7 +2057,7 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock { [self] in
             if let failure = await takeDeferredMeasurementFailure() { throw failure }
             if let confirmed = confirmedResponseSave {
-                let root = try await runtime.rootViewModelReference()
+                let root = try await nativeRootReference()
                 let restored = try ExperienceRunSnapshot(fields: confirmed.kept).mutations(for: root)
                 _ = try await runtime.mutateViewModel(restored + [.fireTrigger(instance: root, path: confirmed.trigger)])
                 contentMeasurement.invalidate()
@@ -2175,11 +2203,42 @@ actor ExperienceInteractiveScreen {
         )
     }
 
-    func rootViewModel() async throws -> ExperienceInteractiveViewModelReference {
-        let runtime = runtime
-        let reference = try await operationGate.withLock {
-            try await runtime.rootViewModelReference()
+    private func nativeRootReference() async throws -> NuxieNativeViewModelReference {
+        if !ownsRuntime, let rootViewModelReference {
+            return NuxieNativeViewModelReference(rawValue: rootViewModelReference.rawValue)!
         }
+        return try await runtime.rootViewModelReference()
+    }
+
+    private func nativeSnapshot() async throws -> NuxieNativeViewModelSnapshot {
+        let root = try await nativeRootReference()
+        return try await runtime.snapshot(root)
+    }
+
+    func projectRowStep(_ result: NuxieNativePlayerStepResult,
+                        snapshot: NuxieNativeViewModelSnapshot, correlationID: UInt64)
+        async throws -> ExperienceInteractiveStepResult {
+        // Topology readback cannot discard events from an already committed step.
+        try? await refreshTrackedTopology(snapshot: snapshot)
+        return projectStep(result, eventSnapshot: snapshot, correlationID: correlationID)
+    }
+
+    func lifecycleMutations(_ snapshot: ExperienceScreenLifecycleSnapshot,
+                            screen: JourneyScreen) throws -> [NuxieNativeViewModelMutation] {
+        guard let name = screen.defaultViewModelName, let rootViewModelReference else { return [] }
+        let schema = try stateCompiler.schema(named: name)
+        let command = snapshot.stateCommand(viewModelName: name, instanceID: screen.defaultInstanceId,
+            includesExitReason: supportsScreenExitReason(viewModelName: name))
+        guard case .snapshot(let values) = command else { return [] }
+        return try values.map { value in
+            let property = try stateCompiler.property(at: value.path, startingWith: schema.index)
+            return Self.nativeMutation(stateMutation(try stateCompiler.scalar(for: property,
+                value: value.value, path: value.path), reference: rootViewModelReference, path: value.path))
+        }
+    }
+
+    func rootViewModel() async throws -> ExperienceInteractiveViewModelReference {
+        let reference = try await operationGate.withLock { [self] in try await nativeRootReference() }
         return ExperienceInteractiveViewModelReference(rawValue: reference.rawValue)!
     }
 
@@ -2756,7 +2815,7 @@ actor ExperienceInteractiveScreen {
         guard let rootViewModelReference else { return }
         let snapshot: NuxieNativeViewModelSnapshot
         if let suppliedSnapshot { snapshot = suppliedSnapshot }
-        else { snapshot = try await runtime.snapshot() }
+        else { snapshot = try await nativeSnapshot() }
         trackedLists = try snapshotTopology.reconcile(
             snapshot: snapshot,
             rootReference: rootViewModelReference,
@@ -3650,8 +3709,7 @@ actor ExperienceInteractiveScreen {
     }
 
     func snapshot() async throws -> ExperienceInteractiveViewModelSnapshot {
-        let runtime = runtime
-        let value = try await operationGate.withLock { try await runtime.snapshot() }
+        let value = try await operationGate.withLock { [self] in try await nativeSnapshot() }
         return Self.projectSnapshot(value)
     }
 
@@ -3887,7 +3945,7 @@ actor ExperienceInteractiveScreen {
         try await operationGate.withLock { [self] in
             await discardTextFrame()
             await videoPlayback?.close()
-            try await runtime.close()
+            if ownsRuntime { try await runtime.close() }
         }
     }
 
@@ -4481,7 +4539,8 @@ private enum ExperienceInteractiveInitialState {
         screen: JourneyScreen,
         renderPlan: NativeExperienceRenderPlan,
         products: [StoreProduct],
-        runtime: NuxieNativeRuntime
+        runtime: NuxieNativeRuntime,
+        rootReference: NuxieNativeViewModelReference? = nil
     ) async throws -> Result {
         let catalog = try await runtime.viewModelCatalog()
         let imageIDs = try ExperienceInteractiveImageIdentityMap.make(
@@ -4518,7 +4577,9 @@ private enum ExperienceInteractiveInitialState {
             )
         }
 
-        let snapshot = try await runtime.snapshot()
+        let snapshot: NuxieNativeViewModelSnapshot
+        if let rootReference { snapshot = try await runtime.snapshot(rootReference) }
+        else { snapshot = try await runtime.snapshot() }
         guard let root = snapshot.instances.first(where: {
             $0.id == snapshot.rootInstanceID
         }),
