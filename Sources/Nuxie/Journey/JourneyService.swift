@@ -39,12 +39,14 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func onAppWillEnterForeground() async
     func onAppBecameActive() async
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
+    func finishUserChangeRouting(to newDistinctId: String) async
     func shutdown() async
 }
 
 extension JourneyServiceProtocol {
     func prepareForEvents() async {}
     func finishStartupRouting() async {}
+    func finishUserChangeRouting(to newDistinctId: String) async {}
     func shutdown() async {}
 }
 
@@ -148,6 +150,7 @@ actor JourneyService {
     private var startupRecoveryStarted = false
     private var startupRoutingDeferral: UInt64?
     private var startupProfileSettled = false
+    private var userChangeRoutingDeferral: UInt64?
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
@@ -330,6 +333,7 @@ extension JourneyService {
         startupRecoveryStarted = false
         startupRoutingDeferral = nil
         startupProfileSettled = false
+        userChangeRoutingDeferral = nil
         foreground = false
         cancelWake()
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
@@ -984,9 +988,41 @@ extension JourneyService {
         // may run after the new user's profile and journal are already live.
         clearRetainedReleaseCache()
         guard initialized, identity.getDistinctId() == newDistinctId else { return }
-        await ensureJournal(for: newDistinctId)
+        if profileState?.distinctId == newDistinctId {
+            // Their profile outran this transition: open their journal now.
+            await ensureJournal(for: newDistinctId)
+        } else if await retireDisplacedJournals(arriving: newDistinctId),
+                  journal == nil {
+            // The arriving customer's events wait for their profile, as at
+            // first launch: routed with no profile, a trigger sent right
+            // after identify() is dropped. Their journal opens with that
+            // profile in commitProfile, whose recovery replays what was held
+            // and releases routing. The hold starts only once the departing
+            // journal is retired, because retiring it drains routing.
+            userChangeRoutingDeferral = await events.deferCommittedRouting()
+        }
         await resetForegroundStateArmReceiptsIfNeeded()
         await scheduleNextWake()
+    }
+
+    /// The arriving customer's profile refresh has settled, admitted or not.
+    /// Without a profile their journal opens as it did before the hold, and
+    /// its recovery releases routing; what was held is handled with no
+    /// profile, as after an offline startup.
+    func finishUserChangeRouting(to newDistinctId: String) async {
+        guard let generation = userChangeRoutingDeferral else { return }
+        userChangeRoutingDeferral = nil
+        if initialized, journal == nil,
+           identity.getDistinctId() == newDistinctId {
+            await ensureJournal(for: newDistinctId)
+        }
+        if let operation = journalRecoveryOperation {
+            await operation.task.value
+        }
+        guard initialized,
+              journal == nil || recoveredJournalGeneration == journalGeneration
+        else { return }
+        await events.resumeCommittedRouting(ifGeneration: generation)
     }
 }
 
@@ -1191,13 +1227,20 @@ private extension JourneyService {
     }
 
     private func ensureJournal(for distinctId: String) async {
-        guard storageScope != nil else { return }
-        // A new-user profile can outrun the queued identity transition. Retire
-        // every journal displaced during that race before installing another.
+        guard await retireDisplacedJournals(arriving: distinctId),
+              identity.getDistinctId() == distinctId,
+              journal?.distinctId != distinctId else { return }
+        await openJournal(for: distinctId)
+    }
+
+    /// A new-user profile can outrun the queued identity transition. Retire
+    /// every journal displaced during that race before installing another.
+    private func retireDisplacedJournals(arriving distinctId: String) async -> Bool {
+        guard storageScope != nil else { return false }
         while let displaced = journal,
               displaced.distinctId != distinctId {
-            guard await abandon(displaced) else { return }
-            guard identity.getDistinctId() == distinctId else { return }
+            guard await abandon(displaced) else { return false }
+            guard identity.getDistinctId() == distinctId else { return false }
             if journal?.distinctId == displaced.distinctId {
                 journal = nil
             }
@@ -1205,11 +1248,9 @@ private extension JourneyService {
         if let current = journal,
            current.distinctId == distinctId,
            revokingCustomers.contains(distinctId) {
-            guard await abandon(current) else { return }
+            guard await abandon(current) else { return false }
         }
-        guard identity.getDistinctId() == distinctId,
-              journal?.distinctId != distinctId else { return }
-        await openJournal(for: distinctId)
+        return true
     }
 
     @discardableResult

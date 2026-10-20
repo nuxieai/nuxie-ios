@@ -126,6 +126,8 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         } catch {
             LogDebug("Identity profile refresh failed: \(error)")
         }
+        // Journey held the arriving customer's events for this profile.
+        await journeyService?.finishUserChangeRouting(to: transition.to)
         // A valid offline profile can still restore readiness. FeatureService
         // requires an admitted profile and fences publication to its identity.
         await featureService.syncFeatureInfo()
