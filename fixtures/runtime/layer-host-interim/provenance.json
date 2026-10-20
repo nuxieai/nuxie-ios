@@ -5,9 +5,29 @@
   "sourceReleaseSHA256": "e5d99944aeb31dcc7c5739f5368dfd51c61ca0b8063c57c7c5994b0c27c98a86",
   "runtimeDefinitions": "/Users/levi/dev/nuxie-dev/.claude/worktrees/epic-driscoll-f31072/third_party/nuxie-runtime/defs",
   "script": "/Users/levi/dev/nuxie-handoff/recreation-loop/magic-move-sdk-playback/tools/make-interim-layer-host.py",
-  "scriptSHA256": "e8f605393c33e2cc16f80d857b6fef36a91c7ea7964fa1ae9c0b9a7182753cf7",
-  "outputSHA256": "373e46e4db0786716e1d55e5271b4f368e2cf671ab56fc73263ab538a00ef0e9",
-  "outputBytes": 892421,
+  "scriptSHA256": "df0e0e85d7a0c1adccd9d399bda7893ca23be4350592601949fe982bcf57ea6b",
+  "outputSHA256": "620af7ecce24b558c2ec7539422f96e4852f8cc76f3079d9517659ffd1b532fb",
+  "outputBytes": 892634,
+  "interim": true,
+  "rowLayout": "fill stack with all-artboard fill override",
+  "diagnosticScenes": {
+    "removal-probe-quiet.riv": {
+      "sha256": "6657faf26a8b00660369a0b76024c049b108cd77669340f0fb1e6e6cbdec3c45",
+      "bytes": 429
+    },
+    "removal-probe-readback.riv": {
+      "sha256": "03b471786f99cdf2a9aee4a5299f583a2c55a93aeb3b1253a4d97d8860863d05",
+      "bytes": 459
+    },
+    "removal-probe-marker.riv": {
+      "sha256": "fb04c982a210723a2db32d16a70ca2e1d1d24c5e885335450940f124262240db",
+      "bytes": 457
+    },
+    "removal-probe-active.riv": {
+      "sha256": "c899e71efb8a615f125e9bd1c34b27bdb00aba112be6e1202375e04034670570",
+      "bytes": 487
+    }
+  },
   "assets": {
     "assets/sha256/3b95bcece1f913d2c1196cff9474497a2f4c0aa1745b1cd241cde5dd2817c82d.png": "3b95bcece1f913d2c1196cff9474497a2f4c0aa1745b1cd241cde5dd2817c82d",
     "assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf"
