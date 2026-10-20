@@ -867,12 +867,14 @@ final class ExperienceScreenViewController: UIViewController {
     ) -> Bool {
         guard targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!) else { return false }
         do {
-            return enqueueJourneyStateCommand(try .value(
-                path: path,
-                rawValue: value,
-                instanceID: instanceId,
-                defaultViewModelName: journeyScreen(for: targetScreenId)?.defaultViewModelName
-            ), screenID: targetScreenId)
+            return try enqueueJourneyStateCommand(screenID: targetScreenId) { row in
+                try .value(
+                    path: path,
+                    rawValue: value,
+                    instanceID: instanceId,
+                    defaultViewModelName: row?.defaultViewModelName
+                )
+            }
         } catch {
             logRejectedState(error)
             return false
@@ -889,13 +891,15 @@ final class ExperienceScreenViewController: UIViewController {
     ) -> Bool {
         guard targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!) else { return false }
         do {
-            return enqueueJourneyStateCommand(try .list(
-                operation: operation,
-                path: path,
-                payload: payload,
-                instanceID: instanceId,
-                defaultViewModelName: journeyScreen(for: targetScreenId)?.defaultViewModelName
-            ), screenID: targetScreenId)
+            return try enqueueJourneyStateCommand(screenID: targetScreenId) { row in
+                try .list(
+                    operation: operation,
+                    path: path,
+                    payload: payload,
+                    instanceID: instanceId,
+                    defaultViewModelName: row?.defaultViewModelName
+                )
+            }
         } catch {
             logRejectedState(error)
             return false
@@ -908,16 +912,21 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        guard targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!),
-              let viewModelName = path.viewModelName ?? journeyScreen(for: targetScreenId)?.defaultViewModelName else {
+        guard targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!) else { return false }
+        do {
+            return try enqueueJourneyStateCommand(screenID: targetScreenId) { row in
+                guard let viewModelName = path.viewModelName ?? row?.defaultViewModelName else {
+                    throw ExperienceInteractiveStateCommandError.invalidValue(
+                        "Trigger path '\(path.path)' has no view-model identity"
+                    )
+                }
+                return .trigger(viewModelName: viewModelName, instanceID: instanceId,
+                    instanceName: nil, path: path.path)
+            }
+        } catch {
+            logRejectedState(error)
             return false
         }
-        return enqueueJourneyStateCommand(.trigger(
-            viewModelName: viewModelName,
-            instanceID: instanceId,
-            instanceName: nil,
-            path: path.path
-        ), screenID: targetScreenId)
     }
 
     func advance(delta: Double = 0) {
@@ -1163,8 +1172,15 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func enqueueJourneyStateCommand(_ command: ExperienceInteractiveStateCommand, screenID: String? = nil) -> Bool {
+        enqueueJourneyStateCommand(screenID: screenID) { _ in command }
+    }
+
+    private func enqueueJourneyStateCommand(
+        screenID: String?,
+        commandForScreen: (JourneyScreen?) throws -> ExperienceInteractiveStateCommand
+    ) rethrows -> Bool {
         if !isLayerController {
-            guard let filtered = command.suppressingLifecycleReservedJourneyWrites(
+            guard let filtered = try commandForScreen(journeyScreen).suppressingLifecycleReservedJourneyWrites(
                 rootViewModelName: journeyScreen?.defaultViewModelName,
                 rootInstanceID: journeyScreen?.defaultInstanceId) else { return true }
             return enqueueStateCommand(filtered)
@@ -1173,7 +1189,7 @@ final class ExperienceScreenViewController: UIViewController {
         var accepted = false
         for id in ids {
             let row = journeyScreen(for: id)
-            guard let filtered = command.suppressingLifecycleReservedJourneyWrites(
+            guard let filtered = try commandForScreen(row).suppressingLifecycleReservedJourneyWrites(
                 rootViewModelName: row?.defaultViewModelName, rootInstanceID: row?.defaultInstanceId) else {
                 accepted = true
                 continue

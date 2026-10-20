@@ -9,18 +9,18 @@ final class ExperienceLayerStepTests: XCTestCase {
                 let probe = LayerStepProbe()
                 try await probe.run(style: style, back: back)
                 XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "register:B:enter",
-                    "insert:\(style == .push && back ? 0 : 1)", "phases:A=exiting,B=entering:pair",
+                    "insert:1", "phases:A=exiting,B=entering:pair",
                     "present", "wait:2:700", "remove", "phases:A=hidden,B=active:",
                     "hidden", "active", "input:true"])
             }
         }
     }
 
-    func testCutRunsDeclaredExitBeforeSwapAndIncomingHalfAfterSwap() async throws {
+    func testCutRunsPublishedHalvesSequentiallyInsteadOfTheDeclaredExit() async throws {
         let probe = LayerStepProbe()
         try await probe.run(style: .none)
-        XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:declared-exit",
-            "phases:A=exiting:", "present", "wait:1:350", "insert:1", "remove",
+        XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit",
+            "phases:A=exiting:pair", "present", "wait:1:700", "insert:1", "remove",
             "register:B:enter", "phases:B=entering:pair", "present", "wait:1:700",
             "phases:A=hidden,B=active:", "hidden", "active", "input:true"])
     }
@@ -36,8 +36,54 @@ final class ExperienceLayerStepTests: XCTestCase {
     func testReducedMotionChangesEveryPhaseWithoutWaitingOrPresentingBetweenHalves() async throws {
         let probe = LayerStepProbe()
         try await probe.run(style: .magicMove, reduced: true)
-        XCTAssertEqual(probe.order, ["input:false", "prepare", "phases:A=exiting:", "insert:1", "remove",
+        XCTAssertEqual(probe.order, ["input:false", "prepare", "phases:A=exiting:pair", "insert:1", "remove",
             "phases:B=entering:pair", "phases:A=hidden,B=active:", "hidden", "active", "input:true"])
+    }
+
+    func testPublishedRowOrderWinsOverStyleInBothDirectionsIncludingCuts() async throws {
+        for forwardOnTop in [false, true] {
+            for reverseOnTop: Bool? in [nil, false, true] {
+                let declaration = NativeExperienceTransition(id: "pair", kind: .layer,
+                    sourceScreenId: "A", destinationScreenId: "B", durationMs: 450,
+                    incomingOnTop: forwardOnTop, source: .init(completeEventName: "exit"),
+                    destination: .init(completeEventName: "enter"),
+                    reverse: .init(durationMs: nil, incomingOnTop: reverseOnTop,
+                        source: .init(completeEventName: "reverse-exit"),
+                        destination: .init(completeEventName: "reverse-enter")))
+                for back in [false, true] {
+                    let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: "pair",
+                        sourceScreenId: back ? "B" : "A", destinationScreenId: back ? "A" : "B",
+                        declarations: [declaration]))
+                    let onTop = back ? reverseOnTop ?? forwardOnTop : forwardOnTop
+                    for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .push, .fade, .none] {
+                        let probe = LayerStepProbe()
+                        try await probe.run(style: style, back: back, plan: plan)
+                        XCTAssertEqual(probe.order.filter { $0.hasPrefix("insert:") },
+                            ["insert:\(onTop ? 1 : 0)"], "\(style), back=\(back), plan=\(plan)")
+                    }
+                }
+            }
+        }
+    }
+
+    func testWithoutAPublishedPlanOnlyPushBackInsertsBelow() async throws {
+        for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .push, .fade, .none] {
+            for back in [false, true] {
+                let probe = LayerStepProbe()
+                try await probe.run(style: style, back: back, plan: nil)
+                XCTAssertEqual(probe.order.filter { $0.hasPrefix("insert:") },
+                    ["insert:\(style == .push && back ? 0 : 1)"])
+            }
+        }
+    }
+
+    func testPublishedCutWithoutADeclaredExitStillWaitsForItsOutgoingHalf() async throws {
+        let probe = LayerStepProbe()
+        try await ExperienceLayerStep.perform(source: "A", target: "B", style: .none,
+            isBack: false, plan: LayerStepProbe.plan, exit: .init(declaration: nil, reduceMotion: false),
+            reduceMotion: false, operations: probe.operations)
+        XCTAssertEqual(Array(probe.order.prefix(7)), ["input:false", "prepare", "register:A:exit",
+            "phases:A=exiting:pair", "present", "wait:1:700", "insert:1"])
     }
 
     func testSelfNavigationDoesNothing() async throws {
@@ -83,7 +129,7 @@ final class ExperienceLayerStepTests: XCTestCase {
             "hidden", "active", "input:true"])
     }
 
-    func testHistoryKeepsTheActualForwardPairAndSkippingBackHasNoPair() {
+    func testHistoryKeepsTheActualForwardPairAndSkippingBackHasNoPair() async throws {
         var history = ExperienceLayerHistory(root: "A")
         history.visit("B", transition: .init(kind: .push, transitionId: "route-one"))
         history.visit("C", transition: .init(kind: .fade, transitionId: "route-two"))
@@ -91,12 +137,16 @@ final class ExperienceLayerStepTests: XCTestCase {
         XCTAssertNil(history.backTransition(steps: 2).transitionId)
         let skip = NativeExperienceTransition(id: "skip", kind: .layer, sourceScreenId: "A", destinationScreenId: "C",
             durationMs: 400, incomingOnTop: true, source: .init(completeEventName: "leave"),
-            destination: .init(completeEventName: "arrive"), reverse: .init(durationMs: nil, incomingOnTop: nil,
+            destination: .init(completeEventName: "arrive"), reverse: .init(durationMs: nil, incomingOnTop: false,
                 source: .init(completeEventName: "return-leave"), destination: .init(completeEventName: "return-arrive")))
         let skipped = history.backTransition(steps: 2, target: "A", declarations: [skip])
         XCTAssertEqual(skipped.transitionId, "skip")
-        XCTAssertNotNil(ExperienceScreenCustomTransitionPlan.resolve(transitionId: "skip", sourceScreenId: "C",
+        XCTAssertEqual(skipped.kind, .magicMove, "Skipping Back uses the published default pair")
+        let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: "skip", sourceScreenId: "C",
             destinationScreenId: "A", declarations: [skip]))
+        let probe = LayerStepProbe()
+        try await probe.run(style: skipped.kind, back: true, plan: plan)
+        XCTAssertTrue(probe.order.contains("insert:0"))
         history.visit("A", transition: .none)
         XCTAssertEqual(history.screenIDs, ["A"])
         history.visit("B", transition: .init(kind: .magicMove, transitionId: "route-three"))
