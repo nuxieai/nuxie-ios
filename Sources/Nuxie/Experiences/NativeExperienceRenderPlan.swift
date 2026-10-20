@@ -95,6 +95,7 @@ struct NativeExperienceTransition: Equatable, Sendable {
     }
     let id: String
     var kind: Kind = .choreographed
+    var isDefaultPair: Bool = false
     let sourceScreenId: String
     let destinationScreenId: String
     let durationMs: Int

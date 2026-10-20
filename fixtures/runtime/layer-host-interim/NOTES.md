@@ -30,6 +30,10 @@ Screen path. This does not qualify the publisher's current action generation.
 
 format-cases.json pins the provisional release grammar across SDKs. Published
 magic-move requires a transitionId. push, fade and none keep it optional.
+The interim render.transitions[].defaultPair marker is an optional boolean.
+Only true identifies a compiler default pair for a skipping Back; absent or
+false declarations remain route-specific. Null and other types are refused.
+UNIV-5113 will supply the final field name.
 
 Stage 2 restores the stage 1 plain-Node layout. Filling the root is UNIV-5113's
 publisher-layout responsibility. testMountedRowsFillResizedRoot is a strict
