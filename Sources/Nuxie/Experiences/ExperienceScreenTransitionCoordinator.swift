@@ -712,7 +712,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             try await targetController.configurePresentationHeight(.init(kind: .fullscreen),
                 target: sourceLayer, availableSize: sourceLayer.view.bounds.size)
         }
-        if case .custom(let transitionId) = spec.kind,
+        if let transitionId = spec.transitionId,
            let sourceController,
            sourceController !== targetController,
            let plan = ExperienceScreenCustomTransitionPlan.resolve(
@@ -818,7 +818,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             } else {
                 try replaceTop(with: screenId, completion: completion)
             }
-        case .custom:
+        case .custom, .magicMove:
             // A custom spec reaches this switch only when its signed manifest
             // declaration did not match the active navigation edge.
             try replaceTop(with: screenId, completion: completion)
@@ -1292,7 +1292,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         switch spec.kind {
         case .fade:
             nextController.view.alpha = 0
-        case .none, .push, .modal, .custom:
+        case .none, .push, .modal, .custom, .magicMove:
             break
         }
 
@@ -1307,7 +1307,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             switch spec.kind {
             case .fade:
                 currentView.alpha = 0
-            case .none, .push, .modal, .custom:
+            case .none, .push, .modal, .custom, .magicMove:
                 break
             }
         } completion: { [weak self, weak nextController] _ in

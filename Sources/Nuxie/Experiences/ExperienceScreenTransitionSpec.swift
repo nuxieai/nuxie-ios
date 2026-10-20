@@ -6,9 +6,10 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
         case push
         case modal
         case fade
+        case magicMove
         case custom(transitionId: String)
 
-        static let allCases: [Kind] = [.none, .push, .modal, .fade]
+        static let allCases: [Kind] = [.none, .push, .modal, .fade, .magicMove]
 
         var rawValue: String {
             switch self {
@@ -16,12 +17,14 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
             case .push: "push"
             case .modal: "modal"
             case .fade: "fade"
+            case .magicMove: "magic-move"
             case .custom: "custom"
             }
         }
     }
 
     let kind: Kind
+    let transitionId: String?
     let presentation: ExperienceLayerPresentation
     private let presentationIsSupported: Bool
     var isAvailable: Bool { presentationIsSupported }
@@ -30,7 +33,7 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
         switch kind {
         case .none:
             return false
-        case .push, .modal, .fade, .custom:
+        case .push, .modal, .fade, .magicMove, .custom:
             return true
         }
     }
@@ -45,8 +48,10 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
 
     static let none = ExperienceScreenTransitionSpec(kind: .none)
 
-    init(kind: Kind, presentation: ExperienceLayerPresentation = .modalDefault, presentationIsSupported: Bool = true) {
+    init(kind: Kind, presentation: ExperienceLayerPresentation = .modalDefault, presentationIsSupported: Bool = true, transitionId: String? = nil) {
         self.kind = kind
+        if case .custom(let id) = kind { self.transitionId = id }
+        else { self.transitionId = transitionId }
         self.presentation = presentation
         self.presentationIsSupported = presentationIsSupported
     }
@@ -63,7 +68,9 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
             height: (record["height"] as? String).flatMap(ExperienceLayerPresentation.Height.init(rawValue:)) ?? .large,
             closedBy: (record["closedby"] as? String).flatMap(ExperienceLayerPresentation.ClosedBy.init(rawValue:)) ?? .any
         ) : .modalDefault, presentationIsSupported: kind != .modal || record["present"] == nil
-            || (record["present"] as? String).flatMap(ExperienceLayerPresentation.Kind.init(rawValue:)) != nil)
+            || (record["present"] as? String).flatMap(ExperienceLayerPresentation.Kind.init(rawValue:)) != nil, transitionId: (record["transitionId"] as? String).flatMap {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+            })
     }
 
     private static func transitionRecord(from raw: Any?) -> [String: Any]? {
@@ -84,14 +91,15 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
             return .modal
         case "fade":
             return .fade
-        case "custom":
+        case "magic-move", "custom":
             guard
                 let rawTransitionId = record["transitionId"] as? String,
                 !rawTransitionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
                 return .none
             }
-            return .custom(transitionId: rawTransitionId)
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "magic-move"
+                ? .magicMove : .custom(transitionId: rawTransitionId)
         default:
             // Unknown kinds fall back to an instant transition.
             return .none

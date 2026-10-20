@@ -19,6 +19,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
     let identity: Identity
     let scene: Scene
     let entry: Entry
+    let layerHost: NativeExperienceLayerHost?
     let screens: [NativeExperienceScreen]
     let transitions: [NativeExperienceTransition]
     let textInputs: [NativeExperienceTextInput]
@@ -31,6 +32,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
 
     init(
         identity: Identity, scene: Scene, entry: Entry,
+        layerHost: NativeExperienceLayerHost? = nil,
         screens: [NativeExperienceScreen], transitions: [NativeExperienceTransition],
         textInputs: [NativeExperienceTextInput], images: [NativeExperienceImageAsset],
         fonts: [NativeExperienceFontAsset], videos: [NativeExperienceVideoAsset] = [], videoElements: [NativeExperienceVideoElement] = [], systemFonts: [NativeExperienceSystemFontRequirement] = []
@@ -38,6 +40,7 @@ struct NativeExperienceRenderPlan: Equatable, Sendable {
         self.identity = identity
         self.scene = scene
         self.entry = entry
+        self.layerHost = layerHost
         self.screens = screens
         self.transitions = transitions
         self.textInputs = textInputs
@@ -82,6 +85,7 @@ struct NativeExperienceScreenExit: Equatable, Sendable {
 }
 
 struct NativeExperienceTransition: Equatable, Sendable {
+    enum Kind: Equatable, Sendable { case choreographed, layer }
     struct Endpoint: Equatable, Sendable { let completeEventName: String }
     struct Reverse: Equatable, Sendable {
         let durationMs: Int?
@@ -90,6 +94,7 @@ struct NativeExperienceTransition: Equatable, Sendable {
         let destination: Endpoint
     }
     let id: String
+    var kind: Kind = .choreographed
     let sourceScreenId: String
     let destinationScreenId: String
     let durationMs: Int
