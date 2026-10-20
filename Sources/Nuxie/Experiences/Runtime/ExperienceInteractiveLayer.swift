@@ -5,7 +5,7 @@ import NuxieRuntime
 /// One presentation layer's clock and list. Screen bindings and routing remain
 /// on ExperienceInteractiveScreen, rooted at each retained row instance.
 actor ExperienceInteractiveLayer {
-    struct Step: Sendable {
+    struct Step: Equatable, Sendable {
         let native: NuxieNativePlayerStepResult
         let rows: [String: ExperienceInteractiveStepResult]
         let unattributedEvents: [NuxieNativeEvent]
@@ -187,7 +187,12 @@ actor ExperienceInteractiveLayer {
                     guard let self else { throw CancellationError() }
                     let step = try await self.step(pointers: pointers, focusInputs: focus,
                         elapsedSeconds: elapsed, correlationID: correlation, capturesTextLayout: capturesText)
-                    guard let result = step.rows[screenID] else { throw CancellationError() }
+                    // A retained row can finish a save after leaving the mounted list.
+                    var result = step.rows[screenID] ?? ExperienceInteractiveStepResult(
+                        keepGoing: step.native.keepGoing || step.rows.values.contains { $0.keepGoing },
+                        pointerHits: step.rows.values.first?.pointerHits ?? [],
+                        focusState: step.native.focusState, effects: [])
+                    result.layerStep = step
                     return result
                 }
                 rows[screenID] = Row(screen: screen, reference: reference, binding: binding,
@@ -353,6 +358,7 @@ actor ExperienceInteractiveLayer {
         let frame = try await runtime.stepWithSnapshot(pointers: pointers, focusInputs: focusInputs, elapsedSeconds: elapsedSeconds,
             correlationID: correlationID)
         layoutBounds.update(size: try await runtime.layoutSize())
+        try await videoPlayback?.resizeViewport(bounds: artboardBounds)
         let videoActive = try await videoPlayback?.tick() ?? false
         guard let snapshot = frame.snapshot else {
             throw ExperienceInteractiveScreenError.stateContract("Layer step requires an event-source snapshot")

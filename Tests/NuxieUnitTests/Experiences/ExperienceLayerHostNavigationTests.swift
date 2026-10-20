@@ -122,6 +122,55 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
         }
     }
 
+    func testRowInitiatedStepDeliversBothTransitionHalvesExactlyOnce() async throws {
+        try await checkRowInitiatedStep(removingRequester: false)
+    }
+
+    func testRemovedRowsLateStepStillDeliversTheMountedRowsEffects() async throws {
+        try await checkRowInitiatedStep(removingRequester: true)
+    }
+
+    private func checkRowInitiatedStep(removingRequester: Bool) async throws {
+        try await withCoordinator { _, controller, probe, _ in
+            let layer = try XCTUnwrap(controller.interactiveLayer)
+            try await controller.prepareLayerRow(screenID: "screen_2", products: [])
+            let requester = try await layer.binding(screenID: "screen_1")
+            let loop = try XCTUnwrap(Mirror(reflecting: controller).children
+                .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+            var delivered: [String: [String]] = [:]
+            controller.onLayerStep = { step in
+                for (id, row) in step.rows {
+                    for effect in row.effects {
+                        if case .reportedEvent(let event) = effect.kind {
+                            delivered[id, default: []].append(event.name)
+                        }
+                    }
+                }
+            }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                loop.enqueue(.init {
+                    try await layer.insert(screenID: "screen_2", at: 1)
+                    try await layer.setPhases([("screen_1", .exiting), ("screen_2", .entering)],
+                        transition: "transition.native-contract")
+                    _ = try await layer.step(elapsedSeconds: 0)
+                    if removingRequester { _ = try await layer.remove(screenID: "screen_1") }
+                    let result = try await requester.step(elapsedSeconds: 0.6)
+                    return .work(requestsFrame: false) {
+                        await controller.deliverStep(result, screenID: "screen_1")
+                    }
+                }, completion: { continuation.resume(with: $0) })
+            }
+            let incoming = "nx_enter_done:transition.native-contract"
+            XCTAssertEqual(delivered["screen_2"]?.filter { $0 == incoming }, [incoming])
+            XCTAssertEqual(probe.events.filter { $0 == "screen_2:\(incoming)" }.count, 1)
+            if !removingRequester {
+                let outgoing = "nx_exit_done:transition.native-contract"
+                XCTAssertEqual(delivered["screen_1"]?.filter { $0 == outgoing }, [outgoing])
+                XCTAssertEqual(probe.events.filter { $0 == "screen_1:\(outgoing)" }.count, 1)
+            }
+        }
+    }
+
     private func rootValue(_ name: String, in snapshot: NuxieNativeViewModelSnapshot) -> NuxieNativeViewModelValue? {
         snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == name }?.value
     }
