@@ -591,11 +591,11 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         addTeardownBlock { await observer.stopListening() }
         XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?[evidence.transactionId]?.backendSyncedAt)
         // The previous backend grant is absent, but StoreKit still verifies ownership.
-        let before = await features.getCached(featureId: "feature-1", entityId: nil)
+        let before = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertNotEqual(before?.allowed, true)
         _ = try await service.restore()
         XCTAssertEqual(api.calls, 1)
-        let refreshed = await features.getCached(featureId: "feature-1", entityId: nil)
+        let refreshed = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(refreshed?.allowed, true)
         // Another ordinary restore also refreshes after the in-memory sync marker exists.
         await features.clearCache()
@@ -607,7 +607,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         ])
         XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 0)
         XCTAssertEqual(sink.routedCaptureCount, 0)
-        let refreshedAgain = await features.getCached(featureId: "feature-1", entityId: nil)
+        let refreshedAgain = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(refreshedAgain?.allowed, true)
         XCTAssertTrue(adapter.purchasedProducts.isEmpty)
         XCTAssertEqual(adapter.restoreCallCount, 2)
@@ -617,7 +617,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await features.handleUserChange(from: "restore-owner", to: "another-owner")
         _ = try await service.restore()
         XCTAssertEqual(api.calls, 2, "Cached completion must not authorize another customer's receipt refresh")
-        let otherOwnerAccess = await features.getCached(featureId: "feature-1", entityId: nil)
+        let otherOwnerAccess = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertNotEqual(otherOwnerAccess?.allowed, true)
         XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
     }
@@ -634,7 +634,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         product.purchaseContext = commercialContext()
         _ = try await harness.service.purchase(product)
         XCTAssertEqual(api.requests, [.init(jwt: "current-jws-1", distinctId: "restore-owner")])
-        let feature = await harness.features.getCached(featureId: "feature-1", entityId: nil)
+        let feature = await harness.features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(feature?.allowed, true)
         XCTAssertEqual(harness.adapter.purchasedProducts.count, 1)
         XCTAssertEqual(harness.sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 0)
