@@ -1972,11 +1972,14 @@ actor ExperienceInteractiveScreen {
         )
     }
 
-    func confirmResponseSave(trigger: String) async throws -> ExperienceInteractiveStepResult {
+    /// Fires a confirmed save's continuation in a step of its own, with the
+    /// values the save kept for it written back first.
+    func confirmResponseSave(trigger: String, kept: [ExperienceRunSnapshot.Field])
+        async throws -> ExperienceInteractiveStepResult {
         guard !trigger.isEmpty else {
             throw ExperienceInteractiveScreenError.stateContract("Missing response save continuation")
         }
-        return try await step(elapsedSeconds: 0, confirmedResponseSaveTrigger: trigger)
+        return try await step(elapsedSeconds: 0, confirmedResponseSave: (trigger, kept))
     }
 
     func environmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
@@ -2014,16 +2017,17 @@ actor ExperienceInteractiveScreen {
         elapsedSeconds: Float,
         correlationID: UInt64 = 0,
         capturesTextLayout: Bool = false,
-        confirmedResponseSaveTrigger: String? = nil
+        confirmedResponseSave: (trigger: String, kept: [ExperienceRunSnapshot.Field])? = nil
     ) async throws -> ExperienceInteractiveStepResult {
         let nativeInputs = inputs.map(Self.nativeInput)
         let nativePointers = pointers.map(Self.nativePointer)
         let runtime = runtime
         return try await operationGate.withLock { [self] in
             if let failure = await takeDeferredMeasurementFailure() { throw failure }
-            if let trigger = confirmedResponseSaveTrigger {
+            if let confirmed = confirmedResponseSave {
                 let root = try await runtime.rootViewModelReference()
-                _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
+                let restored = try ExperienceRunSnapshot(fields: confirmed.kept).mutations(for: root)
+                _ = try await runtime.mutateViewModel(restored + [.fireTrigger(instance: root, path: confirmed.trigger)])
                 contentMeasurement.invalidate()
             }
             let frame = try await runtime.stepWithSnapshot(

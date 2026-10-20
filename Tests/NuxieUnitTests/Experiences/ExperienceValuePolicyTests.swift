@@ -196,6 +196,7 @@ final class ExperienceValuePolicyTests: XCTestCase {
         XCTAssertEqual(captured.form, "feedback")
         XCTAssertEqual(captured.awaitTrigger, "state/save:one:click:0")
         XCTAssertEqual(captured.answers, ["stars": .number(4)])
+        XCTAssertEqual(captured.kept, [], "A save keeps only the values it names")
         let script = try XCTUnwrap(ExperienceResponseSaveRequest.capture(
             .hostCommand(name: "$nuxie.response.save", payload: .object([fields[0]])),
             snapshot: snapshot, catalog: native.catalog, policy: release.valuePolicy))
@@ -204,9 +205,15 @@ final class ExperienceValuePolicyTests: XCTestCase {
             snapshot: snapshot, catalog: native.catalog, policy: release.valuePolicy))
         XCTAssertNil(script.awaitTrigger)
         XCTAssertEqual(script.answers, captured.answers)
+        // A kept value lives in the screen's state and needs an await to keep it for.
+        let keep = { (path: String) in ExperienceInteractiveField(key: "keep:stars", value: .bytes(Data(path.utf8))) }
         for invalid in [[fields[0], fields[0]], [.init(key: "form", value: .number(1))],
                         [.init(key: "form", value: .string("missing"))],
-                        [fields[0], .init(key: "awaitTrigger", value: .string(""))]] {
+                        [fields[0], .init(key: "awaitTrigger", value: .string(""))],
+                        [fields[0], fields[1], keep("responses:feedback/stars")],
+                        [fields[0], fields[1], keep("state/await:one/stars")],
+                        [fields[0], fields[1], keep("state/await:absent:stars")],
+                        [fields[0], keep("state/await:one:click:0:stars")]] {
             XCTAssertThrowsError(try ExperienceResponseSaveRequest.capture(
                 .hostCommand(name: "$nuxie.response.save", payload: .object(invalid)),
                 snapshot: snapshot, catalog: native.catalog, policy: release.valuePolicy))

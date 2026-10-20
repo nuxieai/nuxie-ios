@@ -243,7 +243,7 @@ final class JourneyReleaseTests: XCTestCase {
             let idle = try await screen.step(elapsedSeconds: 0)
             XCTAssertEqual(sentCount(idle.effects), 0)
         }
-        let confirmed = try await screen.confirmResponseSave(trigger: XCTUnwrap(request.awaitTrigger))
+        let confirmed = try await screen.confirmResponseSave(trigger: XCTUnwrap(request.awaitTrigger), kept: request.kept)
         var sent = sentCount(confirmed.effects)
         for _ in 0..<3 {
             let next = try await screen.step(elapsedSeconds: 0)

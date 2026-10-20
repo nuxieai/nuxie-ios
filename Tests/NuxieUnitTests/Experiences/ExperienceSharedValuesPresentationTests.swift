@@ -333,6 +333,80 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         }
     }
 
+    /// The SDKs' await-values fixture, the parent's `tools/sdk-fixtures/await-values`,
+    /// played through the real Journey (spec decision 120,
+    /// [UNIV-5209](https://universe.basis.dev/issue/UNIV-5209)): the rater's
+    /// handler sets the form's answer, awaits its save, then emits the call's
+    /// values. Two calls before the first save is confirmed each go on with their
+    /// own values: each save keeps them, and its confirmation writes them back
+    /// before it fires the save's trigger. The points come from the fixture's CSS
+    /// (`AWAIT_VALUES_POINTS` in the parent's bridge).
+    func testTwoQuickCallsEachGoOnWithTheirOwnValuesAfterTheirSaves() async throws {
+        let fixture = try await signedFixture(kind: .awaitValues)
+        let started = [expectation(description: "first save sent"), expectation(description: "second save sent")]
+        let transport = FormSaveTestTransport(started: started)
+        try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
+            let screen = try await waitForScreen("rate", presentations: presentations)
+            let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
+            let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
+                $0.label == "interactiveScreen"
+            }?.value as? ExperienceInteractiveScreen)
+            let transform = try XCTUnwrap(ExperienceLayoutTransform(
+                artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
+            let observer = try XCTUnwrap(surface.runtimeObserver)
+            func rated() -> [NuxieEvent] { events.routedEvents.filter { $0.name == "rated" } }
+            @MainActor func tap(y: CGFloat) {
+                let point = transform.viewportRect(fromArtboard: CGRect(x: 195, y: y, width: 0, height: 0)).origin
+                let pointer = NSObject()
+                let now = ProcessInfo.processInfo.systemUptime
+                // The same platform pointer seam as touchesBegan/touchesEnded.
+                observer.runtimeSurfaceViewDidReceivePointerEvents([
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .down, location: point, timestampSeconds: now),
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .up, location: point, timestampSeconds: now + 0.01),
+                ])
+            }
+            // Tap only once the buttons take the pointer: a press and an exit
+            // find the hit without calling the action.
+            var ready = false
+            for _ in 0..<200 where !ready {
+                let down = try await interactive.step(pointers: [.init(kind: .down, x: 195, y: 48)], elapsedSeconds: 0)
+                let exit = try await interactive.step(pointers: [.init(kind: .exit, x: 195, y: 48)], elapsedSeconds: 0)
+                XCTAssertTrue((down.effects + exit.effects).allSatisfy { $0.responseSave == nil }, "A probe saves nothing")
+                ready = down.pointerHits.contains { $0 != .none }
+                if !ready { try await Task.sleep(nanoseconds: 25_000_000) }
+            }
+            XCTAssertTrue(ready, "Rate four takes the pointer")
+            tap(y: 48)
+            await fulfillment(of: [started[0]], timeout: 5)
+            tap(y: 104)
+            await fulfillment(of: [started[1]], timeout: 5)
+            let saves = await transport.requests()
+            XCTAssertEqual(saves.map(\.answers), [["stars": .number(4)], ["stars": .number(2)]])
+            XCTAssertTrue(rated().isEmpty, "What follows each await waits for its save")
+            func value(_ event: NuxieEvent, _ key: String) -> AnyHashable? {
+                switch event.properties[key] {
+                case let text as String: text
+                case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID(): number.doubleValue
+                case let flag as Bool: flag
+                default: nil
+                }
+            }
+            let expected: [[String: AnyHashable]] = [
+                ["stars": 4.0, "mood": "glad", "word": "four", "liked": true],
+                ["stars": 2.0, "mood": "calm", "word": "two", "liked": false],
+            ]
+            for (index, save) in saves.enumerated() {
+                await transport.release(sequence: save.sequence, code: .saved)
+                for _ in 0..<200 where rated().count == index { try await Task.sleep(nanoseconds: 25_000_000) }
+                XCTAssertEqual(rated().count, index + 1, "Save \(index + 1)'s confirmation goes on")
+                guard let event = rated().last else { continue }
+                for (key, wanted) in expected[index] {
+                    XCTAssertEqual(value(event, key), wanted, "call \(index + 1) rated.\(key)")
+                }
+            }
+        }
+    }
+
     func testPublishedEnvironmentReceivesHostInsetsAndMotionBeforeAndAfterMount() async throws {
         let fixture = try await signedFixture(kind: .publishedRunValues)
         try await withPresentation(fixture: fixture) { presentations, _, _ in
@@ -632,7 +706,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let supported: JourneyReleaseSupportedRuntime
     }
 
-    private enum FixtureKind { case sharedValues, publishedRunValues, publishedForms, emitValues }
+    private enum FixtureKind { case sharedValues, publishedRunValues, publishedForms, emitValues, awaitValues }
 
     private func signedFixture(kind: FixtureKind = .sharedValues, formsScreen: String = "feedback", formsEvent: String = "sent", publishedFormRoutes: Bool = false) async throws -> Fixture {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -644,6 +718,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let directory = kind == .sharedValues ? SharedValuesFixture.directory : kind == .publishedForms
             ? SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
             : kind == .emitValues ? SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("emit-values")
+            : kind == .awaitValues ? SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("await-values")
             : PublishedRunValuesFixture.directory
         let forms = kind == .publishedForms ? try XCTUnwrap(JSONSerialization.jsonObject(with:
             Data(contentsOf: directory.appendingPathComponent("release.json"))) as? [String: Any]) : nil
@@ -652,6 +727,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let names: [String]
         if kind == .sharedValues { names = ["first", "long", "short"] }
         else if kind == .emitValues { names = ["emits"] }
+        else if kind == .awaitValues { names = ["rate"] }
         else if let forms {
             names = try XCTUnwrap(XCTUnwrap(forms["leg"] as? [String: Any])["screens"] as? [[String: Any]]).map { try XCTUnwrap($0["id"] as? String) }
         } else { names = try PublishedRunValuesFixture.expectations().screens }
@@ -662,7 +738,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         leg["entryStepId"] = "present"
         leg["steps"] = [["kind": "action", "id": "present", "action": ["type": "navigate", "screenId": entryScreen], "outlets": [:]]]
         leg["screens"] = names.map { ["id": $0, "defaultViewModelName": "Runtime \($0) scr_screens_s\($0)", "defaultInstanceId": "\($0)-root", "responseCaptures": []] as [String: Any] }
-        if kind == .emitValues {
+        if kind == .emitValues || kind == .awaitValues {
             // The publish_folder publisher names the root model by its artboard.
             leg["screens"] = names.map { ["id": $0, "defaultViewModelName": "vm_runtime_root_scr_screens_s\($0)",
                 "defaultInstanceId": "vmi_runtime_scr_screens_s\($0)", "responseCaptures": []] as [String: Any] }
@@ -685,6 +761,11 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         if kind == .emitValues {
             // The release declares the Experience's list as its publisher does.
             descriptor["state"] = ["goals": ["type": "list", "items": ["title": ["type": "string"]]]]
+        }
+        if kind == .awaitValues {
+            // The release declares the form as its publisher reported it.
+            let policy = try XCTUnwrap(provenance["valuePolicy"] as? [String: Any])
+            for name in ["state", "responses", "ruleGroups"] { descriptor[name] = policy[name] }
         }
         if let forms {
             leg["screens"] = try XCTUnwrap(forms["leg"] as? [String: Any])["screens"]
