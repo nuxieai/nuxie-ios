@@ -1142,9 +1142,10 @@ extension JourneyService {
         }
     }
 
-    /// Ends a refetch's hold. While the customer is still current their held
-    /// events replay inline, so a waiting Journey takes them before any of
-    /// its deadlines is resolved. A newer hold keeps them for its owner.
+    /// Ends a refetch's hold. While the customer is still current, this
+    /// returns once their held events have been handled, so a waiting
+    /// Journey takes them before any of its deadlines is resolved. A newer
+    /// hold keeps them for its owner.
     private func releaseRefetchRouting(for distinctId: String) async {
         guard let held = refetchRoutingDeferral,
               held.distinctId == distinctId else { return }
@@ -1155,10 +1156,7 @@ extension JourneyService {
             return
         }
         refetchReplaysInFlight[distinctId, default: 0] += 1
-        _ = await events.replayPendingStableRoutes(
-            distinctId: distinctId,
-            ifGeneration: held.generation
-        )
+        await events.releaseCommittedRouting(ifGeneration: held.generation)
         let replays = (refetchReplaysInFlight[distinctId] ?? 1) - 1
         refetchReplaysInFlight[distinctId] = replays > 0 ? replays : nil
     }
