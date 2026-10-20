@@ -83,6 +83,7 @@ private enum RouteCommand: Sendable {
     completion: CheckedContinuation<Bool, Never>?
   )
   case resumeAfterRecovery(generation: UInt64)
+  case releaseHold(generation: UInt64, completion: CheckedContinuation<Bool, Never>)
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
   case undurable(RoutedCommittedEvent)
@@ -342,12 +343,11 @@ protocol EventLogProtocol:
   @discardableResult
   func deferCommittedRouting() async -> UInt64
   func resumeCommittedRouting(ifGeneration: UInt64) async
-  /// `replayPendingStableRoutes(distinctId:)` for the owner of one hold: it
-  /// releases routing only while `generation` still holds it, and returns
-  /// once the routes it held have reached their subscribers. A newer hold
-  /// keeps routing for its own owner.
+  /// `resumeCommittedRouting(ifGeneration:)` that returns once the routes
+  /// the hold kept have reached their subscribers. A newer hold keeps
+  /// routing for its own owner, and then this returns false at once.
   @discardableResult
-  func replayPendingStableRoutes(distinctId: String, ifGeneration: UInt64) async -> Bool
+  func releaseCommittedRouting(ifGeneration: UInt64) async -> Bool
 
   func firstPendingStableRouteEventId(distinctId: String) async throws -> String?
 
@@ -465,9 +465,9 @@ extension EventLogProtocol {
   func deferCommittedRouting() async -> UInt64 { 0 }
   func resumeCommittedRouting(ifGeneration: UInt64) async {}
   @discardableResult
-  func replayPendingStableRoutes(distinctId: String, ifGeneration: UInt64) async -> Bool {
-    _ = ifGeneration
-    return await replayPendingStableRoutes(distinctId: distinctId)
+  func releaseCommittedRouting(ifGeneration generation: UInt64) async -> Bool {
+    await resumeCommittedRouting(ifGeneration: generation)
+    return true
   }
 
   func subscribeCommitted(handler: @escaping CommittedEventHandler) async {
@@ -1433,6 +1433,23 @@ actor EventLog: EventLogProtocol {
     routeContinuation.yield(.resumeAfterRecovery(generation: generation))
   }
 
+  @discardableResult
+  func releaseCommittedRouting(ifGeneration generation: UInt64) async -> Bool {
+    guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+    // A subscriber cannot wait for the worker it runs on.
+    guard !Self.isOnCommittedRouteWorker else {
+      routeContinuation.yield(.resumeAfterRecovery(generation: generation))
+      return false
+    }
+    return await withCheckedContinuation { completion in
+      if case .terminated = routeContinuation.yield(
+        .releaseHold(generation: generation, completion: completion)
+      ) {
+        completion.resume(returning: false)
+      }
+    }
+  }
+
   private func processRoute(_ cmd: RouteCommand) async {
     switch cmd {
     case .recoverStableRoutes(let distinctId, let generation, let admissions, let completion):
@@ -1448,6 +1465,14 @@ actor EventLog: EventLogProtocol {
       let buffered = deferredRouteCommands
       deferredRouteCommands.removeAll()
       for command in buffered { await processRoute(command) }
+      return
+    case .releaseHold(let generation, let completion):
+      guard generation == routingDeferralGeneration else {
+        completion.resume(returning: false)
+        return
+      }
+      await processRoute(.resumeAfterRecovery(generation: generation))
+      completion.resume(returning: !hasFailedCommittedRoutes)
       return
     case .shutdown:
       for command in deferredRouteCommands {
@@ -1465,7 +1490,7 @@ actor EventLog: EventLogProtocol {
     case .retryFailedDeliveries:
       await retryFailedCommittedRoutes()
 
-    case .resumeAfterRecovery, .recoverStableRoutes:
+    case .resumeAfterRecovery, .recoverStableRoutes, .releaseHold:
       return
 
     case .resolved(let sequence, let resolution):
@@ -3110,20 +3135,10 @@ extension EventLog {
 
   @discardableResult
   func replayPendingStableRoutes(distinctId: String) async -> Bool {
-    await replayPendingStableRoutes(distinctId: distinctId, holdGeneration: nil)
-  }
-
-  @discardableResult
-  func replayPendingStableRoutes(distinctId: String, ifGeneration generation: UInt64) async -> Bool {
-    await replayPendingStableRoutes(distinctId: distinctId, holdGeneration: generation)
-  }
-
-  private func replayPendingStableRoutes(distinctId: String, holdGeneration: UInt64?) async -> Bool {
     guard !closeFlag.isClosed else { return false }
     await ready.wait()
     guard !closeFlag.isClosed else { return false }
     let generation = routingDeferralGeneration
-    guard holdGeneration.map({ $0 == generation }) ?? true else { return false }
     let admissions = committedAdmissionRegistry.capture()
     guard !Self.isOnCommittedRouteWorker else {
       routeContinuation.yield(.recoverStableRoutes(

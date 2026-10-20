@@ -57,6 +57,45 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         await log.close()
     }
 
+    /// The owner of a hold gets control back only once what the hold kept
+    /// has reached the subscriber, after an earlier refused route is retried
+    /// first. Releasing an older hold releases nothing.
+    func testReleasingAHoldReturnsOnceWhatItKeptIsDelivered() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+            apiClient: MockNuxieApi(), store: MockEventStore())
+        let configuration = NuxieConfiguration(apiKey: "test-api-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        let accepting = RecoveryAdmission()
+        let received = RecoveredRouteRecorder()
+        let reservation = log.reserveCommittedAdmission { 1 }
+        await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
+            guard accepting.value == 2 else { return false }
+            await received.append(event.name)
+            return true
+        }
+        try await log.configure(configuration: configuration)
+        log.track("refused")
+        await log.drain()
+        let older = await log.deferCommittedRouting()
+        let hold = await log.deferCommittedRouting()
+        log.track("held")
+        _ = await log.flushEvents()
+        accepting.advance()
+
+        let releasedOlder = await log.releaseCommittedRouting(ifGeneration: older)
+        XCTAssertFalse(releasedOlder)
+        let beforeRelease = await received.snapshot()
+        XCTAssertEqual(beforeRelease, [])
+
+        let released = await log.releaseCommittedRouting(ifGeneration: hold)
+        XCTAssertTrue(released)
+        let delivered = await received.snapshot()
+        XCTAssertEqual(delivered, ["refused", "held"])
+        await log.close()
+    }
+
     func testFailedSubscriberKeepsDurableBacklogOnDiskAndReplaysInCaptureOrder() async throws {
         let stores: [any EventStoreProtocol] = [MockEventStore(), SQLiteEventStore()]
         for store in stores {
