@@ -440,6 +440,33 @@ package struct NuxieNativeViewModelSnapshot: Equatable, Sendable {
     package let values: [Value]
 }
 
+extension NuxieNativeViewModelSnapshot {
+    /// Copies a reachable subgraph with its own root and rebuilt value ranges.
+    package func rooted(at root: UInt64) -> Self? {
+        let byID = Dictionary(uniqueKeysWithValues: instances.map { ($0.id, $0) })
+        guard byID[root] != nil else { return nil }
+        var found = Set<UInt64>()
+        var pending = [root]
+        var rowInstances: [Instance] = []
+        var rowValues: [Value] = []
+        while let id = pending.popLast() {
+            guard found.insert(id).inserted, let instance = byID[id] else { continue }
+            let start = rowValues.count
+            let fields = values[instance.valueRange]
+            rowValues += fields
+            rowInstances.append(.init(id: id, schemaIndex: instance.schemaIndex, valueRange: start..<rowValues.count))
+            for field in fields {
+                switch field.value {
+                case .referencedInstance(let child): pending.append(child)
+                case .list(let children): pending += children
+                default: break
+                }
+            }
+        }
+        return .init(rootInstanceID: root, instances: rowInstances, values: rowValues)
+    }
+}
+
 package struct NuxieNativeViewModelMutationResult: Equatable, Sendable {
     package let appliedCount: Int
     package let correlationID: UInt64

@@ -266,7 +266,8 @@ def test_options(args, sdk_platform):
             raise ValueError("Unsupported Xcode test flag; use --test-filter for Bazel test selection")
     if args.suite == "native-runtime" and not selectors:
         selectors = ["NuxieSDKUnitTests/" + name for name in (
-            "NuxieNativeRuntimeTests", "ExperienceInteractiveScreenTests", "ExperienceRuntimePresentationLoopTests")]
+            "NuxieNativeRuntimeTests", "ExperienceInteractiveScreenTests", "ExperienceRuntimePresentationLoopTests",
+            "ExperienceInteractiveLayerTests", "ExperienceLayerHostContractTests")]
     if selectors:
         # Xcode accepts Target/Class[/method]; xctestrunner passes the filter
         # directly to XCTest, which identifies Swift classes as Module.Class.

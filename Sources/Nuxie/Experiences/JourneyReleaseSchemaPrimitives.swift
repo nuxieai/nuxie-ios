@@ -595,7 +595,9 @@ enum JourneyReleaseSchemaPrimitives {
         let transition = try dictionary(value, path: path)
         guard let type = transition["type"] as? String else { try invalid("\(path).type") }
         switch type {
-        case "none", "push", "fade": _ = try object(transition, required: ["type"], path: path)
+        case "none", "push", "fade":
+            _ = try object(transition, required: ["type"], optional: ["transitionId"], path: path)
+            if let id = transition["transitionId"] { try identifier(id, path: "\(path).transitionId") }
         case "modal":
             _ = try object(transition, required: ["type"], optional: ["present", "height", "closedby"], path: path)
             if let value = transition["present"] {
@@ -607,7 +609,7 @@ enum JourneyReleaseSchemaPrimitives {
             if let value = transition["closedby"] {
                 try enumeration(value, values: ["any", "none"], path: "\(path).closedby")
             }
-        case "custom": _ = try object(transition, required: ["type", "transitionId"], path: path); try identifier(transition["transitionId"], path: "\(path).transitionId")
+        case "custom", "magic-move": _ = try object(transition, required: ["type", "transitionId"], path: path); try identifier(transition["transitionId"], path: "\(path).transitionId")
         default: try invalid("\(path).type")
         }
     }
@@ -861,7 +863,12 @@ enum JourneyReleaseSchemaPrimitives {
             try invalid("render.renderer")
         }
         let sceneKey = "nux"
-        let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], optional: ["videoElements"], path: "render")
+        let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], optional: ["videoElements", "layerHost"], path: "render")
+        if let value = render["layerHost"] {
+            let host = try object(value, required: ["artboardName", "list"], path: "render.layerHost")
+            try boundedString(host["artboardName"], minimum: 1, maximumUTF16: 256, path: "render.layerHost.artboardName")
+            try enumeration(host["list"], values: ["screens"], path: "render.layerHost.list")
+        }
         if let value = render["videoElements"] {
             let elements = try array(value, path: "render.videoElements")
             guard elements.count <= JourneyReleaseLimits.videoElementCount else { try invalid("render.videoElements") }
@@ -930,7 +937,7 @@ enum JourneyReleaseSchemaPrimitives {
                 path: "render.transitions[\(index)]"
             )
             try identifier(transition["id"], path: "render.transitions[\(index)].id")
-            guard transition["kind"] as? String == "choreographed" else { try invalid("render.transitions[\(index)].kind") }
+            try enumeration(transition["kind"], values: ["choreographed", "layer"], path: "render.transitions[\(index)].kind")
             for field in ["sourceScreenId", "destinationScreenId"] {
                 try identifier(transition[field], path: "render.transitions[\(index)].\(field)")
                 guard screenIDSet.contains(transition[field] as! String) else { try invalid("render.transitions[\(index)].\(field)") }

@@ -1,0 +1,15 @@
+{
+  "sourceFixture": "fixtures/journeys/rendered-custom-transition",
+  "sourceScene": "fixtures/journeys/rendered-custom-transition/renders/sha256/15764042bd3f08c014154b6f67e537be5d5da227937656e2bb4acf57629980bf.nux",
+  "sourceSHA256": "15764042bd3f08c014154b6f67e537be5d5da227937656e2bb4acf57629980bf",
+  "sourceReleaseSHA256": "e5d99944aeb31dcc7c5739f5368dfd51c61ca0b8063c57c7c5994b0c27c98a86",
+  "runtimeDefinitions": "/Users/levi/dev/nuxie-dev/.claude/worktrees/epic-driscoll-f31072/third_party/nuxie-runtime/defs",
+  "script": "/Users/levi/dev/nuxie-handoff/recreation-loop/magic-move-sdk-playback/tools/make-interim-layer-host.py",
+  "scriptSHA256": "e8f605393c33e2cc16f80d857b6fef36a91c7ea7964fa1ae9c0b9a7182753cf7",
+  "outputSHA256": "373e46e4db0786716e1d55e5271b4f368e2cf671ab56fc73263ab538a00ef0e9",
+  "outputBytes": 892421,
+  "assets": {
+    "assets/sha256/3b95bcece1f913d2c1196cff9474497a2f4c0aa1745b1cd241cde5dd2817c82d.png": "3b95bcece1f913d2c1196cff9474497a2f4c0aa1745b1cd241cde5dd2817c82d",
+    "assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf"
+  }
+}
