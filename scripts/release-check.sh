@@ -206,7 +206,7 @@ consumer_origin="${temporary}/nuxie-ios.git"
 git init --quiet --bare "${consumer_origin}"
 git -C "${consumer_origin}" symbolic-ref HEAD refs/heads/main
 git -C "${repo_root}" push --quiet --no-verify "${consumer_origin}" "${head}:refs/heads/main"
-git -C "${consumer_origin}" tag "${version}" "${head}"
+git -C "${consumer_origin}" tag --no-sign "${version}" "${head}"
 if smoke_output="$("${script_dir}/release-consumer-smoke.sh" \
     --url "file://${consumer_origin}" \
     --version "${version}" \
