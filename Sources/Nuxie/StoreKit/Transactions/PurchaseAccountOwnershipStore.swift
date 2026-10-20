@@ -24,11 +24,6 @@ protocol PurchaseAccountOwnershipStoreProtocol: Sendable {
         [String: StoredPurchaseAccountOwnership]
     >
 
-    func owner(
-        for appAccountToken: UUID,
-        scope: PurchaseStorageScope
-    ) -> String?
-
     func evidenceAuthority(
         for appAccountToken: UUID,
         productId: String,
@@ -60,20 +55,6 @@ final class PurchaseAccountOwnershipStore:
             at: base,
             withIntermediateDirectories: true
         )
-    }
-
-    func owner(
-        for appAccountToken: UUID,
-        scope: PurchaseStorageScope
-    ) -> String? {
-        lock.withLock {
-            guard case .value(let entries) = loadResultUnlocked(
-                absentValue: [:]
-            ) else { return nil }
-            let ownership = entries[appAccountToken.uuidString]
-            guard ownership?.scope == scope else { return nil }
-            return ownership?.distinctId
-        }
     }
 
     func evidenceAuthority(
@@ -172,17 +153,6 @@ final class InMemoryPurchaseAccountOwnershipStore:
 
     func load() -> StoreReadResult<[String: StoredPurchaseAccountOwnership]> {
         lock.withLock { .value(entries) }
-    }
-
-    func owner(
-        for appAccountToken: UUID,
-        scope: PurchaseStorageScope
-    ) -> String? {
-        lock.withLock {
-            let ownership = entries[appAccountToken.uuidString]
-            guard ownership?.scope == scope else { return nil }
-            return ownership?.distinctId
-        }
     }
 
     func evidenceAuthority(

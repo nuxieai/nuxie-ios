@@ -47,6 +47,23 @@ struct CommerceOutcomeCorrelation: Equatable, Sendable {
     }
 }
 
+/// Why a native Restore that found purchases restored none of them.
+enum RestoreClaimError: LocalizedError, Equatable, Sendable {
+    /// The server keeps the purchases with the account that owns them.
+    case ownedByAnotherAccount
+    /// The server has not answered; the purchases are sent again later.
+    case unconfirmed
+
+    var errorDescription: String? {
+        switch self {
+        case .ownedByAnotherAccount:
+            return "These purchases belong to another account, so they weren't restored. Sign in to that account to use them."
+        case .unconfirmed:
+            return "Your purchases couldn't be restored right now. Check your connection and try again."
+        }
+    }
+}
+
 enum PendingPurchaseOwnershipResolution: Sendable {
     case none
     case unique(PendingPurchaseRecord)
@@ -288,23 +305,6 @@ actor TransactionService {
         return pendingPurchaseStateUnreadable
     }
 
-    func purchaseAccountOwner(
-        appAccountToken: UUID?
-    ) -> StoreReadResult<String> {
-        guard let appAccountToken else { return .absent }
-        switch accountOwnershipStore.load() {
-        case .absent:
-            return .absent
-        case .unreadable:
-            return .unreadable
-        case .value(let entries):
-            let ownership = entries[appAccountToken.uuidString]
-            guard ownership?.scope == purchaseStorageScope,
-                  let distinctId = ownership?.distinctId else { return .absent }
-            return .value(distinctId)
-        }
-    }
-
     func activePurchaseEvidenceAuthority(
         productId: String
     ) async -> ActiveProductEvidenceAuthorityResolution {
@@ -446,6 +446,12 @@ actor TransactionService {
         let initiatingDistinctId = outcomeCorrelation?.distinctId
             ?? identityService?.getDistinctId()
             ?? "anonymous"
+        // Whether that customer signed in is read now, with the same identity:
+        // the server lets only a signed-in buyer take a purchase another
+        // customer owns.
+        let initiatingCustomerKind = identityService?.purchaseCustomerKind(
+            of: initiatingDistinctId
+        )
         var checkoutProduct: StoreProduct
         let outcome: NativePurchaseResult?
         let purchaseOutcome: PurchaseOutcome
@@ -475,6 +481,7 @@ actor TransactionService {
                 response.result,
                 product: checkoutProduct,
                 distinctId: initiatingDistinctId,
+                customerKind: initiatingCustomerKind,
                 testStoreTransactionId: response.transactionId,
                 usesTestStore: true,
                 outcomeCorrelation: outcomeCorrelation
@@ -555,6 +562,7 @@ actor TransactionService {
                     nativeOutcome,
                     product: checkoutProduct,
                     distinctId: initiatingDistinctId,
+                    customerKind: initiatingCustomerKind,
                     testStoreTransactionId: nil,
                     usesTestStore: false,
                     outcomeCorrelation: outcomeCorrelation
@@ -587,8 +595,11 @@ actor TransactionService {
             removeCheckoutRecovery(for: checkoutProduct)
             LogInfo("TransactionService: Product already owned; reconciling access for \(product.productId)")
             if usesNativeStoreKit {
-                await transactionObserver.syncCurrentEntitlements(
-                    distinctId: initiatingDistinctId
+                // The customer asked to buy what this Apple Account owns, so
+                // that entitlement is sent as their purchase.
+                _ = await transactionObserver.syncCurrentEntitlements(
+                    distinctId: initiatingDistinctId,
+                    purpose: .purchase(storeProductId: checkoutProduct.storeProductId)
                 )
             }
             await publishCommerceOutcome(
@@ -701,6 +712,7 @@ actor TransactionService {
         _ result: NativePurchaseResult,
         product: StoreProduct,
         distinctId: String,
+        customerKind: PurchaseCustomerKind?,
         testStoreTransactionId: String?,
         usesTestStore: Bool,
         outcomeCorrelation: CommerceOutcomeCorrelation?
@@ -747,6 +759,8 @@ actor TransactionService {
                     resolvesPendingPurchase: true,
                     allowsDurableCheckoutAuthority: true,
                     requiresAuthorityResolution: false,
+                    syncReason: .purchase,
+                    customerKind: customerKind,
                     finish: evidence.finish
                 ),
                 source: .checkout
@@ -966,7 +980,7 @@ actor TransactionService {
             case failed(Error)
             case noPurchases
         }
-        let result: RestoreOutcome
+        var result: RestoreOutcome
         let usesTestStore = testStore != nil
         if let testStore {
             let response = await testStore.restorePurchases(
@@ -985,18 +999,40 @@ actor TransactionService {
             }
         }
         
+        if case .restored = result {
+            // Restored transactions do not re-emit through Transaction.updates,
+            // so send current entitlements to the backend explicitly, as this
+            // customer's Restore. StoreKit holding a purchase is not access:
+            // the Restore succeeds only once the server grants the customer at
+            // least one restored purchase.
+            let claims: CurrentEntitlementSyncResult
+            if isActiveCustomer(initiatingDistinctId) {
+                claims = await transactionObserver.syncCurrentEntitlements(
+                    distinctId: initiatingDistinctId,
+                    purpose: .restore
+                )
+            } else {
+                // The customer changed during the Restore; nothing was sent.
+                claims = CurrentEntitlementSyncResult(failed: 1)
+            }
+            if claims.granted == 0 {
+                if claims.isEmpty {
+                    result = .noPurchases
+                } else {
+                    let error: RestoreClaimError = claims.refused > 0
+                        ? .ownedByAnotherAccount
+                        : .unconfirmed
+                    LogWarning(
+                        "TransactionService: Restore found purchases but the server granted none (\(claims.refused, privacy: .publicValue) refused)"
+                    )
+                    result = .failed(error)
+                }
+            }
+        }
+
         switch result {
         case .restored, .testStoreRestored:
             LogInfo("TransactionService: Restore completed successfully")
-            // Restored transactions do not re-emit through Transaction.updates,
-            // so sync current entitlements to the backend explicitly — otherwise
-            // a restore on a new device never updates server-side entitlements.
-            if case .restored = result,
-               isActiveCustomer(initiatingDistinctId) {
-                await transactionObserver.syncCurrentEntitlements(
-                    distinctId: initiatingDistinctId
-                )
-            }
             // Track successful restore event
             if outcomeCorrelation != nil || isActiveCustomer(initiatingDistinctId) {
                 await publishCommerceOutcome(

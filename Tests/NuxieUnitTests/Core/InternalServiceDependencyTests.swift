@@ -170,7 +170,10 @@ final class InternalServiceDependencyTests: XCTestCase {
             eventSink: EventSink()
         ))
         let productIds = await observer.currentEntitledStoreProductIds()
-        XCTAssertEqual(productIds, ["active", "legacy"])
+        // Only the current customer's account token makes a StoreKit
+        // entitlement theirs. A token another table maps to them, or a local
+        // entry naming someone else, decides nothing: the server owns that.
+        XCTAssertEqual(productIds, ["active", "conflict"])
 
         identity.setDistinctId("next-customer")
         let nextCustomerProducts = await observer.currentEntitledStoreProductIds()

@@ -101,10 +101,9 @@ final class NativeStoreKitServiceFixture: @unchecked Sendable {
 actor StoreKitRecordingPurchaseAPI: PurchaseSynchronizing {
     private var transactionJWSs: [String] = []
 
-    func syncTransaction(
-        transactionJwt: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let transactionJwt = request.transactionJwt
+        let distinctId = request.distinctId
         _ = distinctId
         transactionJWSs.append(transactionJwt)
         return PurchaseResponse(

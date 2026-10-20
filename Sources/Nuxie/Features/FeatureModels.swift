@@ -159,19 +159,55 @@ struct FeatureCheckRequest: Codable {
 
 // MARK: - Purchase Request
 
+/// Why the SDK sends an App Store purchase. Only a Restore or the customer's
+/// own purchase may move a purchase another customer owns to the customer it
+/// is sent for; app start, sign-in and StoreKit updates are syncs, so
+/// ownership never moves between devices on its own.
+enum PurchaseSyncReason: String, Codable, Equatable, Sendable {
+    /// The customer's own checkout, including a product they already own.
+    case purchase
+    /// The customer's Restore.
+    case restore
+    /// Every other send: StoreKit updates, launch recovery and the scans that
+    /// follow identify or reset.
+    case sync
+
+    /// Whether this send asks the server to move the purchase to its customer.
+    var claimsOwnership: Bool { self != .sync }
+
+    /// A purchase or Restore outranks a sync, so a retried send keeps the
+    /// strongest reason it was ever sent for.
+    func strongest(_ other: PurchaseSyncReason?) -> PurchaseSyncReason {
+        guard let other, other.claimsOwnership else { return self }
+        return claimsOwnership ? self : other
+    }
+}
+
+/// Whether the customer a purchase is sent for signed in with `identify`.
+enum PurchaseCustomerKind: String, Codable, Equatable, Sendable {
+    case anonymous
+    case identified
+}
+
 /// Request for syncing App Store transactions
-struct PurchaseRequest: Codable {
+struct PurchaseRequest: Codable, Equatable, Sendable {
     /// Purchase type discriminator - always "appstore" for iOS SDK
     let type: String = "appstore"
     /// Signed transaction JWT from StoreKit 2
     let transactionJwt: String
     /// User's distinct ID for customer lookup
     let distinctId: String
+    /// Why the SDK sends this purchase.
+    let reason: PurchaseSyncReason
+    /// Whether `distinctId` signed in. Always sent.
+    let customerKind: PurchaseCustomerKind
 
     enum CodingKeys: String, CodingKey {
         case type
         case transactionJwt = "transaction_jwt"
         case distinctId = "distinct_id"
+        case reason
+        case customerKind = "customer_kind"
     }
 }
 

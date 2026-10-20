@@ -383,13 +383,6 @@ final class TransactionServiceTests: AsyncSpec {
                     distinctId: "test-user"
                 )
 
-                let owner = await transactionService.purchaseAccountOwner(
-                    appAccountToken: token
-                )
-                guard case .unreadable = owner else {
-                    fail("Expected unreadable account owner")
-                    return
-                }
                 let authority = await transactionService.durablePurchaseEvidenceAuthority(
                     appAccountToken: token,
                     productId: mockProduct.storeProductId

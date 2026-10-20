@@ -208,6 +208,10 @@ internal actor FeatureService: FeatureServiceProtocol {
     private var invalidatedProfileRevisions: [String: UInt64] = [:]
     private var invalidatedCacheRevisions: [String: UInt64] = [:]
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
+    /// A purchase answer's Features hold only until a profile requested after
+    /// them lands: the profile is the customer's access. By key, the latest
+    /// profile request when the answer arrived.
+    private var purchaseGrantProfileRevisions: [FeatureCacheKey: UInt64] = [:]
     /// Monotonic per-feature mutation revision. A feature check captures this
     /// before suspending so an older response cannot erase a purchase grant or
     /// a newer server reconciliation that completed while it was in flight.
@@ -479,6 +483,7 @@ internal actor FeatureService: FeatureServiceProtocol {
                 override: featureOverride,
                 cachedAt: cachedAt
             )
+            purchaseGrantProfileRevisions.removeValue(forKey: cacheKey)
             committedCacheRevisions[cacheKey] =
                 featureMutationRevisions[affectedFeatureId]
             if entityId == nil {
@@ -584,7 +589,17 @@ internal actor FeatureService: FeatureServiceProtocol {
         let identity = identityService
         let distinctId = identity.getDistinctId()
         guard let token = identity.performWithCurrentIdentityFence(distinctId, { _ in () })?.token,
-              await profileService.getCachedProfile(distinctId: distinctId) != nil else { return }
+              let profile = await profileService.getCachedProfile(distinctId: distinctId) else { return }
+        await synchronizeCustomerScopeIfNeeded()
+        if let landed = profile.requestRevision {
+            // A profile requested after a purchase answer is the server's word
+            // on those Features; the answer's copy steps aside.
+            let superseded = purchaseGrantProfileRevisions.filter { $0.value < landed }.keys
+            for key in superseded {
+                realTimeCache.removeValue(forKey: key)
+                purchaseGrantProfileRevisions.removeValue(forKey: key)
+            }
+        }
         let allFeatures = await getAllCached()
         let admittedAt = dateProvider.now()
         let info = featureInfo
@@ -633,6 +648,8 @@ internal actor FeatureService: FeatureServiceProtocol {
             return
         }
         LogInfo("Updating feature cache from purchase response with \(features.count) features")
+        let profileRevision = await profileService.latestRequestRevision()
+        guard identityService.getDistinctId() == distinctId else { return }
 
         // Update FeatureInfo for SwiftUI reactivity
         var accessMap: [String: FeatureAccess] = [:]
@@ -646,6 +663,7 @@ internal actor FeatureService: FeatureServiceProtocol {
             accessMap[featureKey] = access
             let cacheKey = makeCacheKey(featureId: featureKey, entityId: nil)
             realTimeCache[cacheKey] = (override: CachedFeatureOverride(purchase: purchaseFeature), cachedAt: cachedAt)
+            purchaseGrantProfileRevisions[cacheKey] = profileRevision
             committedCacheRevisions[cacheKey] = featureMutationRevisions[featureKey]
         }
 
@@ -669,6 +687,9 @@ internal actor FeatureService: FeatureServiceProtocol {
         guard identityService.getDistinctId() == distinctId else { return }
         featureMutationRevisions[featureId, default: 0] &+= 1
         realTimeCache = realTimeCache.filter { $0.key.featureId != featureId }
+        purchaseGrantProfileRevisions = purchaseGrantProfileRevisions.filter {
+            $0.key.featureId != featureId
+        }
         committedCacheRevisions = committedCacheRevisions.filter { $0.key.featureId != featureId }
         // A profile may predate the spend even after a real-time override expires.
         invalidatedCacheRevisions[featureId] = featureMutationRevisions[featureId]
@@ -716,6 +737,7 @@ internal actor FeatureService: FeatureServiceProtocol {
                 override: featureOverride,
                 cachedAt: cachedAt
             )
+            purchaseGrantProfileRevisions.removeValue(forKey: cacheKey)
             committedCacheRevisions[cacheKey] = featureMutationRevisions[featureId]
             if entityId == nil {
                 await notifyFeatureInfoUpdate(
@@ -758,6 +780,7 @@ internal actor FeatureService: FeatureServiceProtocol {
     private func clearCustomerScopedState(for distinctId: String, identityFence: IdentityFenceToken?) {
         stateGeneration &+= 1
         realTimeCache.removeAll()
+        purchaseGrantProfileRevisions.removeAll()
         invalidatedCacheRevisions.removeAll()
         invalidatedProfileRevisions.removeAll()
         featureMutationRevisions.removeAll()

@@ -47,7 +47,7 @@ final class TransactionEvidenceStoreCorruptionTests: XCTestCase {
         let token = scope.appAccountToken(distinctId: "customer-a")
 
         assertUnreadable(store.load())
-        XCTAssertNil(store.owner(for: token, scope: scope))
+        XCTAssertNil(store.evidenceAuthority(for: token, productId: "product", scope: scope))
         XCTAssertFalse(store.upsert(StoredPurchaseAccountOwnership(
             scope: scope,
             appAccountToken: token,

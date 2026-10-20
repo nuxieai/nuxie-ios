@@ -54,6 +54,7 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 - `features/optimistic-entitlement-projection.json`: authoritative feature state combined with retained purchase evidence.
 - `features/command-recovery.json`: persisted server cooldowns and active-session retry eligibility for durable Feature commands.
 - `purchases/outcome-commit.json`: one purchase outcome committer across StoreKit and host-delegate sources.
+- `purchases/purchase-outbox.json`: the purchase outbox contract (`docs/purchase-outbox.md`): what each producer sends (`reason`, `customer_kind`, requester), how each server answer clears or keeps an entry and refetches the profile, the retry backoff, and the Restore outcome. iOS consumes it in `PurchaseOwnershipClaimTests`.
 - `purchases/app-account-token.json`: the StoreKit `appAccountToken` for each key mode and StoreKit environment. The server derives the same value to decide who owns a purchase; the SDK's service environment takes no part. iOS consumes it in `AppAccountTokenFixtureTests`; nuxie-dev's connectors tests read the same file.
 - `ir/eval-vectors.json` and `ir/response-field-conformance.json`: expression and buffered-response evaluation used by Journey controls.
 

@@ -92,9 +92,12 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                     return
                 }
                 let token = scope.appAccountToken(distinctId: distinctId)
-                let accountOwner = await stack.core.transactionService
-                    .purchaseAccountOwner(appAccountToken: token)
-                guard case .unreadable = accountOwner else {
+                let accountAuthority = await stack.core.transactionService
+                    .durablePurchaseEvidenceAuthority(
+                        appAccountToken: token,
+                        productId: "corrupt-product"
+                    )
+                guard case .unreadable = accountAuthority else {
                     fail("Expected account ownership to remain unreadable")
                     return
                 }
@@ -153,6 +156,14 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 // time; hold the backend unavailable so the unacknowledged
                 // evidence window (and its overlay) is observable.
                 await api.setSyncTransactionShouldSucceed(false)
+                // A native checkout carries the buyer's account token, which
+                // is what lets it unlock before the server answers.
+                let scope = PurchaseStorageScope(
+                    appIdentifier: Bundle.main.bundleIdentifier
+                        ?? "nuxie.unidentified-host-app",
+                    apiKey: "orchestration-suite-key",
+                    testStoreEnabled: false
+                )
                 let recorded = await stack.core.transactionObserver.commit(
                     .verified(
                         VerifiedPurchaseEvidence(
@@ -160,11 +171,15 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                             transactionId: "transaction-1",
                             originalTransactionId: "original-1",
                             productId: "store-product-1",
+                            appAccountToken: scope.appAccountToken(
+                                distinctId: distinctId
+                            ),
                             attributedDistinctId: distinctId,
                             finishRequired: false,
                             resolvesPendingPurchase: false,
                             allowsDurableCheckoutAuthority: false,
-                            requiresAuthorityResolution: false
+                            requiresAuthorityResolution: false,
+                            syncReason: .purchase
                         ),
                         source: .checkout
                     )
@@ -209,6 +224,12 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 expect(joined.0).to(beTrue())
                 expect(joined.1) == 11
 
+                // Once the server accepts the purchase, its profile is the
+                // customer's access: the SDK fetches it again after the answer.
+                await api.setProfileResponse(TestJourneyProfile.response(features: [
+                    Feature(id: "credits", type: .metered, balance: 1, unlimited: false,
+                        nextResetAt: nil, interval: nil, entities: nil),
+                ]))
                 await api.setSyncTransactionShouldSucceed(true)
                 await stack.core.transactionObserver.retryStoredEvidence()
                 let reconciled = await MainActor.run {

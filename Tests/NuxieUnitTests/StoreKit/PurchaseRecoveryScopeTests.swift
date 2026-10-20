@@ -12,10 +12,8 @@ final class RecoverySyncAPI: PurchaseSynchronizing, @unchecked Sendable {
 
     init(succeeds: Bool) { self.succeeds = succeeds }
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
         lock.withLock { customers.append(distinctId) }
         if !succeeds { throw URLError(.notConnectedToInternet) }
         return PurchaseResponse(
@@ -37,10 +35,8 @@ private actor ControlledConcurrentRecoverySyncAPI: PurchaseSynchronizing {
     private var released = false
     private var cancelled = false
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
         customers.append(distinctId)
         let requestWaiters = firstRequestWaiters
         firstRequestWaiters.removeAll()
@@ -108,10 +104,8 @@ private actor SequencedRecoverySyncAPI: PurchaseSynchronizing {
 
     init(results: [Bool]) { self.results = results }
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
         _ = distinctId
         requestCount += 1
         let succeeds = results.isEmpty ? true : results.removeFirst()
@@ -133,10 +127,8 @@ private actor ShutdownControlledSyncAPI: PurchaseSynchronizing {
     private var requestContinuation: CheckedContinuation<Void, Error>?
     private var requestCount = 0
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
         requestCount += 1
         if requestCount > 1 {
             return PurchaseResponse(
@@ -469,11 +461,9 @@ actor RecoveryFeatureRecorder: FeatureServiceProtocol {
 }
 
 private final class FeaturePurchaseSyncAPI: PurchaseSynchronizing, Sendable {
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
-        PurchaseResponse(
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
+        return PurchaseResponse(
             success: true,
             customerId: distinctId,
             features: [
@@ -567,7 +557,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             recordedAt: mocks.dateProvider.now(), isRevoked: false,
             commercialContext: { var context = commercialContext(); context.journeyId = "completed-journey"; return context }(),
             completionDeliveredAt: mocks.dateProvider.now(),
-            backendSyncedAt: mocks.dateProvider.now().addingTimeInterval(-600))
+            answeredAt: mocks.dateProvider.now().addingTimeInterval(-600))
         let store = ControlledTransactionEvidenceStore(entries: [evidence.transactionId: evidence], saveSucceeds: true)
         let api = RestoreRefreshAPI()
         let sink = RecoveryEventSink()
@@ -589,7 +579,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             nativePurchaseAdapter: adapter, featureService: features)
         box.set(service)
         addTeardownBlock { await observer.stopListening() }
-        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?[evidence.transactionId]?.backendSyncedAt)
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?[evidence.transactionId]?.answeredAt)
         // The previous backend grant is absent, but StoreKit still verifies ownership.
         let before = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertNotEqual(before?.allowed, true)
@@ -615,11 +605,36 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.restoreCompleted }.count, 2)
         identity.setDistinctId("another-owner")
         await features.handleUserChange(from: "restore-owner", to: "another-owner")
-        _ = try await service.restore()
-        XCTAssertEqual(api.calls, 2, "Cached completion must not authorize another customer's receipt refresh")
+        api.refuse("another-owner")
+        do {
+            _ = try await service.restore()
+            XCTFail("A Restore the server refuses must not report restored")
+        } catch StoreKitError.restoreFailed(let underlying) {
+            XCTAssertEqual(underlying as? RestoreClaimError, .ownedByAnotherAccount)
+        }
+        // Another customer's local record does not decide the Restore: the
+        // receipt is sent for the restoring customer and the server answers.
+        XCTAssertEqual(api.calls, 3)
+        XCTAssertEqual(api.requests.last, .init(jwt: "current-verified-jws", distinctId: "another-owner"))
         let otherOwnerAccess = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertNotEqual(otherOwnerAccess?.allowed, true)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.restoreCompleted }.count, 2)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.restoreFailed }.count, 1)
         XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0)
+    }
+
+    func testRestoreMovesAnotherCustomersRecordedPurchaseWhenTheServerAllows() async throws {
+        let api = RestoreRefreshAPI()
+        let harness = makeRestoreRefreshHarness(api: api)
+        harness.identity.setDistinctId("signed-in-restorer")
+        await harness.features.handleUserChange(from: "restore-owner", to: "signed-in-restorer")
+
+        let result = try await harness.service.restore()
+
+        XCTAssertEqual(result, .restored)
+        XCTAssertEqual(api.requests, [.init(jwt: "current-jws-1", distinctId: "signed-in-restorer")])
+        let access = await harness.features.getCached(featureId: "pro", entityId: nil)
+        XCTAssertEqual(access?.allowed, true)
     }
 
     func testAlreadyOwnedCheckoutRefreshesSyncedReceiptWithoutRepeatingSyncEvent() async throws {
@@ -633,7 +648,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             price: native.displayPrice, period: nil, productType: native.productType, appStoreProduct: native)
         product.purchaseContext = commercialContext()
         _ = try await harness.service.purchase(product)
-        XCTAssertEqual(api.requests, [.init(jwt: "current-jws-1", distinctId: "restore-owner")])
+        XCTAssertEqual(api.requests, [.init(jwt: "current-jws-1", distinctId: "restore-owner", reason: .purchase)])
         let feature = await harness.features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(feature?.allowed, true)
         XCTAssertEqual(harness.adapter.purchasedProducts.count, 1)
@@ -672,7 +687,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
     private func makeRestoreRefreshHarness(api: any PurchaseSynchronizing, count: Int = 1)
         -> (service: TransactionService, observer: TransactionObserver, adapter: MockNativeStoreKitPurchaseAdapter,
-            sink: RecoveryEventSink, features: FeatureService) {
+            sink: RecoveryEventSink, features: FeatureService, identity: MockIdentityService) {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
         identity.setDistinctId("restore-owner")
@@ -686,7 +701,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             transactionId: "retained-\(index)", originalTransactionId: "original-\(index)",
             productId: "store-product-\(index)", distinctId: "restore-owner", recordedAt: mocks.dateProvider.now(),
             isRevoked: false, commercialContext: context, completionDeliveredAt: mocks.dateProvider.now(),
-            backendSyncedAt: mocks.dateProvider.now().addingTimeInterval(-600)) }
+            answeredAt: mocks.dateProvider.now().addingTimeInterval(-600)) }
         let store = ControlledTransactionEvidenceStore(entries: Dictionary(uniqueKeysWithValues: rows.map { ($0.transactionId, $0) }), saveSucceeds: true)
         let sink = RecoveryEventSink()
         let adapter = MockNativeStoreKitPurchaseAdapter()
@@ -707,7 +722,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             nativePurchaseAdapter: adapter, featureService: features)
         box.set(service)
         addTeardownBlock { await observer.stopListening() }
-        return (service, observer, adapter, sink, features)
+        return (service, observer, adapter, sink, features, identity)
     }
 
     func testPurchaseCompletionEventIdentityIsScopedAcrossAppEnvironmentAndStore() async {
@@ -908,7 +923,10 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
     }
 
-    func testRenewalUsesDurableAccountOwnerAfterCheckoutContextRetires() async {
+    /// The phone no longer works out an owner from the account token: once
+    /// the checkout binding retires, recovery leaves the renewal to the
+    /// ordinary StoreKit update path, which sends it for the current customer.
+    func testRenewalWithoutACheckoutBindingIsNotClaimedForItsTokenOwner() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-b")
         let root = FileManager.default.temporaryDirectory
@@ -984,10 +1002,10 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             finishRequired: true
         )
 
-        XCTAssertEqual(result, .recovered)
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
+        XCTAssertEqual(result, .noMatch)
+        XCTAssertEqual(api.recordedCustomers, [])
         let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 1)
+        XCTAssertEqual(finishCount, 0)
     }
 
     func testProviderOwnershipOverridesPersistedNuxieTokenForRenewal() async {
@@ -1512,7 +1530,9 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
     }
 
-    func testReinstallRecognizesNuxieTokenWithoutAttributingHostToken() async {
+    /// Without a checkout binding, recovery claims neither a Nuxie-token nor a
+    /// host-token transaction; both are left to the StoreKit update path.
+    func testReinstallRecoveryClaimsNoTransactionWithoutACheckoutBinding() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-a")
         let scope = PurchaseStorageScope(
@@ -1585,12 +1605,12 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             attributedDistinctId: "customer-a"
         )
 
-        XCTAssertEqual(restored, .recovered)
+        XCTAssertEqual(restored, .noMatch)
         XCTAssertEqual(hostOwned, .noMatch)
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
+        XCTAssertEqual(api.recordedCustomers, [])
         let nuxieFinishCount = await nuxieFinishes.count()
         let hostFinishCount = await hostFinishes.count()
-        XCTAssertEqual(nuxieFinishCount, 1)
+        XCTAssertEqual(nuxieFinishCount, 0)
         XCTAssertEqual(hostFinishCount, 0)
     }
 
@@ -1707,13 +1727,14 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(liveOwnership.upsert(StoredPurchaseAccountOwnership(
             scope: live,
             appAccountToken: token,
-            distinctId: "customer"
+            distinctId: "customer",
+            productAuthorities: ["product": .nativeStoreKit]
         )))
         XCTAssertEqual(
-            liveOwnership.owner(for: token, scope: live),
-            "customer"
+            liveOwnership.evidenceAuthority(for: token, productId: "product", scope: live),
+            .nativeStoreKit
         )
-        XCTAssertNil(testOwnership.owner(for: token, scope: test))
+        XCTAssertNil(testOwnership.evidenceAuthority(for: token, productId: "product", scope: test))
     }
 
     func testRelaunchRecoversExactCheckoutOnceForOriginalCustomer() async {
@@ -2453,7 +2474,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             recordedAt: mocks.dateProvider.now(),
             isRevoked: false,
             commercialContext: commercialContext(),
-            backendSyncedAt: mocks.dateProvider.now()
+            answeredAt: mocks.dateProvider.now()
         )
         let evidenceStore = InMemoryTransactionEvidenceStore()
         XCTAssertTrue(evidenceStore.save([evidence.transactionId: evidence]))
@@ -2568,7 +2589,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let retained = evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]
         XCTAssertNotNil(retained)
         XCTAssertEqual(retained?.transactionJws, "")
-        XCTAssertNotNil(retained?.backendSyncedAt)
+        XCTAssertNotNil(retained?.answeredAt)
         XCTAssertNil(retained?.completionDeliveredAt)
         XCTAssertEqual(events.routedAttemptCount, 0)
         XCTAssertEqual(events.captureOnlyAttemptCount, 1)
@@ -2626,7 +2647,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertNotNil(retained)
         XCTAssertEqual(retained?.finishRequired, true)
         XCTAssertEqual(retained?.transactionJws, "")
-        XCTAssertNotNil(retained?.backendSyncedAt)
+        XCTAssertNotNil(retained?.answeredAt)
     }
 
     func testConcurrentEvidenceRetriesCoalesceReceiptSubmission() async {
@@ -2645,7 +2666,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             productId: "store-product-1",
             distinctId: "customer-a",
             recordedAt: mocks.dateProvider.now(),
-            isRevoked: false
+            isRevoked: false,
+            appAccountToken: scope.appAccountToken(distinctId: "customer-a")
         )
         let evidenceStore = InMemoryTransactionEvidenceStore()
         XCTAssertTrue(evidenceStore.save([evidence.transactionId: evidence]))
@@ -2916,7 +2938,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.transactionJws,
             "signed-jws"
         )
-        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.backendSyncedAt)
+        XCTAssertNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]?.answeredAt)
         XCTAssertTrue(events.events.filter {
             $0.name == SystemEventNames.purchaseSynced
         }.isEmpty)
@@ -3049,7 +3071,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         await makeObserver().retryStoredEvidence()
         await makeObserver().retryStoredEvidence()
         let retained = evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]
-        XCTAssertNotNil(retained?.backendSyncedAt)
+        XCTAssertNotNil(retained?.answeredAt)
         XCTAssertNil(retained?.completionDeliveredAt)
         XCTAssertEqual(retained?.transactionJws, "")
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
@@ -3151,7 +3173,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             distinctId: "customer-a",
             recordedAt: Date(timeIntervalSince1970: 0),
             isRevoked: false,
-            backendSyncedAt: Date(timeIntervalSince1970: 1)
+            answeredAt: Date(timeIntervalSince1970: 1)
         )
         let evidenceStore = ControlledTransactionEvidenceStore(
             entries: [expired.transactionId: expired],
@@ -3204,12 +3226,31 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
 private final class RestoreRefreshAPI: PurchaseSynchronizing, @unchecked Sendable {
     private let lock = NSLock()
-    struct Request: Equatable { let jwt: String; let distinctId: String }
+    struct Request: Equatable {
+        let jwt: String
+        let distinctId: String
+        var reason: PurchaseSyncReason = .restore
+        var customerKind: PurchaseCustomerKind = .identified
+    }
     private var storage: [Request] = []
+    private var refusedCustomers: Set<String> = []
     var calls: Int { lock.withLock { storage.count } }
     var requests: [Request] { lock.withLock { storage } }
-    func syncTransaction(transactionJwt: String, distinctId: String) async throws -> PurchaseResponse {
-        lock.withLock { storage.append(.init(jwt: transactionJwt, distinctId: distinctId)) }
+    /// Answers this customer's sends with the server's ownership conflict.
+    func refuse(_ distinctId: String) { _ = lock.withLock { refusedCustomers.insert(distinctId) } }
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let transactionJwt = request.transactionJwt
+        let distinctId = request.distinctId
+        let refused = lock.withLock { () -> Bool in
+            storage.append(.init(jwt: transactionJwt, distinctId: distinctId,
+                reason: request.reason, customerKind: request.customerKind))
+            return refusedCustomers.contains(distinctId)
+        }
+        if refused {
+            throw NuxieNetworkError.httpError(statusCode: 409,
+                message: "App Store purchase conflicts with retained ownership",
+                code: "app_store_purchase_conflict")
+        }
         return PurchaseResponse(success: true, customerId: distinctId,
             features: [PurchaseFeature(id: "feature-1", extId: "pro", type: .boolean,
                 allowed: true, balance: nil, unlimited: false)], error: nil)
@@ -3222,7 +3263,9 @@ private actor HeldRestoreRefreshAPI: PurchaseSynchronizing {
     private var released = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     init(onCall: @escaping @Sendable () -> Void) { self.onCall = onCall }
-    func syncTransaction(transactionJwt: String, distinctId: String) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let transactionJwt = request.transactionJwt
+        let distinctId = request.distinctId
         requests.append("\(transactionJwt):\(distinctId)")
         onCall()
         if !released { await withCheckedContinuation { waiters.append($0) } }

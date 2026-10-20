@@ -70,7 +70,12 @@ private actor SuspendingTransactionObserver: TransactionObserverProtocol {
         false
     }
 
-    func syncCurrentEntitlements(distinctId: String) async {}
+    func syncCurrentEntitlements(
+        distinctId: String,
+        purpose: CurrentEntitlementSyncPurpose
+    ) async -> CurrentEntitlementSyncResult {
+        CurrentEntitlementSyncResult()
+    }
 
     func purchaseCompletionEventId(transactionId: String) async -> String {
         "purchase-completed:lifecycle:\(transactionId)"

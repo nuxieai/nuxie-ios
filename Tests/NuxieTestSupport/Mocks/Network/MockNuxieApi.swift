@@ -423,10 +423,14 @@ public actor MockNuxieApi: NuxieApiProtocol {
         syncTransactionShouldSucceed = succeeds
     }
 
+    /// Purchase requests received by ``syncTransaction(_:)``, in call order.
+    public private(set) var syncTransactionRequests: [PurchaseRequest] = []
+
     public func syncTransaction(
-        transactionJwt: String,
-        distinctId: String
+        _ request: PurchaseRequest
     ) async throws -> PurchaseResponse {
+        syncTransactionRequests.append(request)
+        let distinctId = request.distinctId
         guard syncTransactionShouldSucceed else {
             return PurchaseResponse(
                 success: false,

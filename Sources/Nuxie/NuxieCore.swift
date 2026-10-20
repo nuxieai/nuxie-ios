@@ -353,7 +353,19 @@ final class NuxieCore: @unchecked Sendable {
       },
       purchaseStorageScope: purchaseStorageScope,
       dateProvider: dateProvider,
-      recoverySources: overrides.transactionRecoverySources
+      recoverySources: overrides.transactionRecoverySources,
+      // The server's answer to a purchase can change what the customer
+      // holds; their profile, fetched again, is their access.
+      refreshProfile: { [identity] distinctId in
+        guard identity.getDistinctId() == distinctId else { return }
+        do {
+          _ = try await profile.refetchProfile(distinctId: distinctId)
+        } catch {
+          LogDebug("Profile refresh after a purchase answer failed: \(error)")
+          return
+        }
+        await features.syncFeatureInfo()
+      }
     )
     builtTransactionObserver.set(transactionObserver)
     let pendingPurchaseStore = overrides.pendingPurchaseStore ?? PendingPurchaseStore(

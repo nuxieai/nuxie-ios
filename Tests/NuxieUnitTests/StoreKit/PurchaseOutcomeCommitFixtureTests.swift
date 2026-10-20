@@ -344,10 +344,9 @@ private actor PurchaseOutcomeSyncAPI {
         responseSuccesses = successes
     }
 
-    func syncTransaction(
-        transactionJwt: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let transactionJwt = request.transactionJwt
+        let distinctId = request.distinctId
         requests.append((transactionJwt, distinctId))
         let success = responseSuccesses.isEmpty
             ? true
@@ -563,8 +562,11 @@ private actor PurchaseOutcomeCommitRecorder {
         return result
     }
 
-    func syncCurrentEntitlements(distinctId: String) async {
-        await observer.syncCurrentEntitlements(distinctId: distinctId)
+    func syncCurrentEntitlements(
+        distinctId: String,
+        purpose: CurrentEntitlementSyncPurpose
+    ) async -> CurrentEntitlementSyncResult {
+        await observer.syncCurrentEntitlements(distinctId: distinctId, purpose: purpose)
     }
 
     var observedTerminalOutcomes: [PurchaseCommitTerminalOutcome] {
@@ -1187,7 +1189,7 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         XCTAssertEqual(completed.count, 1, "the mid-capture emission race is accepted")
         XCTAssertTrue(retained.isRevoked)
         XCTAssertEqual(retained.transactionJws, "")
-        XCTAssertNotNil(retained.backendSyncedAt)
+        XCTAssertNotNil(retained.answeredAt)
         XCTAssertNotNil(retained.completionDeliveredAt)
         XCTAssertEqual(requestedJWSs, ["revoked-pro-1"])
         XCTAssertEqual(harness.syncTaskProbe.count, 1)
@@ -1223,7 +1225,7 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         )
         XCTAssertTrue(synced)
         XCTAssertEqual(acknowledgedDuringCapture.transactionJws, "")
-        XCTAssertNotNil(acknowledgedDuringCapture.backendSyncedAt)
+        XCTAssertNotNil(acknowledgedDuringCapture.answeredAt)
 
         await harness.eventSink.releasePurchaseCompletionCapture()
         let checkoutError = try await checkout.value
@@ -1234,7 +1236,7 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
 
         XCTAssertNil(checkoutError)
         XCTAssertEqual(retained.transactionJws, "")
-        XCTAssertNotNil(retained.backendSyncedAt)
+        XCTAssertNotNil(retained.answeredAt)
         XCTAssertNotNil(retained.completionDeliveredAt)
         XCTAssertEqual(requestedJWSs, [evidence.signedPayload])
         XCTAssertEqual(harness.syncTaskProbe.count, 0)
@@ -1298,7 +1300,7 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
         XCTAssertNotNil(retainedAfterCaptureFailure.commercialContext)
         XCTAssertNotNil(retainedAfterCaptureFailure.checkoutCompletionEventId)
         XCTAssertNil(retainedAfterCaptureFailure.completionDeliveredAt)
-        XCTAssertNotNil(retainedAfterCaptureFailure.backendSyncedAt)
+        XCTAssertNotNil(retainedAfterCaptureFailure.answeredAt)
         XCTAssertEqual(retainedAfterCaptureFailure.transactionJws, "")
 
         harness.eventSink.setRoutedCaptureResult(true)
