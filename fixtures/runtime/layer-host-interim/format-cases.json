@@ -73,6 +73,17 @@
       "accept": false
     }
   ],
+  "defaultPairs": [
+    { "omit": true, "accept": true },
+    { "value": true, "accept": true },
+    { "value": false, "accept": true },
+    { "value": null, "accept": false },
+    { "value": 0, "accept": false },
+    { "value": 1, "accept": false },
+    { "value": "true", "accept": false },
+    { "value": [], "accept": false },
+    { "value": {}, "accept": false }
+  ],
   "journeyTransitions": [
     {
       "value": {

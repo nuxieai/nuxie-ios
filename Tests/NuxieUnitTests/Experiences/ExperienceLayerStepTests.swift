@@ -129,13 +129,46 @@ final class ExperienceLayerStepTests: XCTestCase {
             "hidden", "active", "input:true"])
     }
 
+    func testWatchdogStillFinishesEachHalfWhenNoPhaseFrameIsPresented() async throws {
+        for style in [ExperienceScreenTransitionSpec.Kind.fade, .none] {
+            let probe = LayerStepProbe()
+            let finished = expectation(description: "starved \(style) finishes within its watchdog budgets")
+            var succeeded = false
+            var presentationCount = 0
+            let task = Task { @MainActor in
+                var operations = probe.operations
+                operations.present = {
+                    presentationCount += 1
+                    try await Task.sleep(nanoseconds: 60_000_000_000)
+                }
+                do {
+                    try await ExperienceLayerStep.perform(source: "A", target: "B", style: style,
+                        isBack: false, plan: .init(transitionId: "pair", durationMilliseconds: 0,
+                            incomingOnTop: true, outgoingCompletionEventName: "exit", incomingCompletionEventName: "enter"),
+                        exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false, operations: operations)
+                    succeeded = true
+                } catch { }
+                finished.fulfill()
+            }
+            await fulfillment(of: [finished], timeout: 1.5)
+            XCTAssertTrue(succeeded, "Drawable starvation must expire like the transition watchdog")
+            XCTAssertEqual(presentationCount, style == .none ? 2 : 1)
+            XCTAssertTrue(probe.order.contains("active"))
+            XCTAssertEqual(probe.order.last, "input:true")
+            XCTAssertFalse(probe.order.contains { $0.hasPrefix("wait:") }, "An expired presentation budget must not start another watchdog")
+            // Cleanup bounds the pre-fix failure after the assertions above.
+            task.cancel()
+            await task.value
+        }
+    }
+
     func testHistoryKeepsTheActualForwardPairAndSkippingBackHasNoPair() async throws {
         var history = ExperienceLayerHistory(root: "A")
         history.visit("B", transition: .init(kind: .push, transitionId: "route-one"))
         history.visit("C", transition: .init(kind: .fade, transitionId: "route-two"))
         XCTAssertEqual(history.backTransition(steps: 1).transitionId, "route-two")
         XCTAssertNil(history.backTransition(steps: 2).transitionId)
-        let skip = NativeExperienceTransition(id: "skip", kind: .layer, sourceScreenId: "A", destinationScreenId: "C",
+        let skip = NativeExperienceTransition(id: "skip", kind: .layer, isDefaultPair: true, sourceScreenId: "A", destinationScreenId: "C",
             durationMs: 400, incomingOnTop: true, source: .init(completeEventName: "leave"),
             destination: .init(completeEventName: "arrive"), reverse: .init(durationMs: nil, incomingOnTop: false,
                 source: .init(completeEventName: "return-leave"), destination: .init(completeEventName: "return-arrive")))
@@ -151,6 +184,54 @@ final class ExperienceLayerStepTests: XCTestCase {
         XCTAssertEqual(history.screenIDs, ["A"])
         history.visit("B", transition: .init(kind: .magicMove, transitionId: "route-three"))
         XCTAssertEqual(history.backTransition(steps: 1).transitionId, "route-three")
+    }
+
+    func testSkippingBackDoesNotUseAnUnmarkedRouteBetweenItsEndpoints() {
+        var history = ExperienceLayerHistory(root: "A")
+        history.visit("B", transition: .init(kind: .push, transitionId: "A-B"))
+        history.visit("C", transition: .init(kind: .fade, transitionId: "B-C"))
+        let unrelatedRoute = NativeExperienceTransition(id: "unrelated-A-C", kind: .layer,
+            sourceScreenId: "A", destinationScreenId: "C", durationMs: 400, incomingOnTop: true,
+            source: .init(completeEventName: "override-leave"), destination: .init(completeEventName: "override-arrive"),
+            reverse: .init(durationMs: nil, incomingOnTop: nil,
+                source: .init(completeEventName: "override-return-leave"), destination: .init(completeEventName: "override-return-arrive")))
+        XCTAssertEqual(history.backTransition(steps: 2, target: "A", declarations: [unrelatedRoute]), .none)
+        XCTAssertEqual(history.backTransition(steps: 1, target: "B", declarations: [unrelatedRoute]).transitionId, "B-C")
+    }
+
+    func testSkippingBackSelectsOnlyAMarkedDefaultInEitherUsableDirection() throws {
+        var history = ExperienceLayerHistory(root: "A")
+        history.visit("B", transition: .init(kind: .push, transitionId: "A-B"))
+        history.visit("C", transition: .init(kind: .fade, transitionId: "B-C"))
+        for source in ["A", "C"] {
+            for hasReverse in [false, true] {
+                let pair = NativeExperienceTransition(id: "default", kind: .layer, isDefaultPair: true,
+                    sourceScreenId: source, destinationScreenId: source == "A" ? "C" : "A",
+                    durationMs: 400, incomingOnTop: true, source: .init(completeEventName: "leave"),
+                    destination: .init(completeEventName: "arrive"), reverse: hasReverse ? .init(durationMs: nil,
+                        incomingOnTop: false, source: .init(completeEventName: "return-leave"),
+                        destination: .init(completeEventName: "return-arrive")) : nil)
+                let route = NativeExperienceTransition(id: "route", kind: .layer, isDefaultPair: false,
+                    sourceScreenId: pair.sourceScreenId, destinationScreenId: pair.destinationScreenId,
+                    durationMs: 900, incomingOnTop: false, source: .init(completeEventName: "override-leave"),
+                    destination: .init(completeEventName: "override-arrive"), reverse: hasReverse ? .init(durationMs: nil,
+                        incomingOnTop: true, source: .init(completeEventName: "override-return-leave"),
+                        destination: .init(completeEventName: "override-return-arrive")) : nil)
+                // The unmarked declaration has identical endpoints and appears first.
+                let result = history.backTransition(steps: 2, target: "A", declarations: [route, pair])
+                if source == "C" || hasReverse {
+                    XCTAssertEqual(result.transitionId, "default")
+                    XCTAssertEqual(result.kind, .magicMove)
+                    let id = try XCTUnwrap(result.transitionId)
+                    let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: id,
+                        sourceScreenId: "C", destinationScreenId: "A", declarations: [route, pair]))
+                    XCTAssertEqual(plan.outgoingCompletionEventName, source == "C" ? "leave" : "return-leave")
+                } else {
+                    XCTAssertEqual(result, .none, "A reverse half must exist for an A to C declaration")
+                }
+                XCTAssertEqual(history.backTransition(steps: 2, target: "A", declarations: [route]), .none)
+            }
+        }
     }
 }
 
