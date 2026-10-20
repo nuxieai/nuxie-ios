@@ -122,7 +122,7 @@ import Nuxie
 @main
 struct MyApp: App {
   init() {
-    let config = NuxieConfiguration(apiKey: "pk_test_…") // pk_live_… in Release builds
+    let config = NuxieConfiguration(apiKey: "pk_test_…") // pk_live_… only in App Store builds
     config.logLevel = .info
     // Optional: configure purchases
     // config.purchaseDelegate = MyPurchaseDelegate()
@@ -144,7 +144,7 @@ import Nuxie
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
   func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-    let config = NuxieConfiguration(apiKey: "pk_test_…") // pk_live_… in Release builds
+    let config = NuxieConfiguration(apiKey: "pk_test_…") // pk_live_… only in App Store builds
     config.logLevel = .warning
 
     do { try NuxieSDK.shared.setup(with: config) }
@@ -210,7 +210,11 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
 
 - `environment`: the Nuxie service, `.production` by default. Keep the default
   for every build, including Debug and TestFlight: the publishable key, not the
-  service environment, selects test or live content and purchases.
+  service environment, selects test or live content and purchases. Nuxie
+  accepts Sandbox and Xcode StoreKit transactions only with a `pk_test_` key and
+  App Store transactions only with a `pk_live_` key. TestFlight purchases are
+  Sandbox purchases, so build TestFlight uploads with the test key even though
+  they use a Release configuration.
 - `testStoreEnabled`: the isolated, local-only purchase sheet (development +
   `pk_test_` key only).
 - Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
