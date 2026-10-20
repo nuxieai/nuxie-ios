@@ -130,21 +130,29 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         // foreground revalidation, a locale change) has not settled this
         // customer's profile, so ask again, a bounded number of times. Once a
         // newer identify() has moved the identity on, that transition asks.
+        var profileSettled = true
         for attempt in 1...Self.supersededRefreshAttempts {
             do {
                 _ = try await profileService.refetchProfile(distinctId: transition.to)
+                profileSettled = true
                 break
-            } catch is ProfileRefreshCancellationError
-                where attempt < Self.supersededRefreshAttempts && !Task.isCancelled
-                    && (identity?.getDistinctId() ?? transition.to) == transition.to {
-                continue
+            } catch is ProfileRefreshCancellationError {
+                // The newer refresh may still bring the profile.
+                profileSettled = false
+                guard attempt < Self.supersededRefreshAttempts, !Task.isCancelled,
+                      (identity?.getDistinctId() ?? transition.to) == transition.to
+                else { break }
             } catch {
                 LogDebug("Identity profile refresh failed: \(error)")
+                profileSettled = true
                 break
             }
         }
         // Journey held the arriving customer's events for this profile.
-        await journeyService?.finishUserChangeRouting(to: transition.to)
+        await journeyService?.finishUserChangeRouting(
+            to: transition.to,
+            profileSettled: profileSettled
+        )
         // A valid offline profile can still restore readiness. FeatureService
         // requires an admitted profile and fences publication to its identity.
         await featureService.syncFeatureInfo()

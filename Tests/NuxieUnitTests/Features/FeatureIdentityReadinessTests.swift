@@ -87,10 +87,14 @@ private actor OrderedJourneyProbe: JourneyServiceProtocol {
 private final class SupersededProfileProbe: ProfileServiceProtocol, @unchecked Sendable {
     private let base = MockProfileService()
     private let log: TransitionOrderLog
+    private let superseded: Int
     private let lock = NSLock()
     private var refetches = 0
 
-    init(log: TransitionOrderLog) { self.log = log }
+    init(log: TransitionOrderLog, superseded: Int = 1) {
+        self.log = log
+        self.superseded = superseded
+    }
 
     func getCachedProfile(distinctId: String) async -> ProfileResponse? {
         await base.getCachedProfile(distinctId: distinctId)
@@ -102,7 +106,7 @@ private final class SupersededProfileProbe: ProfileServiceProtocol, @unchecked S
     func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
         let attempt = lock.withLock { refetches += 1; return refetches }
         log.append("profile.refetch")
-        guard attempt > 1 else { throw ProfileRefreshCancellationError() }
+        guard attempt > superseded else { throw ProfileRefreshCancellationError() }
         return try await base.refetchProfile(distinctId: distinctId)
     }
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
@@ -128,8 +132,8 @@ private actor FinishRecordingJourneyProbe: JourneyServiceProtocol {
     func onAppWillEnterForeground() async {}
     func onAppBecameActive() async {}
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
-    func finishUserChangeRouting(to newDistinctId: String) async {
-        log.append("journeys.finishUserChangeRouting(\(newDistinctId))")
+    func finishUserChangeRouting(to newDistinctId: String, profileSettled: Bool) async {
+        log.append("journeys.finishUserChangeRouting(\(newDistinctId), settled: \(profileSettled))")
     }
     func profileDidCommit(
         _ snapshot: JourneyProfileCatalog.Snapshot,
@@ -267,7 +271,30 @@ final class FeatureIdentityReadinessTests: XCTestCase {
         XCTAssertEqual(log.entries, [
             "profile.refetch",
             "profile.refetch",
-            "journeys.finishUserChangeRouting(customer)",
+            "journeys.finishUserChangeRouting(customer, settled: true)",
+        ])
+    }
+
+    /// When every attempt is superseded, a newer refresh may still bring the
+    /// profile, so the transition finishes without calling it settled.
+    func testATransitionWhoseRefreshesAreAllSupersededFinishesUnsettled() async {
+        let log = TransitionOrderLog()
+        let identity = MockIdentityService()
+        let profile = SupersededProfileProbe(log: log, superseded: 3)
+        let features = FeatureService(api: ReadinessFeatureCheck(), identity: identity,
+            profile: profile, dateProvider: MockDateProvider(), featureInfo: FeatureInfo(), cacheTTL: 300)
+        let transitions = UserTransitionCoordinator(profile: profile,
+            eventLog: ReadinessEventMigration(), features: features,
+            experiences: MockExperienceService(),
+            journeys: FinishRecordingJourneyProbe(log: log), identity: identity)
+        identity.setDistinctId("customer")
+        transitions.enqueue(.init(kind: .identify, from: "anonymous", to: "customer", migrateEvents: true))
+        await transitions.drain()
+        XCTAssertEqual(log.entries, [
+            "profile.refetch",
+            "profile.refetch",
+            "profile.refetch",
+            "journeys.finishUserChangeRouting(customer, settled: false)",
         ])
     }
 
@@ -288,7 +315,7 @@ final class FeatureIdentityReadinessTests: XCTestCase {
         await transitions.drain()
         XCTAssertEqual(log.entries, [
             "profile.refetch",
-            "journeys.finishUserChangeRouting(customer)",
+            "journeys.finishUserChangeRouting(customer, settled: false)",
         ])
     }
 
