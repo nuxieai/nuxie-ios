@@ -172,8 +172,6 @@ struct JourneyExperimentExposureReporter: Sendable {
             isHoldout = false
         }
         properties["is_holdout"] = isHoldout
-        // A treatment was selected; a holdout's treatment was suppressed.
-        properties["exposure_basis"] = isHoldout ? "suppressed" : "selected"
         return Projection(
             eventName: JourneyEvents.experimentExposure,
             properties: properties
