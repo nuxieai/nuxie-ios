@@ -160,6 +160,14 @@ actor ExperienceInteractiveLayer {
         }
     }
 
+    func products(screenID: String) throws -> [StoreProduct] {
+        try requireOpen()
+        guard let row = rows[screenID] else {
+            throw ExperienceInteractiveScreenError.screenNotFound(screenID)
+        }
+        return row.products
+    }
+
     private func prepareRowLocked(screenID: String, products: [StoreProduct]) async throws {
         try requireOpen()
         if rows[screenID] == nil {

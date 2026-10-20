@@ -361,6 +361,84 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
         }
     }
 
+    func testSwipeDuringAnUnpresentedPhaseSupersedesNavigationAndReleasesTheDrain() async throws {
+        try await withCoordinator { coordinator, _, _, _ in
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet"])
+            let sheet = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            let presentation = try XCTUnwrap(sheet.presentationController)
+            let blocked = expectation(description: "phase waiting for presentation")
+            var withdrew = false
+            sheet.onLayerStep = { [weak sheet] _ in
+                guard let sheet else { return }
+                if sheet.lifecyclePhase == .exiting && !withdrew {
+                    withdrew = true
+                    sheet.setContentHidden(true)
+                    blocked.fulfill()
+                }
+            }
+            let superseded = expectation(description: "sheet navigation superseded")
+            var sheetResult: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "screen_1",
+                transition: ["type": "magic-move", "transitionId": "transition.native-contract"]) { result, _ in
+                sheetResult = result
+                superseded.fulfill()
+            })
+            await fulfillment(of: [blocked], timeout: 2)
+            XCTAssertNil(sheetResult)
+            let drain = try XCTUnwrap(Mirror(reflecting: coordinator).children
+                .first { $0.label == "navigationTask" }?.value as? Task<Void, Never>)
+            await withCheckedContinuation { continuation in sheet.dismiss(animated: false) { continuation.resume() } }
+            coordinator.presentationControllerDidDismiss(presentation)
+            let deadline = Date().addingTimeInterval(2)
+            while coordinator.topPresentedLayer != nil, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertNil(coordinator.topPresentedLayer)
+            let revealed = expectation(description: "navigation in revealed layer finishes")
+            var baseResult: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "screen_2", transition: nil) { result, _ in
+                baseResult = result
+                revealed.fulfill()
+            })
+            await fulfillment(of: [superseded, revealed], timeout: 3)
+            XCTAssertEqual(sheetResult, .superseded)
+            XCTAssertEqual(baseResult, .navigated)
+            XCTAssertEqual(coordinator.activeScreenId, "screen_2")
+            // Cancellation keeps the pre-fix regression bounded after its assertions fail.
+            drain.cancel()
+            await drain.value
+        }
+    }
+
+    func testRevisitsReuseTheRowsOriginalProductsForDisplayAndCheckout() async throws {
+        let resolver = LayerProductResolver()
+        try await withCoordinator(productResolver: { await resolver.resolve($0) }) { coordinator, controller, probe, _ in
+            let layer = try XCTUnwrap(controller.interactiveLayer)
+            try await navigate(coordinator, to: "screen_2")
+            let original = try await layer.products(screenID: "screen_2")
+            XCTAssertEqual(original.first?.price, "screen_2:1")
+            try await back(coordinator, to: "screen_1")
+            try await navigate(coordinator, to: "screen_2")
+            let counts = await resolver.counts
+            XCTAssertEqual(counts, ["screen_1": 1, "screen_2": 1])
+            XCTAssertEqual(probe.checkoutProducts.last, original)
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet"])
+            let modal = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            let modalProducts = try await XCTUnwrap(modal.interactiveLayer).products(screenID: "screen_2")
+            XCTAssertEqual(modalProducts.first?.price, "screen_2:2", "A new layer prepares its own row")
+            let closed = await coordinator.closeTopLayer()
+            XCTAssertEqual(closed, .navigated)
+            try await back(coordinator, to: "screen_1")
+            try await navigate(coordinator, to: "screen_2")
+            let retained = try await layer.products(screenID: "screen_2")
+            let finalCounts = await resolver.counts
+            XCTAssertEqual(finalCounts, ["screen_1": 1, "screen_2": 2])
+            XCTAssertEqual(retained, original)
+            XCTAssertEqual(probe.checkoutProducts.last, original,
+                "Checkout must use the same product set that initialized the retained row")
+        }
+    }
+
     private func navigate(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String, transition: Any? = nil) async throws {
         let result: ExperienceScreenNavigationResult = await withCheckedContinuation { continuation in
             if !coordinator.navigate(to: id, transition: transition, completion: { result, _ in continuation.resume(returning: result) }) {
@@ -379,7 +457,8 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
         XCTAssertEqual(result, .navigated)
     }
 
-    private func withCoordinator(payload suppliedPayload: AuthenticatedRuntimePayload? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
+    private func withCoordinator(payload suppliedPayload: AuthenticatedRuntimePayload? = nil,
+        productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
         let payload: AuthenticatedRuntimePayload
         if let suppliedPayload { payload = suppliedPayload }
@@ -392,7 +471,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             sceneURL: root.appendingPathComponent("fixtures/runtime/layer-host-interim/layer-host.riv"), sceneBytes: payload.sceneBytes,
             assetURLsByUniqueName: [:], source: .cache, payload: payload,
             interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(), provenance: UUID().uuidString, payload: payload),
-            products: [], resourceMetrics: .zero)
+            products: [], resourceMetrics: .zero, productResolver: productResolver)
         let preparation = try await acquired.interactivePreparation.preparation()
         let host = UIViewController()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -408,7 +487,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             hostViewController: host, screenDelegate: probe,
             onPresentedScreenDismissed: { _, _ in },
             onScreenHidden: { id, _ in probe.lifecycle.append("hidden:\(id)") },
-            onScreenActive: { id in probe.lifecycle.append("active:\(id)") }, onProductsResolved: { _ in },
+            onScreenActive: { id in probe.lifecycle.append("active:\(id)") }, onProductsResolved: { probe.checkoutProducts.append($0) },
             onProductsUnavailable: { _ in XCTFail("Unexpected product resolution failure") },
             onRuntimeFailure: { id, error in XCTFail("\(id): \(error)") })
         do {
@@ -425,8 +504,18 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
     }
 }
 
+private actor LayerProductResolver {
+    private(set) var counts: [String: Int] = [:]
+    func resolve(_ screenID: String) -> [StoreProduct] {
+        counts[screenID, default: 0] += 1
+        return [StoreProduct(productId: "product", placementId: "placement", name: screenID,
+            price: "\(screenID):\(counts[screenID]!)", period: nil)]
+    }
+}
+
 @MainActor
 private final class LayerHostProbe: ExperienceScreenViewControllerDelegate {
+    var checkoutProducts: [[StoreProduct]] = []
     var lifecycle: [String] = []
     var events: [String] = []
     var firstPhases: [ObjectIdentifier: ExperienceScreenLifecyclePhase] = [:]
