@@ -349,6 +349,14 @@ final class JourneyReleaseTests: XCTestCase {
         }
         root["state"] = ["days": ["type": "number", "rules": []]]
         XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
+        // Rules on values in state travel beside it, in their own optional list.
+        root["state"] = ["days": ["type": "number"]]
+        root["stateRules"] = [["model": "Experience", "property": "days", "kind": 2, "mode": 1, "number_bound": 30,
+            "text": "", "values": [], "value_count": 0, "picked_property": "", "bound_flags": 0, "minimum": 0,
+            "maximum": 0, "code": "max", "message": "Enter a smaller number."]]
+        XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(root))
+        root["stateRules"] = "not a list"
+        XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(root))
     }
 
     func testVersionThreeResponsePolicyRecordsAreStrict() throws {
