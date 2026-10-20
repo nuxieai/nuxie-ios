@@ -50,6 +50,82 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
         }
     }
 
+    func testCachedSnapshotInitializesNewRowsWithoutOverwritingRevisitedValues() async throws {
+        try await withCoordinator { coordinator, controller, _, _ in
+            let layer = try XCTUnwrap(controller.interactiveLayer)
+            XCTAssertTrue(coordinator.applySnapshot(.init(values: [
+                .init(viewModelName: "Runtime", instanceId: "row-a", path: "keptValue", value: AnyCodable(7)),
+                .init(viewModelName: "Runtime_Upsell", instanceId: "row-b", path: "keptValue", value: AnyCodable(11))
+            ]), screenId: nil))
+            XCTAssertTrue(coordinator.applyValue(path: .init(viewModelName: "Runtime", path: "keptValue"),
+                value: 21, screenId: "screen_1", instanceId: "row-a"))
+            try await navigate(coordinator, to: "screen_2")
+            let firstB = try await layer.snapshot(screenID: "screen_2")
+            XCTAssertEqual(rootValue("keptValue", in: firstB), .number(11), "A newly prepared row receives the cached snapshot")
+            XCTAssertTrue(coordinator.applyValue(path: .init(viewModelName: "Runtime_Upsell", path: "keptValue"),
+                value: 42, screenId: "screen_2", instanceId: "row-b"))
+            try await back(coordinator, to: "screen_1")
+            let returnedA = try await layer.snapshot(screenID: "screen_1")
+            XCTAssertEqual(rootValue("keptValue", in: returnedA), .number(21))
+            try await navigate(coordinator, to: "screen_2")
+            let returnedB = try await layer.snapshot(screenID: "screen_2")
+            XCTAssertEqual(returnedB.rootInstanceID, firstB.rootInstanceID)
+            XCTAssertEqual(rootValue("keptValue", in: returnedB), .number(42))
+            XCTAssertTrue(coordinator.applySnapshot(.init(values: [
+                .init(viewModelName: "Runtime_Upsell", instanceId: "row-b", path: "keptValue", value: AnyCodable(99))
+            ]), screenId: "screen_2"))
+            try await back(coordinator, to: "screen_1")
+            let updatedB = try await layer.snapshot(screenID: "screen_2")
+            XCTAssertEqual(rootValue("keptValue", in: updatedB), .number(99), "Explicit snapshots still update retained rows")
+        }
+    }
+
+    func testUnqualifiedBroadcastResolvesTheDefaultViewModelOfEachRetainedRow() async throws {
+        try await withCoordinator { coordinator, controller, _, _ in
+            let layer = try XCTUnwrap(controller.interactiveLayer)
+            try await navigate(coordinator, to: "screen_2")
+            XCTAssertTrue(coordinator.applyValue(path: .init(path: "keptValue"), value: 42,
+                screenId: nil, instanceId: nil))
+            try await back(coordinator, to: "screen_1")
+            let a = try await layer.snapshot(screenID: "screen_1")
+            let b = try await layer.snapshot(screenID: "screen_2")
+            XCTAssertEqual(rootValue("keptValue", in: a), .number(42))
+            XCTAssertEqual(rootValue("keptValue", in: b), .number(42))
+            XCTAssertTrue(coordinator.applyValue(path: .init(path: "keptValue"), value: 84,
+                screenId: nil, instanceId: nil))
+            try await navigate(coordinator, to: "screen_2")
+            let nextA = try await layer.snapshot(screenID: "screen_1")
+            let nextB = try await layer.snapshot(screenID: "screen_2")
+            XCTAssertEqual(rootValue("keptValue", in: nextA), .number(84))
+            XCTAssertEqual(rootValue("keptValue", in: nextB), .number(84))
+        }
+    }
+
+    func testCutWithPublishedHalvesEmitsItsOutgoingCompletionBeforeSwapping() async throws {
+        try await withCoordinator { coordinator, controller, _, _ in
+            var mountedAtExit: [String]?
+            let layer = try XCTUnwrap(controller.interactiveLayer)
+            controller.onLayerStep = { step in
+                if step.rows["screen_1"]?.effects.contains(where: {
+                    if case .reportedEvent(let event) = $0.kind {
+                        return event.name == "nx_exit_done:transition.native-contract"
+                    }
+                    return false
+                }) == true {
+                    mountedAtExit = Array(step.rows.keys).sorted()
+                }
+            }
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "none", "transitionId": "transition.native-contract"])
+            XCTAssertEqual(mountedAtExit, ["screen_1"], "The published leave must finish before insertion")
+            let mounted = await layer.mountedScreenIDs
+            XCTAssertEqual(mounted, ["screen_2"])
+        }
+    }
+
+    private func rootValue(_ name: String, in snapshot: NuxieNativeViewModelSnapshot) -> NuxieNativeViewModelValue? {
+        snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == name }?.value
+    }
+
     func testNavigationRequestedDuringStepQueuesAndSelfNavigationCompletesAlreadyActive() async throws {
         try await withCoordinator { coordinator, controller, _, _ in
             let first = expectation(description: "forward")
