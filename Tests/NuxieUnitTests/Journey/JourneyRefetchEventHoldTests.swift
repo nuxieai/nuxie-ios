@@ -192,6 +192,42 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         await launch.close()
     }
 
+    /// An event captured before a wait's deadline but handled after it
+    /// leaves that timeout to a pass at the current time, which still runs.
+    func testALateEventDoesNotStrandAWaitThatIsDue() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let savedCopy = try await waitingCopy(fixture, entry: "start_waiting")
+        let dateProvider = MockDateProvider(initialDate: Date())
+        let sleeper = MockSleepProvider()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let service = makeService(identity: identity, events: events, directory: directory,
+                                  dateProvider: dateProvider, sleepProvider: sleeper)
+        await service.initialize()
+        await service.profileDidCommit(savedCopy, distinctId: "customer")
+        await service.handleEvent(NuxieEvent(name: "start_waiting", distinctId: "customer",
+                                             timestamp: dateProvider.now()))
+        let capturedAt = dateProvider.now().addingTimeInterval(30)
+        dateProvider.advance(by: 70)
+
+        await service.handleEvent(NuxieEvent(name: "screen_viewed", distinctId: "customer",
+                                             timestamp: capturedAt))
+        for _ in 0..<200 where !sleeper.pendingSleepDurations.contains(0) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(sleeper.pendingSleepDurations.contains(0), "A timeout pass is due at once")
+        sleeper.completeSleeps(withDuration: 0)
+        for _ in 0..<200 where completions(in: events).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(completions(in: events), ["timed_out"])
+        await service.shutdown()
+    }
+
     /// The shared contract, replayed operation by operation.
     func testRefetchEventHoldVectors() async throws {
         let url = URL(fileURLWithPath: #filePath)
@@ -378,6 +414,12 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         .init(kind: .complete, id: "took_go", action: nil, outlets: nil, outcome: "took_go"),
         .init(kind: .complete, id: "timed_out", action: nil, outlets: nil, outcome: "timed_out"),
     ]
+
+    private func completions(in events: MockEventLog) -> [String] {
+        events.routedEvents
+            .filter { $0.name == JourneyEvents.journeyCompleted }
+            .compactMap { $0.properties["outcome"] as? String }
+    }
 
     private actor ActivateOnce {
         private(set) var claimed = false
