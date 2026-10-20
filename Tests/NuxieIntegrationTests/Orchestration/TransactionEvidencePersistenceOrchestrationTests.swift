@@ -32,7 +32,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 let scope = PurchaseStorageScope(
                     appIdentifier: Bundle.main.bundleIdentifier
                         ?? "nuxie.unidentified-host-app",
-                    environment: .production,
+                    apiKey: "orchestration-suite-key",
                     testStoreEnabled: false
                 )
                 let directory = scope.storageDirectory(

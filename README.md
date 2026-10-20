@@ -122,8 +122,7 @@ import Nuxie
 @main
 struct MyApp: App {
   init() {
-    var config = NuxieConfiguration(apiKey: "NX_…")
-    config.environment = .production // or .development
+    let config = NuxieConfiguration(apiKey: "pk_test_…") // pk_live_… in Release builds
     config.logLevel = .info
     // Optional: configure purchases
     // config.purchaseDelegate = MyPurchaseDelegate()
@@ -145,8 +144,7 @@ import Nuxie
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
   func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-    let config = NuxieConfiguration(apiKey: "NX_…")
-    config.environment = .production
+    let config = NuxieConfiguration(apiKey: "pk_test_…") // pk_live_… in Release builds
     config.logLevel = .warning
 
     do { try NuxieSDK.shared.setup(with: config) }
@@ -210,7 +208,9 @@ NuxieSDK.shared.reset() // keepAnonymousId = false by default
 
 Create with `NuxieConfiguration(apiKey:)` and optionally set:
 
-- `environment`: `.production` (default) or `.development`.
+- `environment`: the Nuxie service, `.production` by default. Keep the default
+  for every build, including Debug and TestFlight: the publishable key, not the
+  service environment, selects test or live content and purchases.
 - `testStoreEnabled`: the isolated, local-only purchase sheet (development +
   `pk_test_` key only).
 - Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
@@ -226,8 +226,7 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
 Minimal example:
 
 ```swift
-var config = NuxieConfiguration(apiKey: "NX_…")
-config.environment = .production
+let config = NuxieConfiguration(apiKey: "pk_test_…")
 config.beforeSend = { event in
   // Example: drop noisy dev events
   event.name.hasPrefix("dev_") ? nil : event
@@ -351,8 +350,10 @@ customer owner needed to attribute later renewals; it does not retain the
 one-shot Experience or Placement context. An interrupted checkout may be
 retried after its 15-minute recovery window, while an explicit Ask-to-Buy/SCA
 pending result remains recoverable for 30 days. Purchase recovery, account
-ownership, and receipt evidence are stored in separate app, SDK-environment,
-and Test Store/App Store namespaces. Receipt/JWS retry
+ownership, and receipt evidence are stored in separate app, key-mode (test or
+live), and Test Store/App Store namespaces. The StoreKit account token uses the
+same app, key mode and store mode, which is how the server recognizes the
+purchase's customer; the service environment takes no part. Receipt/JWS retry
 evidence is removed after backend acceptance and expires after 90 days. While
 that evidence is unreconciled, Feature Access is derived in memory from the
 evidence and cached signed Product allowances; no separate access ledger is
