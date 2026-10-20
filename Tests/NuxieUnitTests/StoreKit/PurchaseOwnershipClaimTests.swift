@@ -489,7 +489,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertFalse(entry?.isUnsent ?? false)
     }
 
-    func testRestoreLeavesAnotherCustomersUnsentPurchaseToItsOwnSend() async throws {
+    func testRestoreClaimTakesTheOutboxEntryOfAnotherCustomer() async throws {
         let harness = await makeHarness(customer: "restorer")
         let earlier = StoredTransactionEvidence(
             scope: scope,
@@ -520,16 +520,109 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             customerKind: .identified
         )])
 
-        // The earlier customer's entry is theirs: it is sent as admitted,
-        // and the server, not the phone, decides who ends up owning it.
+        // One entry per purchase: the Restore claim was the newer intent and
+        // took the earlier customer's entry, so once answered nothing is left
+        // to send for them. The server decides who owns the purchase.
+        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"])
         await harness.observer.retryStoredEvidence()
-        XCTAssertEqual(harness.api.requests.count, 2)
-        XCTAssertEqual(harness.api.requests.last, PurchaseRequest(
-            transactionJwt: "earlier-owner-jws",
+        XCTAssertEqual(harness.api.requests.count, 1)
+    }
+
+    func testRestoreClaimOnAnotherCustomersEntryStaysQueuedWithoutAnAnswer() async throws {
+        let harness = await makeHarness(customer: "restorer")
+        let earlier = StoredTransactionEvidence(
+            scope: scope,
+            transactionJws: "earlier-owner-jws",
+            transactionId: "shared-transaction",
+            originalTransactionId: "shared-original",
+            productId: storeProductId,
             distinctId: "earlier-owner",
+            recordedAt: Date(),
+            isRevoked: false,
+            appAccountToken: token("earlier-owner"),
             reason: .purchase,
             customerKind: .identified
+        )
+        _ = harness.store.save([earlier.transactionId: earlier])
+        harness.entitlements.set([
+            entitlement("shared", productId: storeProductId, token: token("earlier-owner"),
+                transactionId: "shared-transaction", originalTransactionId: "shared-original"),
+        ])
+        harness.adapter.restoreResult = .restored
+        harness.api.answer(.fail)
+
+        try await assertRestoreGetsNoAnswer(harness)
+        try assertRestoreClaimQueued("shared-transaction", jws: "shared-jws", in: harness)
+
+        harness.api.answer(.accept)
+        await harness.observer.retryStoredEvidence()
+        XCTAssertEqual(harness.api.requests.last, PurchaseRequest(
+            transactionJwt: "shared-jws",
+            distinctId: "restorer",
+            reason: .restore,
+            customerKind: .identified
         ))
+        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"])
+    }
+
+    func testRestoreClaimOnAnAcceptedPurchaseStaysQueuedWithoutAnAnswer() async throws {
+        let harness = await makeHarness(customer: "restorer")
+        let item = entitlement("own", productId: storeProductId, token: token("restorer"))
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        let synced = await streamed.syncTask?.value
+        XCTAssertEqual(synced, true)
+        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"])
+
+        harness.entitlements.set([item])
+        harness.adapter.restoreResult = .restored
+        harness.api.answer(.fail)
+        try await assertRestoreGetsNoAnswer(harness)
+        try assertRestoreClaimQueued("own-transaction", jws: "own-jws", in: harness)
+
+        harness.api.answer(.accept)
+        await harness.observer.retryStoredEvidence()
+        XCTAssertEqual(harness.api.requests.last?.reason, .restore)
+        XCTAssertEqual(harness.api.requests.last?.distinctId, "restorer")
+        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"])
+    }
+
+    private func assertRestoreGetsNoAnswer(
+        _ harness: Harness,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        do {
+            _ = try await harness.service.restore()
+            XCTFail("A Restore the server has not answered must not report restored", file: file, line: line)
+        } catch StoreKitError.restoreFailed(let underlying) {
+            XCTAssertEqual(underlying as? RestoreClaimError, .unconfirmed, file: file, line: line)
+        }
+    }
+
+    /// The unanswered claim waits in the outbox as the restoring customer's
+    /// own entry, so a retry or relaunch sends it again.
+    private func assertRestoreClaimQueued(
+        _ transactionId: String,
+        jws: String,
+        in harness: Harness,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let queued = try XCTUnwrap(
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?[transactionId],
+            file: file, line: line
+        )
+        XCTAssertTrue(queued.isUnsent, file: file, line: line)
+        XCTAssertEqual(queued.transactionJws, jws, file: file, line: line)
+        XCTAssertEqual(queued.distinctId, "restorer", file: file, line: line)
+        XCTAssertEqual(queued.reason, .restore, file: file, line: line)
+        XCTAssertEqual(queued.customerKind, .identified, file: file, line: line)
+        XCTAssertEqual(queued.sendAttempts, 1, file: file, line: line)
+        XCTAssertFalse(queued.unlocksEarly(for: "restorer"), "a Restore waits for the server", file: file, line: line)
     }
 
     // MARK: - Shared outbox fixture
@@ -556,6 +649,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             let answers: [String]
             let result: String
             let error: String?
+            let queuedClaims: Int
         }
         let suite: String
         let retry: Retry
@@ -651,6 +745,10 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             }
             XCTAssertEqual(outcome, vector.result, vector.name)
             XCTAssertEqual(error, vector.error, vector.name)
+            let queued = harness.store.load().valueTreatingAbsentAsEmpty([:])?.values.filter {
+                $0.isUnsent && $0.reason == .restore && $0.distinctId == "restorer"
+            }
+            XCTAssertEqual(queued?.count, vector.queuedClaims, vector.name)
         }
     }
 

@@ -153,9 +153,11 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     }
 
     /// Whether this entry lets `distinctId` in before the server answers:
-    /// their own unanswered, unrevoked purchase, by account token.
+    /// their own unanswered, unrevoked purchase, by account token. A Restore
+    /// claim waits for the server, as Restore itself does.
     func unlocksEarly(for distinctId: String) -> Bool {
-        answeredAt == nil && !isRevoked && self.distinctId == distinctId
+        answeredAt == nil && !isRevoked && reason != .restore
+            && self.distinctId == distinctId
             && appAccountToken == scope.appAccountToken(distinctId: distinctId)
     }
 

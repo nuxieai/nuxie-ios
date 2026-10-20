@@ -2368,6 +2368,16 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // A child can start after an identity change. Check the initiating owner
         // on this actor immediately before creating the sync operation.
         guard identityService.getDistinctId() == distinctId else { return .failed }
+        // A Restore or purchase claim is queued like any other send before it
+        // goes out, so a claim the server never answers is retried, also
+        // after a relaunch.
+        var customerKind: PurchaseCustomerKind?
+        if reason.claimsOwnership {
+            guard let admitted = await admitClaim(
+                item, distinctId: distinctId, reason: reason
+            ) else { return .failed }
+            customerKind = admitted.customerKind
+        }
         let outcome = await syncTransactionWithOptions(
             transactionJws: item.jwsRepresentation,
             transactionId: item.update.transactionId,
@@ -2375,6 +2385,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             originalTransactionId: item.update.originalTransactionId,
             distinctId: distinctId,
             reason: reason,
+            customerKind: customerKind,
             refreshProviderState: true
         )
         claimOutcomes.removeValue(forKey: syncKey(
@@ -2384,6 +2395,69 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             distinctId: distinctId
         ))
         return outcome
+    }
+
+    /// Writes a claim into the outbox as the claiming customer's entry. Their
+    /// earlier entry for the purchase keeps its bookkeeping and takes the
+    /// claim as its next send. Another customer's entry gives way, since the
+    /// claim is the newer intent for the purchase; a checkout completion that
+    /// customer never delivered goes with it.
+    private func admitClaim(
+        _ item: StoreTransactionRecoveryItem,
+        distinctId: String,
+        reason: PurchaseSyncReason
+    ) async -> StoredTransactionEvidence? {
+        let update = item.update
+        let customerKind = identityService.purchaseCustomerKind(of: distinctId) ?? .identified
+        let admittedAt = dateProvider.now()
+        let change = reloadAndApplyEvidenceChange(transactionId: update.transactionId) {
+            [purchaseStorageScope] current in
+            let own = current?.distinctId == distinctId ? current : nil
+            if let current, own == nil,
+               current.commercialContext != nil, current.completionDeliveredAt == nil {
+                LogWarning(
+                    "TransactionObserver: A Restore claim replaces another customer's entry with an undelivered completion"
+                )
+            }
+            return StoredTransactionEvidence(
+                scope: current?.scope ?? purchaseStorageScope,
+                transactionJws: item.jwsRepresentation,
+                transactionId: update.transactionId,
+                originalTransactionId: update.originalTransactionId,
+                productId: update.productId,
+                distinctId: distinctId,
+                recordedAt: own?.recordedAt ?? admittedAt,
+                productFeatureIds: own?.productFeatureIds ?? [],
+                isRevoked: update.isRevoked,
+                finishRequired: current?.finishRequired ?? false,
+                commercialContext: own?.commercialContext,
+                checkoutCompletionEventId: own?.checkoutCompletionEventId,
+                completionDeliveredAt: own?.completionDeliveredAt,
+                answeredAt: nil,
+                appAccountToken: update.appAccountToken,
+                reason: reason,
+                customerKind: customerKind,
+                sendAttempts: 0
+            )
+        }
+        guard let change else { return nil }
+        // The claim is a new send: an earlier commit or acceptance of this
+        // purchase in this session no longer answers it, so recovery commits
+        // and sends it afresh.
+        completedPurchaseCommits.removeValue(forKey: .verified(
+            transactionId: update.transactionId,
+            revoked: false
+        ))
+        syncedTransactionIds.remove(syncKey(
+            transactionId: update.transactionId,
+            originalTransactionId: update.originalTransactionId,
+            transactionJws: item.jwsRepresentation,
+            distinctId: distinctId
+        ))
+        if change.changed {
+            await refreshOptimisticProjection()
+        }
+        return change.evidence
     }
 
     /// A scheduled sync reports only whether the server accepted it. When a

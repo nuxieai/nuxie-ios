@@ -9,7 +9,7 @@
     "requesterDistinctId is the customer the send is for: the one an explicit producer (checkout, Restore, already owned) names, else the customer of the checkout binding the store delivery matches, else the current customer. The SDK never works out who owns a purchase; the owner is what the server last said.",
     "A 200 or a refusal (409, 400) answers the send and clears the entry. Any other failure (transport, 5xx, 401, 403) keeps it with one more attempt; it is sent again after the backoff, and also at every launch, at identify or reset, and when a newly loaded profile changes the product catalog.",
     "After any answer, accepted or refused, the SDK fetches the requester's profile again when they are the current customer. Access comes only from the server profile, plus the early unlock of the buyer's own unanswered, unrevoked purchase (its account token is the one derived for the current customer). A 200's features hold in memory only until a profile requested after them lands.",
-    "Restore sends every current store entitlement for the restoring customer as 'restore' and reports restored only when the server accepted at least one.",
+    "Restore sends every current store entitlement for the restoring customer as 'restore' and reports restored only when the server accepted at least one. Each claim is written into the outbox as the restoring customer's entry before it is sent, so an unanswered claim is retried like any other entry. With one entry per purchase, a claim takes over another customer's entry for the same purchase. A Restore claim never unlocks before the server answers.",
     "Runners drive production entry points (checkout, already-owned checkout, Restore, store update, launch scan, stored retry) against a transport that records each request and answers as the case says."
   ],
   "request": {
@@ -93,9 +93,9 @@
     { "name": "offline", "status": null, "entry": "kept", "sendAttempts": 1, "profileRefreshes": 0 }
   ],
   "restore": [
-    { "name": "one accepted among refusals", "answers": ["accepted", "conflict"], "result": "restored" },
-    { "name": "every claim refused", "answers": ["conflict"], "result": "failed", "error": "owned_by_another_account" },
-    { "name": "no answer", "answers": ["offline"], "result": "failed", "error": "unconfirmed" },
-    { "name": "nothing to send", "answers": [], "result": "no_purchases" }
+    { "name": "one accepted among refusals", "answers": ["accepted", "conflict"], "result": "restored", "queuedClaims": 0 },
+    { "name": "every claim refused", "answers": ["conflict"], "result": "failed", "error": "owned_by_another_account", "queuedClaims": 0 },
+    { "name": "no answer", "answers": ["offline"], "result": "failed", "error": "unconfirmed", "queuedClaims": 1 },
+    { "name": "nothing to send", "answers": [], "result": "no_purchases", "queuedClaims": 0 }
   ]
 }

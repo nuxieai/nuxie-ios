@@ -73,8 +73,14 @@ Both `reason` and `customer_kind` are always sent.
 ## Restore
 
 Restore sends every current StoreKit entitlement for the restoring customer
-as `restore`, including one another customer on this device has an entry
-for (that entry stays theirs and is sent as it was admitted). The result:
+as `restore`. Each claim is written into the outbox as the restoring
+customer's entry before it is sent, so a claim that gets no answer is retried
+like any other entry, also after a relaunch. That includes a purchase the
+server accepted earlier and a purchase another customer on this device has an
+entry for: one entry per purchase, so the claim, the newer intent, takes that
+entry over (a checkout completion that customer never delivered goes with
+it). A Restore claim never unlocks before the server answers; Restore waits
+for the answer. The result:
 
 - `.restored` once the server accepted at least one;
 - `.failed(restoreFailed(RestoreClaimError.ownedByAnotherAccount))` when it
