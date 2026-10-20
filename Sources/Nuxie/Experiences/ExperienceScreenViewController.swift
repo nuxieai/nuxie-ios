@@ -1264,7 +1264,7 @@ final class ExperienceScreenViewController: UIViewController {
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
                 let step = try await screen.step(elapsedSeconds: 0)
                 return .work(requestsFrame: true) { [weak self = self] in
-                    await self?.deliverStep(effects: step.effects)
+                    await self?.deliverStep(step)
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
                 if case .failure(let error) = result, !(error is CancellationError) {
@@ -1316,8 +1316,7 @@ final class ExperienceScreenViewController: UIViewController {
         point: CGPoint?, text: String? = nil, ending: Bool = false, ownerID: UInt64? = nil
     ) async throws {
         func apply(_ step: ExperienceInteractiveStepResult) async {
-            if let state = step.focusState { riveFocusState = state }
-            await deliverStep(effects: step.effects)
+            await deliverStep(step)
         }
         if ending {
             if nativeEditingTarget == target && nativeEditingOwnerID == ownerID {
@@ -1458,6 +1457,15 @@ final class ExperienceScreenViewController: UIViewController {
 
     private var pendingFramePublications = 0
 
+    func deliverStep(_ step: ExperienceInteractiveStepResult, screenID: String? = nil) async {
+        if let state = step.focusState { riveFocusState = state }
+        if let layerStep = step.layerStep {
+            await deliverLayerStep(layerStep)
+        } else {
+            await deliverStep(effects: step.effects, screenID: screenID)
+        }
+    }
+
     func deliverStep(effects: [ExperienceInteractiveEffect], screenID: String? = nil) async {
         let screenId = screenID ?? self.screenId
         let interactiveBinding = rowBindings[screenId] ?? interactiveScreen
@@ -1480,7 +1488,7 @@ final class ExperienceScreenViewController: UIViewController {
                         _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
                             let step = try await interactive.confirmResponseSave(trigger: path)
                             return .work(requestsFrame: true) { [weak self = self] in
-                                await self?.deliverStep(effects: step.effects, screenID: screenId)
+                                await self?.deliverStep(step, screenID: screenId)
                             }
                         })
                     }))

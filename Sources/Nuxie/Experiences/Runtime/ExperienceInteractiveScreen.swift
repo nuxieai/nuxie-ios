@@ -244,6 +244,8 @@ struct ExperienceInteractiveStepResult: Equatable, Sendable {
     let pointerHits: [ExperienceInteractivePointerHit]
     var focusState: NuxieNativeFocusState? = nil
     let effects: [ExperienceInteractiveEffect]
+    // A row-initiated advance owns the effects of the whole layer.
+    var layerStep: ExperienceInteractiveLayer.Step? = nil
 }
 
 enum ExperienceInteractiveInput: Equatable, Sendable {
