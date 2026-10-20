@@ -248,6 +248,84 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         await events.close()
     }
 
+    func testIdentifyAfterTheCachedProfileStartsFromTheArrivingCustomersProfile() async throws {
+        try await assertIdentifyDuringStartup(cachedProfileCommitsBeforeStartup: false)
+    }
+
+    func testIdentifyBeforeStartupStartsFromTheArrivingCustomersProfile() async throws {
+        try await assertIdentifyDuringStartup(cachedProfileCommitsBeforeStartup: true)
+    }
+
+    /// The cached customer A, then identify(B) while the SDK is starting, in
+    /// production mode: the storage scope comes from A's profile authority.
+    private func assertIdentifyDuringStartup(
+        cachedProfileCommitsBeforeStartup: Bool
+    ) async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let snapshot = replacing(
+            try await authenticatedSnapshot(fixture),
+            entry: .init(type: .event, eventName: "signed_in_trigger", segmentId: nil, member: nil, condition: nil),
+            reentry: .init(type: .everyMatch, window: nil)
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = MockEventStore()
+        let events = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                              apiClient: MockNuxieApi(), store: store)
+        let service = JourneyService(
+            identity: identity, events: events,
+            dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
+            journalDirectory: directory, storageScope: nil, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
+        )
+        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        let configuration = NuxieConfiguration(apiKey: "startup-identify-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        if cachedProfileCommitsBeforeStartup {
+            // A's cached profile and identify(B), with its transition, all
+            // land before the SDK prepares its journal.
+            await service.profileDidCommit(snapshot, artifacts: nil,
+                                           authority: fixture.deliveryAuthority,
+                                           admissionGeneration: 1, distinctId: "customer-a")
+            identity.setDistinctId("customer-b")
+            await service.handleUserChange(from: "customer-a", to: "customer-b")
+            await service.prepareForEvents()
+            try await events.configure(configuration: configuration)
+            await service.initialize()
+            // The startup profile fetch settles without B's profile (the
+            // transition's refresh superseded it): routing stays held for B.
+            await service.finishStartupRouting()
+        } else {
+            // A's cached profile goes live, then identify(B) lands before
+            // initialize() and before its transition runs.
+            await service.prepareForEvents()
+            try await events.configure(configuration: configuration)
+            await service.profileDidCommit(snapshot, artifacts: nil,
+                                           authority: fixture.deliveryAuthority,
+                                           admissionGeneration: 1, distinctId: "customer-a")
+            identity.setDistinctId("customer-b")
+            await service.initialize()
+            await service.handleUserChange(from: "customer-a", to: "customer-b")
+        }
+        events.track("signed_in_trigger")
+        _ = await events.flushEvents()
+        _ = await events.drainCommittedRouting()
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-b"), 0)
+
+        await service.profileDidCommit(snapshot, artifacts: nil,
+                                       authority: fixture.deliveryAuthority,
+                                       admissionGeneration: 2, distinctId: "customer-b")
+        await events.drain()
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-b"), 1)
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-a"), 0)
+        await service.shutdown()
+        await events.close()
+    }
+
     /// Customer A's profile and journal are live and EventLog routes freely,
     /// as once the SDK has settled after launch.
     private func settledCustomerA(

@@ -151,6 +151,10 @@ actor JourneyService {
     private var startupRoutingDeferral: UInt64?
     private var startupProfileSettled = false
     private var userChangeRoutingDeferral: UInt64?
+    /// The customer an identity transition is bringing in, from its first
+    /// step until it finishes. Startup leaves their journal and routing to
+    /// that transition.
+    private var transitionInFlight: String?
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
@@ -289,7 +293,7 @@ extension JourneyService {
     func prepareForEvents() async {
         guard !initialized else { return }
         startupRoutingDeferral = await events.deferCommittedRouting()
-        if storageScope != nil {
+        if startupOpensJournal(for: identity.getDistinctId()) {
             await prepareJournal(for: identity.getDistinctId())
         }
         initialized = true
@@ -304,7 +308,9 @@ extension JourneyService {
     /// recovery gate if profile admission races prefetch completion.
     func finishStartupRouting() async {
         startupProfileSettled = true
-        guard initialized, journal == nil, let generation = startupRoutingDeferral else { return }
+        guard initialized, journal == nil,
+              !awaitsIdentifiedProfile(identity.getDistinctId()),
+              let generation = startupRoutingDeferral else { return }
         await events.resumeCommittedRouting(ifGeneration: generation)
     }
 
@@ -312,7 +318,7 @@ extension JourneyService {
         guard !startupRecoveryStarted else { return }
         startupRecoveryStarted = true
         await prepareForEvents()
-        if storageScope != nil {
+        if startupOpensJournal(for: identity.getDistinctId()) {
             await openJournal(for: identity.getDistinctId())
         }
         if startupProfileSettled {
@@ -334,6 +340,7 @@ extension JourneyService {
         startupRoutingDeferral = nil
         startupProfileSettled = false
         userChangeRoutingDeferral = nil
+        transitionInFlight = nil
         foreground = false
         cancelWake()
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
@@ -960,6 +967,9 @@ extension JourneyService {
         from oldDistinctId: String,
         to newDistinctId: String
     ) async {
+        // Before any await, so a startup step running meanwhile leaves the
+        // arriving customer's journal and routing to this transition.
+        transitionInFlight = newDistinctId
         cancelWake()
         await retireNativeValues(owner: oldDistinctId)
         pendingPresentationPurchasePlacements.removeAll()
@@ -1005,15 +1015,22 @@ extension JourneyService {
         await scheduleNextWake()
     }
 
-    /// The arriving customer's profile refresh has settled, admitted or not.
-    /// Without a profile their journal opens as it did before the hold, and
-    /// its recovery releases routing; what was held is handled with no
-    /// profile, as after an offline startup.
+    /// The transition has finished and the arriving customer's profile
+    /// refresh has settled, admitted or not. Their journal opens now if it
+    /// has not, with their profile when it arrived and without one as before
+    /// the hold otherwise, and this transition's hold is released, with the
+    /// startup hold that waited for it. Transitions run one at a time, so
+    /// no newer transition's hold exists yet.
     func finishUserChangeRouting(to newDistinctId: String) async {
-        guard let generation = userChangeRoutingDeferral else { return }
+        if transitionInFlight == newDistinctId {
+            transitionInFlight = nil
+        }
+        let held = userChangeRoutingDeferral
         userChangeRoutingDeferral = nil
-        if initialized, journal == nil,
-           identity.getDistinctId() == newDistinctId {
+        // Before initialization, startup opens the journal and releases
+        // its own hold.
+        guard initialized else { return }
+        if journal == nil, identity.getDistinctId() == newDistinctId {
             await ensureJournal(for: newDistinctId)
         }
         if let operation = journalRecoveryOperation {
@@ -1022,7 +1039,24 @@ extension JourneyService {
         guard initialized,
               journal == nil || recoveredJournalGeneration == journalGeneration
         else { return }
-        await events.resumeCommittedRouting(ifGeneration: generation)
+        for generation in [held, startupRoutingDeferral].compactMap({ $0 }) {
+            await events.resumeCommittedRouting(ifGeneration: generation)
+        }
+    }
+
+    /// identify() while the SDK starts can leave the departing customer's
+    /// profile installed, or a transition in flight for the identified one.
+    /// Either way the identified customer's profile is still coming.
+    private func awaitsIdentifiedProfile(_ distinctId: String) -> Bool {
+        if profileState?.distinctId == distinctId { return false }
+        return transitionInFlight == distinctId || profileState != nil
+    }
+
+    /// Startup opens the current customer's journal unless their profile is
+    /// still coming; then it opens with that profile, or when the transition
+    /// finishes without one.
+    private func startupOpensJournal(for distinctId: String) -> Bool {
+        storageScope != nil && !awaitsIdentifiedProfile(distinctId)
     }
 }
 

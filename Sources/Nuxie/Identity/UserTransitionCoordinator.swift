@@ -49,6 +49,8 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     }
 
     /// FIFO chain: each enqueued transition awaits the previous one.
+    private static let supersededRefreshAttempts = 3
+
     private let lock = NSLock()
     private var tail: Task<Void, Never>?
 
@@ -121,10 +123,20 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         // Clear the departing customer's projections before admitting the new
         // profile. A remote Feature check cannot establish profile readiness.
         await profileService.handleUserChange(from: transition.from, to: transition.to)
-        do {
-            _ = try await profileService.refetchProfile(distinctId: transition.to)
-        } catch {
-            LogDebug("Identity profile refresh failed: \(error)")
+        // A refresh superseded by another one (the startup prefetch, a
+        // foreground revalidation, a locale change) has not settled this
+        // customer's profile, so ask again, a bounded number of times.
+        for attempt in 1...Self.supersededRefreshAttempts {
+            do {
+                _ = try await profileService.refetchProfile(distinctId: transition.to)
+                break
+            } catch is ProfileRefreshCancellationError
+                where attempt < Self.supersededRefreshAttempts && !Task.isCancelled {
+                continue
+            } catch {
+                LogDebug("Identity profile refresh failed: \(error)")
+                break
+            }
         }
         // Journey held the arriving customer's events for this profile.
         await journeyService?.finishUserChangeRouting(to: transition.to)
