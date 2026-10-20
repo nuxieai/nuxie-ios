@@ -67,6 +67,26 @@ final class ExperienceLayerHostContractTests: XCTestCase {
         }
     }
 
+    func testDefaultPairMarkerIsOptionalAndStrictlyBoolean() throws {
+        var descriptor = try sourceDescriptor()
+        var render = try XCTUnwrap(descriptor["render"] as? [String: Any])
+        var transitions = try XCTUnwrap(render["transitions"] as? [[String: Any]])
+        for entry in try cases("defaultPairs") {
+            transitions[0].removeValue(forKey: "defaultPair")
+            if let value = entry["value"] { transitions[0]["defaultPair"] = value }
+            render["transitions"] = transitions
+            descriptor["render"] = render
+            if entry["accept"] as? Bool == true {
+                XCTAssertNoThrow(try JourneyReleaseSchemaValidator.validate(descriptor), "\(entry)")
+                let decoded = try JSONDecoder().decode(ExperienceLayerHostContract.Transition.self,
+                    from: JSONSerialization.data(withJSONObject: transitions[0]))
+                XCTAssertEqual(decoded.isDefaultPair, entry["value"] as? Bool ?? false)
+            } else {
+                XCTAssertThrowsError(try JourneyReleaseSchemaValidator.validate(descriptor), "\(entry)")
+            }
+        }
+    }
+
     func testMagicMoveWithoutAPublishedIDFallsBackToNone() {
         for id: Any in [NSNull(), "", "  ", 1] {
             XCTAssertEqual(ExperienceScreenTransitionSpec(raw: ["type": "magic-move", "transitionId": id]), .none)
