@@ -121,7 +121,7 @@ private enum ExperienceInteractiveScreenControllerError: LocalizedError {
     }
 }
 
-/// UIKit owner for one Swift-authenticated, raw-C interactive screen.
+/// UIKit owner for one runtime surface, with retained Screen rows on a layer host.
 ///
 /// The controller owns product routing and Apple presentation policy. Its
 /// screen actor owns generic native handles and typed operations only.
@@ -134,7 +134,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     private let experience: Experience
     private let artifact: LoadedExperienceArtifact
-    private let screen: NativeExperienceScreen
+    private var screen: NativeExperienceScreen
     private let saveDisplayObserverID = UUID()
     private let runValues: ExperienceRunValues
     private let surfaceView = ExperienceRuntimeSurfaceView(frame: .zero)
@@ -152,6 +152,20 @@ final class ExperienceScreenViewController: UIViewController {
     private lazy var semanticContainer = ExperienceSemanticAccessibilityContainer(view: surfaceView)
 
     private var interactiveScreen: ExperienceInteractiveScreen?
+    private(set) var interactiveLayer: ExperienceInteractiveLayer?
+    private var rowBindings: [String: ExperienceInteractiveScreen] = [:]
+    private(set) var layerHistory: ExperienceLayerHistory
+    private var layerStepInProgress = false
+    weak var orientationHost: UIViewController?
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        orientationHost?.supportedInterfaceOrientations ?? super.supportedInterfaceOrientations
+    }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        orientationHost?.preferredInterfaceOrientationForPresentation ?? super.preferredInterfaceOrientationForPresentation
+    }
+    var retainedScreenIDs: [String] { interactiveLayer == nil ? [screenId] : Array(rowBindings.keys) }
+    var isLayerController: Bool { artifact.renderPlan.layerHost != nil }
     private var lifecycleIncludesExitReason = false
     private let usesSystemDisplayLink: Bool
     private let acquireDrawable: @MainActor (CAMetalLayer) -> (any CAMetalDrawable)?
@@ -183,6 +197,7 @@ final class ExperienceScreenViewController: UIViewController {
     /// Terminal failures after a successful mount are surfaced here. A queued
     /// SDK mutation can be rejected without poisoning the presentation lane.
     var onRuntimeFailure: ((Error) -> Void)?
+    var onLayerStep: ((ExperienceInteractiveLayer.Step) -> Void)?
     var onSemanticCapture: ((NuxieNativeSemanticCapture) -> Void)?
     var hasCompletedLatestFrame: Bool { presentationLoop?.hasCompletedLatestFrame ?? false }
     var hasDeliveredLatestSemanticFrame: Bool { presentationLoop?.hasDeliveredLatestSemanticFrame ?? false }
@@ -197,6 +212,7 @@ final class ExperienceScreenViewController: UIViewController {
         return try await interactiveScreen.snapshot()
     }
     func runtimeEnvironmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
+        if let interactiveLayer { return try await interactiveLayer.environmentSnapshot() }
         guard let interactiveScreen else { throw ExperienceInteractiveScreenControllerError.unavailable }
         return try await interactiveScreen.environmentSnapshot()
     }
@@ -224,6 +240,7 @@ final class ExperienceScreenViewController: UIViewController {
         self.acquireDrawable = acquireDrawable
         self.artifact = artifact
         self.screen = screen
+        layerHistory = ExperienceLayerHistory(root: screen.screenId)
         self.runValues = runValues
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         self.videoDecoderPool = videoDecoderPool
@@ -300,6 +317,10 @@ final class ExperienceScreenViewController: UIViewController {
         // it was out of the window (beneath a modal, behind another screen) is written
         // before it shows.
         syncColorScheme()
+        if isLayerController {
+            controllerIsVisible = true
+            updatePresentationVisibility()
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -362,7 +383,7 @@ final class ExperienceScreenViewController: UIViewController {
     func receiveHardwareKey(hid: Int, modifiers: UInt8, pressed: Bool, repeated: Bool) -> Bool {
         defer { if !pressed { pressedHardwareKeys.remove(hid) } }
         let isTab = hid == UIKeyboardHIDUsage.keyboardTab.rawValue
-        guard controllerIsVisible, !coveredByLayer, isTab || !hasNativeTextFocus(view),
+        guard !layerStepInProgress, controllerIsVisible, !coveredByLayer, isTab || !hasNativeTextFocus(view),
               hid == UIKeyboardHIDUsage.keyboardTab.rawValue || riveFocusState.hasFocus || pressedHardwareKeys.contains(hid),
               let input = ExperienceHardwareKey.input(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeated)
         else { return false }
@@ -376,7 +397,8 @@ final class ExperienceScreenViewController: UIViewController {
 
     @discardableResult
     func receiveFocusInput(_ input: NuxieNativeFocusInput) -> Bool {
-        presentationLoop?.enqueueFocus(input) ?? false
+        guard !layerStepInProgress else { return false }
+        return presentationLoop?.enqueueFocus(input) ?? false
     }
 
     private func hasNativeTextFocus(_ view: UIView) -> Bool {
@@ -401,11 +423,15 @@ final class ExperienceScreenViewController: UIViewController {
         heightPresentationTarget = target
         availablePresentationHeight = availableSize.height
         lastPresentedHeight = nil
+        if let interactiveLayer {
+            try await interactiveLayer.configurePresentationHeight(fitContent: presentation.fitsContent, size: availableSize)
+            return
+        }
         guard let interactiveScreen, let presentationLoop else { throw CancellationError() }
         try await presentationLoop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork { [weak self] in
             let available = try await interactiveScreen.setPresentationHeight(
                 fitContent: presentation.fitsContent, availableSize: availableSize)
-            return .work(requestsFrame: false) { [weak self] in
+            return .work(requestsFrame: false) { [weak self = self] in
                 self?.measuresContentHeight = presentation.fitsContent && available
             }
         })
@@ -488,18 +514,33 @@ final class ExperienceScreenViewController: UIViewController {
         detachedHostStyle = hostTraits?.userInterfaceStyle
         let initialColorScheme = colorScheme
         let preparation = try await artifact.acquired.interactivePreparation.preparation()
-        let interactive = try await preparation.openScreen(
-            screenID: screenId,
-            runValues: runValues,
-            products: artifact.acquired.products,
-            pixelWidth: initialWidth,
-            pixelHeight: initialHeight,
-            initialReduceMotion: lifecycleState.snapshot.reduceMotion,
-            initialFontScale: Self.fontScale(for: traitCollection),
-            initialSafeArea: experienceSafeAreaInsets(for: view),
-            initialColorScheme: initialColorScheme,
-            videoDecoderPool: videoDecoderPool
-        )
+        let interactive: ExperienceInteractiveScreen
+        if isLayerController {
+            let layer = try await preparation.openLayer(runValues: runValues, pixelWidth: initialWidth,
+                pixelHeight: initialHeight, reduceMotion: lifecycleState.snapshot.reduceMotion,
+                fontScale: Self.fontScale(for: traitCollection),
+                safeArea: experienceSafeAreaInsets(for: view), colorScheme: initialColorScheme,
+                videoDecoderPool: videoDecoderPool)
+            interactiveLayer = layer
+            interactive = try await layer.prepareRow(screenID: screenId, products: artifact.acquired.products)
+            rowBindings[screenId] = interactive
+            try await layer.insert(screenID: screenId, at: 0)
+            let entering = lifecycleState.move(to: .entering)
+            try await layer.applyLifecycleSnapshot(entering, screenID: screenId)
+        } else {
+            interactive = try await preparation.openScreen(
+                screenID: screenId,
+                runValues: runValues,
+                products: artifact.acquired.products,
+                pixelWidth: initialWidth,
+                pixelHeight: initialHeight,
+                initialReduceMotion: lifecycleState.snapshot.reduceMotion,
+                initialFontScale: Self.fontScale(for: traitCollection),
+                initialSafeArea: experienceSafeAreaInsets(for: view),
+                initialColorScheme: initialColorScheme,
+                videoDecoderPool: videoDecoderPool
+            )
+        }
         if let name = journeyScreen?.defaultViewModelName {
             lifecycleIncludesExitReason = await interactive.supportsScreenExitReason(viewModelName: name)
         } else {
@@ -518,15 +559,16 @@ final class ExperienceScreenViewController: UIViewController {
             $0.screenId == screenId && $0.editable
         }
         let semanticConsumer: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)?
-        if requiresSceneSemantics {
+        if requiresSceneSemantics || isLayerController {
             semanticConsumer = { [weak self] capture in self?.applySemantics(capture) }
         } else {
             semanticConsumer = nil
         }
         let textConsumer: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)?
-        if includesTextInputSnapshot {
+        if includesTextInputSnapshot || isLayerController {
             textConsumer = { [weak self] frame in
-                self?.textInputOverlayBridge.update(frame: frame)
+                guard let self, !self.layerStepInProgress else { return }
+                self.textInputOverlayBridge.update(frame: frame)
             }
         } else {
             textConsumer = nil
@@ -539,15 +581,23 @@ final class ExperienceScreenViewController: UIViewController {
                 self.videoCaptionOverlay.update(captions)
             }
         }
-        let loop = ExperienceRuntimePresentationLoop(
-            session: interactive.presentationSession(
+        let session: ExperienceRuntimePresentationSession
+        if let interactiveLayer {
+            session = interactiveLayer.presentationSession(onSemantics: semanticConsumer, onTextFrame: textConsumer,
+                onCaptions: captionConsumer, onFocus: { [weak self] state in self?.riveFocusState = state },
+                onStep: { [weak self] step in await self?.deliverLayerStep(step) })
+        } else {
+            session = interactive.presentationSession(
                 onSemantics: semanticConsumer,
                 onTextFrame: textConsumer,
                 onCaptions: captionConsumer,
                 onFocus: { [weak self] state in self?.riveFocusState = state }
             ) { [weak self] effects in
                 await self?.deliverStep(effects: effects)
-            },
+            }
+        }
+        let loop = ExperienceRuntimePresentationLoop(
+            session: session,
             surfaceView: surfaceView,
             usesSystemDisplayLink: usesSystemDisplayLink,
             acquireDrawable: acquireDrawable,
@@ -580,10 +630,15 @@ final class ExperienceScreenViewController: UIViewController {
             let insets = experienceSafeAreaInsets(for: view)
             let viewport = viewportEnvironment()
             let fold = surfaceView.foldEnvironment
-            try await interactive.updateEnvironment(
-                reduceMotion: lifecycleState.snapshot.reduceMotion,
-                fontScale: Self.fontScale(for: traitCollection), safeArea: insets,
-                viewport: viewport, fold: fold)
+            if let interactiveLayer {
+                try await interactiveLayer.updateEnvironment(reduceMotion: lifecycleState.snapshot.reduceMotion,
+                    fontScale: Self.fontScale(for: traitCollection), safeArea: insets, viewport: viewport, fold: fold)
+            } else {
+                try await interactive.updateEnvironment(
+                    reduceMotion: lifecycleState.snapshot.reduceMotion,
+                    fontScale: Self.fontScale(for: traitCollection), safeArea: insets,
+                    viewport: viewport, fold: fold)
+            }
             lastPushedSafeAreaInsets = insets
             lastPushedViewport = viewport
             lastPushedFold = fold
@@ -601,8 +656,133 @@ final class ExperienceScreenViewController: UIViewController {
             interactiveScreen = nil
             lifecycleIncludesExitReason = false
             await loop.shutdown()
+            interactiveLayer = nil
+            rowBindings.removeAll()
             throw error
         }
+    }
+
+    func prepareLayerRow(screenID: String, products: [StoreProduct]) async throws {
+        guard let interactiveLayer else { throw ExperienceInteractiveScreenControllerError.unavailable }
+        rowBindings[screenID] = try await interactiveLayer.prepareRow(screenID: screenID, products: products)
+    }
+
+    private func deliverLayerStep(_ step: ExperienceInteractiveLayer.Step) async {
+        onLayerStep?(step)
+        for id in step.rows.keys.sorted() {
+            if let row = step.rows[id] { await deliverStep(effects: row.effects, screenID: id) }
+        }
+        if !step.unattributedEvents.isEmpty || !step.unattributedHostCommands.isEmpty {
+            LogWarning("ExperienceScreenViewController: layer step has effects without a unique Screen owner")
+        }
+    }
+
+    private func layerWork(_ work: @escaping @Sendable () async throws -> ExperienceInteractiveLayer.Step?) async throws {
+        guard let presentationLoop, runtimeFailure == nil, !isShuttingDown else { throw CancellationError() }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            presentationLoop.enqueue(.init {
+                let step = try await work()
+                return .work(requestsFrame: false) { [weak self = self] in
+                    if let step { await self?.deliverLayerStep(step) }
+                }
+            }, completion: { continuation.resume(with: $0) })
+        }
+    }
+
+    func navigateLayer(to targetID: String, spec: ExperienceScreenTransitionSpec, isBack: Bool,
+                       reduceMotion: Bool, isEligible: @escaping () -> Bool,
+                       onHidden: @escaping () async -> Void, onActive: @escaping () async -> Void) async throws {
+        guard let layer = interactiveLayer, let loop = presentationLoop,
+              let target = artifact.renderPlan.screens.first(where: { $0.screenId == targetID }) else {
+            throw ExperienceInteractiveScreenControllerError.unavailable
+        }
+        let sourceID = screenId
+        guard sourceID != targetID else { return }
+        let plan = spec.transitionId.flatMap {
+            ExperienceScreenCustomTransitionPlan.resolve(transitionId: $0, sourceScreenId: sourceID,
+                destinationScreenId: targetID, declarations: artifact.renderPlan.transitions, reduceMotion: reduceMotion)
+        }
+        var waiters: [(String, ExperienceInteractiveLayer.Completion)] = []
+        var pendingInsert: Int?
+        let operations = ExperienceLayerStep.Operations(
+            setInputEnabled: { [self] enabled in
+                layerStepInProgress = !enabled
+                loop.setInputEnabled(enabled)
+                view.isUserInteractionEnabled = enabled && !coveredByLayer
+                if !enabled {
+                    clearHardwareKeys()
+                    textInputOverlayBridge.setHidden(true)
+                    semanticContainer.clear()
+                } else {
+                    textInputOverlayBridge.setHidden(contentHidden || coveredByLayer)
+                    updatePresentationVisibility()
+                }
+            }, prepare: { [self] in
+                guard isEligible(), rowBindings[targetID] != nil else { throw CancellationError() }
+            }, register: { id, name in
+                let waiter = try await layer.registerCompletion(screenID: id, eventName: name)
+                waiters.append((id, waiter))
+                return waiter.events
+            }, insert: { index in pendingInsert = index }, phases: { [self] phases, transition in
+                guard isEligible() else { throw CancellationError() }
+                let insert = pendingInsert
+                pendingInsert = nil
+                try await layerWork {
+                    if let insert { try await layer.insert(screenID: targetID, at: insert) }
+                    try await layer.setPhases(phases, transition: transition, reduceMotion: reduceMotion)
+                    return nil
+                }
+                if let phase = phases.first(where: { $0.0 == sourceID })?.1 {
+                    _ = lifecycleState.move(to: phase, transition: transition, reduceMotion: reduceMotion)
+                }
+            }, present: {
+                loop.setTimelineActive(true)
+                try await loop.advanceZeroDelta(awaitsPresentation: true)
+            }, wait: { streams, milliseconds in
+                await ExperienceScreenExitWatchdog.wait(for: streams, watchdogMilliseconds: milliseconds)
+            }, remove: { [self] in
+                guard isEligible() else { throw CancellationError() }
+                let insert = pendingInsert
+                pendingInsert = nil
+                try await layerWork {
+                    if let insert { try await layer.insert(screenID: targetID, at: insert) }
+                    return try await layer.remove(screenID: sourceID)
+                }
+            }, hidden: onHidden, active: { [self] in
+                guard isEligible(), runtimeFailure == nil, !isShuttingDown else { throw CancellationError() }
+                try await layer.selectActiveRow(targetID)
+                screen = target
+                interactiveScreen = rowBindings[targetID]
+                lifecycleState = await layer.state(screenID: targetID) ?? .init(reduceMotion: reduceMotion)
+                layerHistory.visit(targetID, transition: spec)
+                semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
+                let write = semanticFocusLifecycle.beginWrite(phase: .active)
+                _ = semanticFocusLifecycle.completeWrite(write, succeeded: true)
+                semanticContainer.requestFocusOnNextPresentation()
+                if let interactiveScreen {
+                    bindTextInputs(to: interactiveScreen, loop: loop)
+                }
+                try await loop.advanceZeroDelta()
+                await onActive()
+            })
+        do {
+            try await ExperienceLayerStep.perform(source: sourceID, target: targetID, style: spec.kind,
+                isBack: isBack, plan: plan, exit: .init(declaration: screen.exit, reduceMotion: reduceMotion),
+                reduceMotion: reduceMotion, operations: operations)
+        } catch {
+            for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
+            // A cancelled drain may have mounted its destination without committing navigation.
+            if isEligible(), runtimeFailure == nil, !isShuttingDown {
+                let mounted = await layer.mountedScreenIDs
+                if mounted.contains(targetID) {
+                    try? await layerWork { try await layer.remove(screenID: targetID) }
+                }
+                if !mounted.contains(sourceID) { try? await layer.insert(screenID: sourceID, at: 0) }
+                await activate(reduceMotion: reduceMotion)
+            }
+            throw error
+        }
+        for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
     }
 
     private func didPresentDrawable(_ drawable: ExperienceRuntimePresentedDrawable) {
@@ -630,8 +810,11 @@ final class ExperienceScreenViewController: UIViewController {
             self.isShuttingDown = true
             await self.runValues.removeSaveDisplayObserver(id: self.saveDisplayObserverID)
             let loop = self.presentationLoop
+            let layer = self.interactiveLayer
             self.presentationLoop = nil
             self.interactiveScreen = nil
+            self.interactiveLayer = nil
+            self.rowBindings.removeAll()
             self.lifecycleIncludesExitReason = false
             self.finishExitWaiters()
             self.semanticContainer.clear()
@@ -640,6 +823,7 @@ final class ExperienceScreenViewController: UIViewController {
             self.videoCaptionOverlay.update([])
             self.videoCaptionOverlay.isHidden = true
             await loop?.shutdown()
+            if loop == nil { try? await layer?.close() }
             self.isShuttingDown = false
         }
         shutdownTask = task
@@ -652,7 +836,7 @@ final class ExperienceScreenViewController: UIViewController {
         contentHidden = hidden
         if hidden, requiresSceneSemantics { semanticContainer.setActive(false) }
         surfaceView.isHidden = hidden
-        textInputOverlayBridge.setHidden(hidden)
+        textInputOverlayBridge.setHidden(hidden || layerStepInProgress || coveredByLayer)
         updatePresentationVisibility()
     }
 
@@ -665,8 +849,9 @@ final class ExperienceScreenViewController: UIViewController {
         _ snapshot: ExperienceViewModelSnapshot,
         screenId targetScreenId: String?
     ) -> Bool {
+        guard !isLayerController || targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!) else { return false }
         do {
-            return enqueueJourneyStateCommand(try .snapshot(snapshot))
+            return enqueueJourneyStateCommand(try .snapshot(snapshot), screenID: targetScreenId)
         } catch {
             logRejectedState(error)
             return false
@@ -680,14 +865,14 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        guard targetScreenId == nil || targetScreenId == screenId else { return false }
+        guard targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!) else { return false }
         do {
             return enqueueJourneyStateCommand(try .value(
                 path: path,
                 rawValue: value,
                 instanceID: instanceId,
-                defaultViewModelName: journeyScreen?.defaultViewModelName
-            ))
+                defaultViewModelName: journeyScreen(for: targetScreenId)?.defaultViewModelName
+            ), screenID: targetScreenId)
         } catch {
             logRejectedState(error)
             return false
@@ -702,15 +887,15 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        guard targetScreenId == nil || targetScreenId == screenId else { return false }
+        guard targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!) else { return false }
         do {
             return enqueueJourneyStateCommand(try .list(
                 operation: operation,
                 path: path,
                 payload: payload,
                 instanceID: instanceId,
-                defaultViewModelName: journeyScreen?.defaultViewModelName
-            ))
+                defaultViewModelName: journeyScreen(for: targetScreenId)?.defaultViewModelName
+            ), screenID: targetScreenId)
         } catch {
             logRejectedState(error)
             return false
@@ -723,8 +908,8 @@ final class ExperienceScreenViewController: UIViewController {
         screenId targetScreenId: String?,
         instanceId: String?
     ) -> Bool {
-        guard targetScreenId == nil || targetScreenId == screenId,
-              let viewModelName = path.viewModelName ?? journeyScreen?.defaultViewModelName else {
+        guard targetScreenId == nil || retainedScreenIDs.contains(targetScreenId!),
+              let viewModelName = path.viewModelName ?? journeyScreen(for: targetScreenId)?.defaultViewModelName else {
             return false
         }
         return enqueueJourneyStateCommand(.trigger(
@@ -732,7 +917,7 @@ final class ExperienceScreenViewController: UIViewController {
             instanceID: instanceId,
             instanceName: nil,
             path: path.path
-        ))
+        ), screenID: targetScreenId)
     }
 
     func advance(delta: Double = 0) {
@@ -742,6 +927,10 @@ final class ExperienceScreenViewController: UIViewController {
 
     func enter(reduceMotion: Bool) async {
         presentationLoop?.setTimelineActive(true)
+        if isLayerController, lifecycleState.phase == .entering {
+            await updateReduceMotion(reduceMotion)
+            return
+        }
         let snapshot = lifecycleState.move(
             to: .entering,
             reduceMotion: reduceMotion
@@ -855,8 +1044,12 @@ final class ExperienceScreenViewController: UIViewController {
         environmentWriteQueued = true
         if !presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
             guard let values = await self?.takeLatestEnvironment() else { return .work(requestsFrame: false) }
-            try await interactiveScreen.updateEnvironment(fontScale: values.3,
-                safeArea: values.0, viewport: values.1, fold: values.2)
+            if let layer = await self?.interactiveLayer {
+                try await layer.updateEnvironment(fontScale: values.3, safeArea: values.0, viewport: values.1, fold: values.2)
+            } else {
+                try await interactiveScreen.updateEnvironment(fontScale: values.3,
+                    safeArea: values.0, viewport: values.1, fold: values.2)
+            }
             return .work(requestsFrame: true)
         }, completion: { [weak self] result in
             guard let self else { return }
@@ -884,7 +1077,8 @@ final class ExperienceScreenViewController: UIViewController {
         colorSchemeWriteQueued = true
         if !presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
             guard let colorScheme = await self?.takeLatestColorScheme() else { return .work(requestsFrame: false) }
-            try await interactiveScreen.updateEnvironment(colorScheme: colorScheme)
+            if let layer = await self?.interactiveLayer { try await layer.updateEnvironment(colorScheme: colorScheme) }
+            else { try await interactiveScreen.updateEnvironment(colorScheme: colorScheme) }
             return .work(requestsFrame: true)
         }, completion: { [weak self] result in
             guard let self else { return }
@@ -939,18 +1133,20 @@ final class ExperienceScreenViewController: UIViewController {
         logFailure: Bool = true,
         reduceMotion: Bool? = nil,
         requestsFrame: Bool = true,
-        completion: (@MainActor @Sendable (Result<Void, Error>) -> Void)? = nil
+        completion: (@MainActor @Sendable (Result<Void, Error>) -> Void)? = nil,
+        screenID: String? = nil
     ) -> Bool {
         guard !isShuttingDown,
               runtimeFailure == nil,
-              let interactiveScreen,
+              let interactiveScreen = screenID.flatMap({ rowBindings[$0] }) ?? interactiveScreen,
               let presentationLoop else { return false }
+        let sourceID = screenID ?? screenId
         return presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
                 try await interactiveScreen.updateEnvironment(reduceMotion: reduceMotion)
                 let result = try await interactiveScreen.applyStateCommand(command)
-                return .work(requestsFrame: requestsFrame) { [weak self] in
-                    await self?.deliverStep(effects: result.effects)
+                return .work(requestsFrame: requestsFrame) { [weak self = self] in
+                    await self?.deliverStep(effects: result.effects, screenID: sourceID)
                 }
             },
             completion: { [weak self] result in
@@ -962,20 +1158,33 @@ final class ExperienceScreenViewController: UIViewController {
         )
     }
 
-    private func enqueueJourneyStateCommand(
-        _ command: ExperienceInteractiveStateCommand
-    ) -> Bool {
-        guard let command = command.suppressingLifecycleReservedJourneyWrites(
-            rootViewModelName: journeyScreen?.defaultViewModelName,
-            rootInstanceID: journeyScreen?.defaultInstanceId
-        ) else {
-            return true
+    private func journeyScreen(for id: String?) -> JourneyScreen? {
+        experience.screens.screens.first { $0.id == (id ?? screenId) }
+    }
+
+    private func enqueueJourneyStateCommand(_ command: ExperienceInteractiveStateCommand, screenID: String? = nil) -> Bool {
+        if !isLayerController {
+            guard let filtered = command.suppressingLifecycleReservedJourneyWrites(
+                rootViewModelName: journeyScreen?.defaultViewModelName,
+                rootInstanceID: journeyScreen?.defaultInstanceId) else { return true }
+            return enqueueStateCommand(filtered)
         }
-        return enqueueStateCommand(command)
+        let ids = screenID.map { [$0] } ?? retainedScreenIDs
+        var accepted = false
+        for id in ids {
+            let row = journeyScreen(for: id)
+            guard let filtered = command.suppressingLifecycleReservedJourneyWrites(
+                rootViewModelName: row?.defaultViewModelName, rootInstanceID: row?.defaultInstanceId) else {
+                accepted = true
+                continue
+            }
+            accepted = enqueueStateCommand(filtered, screenID: id) || accepted
+        }
+        return accepted
     }
 
     private func applySemantics(_ capture: NuxieNativeSemanticCapture) {
-        guard !isShuttingDown, !contentHidden, controllerIsVisible,
+        guard !layerStepInProgress, !isShuttingDown, !contentHidden, controllerIsVisible,
               let interactiveScreen, let presentationLoop,
               let transform = ExperienceLayoutTransform(
                 artboardBounds: interactiveScreen.artboardBounds,
@@ -1014,7 +1223,7 @@ final class ExperienceScreenViewController: UIViewController {
                   let loop = self.presentationLoop else { return }
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
                 let step = try await screen.step(elapsedSeconds: 0)
-                return .work(requestsFrame: true) { [weak self] in
+                return .work(requestsFrame: true) { [weak self = self] in
                     await self?.deliverStep(effects: step.effects)
                 }
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true }, completion: { [weak self] result in
@@ -1032,7 +1241,7 @@ final class ExperienceScreenViewController: UIViewController {
             let originatingRun = self.delegate?.screenEmissionRun(for: self)
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
                 let result = try await interactiveScreen.commitTextInput(inputID: input.inputId, value: event.text, ownerInstanceID: event.ownerInstanceID)
-                return .work(requestsFrame: result != nil) { [weak self] in
+                return .work(requestsFrame: result != nil) { [weak self = self] in
                     guard let self, self.semanticInputIsEligible else { return }
                     if let result {
                         await self.deliverStep(effects: result.effects)
@@ -1056,7 +1265,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private var semanticInputIsEligible: Bool {
-        !isShuttingDown && runtimeFailure == nil && !contentHidden && controllerIsVisible && !coveredByLayer && lifecyclePhase == .active
+        !layerStepInProgress && !isShuttingDown && runtimeFailure == nil && !contentHidden && controllerIsVisible && !coveredByLayer && lifecyclePhase == .active
             && ExperienceSemanticAccessibilityElement.allowsInteraction(in: surfaceView)
     }
 
@@ -1209,7 +1418,9 @@ final class ExperienceScreenViewController: UIViewController {
 
     private var pendingFramePublications = 0
 
-    func deliverStep(effects: [ExperienceInteractiveEffect]) async {
+    func deliverStep(effects: [ExperienceInteractiveEffect], screenID: String? = nil) async {
+        let screenId = screenID ?? self.screenId
+        let interactiveBinding = rowBindings[screenId] ?? interactiveScreen
         guard !isShuttingDown, runtimeFailure == nil else { return }
         let originatingRun = delegate?.screenEmissionRun(for: self)
         let openLink = delegate?.captureLinkHandler(for: self)
@@ -1224,18 +1435,18 @@ final class ExperienceScreenViewController: UIViewController {
                         guard let self, let originatingRun,
                               self.delegate?.screenEmissionRun(for: self) == originatingRun,
                               !self.isShuttingDown, self.runtimeFailure == nil,
-                              let interactive = self.interactiveScreen,
+                              let interactive = interactiveBinding,
                               let path = request.awaitTrigger else { return }
                         _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
                             let step = try await interactive.confirmResponseSave(trigger: path, kept: request.kept)
-                            return .work(requestsFrame: true) { [weak self] in
-                                await self?.deliverStep(effects: step.effects)
+                            return .work(requestsFrame: true) { [weak self = self] in
+                                await self?.deliverStep(effects: step.effects, screenID: screenId)
                             }
                         })
                     }))
                 continue
             }
-            guard let projected = await route(effect) else { continue }
+            guard let projected = await route(effect, screenID: screenId) else { continue }
             switch projected {
             case .link(let request):
                 links.append(request)
@@ -1299,15 +1510,17 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func route(
-        _ effect: ExperienceInteractiveEffect
+        _ effect: ExperienceInteractiveEffect, screenID: String? = nil
     ) async -> ExperienceRuntimeProjectedEmission? {
+        let screenId = screenID ?? self.screenId
+        let interactiveScreen = rowBindings[screenId] ?? self.interactiveScreen
         switch effect.kind {
         case .controlAction(let actionId, let event):
             guard Set(event.properties.map(\.key)).count == event.properties.count else { return nil }
             let properties = Dictionary(uniqueKeysWithValues: event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
             })
-            let eventScreenID = Self.stringProperty(
+            let eventScreenID = isLayerController ? screenId : Self.stringProperty(
                 ["screenId", "screen_id"],
                 in: properties
             ) ?? screenId
@@ -1327,7 +1540,7 @@ final class ExperienceScreenViewController: UIViewController {
                 )
             )
         case .reportedEvent(let event):
-            resolveExitWaiters(eventName: event.name)
+            if screenId == self.screenId { resolveExitWaiters(eventName: event.name) }
             let properties = Dictionary(event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
             }, uniquingKeysWith: { first, _ in first })
@@ -1387,7 +1600,7 @@ final class ExperienceScreenViewController: UIViewController {
                     payload: properties.mapValues(ScreenEmissionValue.init(rendererValue:))
                 ),
                 source: ScreenEmissionSource(
-                    screenId: Self.stringProperty(
+                    screenId: isLayerController ? screenId : Self.stringProperty(
                         ["screenId", "screen_id"], in: properties
                     ) ?? screenId,
                     actionId: "runtime:\(effect.correlationID)",
@@ -1455,6 +1668,23 @@ final class ExperienceScreenViewController: UIViewController {
         let write = semanticFocusLifecycle.beginWrite(phase: snapshot.phase)
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
+        }
+        if let interactiveLayer, let presentationLoop {
+            let id = screenId
+            do {
+                try await presentationLoop.advanceZeroDelta(after: .init {
+                    try await interactiveLayer.updateEnvironment(reduceMotion: snapshot.reduceMotion)
+                    try await interactiveLayer.applyLifecycleSnapshot(snapshot, screenID: id)
+                    return .work(requestsFrame: false)
+                })
+                _ = semanticFocusLifecycle.completeWrite(write, succeeded: true)
+                updatePresentationVisibility()
+                return write
+            } catch {
+                _ = semanticFocusLifecycle.completeWrite(write, succeeded: false)
+                handleTerminalFailure(error)
+                return nil
+            }
         }
         guard !lifecycleWritesUnavailable else { return nil }
         // Rootless screens still receive the file's global device values.

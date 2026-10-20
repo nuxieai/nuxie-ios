@@ -1,0 +1,329 @@
+#if canImport(UIKit) && NUXIE_HOSTED_INPUT_TESTS
+import UIKit
+import XCTest
+@testable import NuxieRuntime
+@_spi(Testing) @testable import Nuxie
+
+@MainActor
+final class ExperienceLayerHostNavigationTests: XCTestCase {
+    func testRealCompletionsForwardBackAndRevisitUseOneControllerAndPlayer() async throws {
+        try await withCoordinator { coordinator, controller, probe, preparation in
+            XCTAssertTrue(controller.isLayerController)
+            XCTAssertEqual(probe.firstPhases[ObjectIdentifier(controller)], .entering,
+                "The first row must be entering before its first advance")
+            XCTAssertFalse(controller.parent is UINavigationController)
+            let layer = try XCTUnwrap(controller.interactiveLayer)
+            var completed: [String: Set<String>] = [:]
+            controller.onLayerStep = { step in
+                for (id, row) in step.rows {
+                    for effect in row.effects {
+                        if case .reportedEvent(let event) = effect.kind, event.name.hasPrefix("nx_") {
+                            completed[id, default: []].insert(event.name)
+                        }
+                    }
+                }
+            }
+            let a = try await layer.snapshot(screenID: "screen_1").rootInstanceID
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "magic-move", "transitionId": "transition.native-contract"])
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1", "screen_2"]])
+            XCTAssertEqual(controller.screenId, "screen_2")
+            XCTAssertTrue(completed["screen_1"]?.contains("nx_exit_done:transition.native-contract") == true)
+            XCTAssertTrue(completed["screen_2"]?.contains("nx_enter_done:transition.native-contract") == true)
+            XCTAssertTrue(probe.events.contains("screen_1:nx_exit_done:transition.native-contract"))
+            XCTAssertTrue(probe.events.contains("screen_2:nx_enter_done:transition.native-contract"))
+            let mountedB = await layer.mountedScreenIDs
+            XCTAssertEqual(mountedB, ["screen_2"])
+            XCTAssertTrue(coordinator.applyValue(path: VmPathRef(viewModelName: "Runtime_Upsell", path: "keptValue"),
+                value: 42, screenId: "screen_2", instanceId: "row-b"))
+            try await back(coordinator, to: "screen_1")
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"]])
+            XCTAssertTrue(completed["screen_2"]?.contains("nx_exit_done:transition.native-contract.reverse") == true)
+            XCTAssertTrue(completed["screen_1"]?.contains("nx_enter_done:transition.native-contract.reverse") == true)
+            let revisitedA = try await layer.snapshot(screenID: "screen_1").rootInstanceID
+            XCTAssertEqual(a, revisitedA)
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "push", "transitionId": "transition.native-contract"])
+            let revisitedB = try await layer.snapshot(screenID: "screen_2")
+            XCTAssertTrue(revisitedB.values.contains { $0.name == "keptValue" && $0.value == .number(42) })
+            let metrics = await preparation.metrics()
+            XCTAssertEqual(metrics.openedSessionCount, 1)
+            XCTAssertEqual(probe.lifecycle.suffix(2), ["hidden:screen_1", "active:screen_2"])
+        }
+    }
+
+    func testNavigationRequestedDuringStepQueuesAndSelfNavigationCompletesAlreadyActive() async throws {
+        try await withCoordinator { coordinator, controller, _, _ in
+            let first = expectation(description: "forward")
+            let second = expectation(description: "queued self")
+            var results: [ExperienceScreenNavigationResult] = []
+            XCTAssertTrue(coordinator.navigate(to: "screen_2", transition: ["type": "fade", "transitionId": "transition.native-contract"]) { result, _ in
+                results.append(result); first.fulfill()
+            })
+            let deadline = Date().addingTimeInterval(2)
+            while controller.lifecyclePhase != .exiting, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(controller.lifecyclePhase, .exiting)
+            XCTAssertFalse(controller.receiveFocusInput(.next), "Input is blocked while both rows run")
+            XCTAssertTrue(coordinator.navigate(to: "screen_2", transition: nil) { result, _ in
+                results.append(result); second.fulfill()
+            })
+            await fulfillment(of: [first, second], timeout: 5)
+            XCTAssertEqual(results, [.navigated, .alreadyActive])
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1", "screen_2"]])
+            XCTAssertEqual(controller.screenId, "screen_2")
+        }
+    }
+
+    func testModalOwnsAnotherPlayerAndDismissalRevealsRetainedBase() async throws {
+        try await withCoordinator { coordinator, base, probe, preparation in
+            let layer = try XCTUnwrap(base.interactiveLayer)
+            let before = try await layer.snapshot(screenID: "screen_1").rootInstanceID
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet", "closedby": "none"])
+            let modal = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            XCTAssertFalse(modal === base)
+            XCTAssertEqual(probe.firstPhases[ObjectIdentifier(modal)], .entering)
+            let firstAppearance = await modal.interactiveLayer?.lifecycle(screenID: "screen_2")
+            XCTAssertEqual(firstAppearance?.appearances, 1)
+            XCTAssertFalse(modal.interactiveLayer === base.interactiveLayer)
+            XCTAssertTrue(modal.isModalInPresentation)
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"]])
+            let metrics = await preparation.metrics()
+            XCTAssertEqual(metrics.openedSessionCount, 2)
+            let result = await coordinator.closeTopLayer()
+            XCTAssertEqual(result, .navigated)
+            XCTAssertNil(coordinator.topPresentedLayer)
+            XCTAssertEqual(coordinator.activeScreenId, "screen_1")
+            let after = try await layer.snapshot(screenID: "screen_1").rootInstanceID
+            XCTAssertEqual(before, after)
+            XCTAssertEqual(probe.lifecycle.last, "active:screen_1")
+        }
+    }
+
+    func testTapFromActiveNestedRowKeepsItsScreenOwner() async throws {
+        try await withCoordinator { coordinator, controller, _, _ in
+            try await navigate(coordinator, to: "screen_2")
+            let layer = try XCTUnwrap(controller.interactiveLayer)
+            let down = try await layer.step(pointers: [.init(kind: .down, x: 60, y: 40)], elapsedSeconds: 0)
+            let up = try await layer.step(pointers: [.init(kind: .up, x: 60, y: 40)], elapsedSeconds: 0)
+            XCTAssertTrue(down.rows["screen_1"] == nil)
+            XCTAssertTrue(up.rows["screen_1"] == nil)
+            XCTAssertTrue(up.rows["screen_2"]?.effects.contains {
+                if case .rejectedHostCommand(let name, _) = $0.kind { return name == "Nuxie Interaction" }
+                return false
+            } == true)
+            XCTAssertTrue(up.unattributedEvents.isEmpty)
+        }
+    }
+
+    func testOnlyActiveRowExposesSemanticsAndEditorsAndFieldOwnerSurvivesRevisit() async throws {
+        let root = experiencePreparationRepositoryRoot()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/layer-host-input/layer-host.riv"))
+        let path = "nuxieTextInputs/input_scr_screens_sinput_v2_476c0e3c"
+        let inputs = [NativeExperienceTextInput(inputId: "name", screenId: "input", artboardId: "input",
+            viewNodeId: "scr_screens_sinput::v2", renderedNodeId: "scr_screens_sinput::v2",
+            textInputName: "scr_screens_sinput::v2 editable value", value: "", placeholder: nil, editable: true,
+            geometry: .init(xPath: "\(path)/x", yPath: "\(path)/y", widthPath: "\(path)/width", heightPath: "\(path)/height",
+                rotationPath: "\(path)/rotation", scaleXPath: "\(path)/scaleX", scaleYPath: "\(path)/scaleY"),
+            style: .init(fontFamily: "System", fontWeight: "400", fontStyle: "normal", fontSize: 16,
+                lineHeight: -1, letterSpacing: 0, color: 0xFF111827,
+                fontAssetUniqueName: "font-system-400-normal-6cda3de3-0", textAlign: "left"),
+            keyboardType: nil, secureTextEntry: false, multiline: false, maxLength: nil, responseFieldKey: nil)]
+        let base = try SharedValuesFixture.payload(directory: PublishedInputFixture.directory, screens: ["input", "greeting"],
+            scene: bytes, textInputs: inputs)
+        let plan = NativeExperienceRenderPlan(identity: base.renderPlan.identity, scene: base.renderPlan.scene,
+            entry: base.renderPlan.entry, layerHost: .init(artboardName: "LayerList", listPath: "screens"),
+            screens: base.renderPlan.screens, transitions: [], textInputs: inputs, images: [], fonts: [],
+            systemFonts: base.renderPlan.systemFonts)
+        let payload = AuthenticatedRuntimePayload(authenticatedKeyID: base.authenticatedKeyID,
+            requiredCapabilities: base.requiredCapabilities.union(["experience-accessibility"]), renderPlan: plan,
+            journey: base.journey, sceneBytes: bytes, assets: base.assets)
+        try await withCoordinator(payload: payload) { coordinator, controller, _, _ in
+            var capture: NuxieNativeSemanticCapture?
+            controller.onSemanticCapture = { capture = $0 }
+            @MainActor func fields(_ view: UIView) -> [UITextField] {
+                (view as? UITextField).map { [$0] } ?? view.subviews.flatMap(fields)
+            }
+            @MainActor func settle(_ predicate: @MainActor () -> Bool) async throws {
+                let deadline = Date().addingTimeInterval(5)
+                while !predicate(), Date() < deadline {
+                    controller.advance(delta: 1 / 60)
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                XCTAssertTrue(predicate())
+            }
+            try await settle { fields(controller.view).first?.text == "Ada" && capture != nil }
+            let field = try XCTUnwrap(fields(controller.view).first)
+            field.keyboardType = .asciiCapable
+            XCTAssertTrue(field.becomeFirstResponder())
+            try await settle { controller.riveFocusState.expectsKeyboardInput }
+            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+            field.insertText("Grace")
+            try await settle { field.text == "Grace" && controller.hasDeliveredLatestSemanticFrame }
+            let binding = try await XCTUnwrap(controller.interactiveLayer).binding(screenID: "input")
+            let current = try XCTUnwrap(capture)
+            let node = try XCTUnwrap(current.tree.nodes.first { $0.role == NuxieNativeSemanticRole.textField.rawValue })
+            let source = try await binding.readSemanticText(captureID: current.id, inputID: inputs[0].inputId, nodeID: node.id)
+            XCTAssertNotNil(source.ownerInstanceID)
+            XCTAssertEqual(source.text, "Grace")
+            try await navigate(coordinator, to: "greeting")
+            try await settle { capture?.tree.nodes.contains { $0.role == NuxieNativeSemanticRole.textField.rawValue } == false }
+            XCTAssertTrue(fields(controller.view).allSatisfy { $0.isHidden || $0.superview == nil })
+            try await back(coordinator, to: "input")
+            try await settle { fields(controller.view).first?.text == "Grace" }
+            XCTAssertEqual(controller.screenId, "input")
+        }
+    }
+
+    func testBackRequestedDuringAStepQueuesAndReversesThePairThatFinishes() async throws {
+        try await withCoordinator { coordinator, controller, probe, _ in
+            let forward = expectation(description: "forward finishes")
+            let returned = expectation(description: "queued back finishes")
+            var results: [ExperienceScreenNavigationResult] = []
+            XCTAssertTrue(coordinator.navigate(to: "screen_2", transition: ["type": "magic-move", "transitionId": "transition.native-contract"]) { result, _ in
+                results.append(result)
+                forward.fulfill()
+            })
+            let deadline = Date().addingTimeInterval(2)
+            while controller.lifecyclePhase != .exiting, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(controller.lifecyclePhase, .exiting)
+            XCTAssertTrue(coordinator.back(to: "screen_1", steps: 1) { result, _ in
+                results.append(result)
+                returned.fulfill()
+            })
+            XCTAssertTrue(results.isEmpty, "Back during a step must be queued rather than completing alreadyActive")
+            await fulfillment(of: [forward, returned], timeout: 5)
+            XCTAssertEqual(results, [.navigated, .navigated])
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"]])
+            XCTAssertTrue(probe.events.contains("screen_2:nx_exit_done:transition.native-contract.reverse"))
+            XCTAssertTrue(probe.events.contains("screen_1:nx_enter_done:transition.native-contract.reverse"))
+        }
+    }
+
+    func testStackedSheetsAndSwipeDismissalKeepEachLayerIndependent() async throws {
+        try await withCoordinator { coordinator, base, _, preparation in
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet", "height": "medium"])
+            let lower = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            try await navigate(coordinator, to: "screen_1", transition: ["type": "modal", "present": "sheet"])
+            let upper = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            XCTAssertFalse(upper.view.window === lower.view.window)
+            XCTAssertTrue(lower.view.window === base.view.window)
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"], ["screen_1"]])
+            let metrics = await preparation.metrics()
+            XCTAssertEqual(metrics.openedSessionCount, 3)
+            let presentation = try XCTUnwrap(upper.presentationController)
+            await withCheckedContinuation { continuation in upper.dismiss(animated: false) { continuation.resume() } }
+            coordinator.presentationControllerDidDismiss(presentation)
+            let deadline = Date().addingTimeInterval(2)
+            while coordinator.activeScreenId != "screen_2", Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"]])
+            XCTAssertEqual(lower.lifecyclePhase, .active)
+            let closed = await coordinator.closeTopLayer()
+            XCTAssertEqual(closed, .navigated)
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"]])
+        }
+    }
+
+    func testAttributedJourneyEventCannotOverrideItsRowWithAPayloadScreenID() async throws {
+        try await withCoordinator { _, controller, probe, _ in
+            let effect = ExperienceInteractiveEffect(sequence: 0, correlationID: 1,
+                kind: .journeyEvent(name: "row-event", payload: .object([.init(key: "screenId", value: .string("screen_1"))])))
+            await controller.deliverStep(effects: [effect], screenID: "screen_2")
+            XCTAssertTrue(probe.events.contains("screen_2:row-event"))
+        }
+    }
+
+    private func navigate(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String, transition: Any? = nil) async throws {
+        let result: ExperienceScreenNavigationResult = await withCheckedContinuation { continuation in
+            if !coordinator.navigate(to: id, transition: transition, completion: { result, _ in continuation.resume(returning: result) }) {
+                continuation.resume(returning: .failed)
+            }
+        }
+        XCTAssertEqual(result, .navigated)
+    }
+
+    private func back(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String) async throws {
+        let result: ExperienceScreenNavigationResult = await withCheckedContinuation { continuation in
+            if !coordinator.back(to: id, steps: 1, completion: { result, _ in continuation.resume(returning: result) }) {
+                continuation.resume(returning: .failed)
+            }
+        }
+        XCTAssertEqual(result, .navigated)
+    }
+
+    private func withCoordinator(payload suppliedPayload: AuthenticatedRuntimePayload? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
+        LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
+        let payload: AuthenticatedRuntimePayload
+        if let suppliedPayload { payload = suppliedPayload }
+        else { payload = try await interimLayerPayload() }
+        let root = experiencePreparationRepositoryRoot()
+        let experience = Experience(id: "layer-host", versionId: "layer-version", buildId: "layer-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+            behaviorPresentationScreens: [:], assetBaseURL: root, journey: payload.journey, definition: payload.definition)
+        let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+            sceneURL: root.appendingPathComponent("fixtures/runtime/layer-host-interim/layer-host.riv"), sceneBytes: payload.sceneBytes,
+            assetURLsByUniqueName: [:], source: .cache, payload: payload,
+            interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(), provenance: UUID().uuidString, payload: payload),
+            products: [], resourceMetrics: .zero)
+        let preparation = try await acquired.interactivePreparation.preparation()
+        let host = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let oldKey = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let presenter = UIViewController()
+        window.rootViewController = presenter
+        window.makeKeyAndVisible()
+        host.modalPresentationStyle = .fullScreen
+        await withCheckedContinuation { continuation in presenter.present(host, animated: false) { continuation.resume() } }
+        let probe = LayerHostProbe()
+        let coordinator = ExperienceScreenTransitionCoordinator(experience: experience, artifact: .init(acquired: acquired),
+            hostViewController: host, screenDelegate: probe,
+            onPresentedScreenDismissed: { _, _ in },
+            onScreenHidden: { id, _ in probe.lifecycle.append("hidden:\(id)") },
+            onScreenActive: { id in probe.lifecycle.append("active:\(id)") }, onProductsResolved: { _ in },
+            onProductsUnavailable: { _ in XCTFail("Unexpected product resolution failure") },
+            onRuntimeFailure: { id, error in XCTFail("\(id): \(error)") })
+        do {
+            try await coordinator.install()
+            coordinator.setContentHidden(false)
+            _ = await coordinator.activateInitialScreen()
+            let controller = try XCTUnwrap(host.children.first as? ExperienceScreenViewController)
+            try await body(coordinator, controller, probe, preparation)
+            await coordinator.tearDown()
+        } catch { await coordinator.tearDown(); window.isHidden = true; oldKey?.makeKey(); throw error }
+        await withCheckedContinuation { continuation in presenter.dismiss(animated: false) { continuation.resume() } }
+        window.isHidden = true
+        oldKey?.makeKey()
+    }
+}
+
+@MainActor
+private final class LayerHostProbe: ExperienceScreenViewControllerDelegate {
+    var lifecycle: [String] = []
+    var events: [String] = []
+    var firstPhases: [ObjectIdentifier: ExperienceScreenLifecyclePhase] = [:]
+    func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {
+        if firstPhases[ObjectIdentifier(controller)] == nil {
+            firstPhases[ObjectIdentifier(controller)] = controller.lifecyclePhase
+        }
+    }
+    func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController,
+        didEmitScreenEmission input: ExperienceRuntimeScreenEmission, originatingRun: ScreenEmissionRun?, frameSources: ExperienceEmissionSources?) async {
+        let id: String
+        let drafts: [ScreenEmissionDraft]
+        switch input {
+        case .control(let screenId, _, let additional): id = screenId; drafts = additional
+        case .effects(let source, let emitted): id = source.screenId; drafts = emitted
+        }
+        for case .event(let name, _) in drafts { events.append("\(id):\(name)") }
+    }
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didEmitViewModelChange change: ExperienceRendererViewModelChange) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}
+    func experienceScreenViewController(_ controller: ExperienceScreenViewController, didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
+}
+#endif
