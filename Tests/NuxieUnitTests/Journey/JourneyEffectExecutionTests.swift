@@ -189,6 +189,102 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         await events.close()
     }
 
+    func testTriggerRightAfterIdentifyStartsFromTheArrivingCustomersProfile() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = replacing(
+            try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load()),
+            entry: .init(type: .event, eventName: "signed_in_trigger", segmentId: nil, member: nil, condition: nil),
+            reentry: .init(type: .everyMatch, window: nil)
+        )
+        let (identity, store, events, service) = try await settledCustomerA(directory: directory, snapshot: snapshot)
+
+        // identify(B) once the SDK has settled: the transition runs before B's
+        // profile arrives, and the app sends its trigger straight away.
+        identity.setDistinctId("customer-b")
+        await service.handleUserChange(from: "customer-a", to: "customer-b")
+        events.track("signed_in_trigger")
+        // Commit the trigger and route whatever may route now, before B's
+        // profile arrives.
+        _ = await events.flushEvents()
+        _ = await events.drainCommittedRouting()
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-b"), 0)
+
+        await service.profileDidCommit(snapshot, distinctId: "customer-b")
+        await service.finishUserChangeRouting(to: "customer-b")
+        await events.drain()
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-b"), 1)
+        await service.shutdown()
+        await events.close()
+    }
+
+    func testUserChangeWithoutAProfileReleasesRoutingAndKeepsTheJournalLive() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = replacing(
+            try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load()),
+            entry: .init(type: .event, eventName: "signed_in_trigger", segmentId: nil, member: nil, condition: nil),
+            reentry: .init(type: .everyMatch, window: nil)
+        )
+        let (identity, store, events, service) = try await settledCustomerA(directory: directory, snapshot: snapshot)
+
+        identity.setDistinctId("customer-b")
+        await service.handleUserChange(from: "customer-a", to: "customer-b")
+        events.track("signed_in_trigger")
+        // B's profile refresh fails. Routing is released and B's journal
+        // opens without a profile, so the held trigger starts nothing, as
+        // after an offline startup.
+        await service.finishUserChangeRouting(to: "customer-b")
+        await events.drain()
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-b"), 0)
+
+        // A profile that arrives later finds a healthy journal and live
+        // routing: the next trigger starts.
+        await service.profileDidCommit(snapshot, distinctId: "customer-b")
+        events.track("signed_in_trigger")
+        await events.drain()
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-b"), 1)
+        await service.shutdown()
+        await events.close()
+    }
+
+    /// Customer A's profile and journal are live and EventLog routes freely,
+    /// as once the SDK has settled after launch.
+    private func settledCustomerA(
+        directory: URL,
+        snapshot: JourneyProfileCatalog.Snapshot
+    ) async throws -> (MockIdentityService, MockEventStore, EventLog, JourneyService) {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = MockEventStore()
+        let events = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                              apiClient: MockNuxieApi(), store: store)
+        let service = JourneyService(
+            identity: identity, events: events,
+            dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
+            journalDirectory: directory, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
+        )
+        await service.profileDidCommit(snapshot, distinctId: "customer-a")
+        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        await service.prepareForEvents()
+        let configuration = NuxieConfiguration(apiKey: "user-change-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await events.configure(configuration: configuration)
+        await service.initialize()
+        await service.finishStartupRouting()
+        await events.drain()
+        return (identity, store, events, service)
+    }
+
+    private func startedJourneys(in store: MockEventStore, for distinctId: String) -> Int {
+        store.storedEvents.filter {
+            $0.name == JourneyEvents.journeyStarted && $0.distinctId == distinctId
+        }.count
+    }
+
     func testProfileChangesWaitForRetainedRouteRecovery() async throws {
         for change in ["replace", "withdraw", "clear", "clearAll"] {
             try await assertProfileChangeWaitsForRetainedRouteRecovery(change)
