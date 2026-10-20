@@ -85,10 +85,6 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         // Exposure metadata comes from the authenticated variant definition,
         // not the untrusted assignment hint supplied above.
         XCTAssertEqual(exposures.first?.properties["is_holdout"] as? Bool, false)
-        XCTAssertEqual(
-            exposures.first?.properties["exposure_basis"] as? String,
-            "selected"
-        )
         let shownRuns = try await journal.runs()
         let shownRun = try XCTUnwrap(shownRuns.first)
         let shownExposure = try XCTUnwrap(shownRun.experimentExposures.first)
@@ -441,13 +437,9 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             "fallback"
         )
         XCTAssertEqual(fallback.properties["is_holdout"] as? Bool, false)
-        XCTAssertEqual(
-            fallback.properties["exposure_basis"] as? String,
-            "selected"
-        )
     }
 
-    func testHoldoutExposureSaysItsTreatmentWasSuppressed() async throws {
+    func testHoldoutExposureTakesItsHoldoutFlagFromTheRelease() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -489,10 +481,6 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         // Holdout truth comes from the authenticated variant definition, not
         // the assignment hint, which says otherwise here.
         XCTAssertEqual(holdout.properties["is_holdout"] as? Bool, true)
-        XCTAssertEqual(
-            holdout.properties["exposure_basis"] as? String,
-            "suppressed"
-        )
     }
 
     func testDeclinedPresentationDoesNotReportExperimentExposure() async throws {
