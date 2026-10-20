@@ -1,0 +1,10 @@
+{
+  "source": "fixtures/runtime/published-input/screen.riv",
+  "sourceSHA256": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
+  "generator": "/Users/levi/dev/nuxie-handoff/recreation-loop/magic-move-sdk-playback/tools/make-layer-input-probe.py",
+  "generatorSHA256": "5a2ffc4f92134d6da144b4587217cf574f2ddc3650972c684fae0c5fceaf420d",
+  "readerSHA256": "98e967216172c34a71d2c8196ce4f50e30e10057541aa509482afc97db6397f4",
+  "outputSHA256": "891b58efa2c8b882ebea35d1c04c6189237337c5f875fd819e84afce6bd97768",
+  "outputBytes": 4706,
+  "interim": true
+}

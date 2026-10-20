@@ -63,3 +63,9 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 - `ir/eval-vectors.json` and `ir/response-field-conformance.json`: expression and buffered-response evaluation used by Journey controls.
 
 - `runtime/forms-saves/goals/`: F5 goals from publisher `81fa73c87f0638d151d0a4082fbcab1cd61ec73c`. The unchanged source and oracle qualify ordered native list snapshot/recovery. SDK timed-wait persistence remains its own proof; this fixture has no row-remove event, forms or saves.
+
+`runtime/layer-host-video` wraps the published video Screen in an interim layer
+list to qualify nested decode, bound pause and row retirement on one player.
+
+`runtime/layer-host-input` wraps the published input and greeting Screens in an
+interim layer list to qualify active-row editors, field owners and revisits.

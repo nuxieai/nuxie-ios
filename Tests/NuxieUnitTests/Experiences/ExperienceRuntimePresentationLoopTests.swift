@@ -7,6 +7,125 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
+    func testLayerInputGateRejectsEditorWorkQueuedBeforeTheStep() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        try await loop.advanceZeroDelta()
+        await recorder.holdNextQueuedWork()
+        loop.enqueue(.init { .work(requestsFrame: false) })
+        let held = await recorder.waitForOperation(named: "queued")
+        XCTAssertTrue(held)
+        let rejected = expectation(description: "old editor work rejected")
+        actor Execution {
+            var ran = false
+            func mark() { ran = true }
+        }
+        let execution = Execution()
+        loop.enqueueInteraction(.init {
+            await execution.mark()
+            return .work(requestsFrame: false)
+        }, isEligible: { true }, completion: { result in
+            if case .failure = result { rejected.fulfill() }
+        })
+        loop.setInputEnabled(false)
+        loop.setInputEnabled(true)
+        await recorder.releaseQueuedWork()
+        await fulfillment(of: [rejected], timeout: 2)
+        let executed = await execution.ran
+        XCTAssertFalse(executed)
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testLayerWatchdogBarrierSurvivesASkippedPhaseDrawable() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        var permitsDrawable = true
+        let loop = makeLoop(recorder: recorder, view: view,
+            acquireDrawable: { permitsDrawable ? $0.nextDrawable() : nil })
+        try await loop.start()
+        try await loop.advanceZeroDelta()
+        let before = await recorder.renderDispositions().count
+        permitsDrawable = false
+        let completed = expectation(description: "later frame carries phase writes")
+        let phase = Task { @MainActor in
+            try await loop.advanceZeroDelta(awaitsPresentation: true)
+            completed.fulfill()
+        }
+        let skipped = await recorder.waitForRenderCount(before + 1)
+        XCTAssertTrue(skipped)
+        permitsDrawable = true
+        loop.displayLinkDidFire(at: 1)
+        await fulfillment(of: [completed], timeout: 2)
+        phase.cancel()
+        _ = await phase.result
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testLayerWatchdogBarrierWaitsForTheFrameCarryingItsPhases() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        var observations: [@Sendable (TimeInterval, ExperienceRuntimePresentedDrawable.Provenance) -> Void] = []
+        let loop = makeLoop(recorder: recorder, view: view, observesEveryPresentation: true,
+            observeDrawablePresentation: { _, handler in observations.append(handler) },
+            nativeCompletionPresentationFallback: nil)
+        try await loop.start()
+        try await loop.advanceZeroDelta()
+        let initialCount = observations.count
+        XCTAssertGreaterThan(initialCount, 0)
+        let complete = expectation(description: "phase frame presented")
+        var finished = false
+        let phase = Task { @MainActor in
+            try await loop.advanceZeroDelta(awaitsPresentation: true)
+            finished = true
+            complete.fulfill()
+        }
+        let rendered = await recorder.waitForRenderCount(initialCount + 1)
+        XCTAssertTrue(rendered)
+        for old in observations.prefix(initialCount) { old(1, .injectedTestObserver) }
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(finished, "An older presented frame must not start the watchdog")
+        observations.last?(2, .injectedTestObserver)
+        await fulfillment(of: [complete], timeout: 2)
+        phase.cancel()
+        _ = await phase.result
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
+    func testLayerStepBlocksPointerAndFocusInput() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        try await loop.advanceZeroDelta()
+        let before = await recorder.steps().count
+        loop.setInputEnabled(false)
+        XCTAssertFalse(loop.enqueueFocus(.next))
+        let source = NSObject()
+        loop.runtimeSurfaceViewDidReceivePointerEvents([
+            .init(source: ExperienceRuntimePointerSourceID(source), kind: .down, location: CGPoint(x: 20, y: 20)),
+        ])
+        try await loop.advanceZeroDelta()
+        let steps = await recorder.steps().dropFirst(before)
+        XCTAssertTrue(steps.allSatisfy { $0.pointers.isEmpty && $0.focusInputs.isEmpty })
+        loop.setInputEnabled(true)
+        XCTAssertTrue(loop.enqueueFocus(.next))
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testNativeFocusTapDoesNotConsumeALaterScenePointer() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let recorder = PresentationSessionRecorder(device: device)

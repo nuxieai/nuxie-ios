@@ -231,7 +231,7 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
                 let snapshot = try await layer.snapshot(screenID: id)
                 snapshots.append((id, snapshot))
             }
-            try XCTExpectFailure("UNIV-5113: fill stack and list override still read 0 by 0, with B at y=710 on apple-runtime-v0.10.16") {
+            try XCTExpectFailure("UNIV-5113: publisher layouts must make authored-size rows fill the resized layer root") {
                 for (id, snapshot) in snapshots {
                     XCTAssertEqual(try self.number(snapshot, "rowWidth"), 510, id)
                     XCTAssertEqual(try self.number(snapshot, "rowHeight"), 710, id)
@@ -240,6 +240,86 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testFitContentRequiresTheActiveRowsIntrinsicHeight() async throws {
+        try await withLayer { layer, _ in
+            try await layer.insert(screenID: "screen_1", at: 0)
+            var failure: Error?
+            do { try await layer.configurePresentationHeight(fitContent: true, size: CGSize(width: 390, height: 844)) }
+            catch { failure = error }
+            XCTExpectFailure("UNIV-5113: the released ABI measures only the layer root, not the active row's intrinsic height") {
+                XCTAssertNil(failure)
+            }
+        }
+    }
+
+    func testUpdatingAnEnteringRowsSnapshotDoesNotCountAnotherAppearance() async throws {
+        try await withLayer { layer, _ in
+            try await layer.insert(screenID: "screen_1", at: 0)
+            try await layer.setPhases([("screen_1", .entering)])
+            let current = await layer.lifecycle(screenID: "screen_1")
+            var state = ExperienceScreenLifecycleState(snapshot: try XCTUnwrap(current))
+            try await layer.applyLifecycleSnapshot(state.updateReduceMotion(true), screenID: "screen_1")
+            let updated = await layer.lifecycle(screenID: "screen_1")
+            XCTAssertEqual(updated?.appearances, 1)
+            XCTAssertEqual(updated?.reduceMotion, true)
+        }
+    }
+
+    @MainActor
+    func testNestedRowVideoBindsDecodesAndRetiresWithTheRow() async throws {
+        let root = experiencePreparationRepositoryRoot()
+        let scene = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/layer-host-video/layer-host.riv"))
+        let mediaURL = root.appendingPathComponent("fixtures/video/greeting.mp4")
+        let media = try Data(contentsOf: mediaURL)
+        let digest = SHA256Provider.hexDigest(media)
+        let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: scene)
+        let asset = try XCTUnwrap(catalog.first { $0.kind == .video })
+        let id = try XCTUnwrap(asset.authoredID)
+        let uniqueName = "\(asset.name)-\(id)"
+        let key = "assets/sha256/\(digest).mp4"
+        struct Inventory: Decodable { let videoElements: [NativeExperienceVideoElement] }
+        let inventory = try JSONDecoder().decode(Inventory.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/video/inventory.json")))
+        let video = NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: "asset:clip",
+            authoredAssetId: UInt64(id), assetUniqueName: uniqueName, sha256: digest, sizeBytes: media.count,
+            width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [], required: true)
+        let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
+            scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
+            entry: .init(screenId: "screen"), layerHost: .init(artboardName: "LayerList", listPath: "screens"),
+            screens: [.init(screenId: "screen", artboardId: "screen", artboardName: "Video Frame", width: 320, height: 640, exit: nil)],
+            transitions: [], textInputs: [], images: [], fonts: [], videos: [video], videoElements: inventory.videoElements)
+        let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
+            journey: JourneyDocument(screens: [.init(id: "screen", defaultViewModelName: "Runtime")]), sceneBytes: scene,
+            assets: [.init(kind: .video, authoredAssetID: id, assetUniqueName: uniqueName, sourceKey: key,
+                contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: mediaURL)])
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let layer = try await preparation.openLayer(pixelWidth: 320, pixelHeight: 640)
+        do {
+            try await layer.insert(screenID: "screen", at: 0)
+            try await layer.setPhases([("screen", .active)])
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                _ = try await layer.step(elapsedSeconds: 1 / 60)
+                if await layer.deliveredVideoFrames > 0 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            } while Date() < deadline
+            let occurrences = try await layer.runtime.videos()
+            XCTAssertEqual(occurrences.count, 1)
+            let frames = await layer.deliveredVideoFrames
+            XCTAssertGreaterThan(frames, 0, "The layer's shared video host must deliver decoded frames from its nested row")
+            let binding = try await layer.binding(screenID: "screen")
+            _ = try await binding.applyStateCommand(.value(.init(viewModelName: "Runtime", instanceID: nil,
+                instanceName: nil, path: "paused", value: .bool(true))))
+            _ = try await layer.step(elapsedSeconds: 0)
+            let paused = try await layer.runtime.videos()
+            XCTAssertEqual(paused.first?.wantsPlay, false)
+            try await layer.remove(screenID: "screen")
+            let removed = try await layer.runtime.videos()
+            XCTAssertTrue(removed.isEmpty)
+            try await layer.close()
+        } catch { try? await layer.close(); throw error }
     }
 
     private func number(_ snapshot: NuxieNativeViewModelSnapshot, _ name: String) throws -> Float {
@@ -262,29 +342,4 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
     }
 }
 
-func interimLayerTransition() -> NativeExperienceTransition {
-    .init(id: "transition.native-contract", kind: .layer,
-        sourceScreenId: "screen_1", destinationScreenId: "screen_2", durationMs: 450,
-        incomingOnTop: true, source: .init(completeEventName: "nx_exit_done:transition.native-contract"),
-        destination: .init(completeEventName: "nx_enter_done:transition.native-contract"),
-        reverse: .init(durationMs: nil, incomingOnTop: nil,
-            source: .init(completeEventName: "nx_exit_done:transition.native-contract.reverse"),
-            destination: .init(completeEventName: "nx_enter_done:transition.native-contract.reverse")))
-}
-
-private func interimLayerPayload() async throws -> AuthenticatedRuntimePayload {
-    let bytes = try Data(contentsOf: experiencePreparationRepositoryRoot()
-        .appendingPathComponent("fixtures/runtime/layer-host-interim/layer-host.riv"))
-    let base = try await statePayload(defaultViewModelName: nil, values: [], scene: bytes)
-    let screens = [JourneyScreen(id: "screen_1", defaultViewModelName: "Runtime", defaultInstanceId: "row-a"),
-                   JourneyScreen(id: "screen_2", defaultViewModelName: "Runtime_Upsell", defaultInstanceId: "row-b")]
-    let definition = ExperienceDefinition(screens: screens, viewModelValues: [], controlsByScreen: [:])
-    return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
-        renderPlan: .init(identity: base.renderPlan.identity, scene: base.renderPlan.scene,
-            entry: .init(screenId: "screen_1"), layerHost: .init(artboardName: "LayerList", listPath: "screens"),
-            screens: [.init(screenId: "screen_1", artboardId: "screen_1", artboardName: "Paywall", width: 390, height: 844, exit: nil),
-                      .init(screenId: "screen_2", artboardId: "screen_2", artboardName: "Upsell", width: 430, height: 932, exit: nil)],
-            transitions: [interimLayerTransition()], textInputs: [], images: base.renderPlan.images, fonts: base.renderPlan.fonts),
-        journey: definition.renderShell, definition: definition, sceneBytes: bytes, assets: base.assets)
-}
 #endif
