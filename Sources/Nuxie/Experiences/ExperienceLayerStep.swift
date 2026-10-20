@@ -26,10 +26,12 @@ enum ExperienceLayerStep {
         try await operations.prepare()
         let together = style != .none && plan != nil && !reduceMotion
         let transition = plan?.transitionId ?? ""
+        let incomingOnTop = plan?.incomingOnTop ?? (style != .push || !isBack)
+        let incomingIndex = incomingOnTop ? 1 : 0
         if together, let plan {
             let outgoing = try await operations.register(source, plan.outgoingCompletionEventName)
             let incoming = try await operations.register(target, plan.incomingCompletionEventName)
-            try await operations.insert(style == .push && isBack ? 0 : 1)
+            try await operations.insert(incomingIndex)
             try await operations.phases([(source, .exiting), (target, .entering)], transition)
             try await operations.present()
             await operations.wait([outgoing, incoming], plan.watchdogMilliseconds)
@@ -37,18 +39,18 @@ enum ExperienceLayerStep {
             try await operations.remove()
         } else {
             let outgoing: AsyncStream<Void>?
-            if !reduceMotion, let name = exit.completionEventName {
+            if !reduceMotion, let name = plan?.outgoingCompletionEventName ?? exit.completionEventName {
                 outgoing = try await operations.register(source, name)
             } else { outgoing = nil }
-            try await operations.phases([(source, .exiting)], "")
+            try await operations.phases([(source, .exiting)], transition)
             if !reduceMotion {
                 try await operations.present()
-                if let outgoing, let duration = exit.watchdogMilliseconds {
+                if let outgoing, let duration = plan?.watchdogMilliseconds ?? exit.watchdogMilliseconds {
                     await operations.wait([outgoing], duration)
                 }
             }
             try Task.checkCancellation()
-            try await operations.insert(style == .push && isBack ? 0 : 1)
+            try await operations.insert(incomingIndex)
             try await operations.remove()
             let incoming: AsyncStream<Void>?
             if !reduceMotion, let plan {
@@ -87,7 +89,10 @@ struct ExperienceLayerHistory {
         if let target, let pair = declarations.first(where: {
             ($0.sourceScreenId == entry.screenID && $0.destinationScreenId == target)
                 || ($0.destinationScreenId == entry.screenID && $0.sourceScreenId == target && $0.reverse != nil)
-        }) { return .init(kind: .magicMove, transitionId: pair.id) }
+        }) {
+            // Skipping Back uses the published default pair between its endpoints.
+            return .init(kind: .magicMove, transitionId: pair.id)
+        }
         return .none
     }
 
