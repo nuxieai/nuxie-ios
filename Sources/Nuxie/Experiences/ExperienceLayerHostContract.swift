@@ -36,6 +36,8 @@ enum ExperienceLayerHostContract {
         let id: String
         private enum PublishedKind: String, Decodable { case layer, choreographed }
         private let kind: PublishedKind
+        private let defaultPair: Bool?
+        var isDefaultPair: Bool { defaultPair == true }
         var planKind: NativeExperienceTransition.Kind {
             switch kind {
             case .layer: .layer

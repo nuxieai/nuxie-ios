@@ -81,6 +81,52 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testLayerStepWatchdogReleasesAStarvedDrawableBarrier() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view, acquireDrawable: { _ in nil })
+        try await loop.start()
+        let finished = expectation(description: "starved drawable watchdog finishes navigation")
+        var activated = false
+        var inputEnabled = true
+        var outcome: Result<Void, Error>?
+        let navigation = Task { @MainActor in
+            do {
+                try await ExperienceLayerStep.perform(source: "A", target: "B", style: .fade,
+                    isBack: false, plan: .init(transitionId: "pair", durationMilliseconds: 0,
+                        incomingOnTop: true, outgoingCompletionEventName: "exit", incomingCompletionEventName: "enter"),
+                    exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false,
+                    operations: .init(setInputEnabled: { inputEnabled = $0; loop.setInputEnabled($0) },
+                        prepare: {}, register: { _, _ in AsyncStream { _ in } }, insert: { _ in },
+                        phases: { _, _ in }, present: {
+                            loop.setTimelineActive(true)
+                            try await loop.advanceZeroDelta(awaitsPresentation: true)
+                        }, wait: { _, _ in XCTFail("The presentation budget has already expired") },
+                        remove: {}, hidden: {}, active: { activated = true }))
+                outcome = .success(())
+            } catch { outcome = .failure(error) }
+            finished.fulfill()
+        }
+        let skipped = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(skipped)
+        loop.displayLinkDidFire(at: 1)
+        let skippedAgain = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(skippedAgain)
+        await fulfillment(of: [finished], timeout: 1.5)
+        if case .success? = outcome { } else { XCTFail("Expected watchdog completion, got \(String(describing: outcome))") }
+        XCTAssertTrue(activated)
+        XCTAssertTrue(inputEnabled)
+        let dispositions = await recorder.renderDispositions()
+        XCTAssertTrue(dispositions.allSatisfy { $0 == .skippedTimeout })
+        navigation.cancel()
+        await navigation.value
+        try await loop.advanceZeroDelta()
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testLayerWatchdogBarrierSurvivesASkippedPhaseDrawable() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let recorder = PresentationSessionRecorder(device: device)
