@@ -239,9 +239,25 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
         }
     }
 
-    public func syncCurrentEntitlements(distinctId: String) async {
+    /// Purposes received by ``syncCurrentEntitlements(distinctId:purpose:)``.
+    public private(set) var syncCurrentEntitlementsPurposes: [CurrentEntitlementSyncPurpose] = []
+    /// What the next current-entitlement sync reports; by default the server
+    /// granted one restored purchase.
+    public private(set) var nextCurrentEntitlementSyncResult = CurrentEntitlementSyncResult(granted: 1)
+
+    public func syncCurrentEntitlements(
+        distinctId: String,
+        purpose: CurrentEntitlementSyncPurpose
+    ) async -> CurrentEntitlementSyncResult {
         syncCurrentEntitlementsCalled = true
         syncCurrentEntitlementsDistinctIds.append(distinctId)
+        syncCurrentEntitlementsPurposes.append(purpose)
+        return nextCurrentEntitlementSyncResult
+    }
+
+    /// Configures what the next current-entitlement sync reports.
+    public func setNextCurrentEntitlementSyncResult(_ result: CurrentEntitlementSyncResult) {
+        nextCurrentEntitlementSyncResult = result
     }
 
     @_spi(Testing) public func useFeatureWithPendingPurchase(

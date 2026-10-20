@@ -552,7 +552,12 @@ private actor JourneyFixtureTransactionObserver: TransactionObserverProtocol {
     ) async -> Bool {
         false
     }
-    func syncCurrentEntitlements(distinctId: String) async {}
+    func syncCurrentEntitlements(
+        distinctId: String,
+        purpose: CurrentEntitlementSyncPurpose
+    ) async -> CurrentEntitlementSyncResult {
+        CurrentEntitlementSyncResult()
+    }
     func purchaseCompletionEventId(transactionId: String) async -> String {
         "purchase-completed:test-fixture:test:appStore:\(transactionId)"
     }

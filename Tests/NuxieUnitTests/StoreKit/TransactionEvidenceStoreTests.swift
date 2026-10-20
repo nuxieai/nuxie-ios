@@ -19,11 +19,9 @@ private final class TransactionEvidenceEventSink: SystemEventSink, @unchecked Se
 }
 
 private final class SuccessfulPurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
-        PurchaseResponse(
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
+        return PurchaseResponse(
             success: true,
             customerId: distinctId,
             features: nil,
@@ -33,20 +31,15 @@ private final class SuccessfulPurchaseSyncAPI: PurchaseSynchronizing, @unchecked
 }
 
 private final class UnavailablePurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId _: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
         throw URLError(.notConnectedToInternet)
     }
 }
 
 private final class RevokedPurchaseSyncAPI: PurchaseSynchronizing, @unchecked Sendable {
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
-        PurchaseResponse(
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
+        return PurchaseResponse(
             success: true,
             customerId: distinctId,
             features: [
@@ -155,10 +148,9 @@ private actor SuspendedRevocationProjection {
 private actor RecordingTransactionSyncAPI {
     private var transactionJWSs: [String] = []
 
-    func syncTransaction(
-        transactionJwt: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let transactionJwt = request.transactionJwt
+        let distinctId = request.distinctId
         transactionJWSs.append(transactionJwt)
         return PurchaseResponse(
             success: true,
@@ -223,7 +215,7 @@ final class TransactionEvidenceStoreTests: QuickSpec {
                         OptimisticPurchaseEvidence(
                             transactionId: $0.transactionId,
                             distinctId: $0.distinctId,
-                            backendSynced: $0.backendSyncedAt != nil,
+                            backendSynced: $0.answeredAt != nil,
                             revoked: $0.isRevoked
                         )
                     }
@@ -436,7 +428,9 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertTrue(activeResult.committed)
         XCTAssertNil(activeResult.syncTask)
         XCTAssertEqual(coercedBeforeRevocationPersist?.isRevoked, true)
-        XCTAssertEqual(coercedBeforeRevocationPersist?.transactionJws, "active-jws")
+        // The refund is recorded at once: its signed revocation replaces the
+        // entry's send before the active commit can submit anything.
+        XCTAssertEqual(coercedBeforeRevocationPersist?.transactionJws, "revoked-jws")
         XCTAssertTrue(requestsBeforeRevocationPersist.isEmpty)
         XCTAssertFalse(eventSink.names.contains(SystemEventNames.purchaseCompleted))
 
@@ -459,7 +453,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertEqual(recordedJWSs, ["revoked-jws"])
         XCTAssertEqual(retained?.isRevoked, true)
         XCTAssertEqual(retained?.transactionJws, "")
-        XCTAssertNotNil(retained?.backendSyncedAt)
+        XCTAssertNotNil(retained?.answeredAt)
         await observer.stopListening()
     }
 
@@ -470,9 +464,15 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
         identity.setDistinctId("relaunch-customer")
+        // A native checkout installs the buyer's account token before StoreKit
+        // opens, which is what lets the purchase unlock before sync.
         let product = Self.projectionProduct(
             productId: "relaunch-product",
             storeProductId: "relaunch-store-product"
+        ).preparedForNativeCheckout(
+            appAccountToken: PurchaseStorageScope.testFixture.appAccountToken(
+                distinctId: "relaunch-customer"
+            )
         )
         let descriptorSHA256 = try XCTUnwrap(
             product.purchaseContext?.release.descriptorSHA256
@@ -768,7 +768,11 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         )
     }
 
-    func testImmediateRevocationWithoutStoredEvidenceRejectsLateActiveWrite() async {
+    /// The SDK keeps no revocation memory beyond a purchase's own outbox
+    /// entry. A refund StoreKit reports before Nuxie can process the
+    /// transaction leaves nothing behind, so a late active write is queued as
+    /// an ordinary send and the server, which knows the refund, decides.
+    func testLateActiveWriteAfterAnUnrecordedRevocationIsSentForTheServerToDecide() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("test-user")
         let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(
@@ -843,10 +847,10 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         )
 
         XCTAssertTrue(recorded)
-        XCTAssertEqual(
-            evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[transactionId]?.isRevoked,
-            true
-        )
+        let entry = evidenceStore.load().valueTreatingAbsentAsEmpty([:])?[transactionId]
+        XCTAssertEqual(entry?.isRevoked, false)
+        XCTAssertEqual(entry?.isUnsent, true)
+        XCTAssertEqual(entry?.unlocksEarly(for: "test-user"), false, "a purchase without the buyer's account token never unlocks early")
     }
 
     func testExistingRevocationCannotBeDowngradedByPurchaseRecording() async {
@@ -1021,7 +1025,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         let retained = evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId]
         XCTAssertEqual(retained?.finishRequired, true)
         XCTAssertEqual(retained?.transactionJws, "")
-        XCTAssertNotNil(retained?.backendSyncedAt)
+        XCTAssertNotNil(retained?.answeredAt)
     }
 
     @MainActor

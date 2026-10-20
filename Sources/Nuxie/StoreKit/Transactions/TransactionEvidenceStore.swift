@@ -7,17 +7,36 @@ struct StoredLocalEntitlementGrant: Codable, Equatable, Sendable {
     let allowance: Double?
 }
 
+/// One purchase's durable outbox entry, keyed by its StoreKit transaction id.
+///
+/// The entry holds what the SDK sends to `POST /purchase`: the signed
+/// transaction, why it is sent (`reason`), the customer it is sent for
+/// (`distinctId`, the requester) and whether that customer had signed in
+/// (`customerKind`), all recorded when the send was admitted so a retry never
+/// works them out again. The server's 200 or refusal (409/400) answers the
+/// send; a transport or 5xx failure keeps it for a retry with backoff, across
+/// restarts. The entry is not purchase authority: who owns the purchase is
+/// what the server last said, and access comes from the server profile, so
+/// the entry only lets the buyer's own unanswered purchase unlock early.
+///
+/// The rest is local bookkeeping that can outlive the send: finishing the
+/// StoreKit transaction and delivering the checkout's completion event. See
+/// `docs/purchase-outbox.md` and `fixtures/purchases/purchase-outbox.json`.
 struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let scope: PurchaseStorageScope
+    /// The signed StoreKit transaction to send; empty once answered.
     let transactionJws: String
     let transactionId: String
     let originalTransactionId: String
     let productId: String
+    /// The requester: the customer this purchase is sent for.
     let distinctId: String
     let recordedAt: Date
     /// Internal and external Feature identifiers from the signed Product.
     /// This is selection metadata for the server command, not entitlement state.
     let productFeatureIds: [String]
+    /// StoreKit reports the signed transaction as revoked (refunded). A
+    /// revoked purchase never unlocks early; the server decides access.
     let isRevoked: Bool
     let finishRequired: Bool
     let commercialContext: PurchaseCommercialContext?
@@ -28,9 +47,22 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     /// while receipt sync is offline, preventing a cold relaunch from
     /// replaying or rerouting the same commercial success transition.
     let completionDeliveredAt: Date?
-    /// Backend receipt acknowledgement retained independently from commercial
-    /// completion delivery when the purchasing customer is not active.
-    let backendSyncedAt: Date?
+    /// When the server answered the send, by accepting (200) or refusing
+    /// (409/400) it. An answered entry is no longer sent; it stays only while
+    /// its finish or completion delivery is outstanding.
+    let answeredAt: Date?
+    /// The account token StoreKit reports on the transaction. Only a
+    /// transaction whose token is the one Nuxie derives for the current
+    /// customer is their own purchase, and only it unlocks before the server
+    /// answers.
+    let appAccountToken: UUID?
+    /// Why the SDK sends this purchase, recorded at admission.
+    let reason: PurchaseSyncReason
+    /// Whether the requester had signed in, recorded at admission
+    /// ("identified" when the SDK could not tell).
+    let customerKind: PurchaseCustomerKind
+    /// Sends that failed without an answer; the retry backoff grows with it.
+    let sendAttempts: Int
 
     init(
         scope: PurchaseStorageScope = .testFixture,
@@ -46,7 +78,11 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         commercialContext: PurchaseCommercialContext? = nil,
         checkoutCompletionEventId: String? = nil,
         completionDeliveredAt: Date? = nil,
-        backendSyncedAt: Date? = nil
+        answeredAt: Date? = nil,
+        appAccountToken: UUID? = nil,
+        reason: PurchaseSyncReason = .sync,
+        customerKind: PurchaseCustomerKind = .identified,
+        sendAttempts: Int = 0
     ) {
         self.scope = scope
         self.transactionJws = transactionJws
@@ -61,16 +97,66 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.commercialContext = commercialContext
         self.checkoutCompletionEventId = checkoutCompletionEventId
         self.completionDeliveredAt = completionDeliveredAt
-        self.backendSyncedAt = backendSyncedAt
+        self.answeredAt = answeredAt
+        self.appAccountToken = appAccountToken
+        self.reason = reason
+        self.customerKind = customerKind
+        self.sendAttempts = sendAttempts
     }
 
-    func replacing(backendSyncedAt: Date?) -> Self {
+    /// Entries written before the outbox fields existed read as syncs for a
+    /// signed-in customer, the kind the server can move but never merge.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            scope: try container.decode(PurchaseStorageScope.self, forKey: .scope),
+            transactionJws: try container.decode(String.self, forKey: .transactionJws),
+            transactionId: try container.decode(String.self, forKey: .transactionId),
+            originalTransactionId: try container.decode(String.self, forKey: .originalTransactionId),
+            productId: try container.decode(String.self, forKey: .productId),
+            distinctId: try container.decode(String.self, forKey: .distinctId),
+            recordedAt: try container.decode(Date.self, forKey: .recordedAt),
+            productFeatureIds: try container.decode([String].self, forKey: .productFeatureIds),
+            isRevoked: try container.decode(Bool.self, forKey: .isRevoked),
+            finishRequired: try container.decode(Bool.self, forKey: .finishRequired),
+            commercialContext: try container.decodeIfPresent(
+                PurchaseCommercialContext.self, forKey: .commercialContext
+            ),
+            checkoutCompletionEventId: try container.decodeIfPresent(
+                String.self, forKey: .checkoutCompletionEventId
+            ),
+            completionDeliveredAt: try container.decodeIfPresent(
+                Date.self, forKey: .completionDeliveredAt
+            ),
+            answeredAt: try container.decodeIfPresent(Date.self, forKey: .answeredAt),
+            appAccountToken: try container.decodeIfPresent(UUID.self, forKey: .appAccountToken),
+            reason: try container.decodeIfPresent(PurchaseSyncReason.self, forKey: .reason) ?? .sync,
+            customerKind: try container.decodeIfPresent(
+                PurchaseCustomerKind.self, forKey: .customerKind
+            ) ?? .identified,
+            sendAttempts: try container.decodeIfPresent(Int.self, forKey: .sendAttempts) ?? 0
+        )
+    }
+
+    /// Whether this entry is still to be sent.
+    var isUnsent: Bool {
+        answeredAt == nil && !transactionJws.isEmpty
+    }
+
+    /// Whether this entry lets `distinctId` in before the server answers:
+    /// their own unanswered, unrevoked purchase, by account token.
+    func unlocksEarly(for distinctId: String) -> Bool {
+        answeredAt == nil && !isRevoked && self.distinctId == distinctId
+            && appAccountToken == scope.appAccountToken(distinctId: distinctId)
+    }
+
+    func replacing(answeredAt: Date?) -> Self {
         Self(
             scope: scope,
-            // Once the backend accepts the signed receipt, only the bounded
+            // Once the server answers the signed receipt, only the bounded
             // commercial completion context needs to survive for an inactive
-            // customer. Do not retain accepted receipt material for 90 days.
-            transactionJws: backendSyncedAt == nil ? transactionJws : "",
+            // customer. Do not retain answered receipt material for 90 days.
+            transactionJws: answeredAt == nil ? transactionJws : "",
             transactionId: transactionId,
             originalTransactionId: originalTransactionId,
             productId: productId,
@@ -82,7 +168,35 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             commercialContext: commercialContext,
             checkoutCompletionEventId: checkoutCompletionEventId,
             completionDeliveredAt: completionDeliveredAt,
-            backendSyncedAt: backendSyncedAt
+            answeredAt: answeredAt,
+            appAccountToken: appAccountToken,
+            reason: reason,
+            customerKind: customerKind,
+            sendAttempts: answeredAt == nil ? sendAttempts : 0
+        )
+    }
+
+    /// The same entry after one more send failed without an answer.
+    func replacingAfterFailedSend() -> Self {
+        Self(
+            scope: scope,
+            transactionJws: transactionJws,
+            transactionId: transactionId,
+            originalTransactionId: originalTransactionId,
+            productId: productId,
+            distinctId: distinctId,
+            recordedAt: recordedAt,
+            productFeatureIds: productFeatureIds,
+            isRevoked: isRevoked,
+            finishRequired: finishRequired,
+            commercialContext: commercialContext,
+            checkoutCompletionEventId: checkoutCompletionEventId,
+            completionDeliveredAt: completionDeliveredAt,
+            answeredAt: answeredAt,
+            appAccountToken: appAccountToken,
+            reason: reason,
+            customerKind: customerKind,
+            sendAttempts: sendAttempts + 1
         )
     }
 }

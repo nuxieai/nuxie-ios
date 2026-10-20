@@ -144,6 +144,16 @@ create StoreKit evidence or finish StoreKit transactions. In native StoreKit
 mode, `.full` lets Nuxie finish verified transactions after durable sync and
 `.observer` leaves finishing to the host.
 
+In native StoreKit mode, every App Store purchase goes through one durable
+outbox entry that says why it is sent (the customer's purchase, their
+Restore, or a sync) and whether its customer signed in with `identify`; see
+[Purchase outbox](purchase-outbox.md). Access comes from the server profile,
+which the SDK fetches again after every answer; only the buyer's own fresh
+purchase unlocks before the server answers. `restorePurchases()` returns
+`.restored` only after the server grants the customer at least one restored
+purchase, `.noPurchases` when the App Store account holds none, and `.failed`
+when the server refuses them or has not answered.
+
 Application lifecycle events are captured by default. `beforeSend` may
 transform or drop any event, including SDK-authored lifecycle events. Identity
 fields are pinned by the SDK and cannot be changed by the hook.

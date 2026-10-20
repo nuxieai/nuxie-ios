@@ -136,7 +136,9 @@ actor MockNuxieApiForQueue: NuxieApiProtocol {
         )
     }
 
-    func syncTransaction(transactionJwt: String, distinctId: String) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let transactionJwt = request.transactionJwt
+        let distinctId = request.distinctId
         return PurchaseResponse(success: true, customerId: distinctId, features: nil, error: nil)
     }
 

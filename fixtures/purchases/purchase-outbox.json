@@ -1,0 +1,101 @@
+{
+  "suite": "purchases/purchase-outbox",
+  "version": 1,
+  "notes": [
+    "One durable outbox entry per purchase, keyed by the store transaction id (Google Play: the purchase token).",
+    "An entry records, when its send is admitted: signedTransaction, reason, requesterDistinctId and customerKind. Every retry sends exactly these; it never works them out again.",
+    "reason is 'purchase' for the customer's own checkout (including a store delivery of a checkout still running, and the product the store says they already own, for that product only), 'restore' for Restore, and 'sync' for every other send: store updates, launch recovery, deferred approvals, and the scans after identify or reset.",
+    "customerKind is 'identified' when the requester signed in with identify and 'anonymous' when they did not. When the SDK cannot tell (a requester no longer on the device whose entry has no recorded kind) it is 'identified': the server merges only owners declared anonymous, so such a customer can be moved but never merged away.",
+    "requesterDistinctId is the customer the send is for: the one an explicit producer (checkout, Restore, already owned) names, else the customer of the checkout binding the store delivery matches, else the current customer. The SDK never works out who owns a purchase; the owner is what the server last said.",
+    "A 200 or a refusal (409, 400) answers the send and clears the entry. Any other failure (transport, 5xx, 401, 403) keeps it with one more attempt; it is sent again after the backoff, and also at every launch, at identify or reset, and when a newly loaded profile changes the product catalog.",
+    "After any answer, accepted or refused, the SDK fetches the requester's profile again when they are the current customer. Access comes only from the server profile, plus the early unlock of the buyer's own unanswered, unrevoked purchase (its account token is the one derived for the current customer). A 200's features hold in memory only until a profile requested after them lands.",
+    "Restore sends every current store entitlement for the restoring customer as 'restore' and reports restored only when the server accepted at least one.",
+    "Runners drive production entry points (checkout, already-owned checkout, Restore, store update, launch scan, stored retry) against a transport that records each request and answers as the case says."
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/purchase",
+    "body": {
+      "type": "appstore",
+      "transaction_jwt": "<signedTransaction>",
+      "distinct_id": "<requesterDistinctId>",
+      "reason": "<reason>",
+      "customer_kind": "<customerKind>"
+    }
+  },
+  "retry": {
+    "initialDelaySeconds": 30,
+    "multiplier": 2,
+    "maximumDelaySeconds": 3600,
+    "delayAfterAttempts": [
+      { "attempts": 1, "delaySeconds": 30 },
+      { "attempts": 2, "delaySeconds": 60 },
+      { "attempts": 3, "delaySeconds": 120 },
+      { "attempts": 8, "delaySeconds": 3600 },
+      { "attempts": 40, "delaySeconds": 3600 }
+    ]
+  },
+  "sends": [
+    {
+      "name": "signed-in checkout",
+      "producer": "checkout",
+      "customer": { "distinctId": "buyer", "identified": true },
+      "expectedRequest": { "distinct_id": "buyer", "reason": "purchase", "customer_kind": "identified" }
+    },
+    {
+      "name": "anonymous checkout",
+      "producer": "checkout",
+      "customer": { "distinctId": "buyer", "identified": false },
+      "expectedRequest": { "distinct_id": "<anonymousId>", "reason": "purchase", "customer_kind": "anonymous" }
+    },
+    {
+      "name": "the product the store says is already owned",
+      "producer": "already_owned",
+      "customer": { "distinctId": "buyer", "identified": true },
+      "expectedRequest": { "distinct_id": "buyer", "reason": "purchase", "customer_kind": "identified" }
+    },
+    {
+      "name": "restore",
+      "producer": "restore",
+      "customer": { "distinctId": "restorer", "identified": true },
+      "expectedRequest": { "distinct_id": "restorer", "reason": "restore", "customer_kind": "identified" }
+    },
+    {
+      "name": "store update",
+      "producer": "transaction_stream",
+      "customer": { "distinctId": "customer", "identified": true },
+      "expectedRequest": { "distinct_id": "customer", "reason": "sync", "customer_kind": "identified" }
+    },
+    {
+      "name": "launch scan",
+      "producer": "launch_scan",
+      "customer": { "distinctId": "customer", "identified": true },
+      "expectedRequest": { "distinct_id": "customer", "reason": "sync", "customer_kind": "identified" }
+    },
+    {
+      "name": "a retry after reset keeps the recorded fields",
+      "producer": "retry_after_reset",
+      "customer": { "distinctId": "buyer", "identified": true },
+      "expectedRequest": { "distinct_id": "buyer", "reason": "purchase", "customer_kind": "identified" }
+    },
+    {
+      "name": "an entry with no recorded kind or reason, for a requester no longer here",
+      "producer": "retry_unrecorded",
+      "customer": { "distinctId": "current-customer", "identified": true },
+      "expectedRequest": { "distinct_id": "departed-customer", "reason": "sync", "customer_kind": "identified" }
+    }
+  ],
+  "answers": [
+    { "name": "accepted", "status": 200, "entry": "cleared", "sendAttempts": 0, "profileRefreshes": 1 },
+    { "name": "conflict", "status": 409, "code": "app_store_purchase_conflict", "entry": "cleared", "sendAttempts": 0, "profileRefreshes": 1 },
+    { "name": "invalid", "status": 400, "code": "app_store_purchase_invalid", "entry": "cleared", "sendAttempts": 0, "profileRefreshes": 1 },
+    { "name": "unavailable", "status": 503, "code": "app_store_purchase_unavailable", "entry": "kept", "sendAttempts": 1, "profileRefreshes": 0 },
+    { "name": "offline", "status": null, "entry": "kept", "sendAttempts": 1, "profileRefreshes": 0 }
+  ],
+  "restore": [
+    { "name": "one accepted among refusals", "answers": ["accepted", "conflict"], "result": "restored" },
+    { "name": "every claim refused", "answers": ["conflict"], "result": "failed", "error": "owned_by_another_account" },
+    { "name": "no answer", "answers": ["offline"], "result": "failed", "error": "unconfirmed" },
+    { "name": "nothing to send", "answers": [], "result": "no_purchases" }
+  ]
+}

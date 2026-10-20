@@ -70,10 +70,9 @@ protocol FeatureChecking: AnyObject, Sendable {
 }
 
 protocol PurchaseSynchronizing: AnyObject, Sendable {
-    func syncTransaction(
-        transactionJwt: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse
+    /// Sends one verified App Store transaction for `request.distinctId`.
+    /// A 409 or 400 means the server will not attach it to that customer.
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse
 }
 
 /// The atomic server command used when a verified App Store purchase has not

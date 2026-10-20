@@ -74,11 +74,9 @@ private actor PurchaseBackedUsageAPI: PurchaseSynchronizing, PurchaseBackedFeatu
         self.results = results
     }
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
-        PurchaseResponse(
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
+        return PurchaseResponse(
             success: true,
             customerId: distinctId,
             features: nil,
@@ -106,10 +104,7 @@ private final class OrdinaryReceiptSyncAPI {
         self.responseCustomerId = responseCustomerId
     }
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId _: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
         lock.withLock { requestCount += 1 }
         return PurchaseResponse(
             success: true,
@@ -239,10 +234,8 @@ private actor ControlledPurchaseBackedUsageAPI:
     private var released = false
     private var syncRequestCount = 0
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
         syncRequestCount += 1
         return PurchaseResponse(
             success: true,
@@ -299,10 +292,8 @@ private actor ControlledReceiptSyncAPI:
     private var syncReleased = false
     private var usageRequestCount = 0
 
-    func syncTransaction(
-        transactionJwt _: String,
-        distinctId: String
-    ) async throws -> PurchaseResponse {
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        let distinctId = request.distinctId
         syncStarted = true
         let waiters = syncStartWaiters
         syncStartWaiters.removeAll()
@@ -811,7 +802,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws,
             "signed-transaction-1"
         )
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.backendSyncedAt)
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
         XCTAssertTrue(events.events().isEmpty)
 
         _ = try await observer.useFeatureWithPendingPurchase(
@@ -881,7 +872,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         }
 
         XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws, "signed-transaction-1")
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.backendSyncedAt)
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
         XCTAssertTrue(events.events().isEmpty)
         let updateCount = await features.recordedUpdates().count
         XCTAssertEqual(updateCount, 0)
@@ -1023,7 +1014,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 distinctId: "customer-a",
                 featureIds: ["credits"],
                 transactionJws: "",
-                backendSyncedAt: Date(timeIntervalSince1970: 75)
+                answeredAt: Date(timeIntervalSince1970: 75)
             ),
             "empty": evidence(
                 transactionId: "empty",
@@ -1478,7 +1469,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws,
             "signed-transaction-1"
         )
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.backendSyncedAt)
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
     }
 
     private func assertOrdinaryReceiptSyncAccepts(
@@ -1665,7 +1656,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
 
         let evidence = try XCTUnwrap(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
         XCTAssertEqual(evidence.transactionJws, "")
-        XCTAssertNotNil(evidence.backendSyncedAt)
+        XCTAssertNotNil(evidence.answeredAt)
         XCTAssertTrue(evidence.finishRequired)
         XCTAssertEqual(evidence.commercialContext, commercialContext())
         XCTAssertNil(evidence.completionDeliveredAt)
@@ -1679,11 +1670,12 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         commercialContext: PurchaseCommercialContext? = nil,
         isRevoked: Bool = false,
         transactionJws: String? = nil,
-        backendSyncedAt: Date? = nil,
+        answeredAt: Date? = nil,
         scope: PurchaseStorageScope? = nil
     ) -> StoredTransactionEvidence {
-        StoredTransactionEvidence(
-            scope: scope ?? self.scope,
+        let scope = scope ?? self.scope
+        return StoredTransactionEvidence(
+            scope: scope,
             transactionJws: transactionJws ?? "signed-\(transactionId)",
             transactionId: transactionId,
             originalTransactionId: "original-\(transactionId)",
@@ -1694,7 +1686,10 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             isRevoked: isRevoked,
             finishRequired: finishRequired,
             commercialContext: commercialContext,
-            backendSyncedAt: backendSyncedAt
+            answeredAt: answeredAt,
+            // The customer's own checkout: its account token names them.
+            appAccountToken: scope.appAccountToken(distinctId: distinctId),
+            reason: .purchase
         )
     }
 
