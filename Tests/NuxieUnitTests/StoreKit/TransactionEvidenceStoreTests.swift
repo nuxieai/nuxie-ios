@@ -240,6 +240,65 @@ final class TransactionEvidenceStoreTests: QuickSpec {
 }
 
 final class TransactionObserverEvidenceRaceTests: XCTestCase {
+    /// A send that fails schedules its retry even while another entry is
+    /// still waiting for its first send.
+    func testFailedSendSchedulesItsRetryWhileAnotherEntryIsUnsent() async {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = InMemoryTransactionEvidenceStore()
+        let waiting = StoredTransactionEvidence(
+            transactionJws: "waiting-jws",
+            transactionId: "waiting-transaction",
+            originalTransactionId: "waiting-original",
+            productId: "product",
+            distinctId: "customer",
+            recordedAt: mocks.dateProvider.now(),
+            isRevoked: false
+        )
+        XCTAssertTrue(store.save([waiting.transactionId: waiting]))
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: mocks.dateProvider,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "retry-schedule")),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            dateProvider: mocks.dateProvider
+        )
+        addTeardownBlock { await observer.stopListening() }
+
+        let failing = await observer.commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: "failing-jws",
+                transactionId: "failing-transaction",
+                originalTransactionId: "failing-original",
+                productId: "product",
+                attributedDistinctId: "customer",
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: false,
+                requiresAuthorityResolution: false
+            ),
+            source: .transactionStream
+        ))
+        let synced = await failing.syncTask?.value
+        XCTAssertEqual(synced, false)
+
+        let stored = store.load().valueTreatingAbsentAsEmpty([:])
+        XCTAssertEqual(stored?["failing-transaction"]?.sendAttempts, 1)
+        XCTAssertEqual(stored?["waiting-transaction"]?.sendAttempts, 0)
+        let scheduled = await observer.hasScheduledOutboxRetry
+        XCTAssertTrue(scheduled, "the failed send's retry is scheduled")
+    }
+
     func testExternalDelegatePurchaseDoesNotCreateOverlayThroughProjectionRefresh() async throws {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
