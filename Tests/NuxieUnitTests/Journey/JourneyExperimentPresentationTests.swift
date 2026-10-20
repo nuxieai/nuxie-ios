@@ -446,7 +446,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let snapshot = renderedExperimentSnapshot(
             try await authenticatedRenderedSnapshot(fixture),
             assignment: .init(variantId: "variant_b", isHoldout: false),
-            variantBIsHoldout: true
+            holdoutVariantIds: ["variant_b"]
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -481,6 +481,51 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         // Holdout truth comes from the authenticated variant definition, not
         // the assignment hint, which says otherwise here.
         XCTAssertEqual(holdout.properties["is_holdout"] as? Bool, true)
+    }
+
+    func testFallbackExposureReportsItsVariantsHoldoutFlag() async throws {
+        // Publishing never signs a holdout fallback, but the executor runs
+        // one (fixtures/journeys/planes/executor-controls.json): the exposure
+        // reports the holdout path the person actually took.
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = renderedExperimentSnapshot(
+            try await authenticatedRenderedSnapshot(fixture),
+            assignment: nil,
+            holdoutVariantIds: ["variant_a"]
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = await MainActor.run {
+            let value = RecordingJourneyPresenter()
+            value.automaticallyRevealsShownPresentation = false
+            return value
+        }
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            presenter: presenter
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        await request.onPresentationRevealed("screen_welcome")
+
+        let fallback = try XCTUnwrap(events.routedEvents.first {
+            $0.name == JourneyEvents.experimentExposure
+        })
+        XCTAssertEqual(fallback.properties["variant_key"] as? String, "variant_a")
+        XCTAssertEqual(
+            fallback.properties["assignment_source"] as? String,
+            "fallback"
+        )
+        XCTAssertEqual(fallback.properties["is_holdout"] as? Bool, true)
     }
 
     func testDeclinedPresentationDoesNotReportExperimentExposure() async throws {

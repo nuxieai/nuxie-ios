@@ -164,14 +164,10 @@ struct JourneyExperimentExposureReporter: Sendable {
         properties["assignment_source"] = exposure.kind == .assigned
             ? "profile"
             : "fallback"
-        let isHoldout: Bool
-        switch exposure.kind {
-        case .assigned:
-            isHoldout = exposure.isHoldout
-        case .fallback:
-            isHoldout = false
-        }
-        properties["is_holdout"] = isHoldout
+        // The selected variant's flag from the authenticated release, for a
+        // fallback too: publishing never signs a holdout fallback, but a
+        // release that did would run its holdout path.
+        properties["is_holdout"] = exposure.isHoldout
         return Projection(
             eventName: JourneyEvents.experimentExposure,
             properties: properties

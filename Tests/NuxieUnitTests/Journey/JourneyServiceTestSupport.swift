@@ -389,7 +389,7 @@ extension JourneyTestCase {
     func renderedExperimentSnapshot(
         _ snapshot: JourneyProfileCatalog.Snapshot,
         assignment: JourneyFactTable.Assignment?,
-        variantBIsHoldout: Bool = false
+        holdoutVariantIds: Set<String> = []
     ) -> JourneyProfileCatalog.Snapshot {
         var assignments: ExactJSONObject<JourneyFactTable.Assignment?> = [:]
         if let assignment {
@@ -414,11 +414,11 @@ extension JourneyTestCase {
                         "variants": .array([
                             .object([
                                 "id": .string("variant_a"),
-                                "isHoldout": .bool(false),
+                                "isHoldout": .bool(holdoutVariantIds.contains("variant_a")),
                             ]),
                             .object([
                                 "id": .string("variant_b"),
-                                "isHoldout": .bool(variantBIsHoldout),
+                                "isHoldout": .bool(holdoutVariantIds.contains("variant_b")),
                             ]),
                         ]),
                     ],
