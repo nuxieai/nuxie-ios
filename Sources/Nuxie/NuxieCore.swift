@@ -281,7 +281,7 @@ final class NuxieCore: @unchecked Sendable {
     let appIdentifier = Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app"
     let purchaseStorageScope = PurchaseStorageScope(
       appIdentifier: appIdentifier,
-      environment: configuration.environment,
+      apiKey: configuration.apiKey,
       testStoreEnabled: configuration.testStoreEnabled
     )
     let features = overrides.features ?? FeatureService(

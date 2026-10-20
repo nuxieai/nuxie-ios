@@ -858,23 +858,53 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
     }
 
     func testAppScopeSurvivesPublishableKeyRotation() {
-        let firstConfiguration = NuxieConfiguration(apiKey: "pk-old")
-        let rotatedConfiguration = NuxieConfiguration(apiKey: "pk-new")
-        let first = PurchaseStorageScope(
-            appIdentifier: "com.example.host-app",
-            environment: firstConfiguration.environment,
-            testStoreEnabled: firstConfiguration.testStoreEnabled
-        )
-        let rotated = PurchaseStorageScope(
-            appIdentifier: "com.example.host-app",
-            environment: rotatedConfiguration.environment,
-            testStoreEnabled: rotatedConfiguration.testStoreEnabled
-        )
+        for (oldKey, newKey) in [
+            ("pk_test_old", "pk_test_new"),
+            ("pk_live_old", "pk_live_new"),
+        ] {
+            let first = PurchaseStorageScope(
+                appIdentifier: "com.example.host-app",
+                apiKey: oldKey,
+                testStoreEnabled: false
+            )
+            let rotated = PurchaseStorageScope(
+                appIdentifier: "com.example.host-app",
+                apiKey: newKey,
+                testStoreEnabled: false
+            )
 
-        XCTAssertEqual(first, rotated)
+            XCTAssertEqual(first, rotated)
+            XCTAssertEqual(
+                first.appAccountToken(distinctId: "customer"),
+                rotated.appAccountToken(distinctId: "customer")
+            )
+        }
+    }
+
+    /// The service environment selects which Nuxie service the SDK talks to.
+    /// It must not change which customer a StoreKit purchase belongs to: the
+    /// server derives the token from the key's mode alone (UNIV-5182).
+    func testAccountTokenFollowsKeyModeNotServiceEnvironment() {
+        let production = NuxieConfiguration(apiKey: "pk_test_debug_build")
+        let development = NuxieConfiguration(apiKey: "pk_test_debug_build")
+        development.environment = .development
+        let scopes = [production, development].map {
+            PurchaseStorageScope(
+                appIdentifier: "com.example.host-app",
+                apiKey: $0.apiKey,
+                testStoreEnabled: $0.testStoreEnabled
+            )
+        }
+
+        XCTAssertEqual(scopes[0], scopes[1])
+        XCTAssertEqual(scopes[0].environment, "development")
         XCTAssertEqual(
-            first.appAccountToken(distinctId: "customer"),
-            rotated.appAccountToken(distinctId: "customer")
+            PurchaseStorageScope(
+                appIdentifier: "com.example.host-app",
+                apiKey: "pk_live_release_build",
+                testStoreEnabled: false
+            ).environment,
+            "production"
         )
     }
 

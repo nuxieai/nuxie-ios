@@ -9,7 +9,14 @@ enum PurchaseStoreEnvironment: String, Codable, Sendable {
 /// Opaque namespace for every durable purchase artifact. The host app's stable
 /// bundle identity is hashed before it reaches disk; environment and store mode
 /// remain explicit so development Test Store state can never be replayed as
-/// App Store state. A rotatable publishable API key is not app identity.
+/// App Store state. A rotatable publishable API key is not app identity: only
+/// its mode (live or test) takes part, so rotating a key keeps the namespace.
+///
+/// The environment component is the key's mode, never the SDK's service
+/// environment. Nuxie admits App Store (Production) transactions only with a
+/// live key and Sandbox or Xcode transactions only with a test key, and the
+/// server derives the expected account token from that pairing. Shared vectors
+/// in `fixtures/purchases/app-account-token.json` pin both sides.
 struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
     let appIdentifierHash: String
     let environment: String
@@ -17,13 +24,20 @@ struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
 
     init(
         appIdentifier: String,
-        environment: Environment,
+        apiKey: String,
         testStoreEnabled: Bool
     ) {
         let digest = SHA256.hash(data: Data(appIdentifier.utf8))
         appIdentifierHash = digest.map { String(format: "%02x", $0) }.joined()
-        self.environment = environment.rawValue
+        environment = Self.environment(forPublishableKey: apiKey)
         storeEnvironment = testStoreEnabled ? .testStore : .appStore
+    }
+
+    /// `production` for a live key, `development` for a test key. Nuxie issues
+    /// only `pk_live_` and `pk_test_` keys, and a test key is the safe reading
+    /// of anything else: it can never claim a Production transaction.
+    static func environment(forPublishableKey apiKey: String) -> String {
+        apiKey.hasPrefix("pk_live_") ? "production" : "development"
     }
 
     init(
