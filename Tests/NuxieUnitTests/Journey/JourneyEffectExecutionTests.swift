@@ -347,6 +347,35 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         return started
     }
 
+    func testAnUnsettledTransitionKeepsTheTriggerForTheProfileStillComing() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = replacing(
+            try await authenticatedSnapshot(JourneyPlaneProfileTestFixture.load()),
+            entry: .init(type: .event, eventName: "signed_in_trigger", segmentId: nil, member: nil, condition: nil),
+            reentry: .init(type: .everyMatch, window: nil)
+        )
+        let (identity, store, events, service) = try await settledCustomerA(directory: directory, snapshot: snapshot)
+
+        identity.setDistinctId("customer-b")
+        await service.handleUserChange(from: "customer-a", to: "customer-b")
+        events.track("signed_in_trigger")
+        _ = await events.flushEvents()
+        _ = await events.drainCommittedRouting()
+        // Every refresh was superseded: B's profile may still arrive, so the
+        // transition finishes without opening B's journal without it.
+        await service.finishUserChangeRouting(to: "customer-b", profileSettled: false)
+        _ = await events.drainCommittedRouting()
+        XCTAssertEqual(startedJourneys(in: store, for: "customer-b"), 0)
+
+        // The newer refresh brings the profile: the kept trigger starts.
+        await service.profileDidCommit(snapshot, distinctId: "customer-b")
+        let started = try await waitForStartedJourneys(1, in: store, for: "customer-b", events: events)
+        XCTAssertEqual(started, 1)
+        await service.shutdown()
+        await events.close()
+    }
+
     func testAnObsoleteTransitionLeavesRoutingHeldForTheQueuedCustomer() async throws {
         // A fresh install starting up: routing is held until a journal opens.
         let directory = temporaryDirectory()

@@ -39,14 +39,18 @@ protocol JourneyServiceProtocol: JourneyProfileConsuming {
     func onAppWillEnterForeground() async
     func onAppBecameActive() async
     func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async
-    func finishUserChangeRouting(to newDistinctId: String) async
+    func finishUserChangeRouting(to newDistinctId: String, profileSettled: Bool) async
     func shutdown() async
 }
 
 extension JourneyServiceProtocol {
     func prepareForEvents() async {}
     func finishStartupRouting() async {}
-    func finishUserChangeRouting(to newDistinctId: String) async {}
+    func finishUserChangeRouting(to newDistinctId: String, profileSettled: Bool) async {}
+    /// A transition whose profile refresh settled, admitted or failed.
+    func finishUserChangeRouting(to newDistinctId: String) async {
+        await finishUserChangeRouting(to: newDistinctId, profileSettled: true)
+    }
     func shutdown() async {}
 }
 
@@ -1015,13 +1019,19 @@ extension JourneyService {
         await scheduleNextWake()
     }
 
-    /// The transition has finished and the arriving customer's profile
-    /// refresh has settled, admitted or not. Their journal opens now if it
+    /// The transition has finished. When its profile refresh settled
+    /// (admitted, or failed) the arriving customer's journal opens now if it
     /// has not, with their profile when it arrived and without one as before
-    /// the hold otherwise, and this transition's hold is released, with the
-    /// startup hold that waited for it. Transitions run one at a time, so
-    /// no newer transition's hold exists yet.
-    func finishUserChangeRouting(to newDistinctId: String) async {
+    /// the hold otherwise. When every refresh was superseded, a newer one may
+    /// still bring the profile, so the journal stays closed: their events are
+    /// then refused and kept by EventLog until that profile opens it. Either
+    /// way this transition's hold is released, with the startup hold that
+    /// waited for it. Transitions run one at a time, so no newer
+    /// transition's hold exists yet.
+    func finishUserChangeRouting(
+        to newDistinctId: String,
+        profileSettled: Bool
+    ) async {
         // A newer identify() is queued behind this transition: the holds
         // stay for it, and it is the transition now in flight.
         guard identity.getDistinctId() == newDistinctId else {
@@ -1032,7 +1042,7 @@ extension JourneyService {
         // Before initialization no hold was taken here; startup opens the
         // journal and releases its own hold.
         guard initialized else { return }
-        if journal == nil {
+        if journal == nil, profileSettled {
             await ensureJournal(for: newDistinctId)
         }
         if let operation = journalRecoveryOperation {
