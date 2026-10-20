@@ -1022,23 +1022,31 @@ extension JourneyService {
     /// startup hold that waited for it. Transitions run one at a time, so
     /// no newer transition's hold exists yet.
     func finishUserChangeRouting(to newDistinctId: String) async {
-        if transitionInFlight == newDistinctId {
-            transitionInFlight = nil
+        // A newer identify() is queued behind this transition: the holds
+        // stay for it, and it is the transition now in flight.
+        guard identity.getDistinctId() == newDistinctId else {
+            transitionInFlight = identity.getDistinctId()
+            return
         }
-        let held = userChangeRoutingDeferral
-        userChangeRoutingDeferral = nil
-        // Before initialization, startup opens the journal and releases
-        // its own hold.
+        transitionInFlight = nil
+        // Before initialization no hold was taken here; startup opens the
+        // journal and releases its own hold.
         guard initialized else { return }
-        if journal == nil, identity.getDistinctId() == newDistinctId {
+        if journal == nil {
             await ensureJournal(for: newDistinctId)
         }
         if let operation = journalRecoveryOperation {
             await operation.task.value
         }
+        guard identity.getDistinctId() == newDistinctId else {
+            transitionInFlight = identity.getDistinctId()
+            return
+        }
         guard initialized,
               journal == nil || recoveredJournalGeneration == journalGeneration
         else { return }
+        let held = userChangeRoutingDeferral
+        userChangeRoutingDeferral = nil
         for generation in [held, startupRoutingDeferral].compactMap({ $0 }) {
             await events.resumeCommittedRouting(ifGeneration: generation)
         }
