@@ -359,6 +359,20 @@ internal actor ProfileService: ProfileServiceProtocol {
     func refetchProfile(distinctId requestedId: String?) async throws -> ProfileResponse {
         await awaitInitialDiskLoad()
         let distinctId = requestedId ?? identity.getDistinctId()
+        // A customer without a usable copy has their events held for this
+        // fetch, until it or a newer one for them settles.
+        await journeys?.profileRefetchWillBegin(distinctId: distinctId)
+        do {
+            let response = try await fetchProfile(distinctId: distinctId)
+            await journeys?.profileRefetchDidSettle(distinctId: distinctId)
+            return response
+        } catch {
+            await journeys?.profileRefetchDidSettle(distinctId: distinctId)
+            throw error
+        }
+    }
+
+    private func fetchProfile(distinctId: String) async throws -> ProfileResponse {
         let admission = beginAdmission(distinctId: distinctId)
         requestRevision &+= 1
         let admittedRequestRevision = requestRevision

@@ -25,7 +25,7 @@ These JSON vectors define the contracts shared by SDK implementations.
 - `journeys/planes/publication-admission.json`: identical publication replay, equal-sequence conflicts and newer publication admission.
 - `journeys/planes/entry-evaluation.json`: profile fact, membership, event-edge, foreground, and unknown-value admission.
 - `sdk/early-event-admission.json`: an event starts from the copy installed when it is handled, never dropped for being captured under an earlier copy or before the first one; it never starts another customer's Journey. iOS consumes it in `JourneyEarlyEventAdmissionTests`.
-- `sdk/refetch-event-hold.json`: while a fresh copy replaces a customer's withdrawn one (a language change in the app), their events wait, then replay against it before any wait is resolved; a failed fetch lets them through without a copy, and with no fetch nothing waits. iOS consumes it in `JourneyRefetchEventHoldTests`.
+- `sdk/refetch-event-hold.json`: while a customer has no usable copy (withdrawn after a language change in the app) and a fetch of it runs, their events wait, then replay against the copy that lands before any wait is resolved. The hold lasts until a copy lands or their last running fetch settles; then the events go through without a copy. With no fetch nothing waits. iOS consumes it in `JourneyRefetchEventHoldTests`.
 - `journeys/planes/occurrence-evaluation.json`: occurrence queries, aggregates, predicates, windows, and unknown propagation.
 - `journeys/planes/history-coverage.json`: retained-history horizons, gaps, pending captures, restart, and known-empty windows.
 - `journeys/planes/executor-controls.json`: waits, routes, experiments, authored fallback selection, and terminal controls.

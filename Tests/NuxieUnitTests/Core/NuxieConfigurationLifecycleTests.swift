@@ -1210,8 +1210,9 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         await sdk.shutdown()
     }
 
-    /// Journey holds the customer's events from before the old locale's
-    /// copy is withdrawn until the new locale's fetch has settled.
+    /// Journey is told a fetch is running from before the old locale's copy
+    /// is withdrawn until the new locale's fetch has settled, so it holds
+    /// the customer's events across both.
     func testSDKLocaleControlBracketsTheNewLocalesFetchForJourneys() async throws {
         let sdk = NuxieSDK.shared
         await sdk.shutdown()
@@ -1231,9 +1232,13 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         try await sdk.setLocaleIdentifier("fr_FR")
 
         let steps = await journeys.steps
+        // The change counts as a fetch around the withdrawal; the profile
+        // fetch inside it is bracketed too.
         XCTAssertEqual(steps, [
             "refetch-begin after \(fetchesBefore) fetches, last \(localeBefore)",
             "withdraw after \(fetchesBefore) fetches, last \(localeBefore)",
+            "refetch-begin after \(fetchesBefore) fetches, last \(localeBefore)",
+            "refetch-settle after \(fetchesBefore + 1) fetches, last fr_FR",
             "refetch-settle after \(fetchesBefore + 1) fetches, last fr_FR",
         ])
         await sdk.shutdown()
