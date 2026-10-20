@@ -10,6 +10,7 @@ These JSON vectors define the contracts shared by SDK implementations.
 - `journeys/planes/file-paywall-selection.json`: file-made flat rows, dynamic purchase reference, signed identities and at-open cases with duplicate product IDs or a different baked root ID.
 
 - `runtime/published-input/`: F3 input and greeting from publisher `09081fd6591bb5f24c33693d0b06a7c3a207ea65`. Preserves the published text-input table, source, behavior oracle and provenance. The native input handler runs on the advance after the text changes; no authored key handler or emit is present. Native field delivery and signed release admission require separate platform proof.
+- `runtime/emit-values/`: the parent's `tools/sdk-fixtures/emit-values`, published through its `publish_folder` example. One screen whose emits read a value from state (beside a payload field named `screenId`), a repeated row's item, a copy's output, an action's value, a value set before the send and one cleared after it, and a row of `experience.goals` that removes its own item. Platform tests play it through the real Journey and check each emit's values and the parked run's values; the points and values are in its `NOTES.md` (D2.54).
 - `runtime/run-values/`: F4 tap and level screens from publisher `97d23aae674d8035ffda773cefdf936f85a1ea46`, with unchanged source, handwritten expectations and file hashes. Platform tests check native `continue` admission in a signed Journey, write-before-route ordering and the component copy's first drawn pixels. The published event has no action id; the test release keeps its control table empty.
 - `runtime/state-rules/`: SDK-authored rules on values in `state`, carried in the optional top-level `stateRules` list. Every state rule refuses; `refused` cases must fail validation, and `engine` writes `trip_days` on the F4 screen against a minimum and a maximum.
 
@@ -42,6 +43,8 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 - `events/delivery-disposition.json`: retry, authentication, split, partial acknowledgement, and poison-event handling.
 - `events/generated-control-routing.json`: generated native controls cannot be forged by ordinary analytics payloads.
 - `events/atomic-purchase-sync.json`: stable purchase synchronization identity, evidence retention, and retry ordering.
+- `events/runtime-event-sources.json` (version 2): whose event it is comes from the runtime's report alone. The source carries the alias of the native instance that reported the event; a property named `instanceId` is the author's value, sent as written, and never changes or rejects the source (the data plan's phone events step, D2.54).
+- `events/runtime-event-values.json`: an emit's values as the editor and Preview send them. A literal property goes under its name; a text property named `$<field>` names a path in the screen's root view model (names joined by `/`, never split at dots), and the text, number or yes or no there goes under `<field>`. No `$` property is sent itself, and a number is its shortest decimal (D2.54).
 
 ## Public values and adjacent subsystems
 

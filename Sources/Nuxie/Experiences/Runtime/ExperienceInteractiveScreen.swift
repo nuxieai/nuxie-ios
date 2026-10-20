@@ -44,6 +44,9 @@ struct ExperienceInteractiveReportedEvent: Equatable, Sendable {
     let properties: [ExperienceInteractiveField]
     var sourceRejection: String? = nil
     var resolvedSource: ExperienceResolvedEventSource? = nil
+    /// The signed alias of the view model instance the runtime reported the
+    /// event from, as its source; never one of the event's properties.
+    var sourceInstanceAlias: String? = nil
 }
 
 enum ExperienceInteractiveViewModelValue: Equatable, Sendable {
@@ -2125,10 +2128,11 @@ actor ExperienceInteractiveScreen {
         let effects = router.project(
             reportedEvents: result.events.map { event in
                 var projected = ExperienceInteractiveEventSource.project(
-                    Self.reportedEvent(event), nativeID: event.sourceViewModelInstanceID,
+                    Self.reportedEvent(event, snapshot: eventSnapshot), nativeID: event.sourceViewModelInstanceID,
                     rootID: eventSnapshot?.rootInstanceID,
                     liveIDs: liveIDs,
-                    identities: viewModelsByIdentity
+                    identities: viewModelsByIdentity,
+                    controlActionIds: controlActionIds
                 )
                 projected.resolvedSource = frameSnapshot.map {
                     ExperienceResolvedEventSource(
@@ -4013,7 +4017,13 @@ actor ExperienceInteractiveScreen {
         )
     }
 
-    private static func reportedEvent(_ event: NuxieNativeEvent)
+    /// An event's values as the editor and Preview send them (the data
+    /// plan's phone events step, D2.54): a literal property under its name,
+    /// and for a text property named `$<field>`, the value at the path it
+    /// names in the screen's root view model, as the step left it, under
+    /// `<field>`. The emit's listener wrote that hidden value just before
+    /// the event fired. No `$` property is sent itself.
+    static func reportedEvent(_ event: NuxieNativeEvent, snapshot: NuxieNativeViewModelSnapshot?)
         -> ExperienceInteractiveReportedEvent
     {
         ExperienceInteractiveReportedEvent(
@@ -4023,20 +4033,55 @@ actor ExperienceInteractiveScreen {
             url: event.url,
             target: event.target,
             delay: event.delay,
-            properties: event.properties.map { property in
-                ExperienceInteractiveField(
-                    key: property.name,
-                    value: eventValue(property.value)
-                )
+            properties: event.properties.compactMap { property in
+                guard property.name.hasPrefix("$") else {
+                    return ExperienceInteractiveField(key: property.name, value: eventValue(property.value))
+                }
+                guard case .bytes(let path) = property.value,
+                      let path = String(data: path, encoding: .utf8),
+                      let snapshot,
+                      let value = emitValue(at: path, in: snapshot) else { return nil }
+                return ExperienceInteractiveField(key: String(property.name.dropFirst()), value: value)
             }
         )
+    }
+
+    /// The text, number or yes or no at `path` (property names joined by
+    /// `/`) from the snapshot's root, or nil.
+    private static func emitValue(at path: String, in snapshot: NuxieNativeViewModelSnapshot)
+        -> ExperienceInteractiveValue?
+    {
+        var owner = snapshot.rootInstanceID
+        let names = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        for (index, name) in names.enumerated() {
+            guard let entry = snapshot.values.first(where: { $0.ownerInstanceID == owner && $0.name == name })
+            else { return nil }
+            if index < names.count - 1 {
+                guard case .referencedInstance(let child) = entry.value else { return nil }
+                owner = child
+                continue
+            }
+            switch entry.value {
+            case .bytes(let text): return .bytes(text)
+            case .number(let number): return .number(eventNumber(number))
+            case .bool(let flag): return .bool(flag)
+            default: return nil
+            }
+        }
+        return nil
+    }
+
+    /// A runtime number as the shortest decimal that reads back as the same
+    /// 32-bit value, so 0.1 stays 0.1, as the editor sends it.
+    private static func eventNumber(_ value: Float) -> Double {
+        Double(String(value)) ?? Double(value)
     }
 
     private static func eventValue(_ value: NuxieNativeEventPropertyValue)
         -> ExperienceInteractiveValue
     {
         switch value {
-        case .number(let value): .number(Double(value))
+        case .number(let value): .number(eventNumber(value))
         case .bool(let value): .bool(value)
         case .bytes(let value): .bytes(value)
         case .color(let value): .number(Double(value))

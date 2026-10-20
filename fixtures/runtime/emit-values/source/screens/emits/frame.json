@@ -1,0 +1,24 @@
+{
+  "$schema": "https://nuxie.ai/schema/frame/1.json",
+  "size": { "width": 390, "height": 680 },
+  "state": {
+    "plan": { "type": "enum", "values": ["monthly", "annual"], "default": "monthly" },
+    "plans": {
+      "type": "list",
+      "items": { "id": { "type": "string" }, "name": { "type": "string" } },
+      "default": [
+        { "id": "weekly", "name": "Weekly plan" },
+        { "id": "yearly", "name": "Yearly plan" }
+      ]
+    },
+    "count": { "type": "number", "default": 0 },
+    "note": { "type": "string", "default": "before" }
+  },
+  "emits": {
+    "picked": { "plan": { "type": "string" }, "screenId": { "type": "string" } },
+    "counted": { "count": { "type": "number" } },
+    "rated": { "stars": { "type": "number" } },
+    "noted": { "note": { "type": "string" } },
+    "goal_removed": { "title": { "type": "string" } }
+  }
+}

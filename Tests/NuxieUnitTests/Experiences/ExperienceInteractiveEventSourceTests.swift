@@ -12,10 +12,18 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
     func testSourceFollowsNativeIdentityInsteadOfGraphTraversalOrder() {
         let identities = bindings()
         for (id, alias) in [(UInt64(30), "plan.second"), (20, "plan.first"), (30, "plan.second")] {
-            let projected = ExperienceInteractiveEventSource.project(event, nativeID: id,
+            // A signed control reads its instance from its properties.
+            let control = ExperienceInteractiveEventSource.project(event, nativeID: id,
+                rootID: 10, liveIDs: [30, 10, 20], identities: identities, controlActionIds: ["buy"])
+            XCTAssertNil(control.sourceRejection)
+            XCTAssertEqual(control.properties, [.init(key: "instanceId", value: .string(alias))])
+            XCTAssertEqual(control.sourceInstanceAlias, alias)
+            // An emit carries it as its source, never among its values (D2.54).
+            let emit = ExperienceInteractiveEventSource.project(event, nativeID: id,
                 rootID: 10, liveIDs: [30, 10, 20], identities: identities)
-            XCTAssertNil(projected.sourceRejection)
-            XCTAssertEqual(projected.properties, [.init(key: "instanceId", value: .string(alias))])
+            XCTAssertNil(emit.sourceRejection)
+            XCTAssertEqual(emit.properties, [])
+            XCTAssertEqual(emit.sourceInstanceAlias, alias)
         }
     }
 
@@ -54,8 +62,22 @@ final class ExperienceInteractiveEventSourceTests: XCTestCase {
             let declared = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128,
                 name: "buy", url: "", target: "", delay: 0, properties: properties)
             XCTAssertNotNil(ExperienceInteractiveEventSource.project(declared, nativeID: 20,
-                rootID: 10, liveIDs: [10, 20, 30], identities: bindings()).sourceRejection)
+                rootID: 10, liveIDs: [10, 20, 30], identities: bindings(),
+                controlActionIds: ["buy"]).sourceRejection)
         }
+    }
+
+    /// An emit's field named instanceId is the author's value: it neither
+    /// rejects nor changes the source the runtime reported (D2.54).
+    func testAnEmitsInstanceIdFieldIsTheAuthorsValue() {
+        let declared = ExperienceInteractiveReportedEvent(localIndex: 0, coreType: 128,
+            name: "picked", url: "", target: "", delay: 0,
+            properties: [.init(key: "instanceId", value: .string("plan.second"))])
+        let projected = ExperienceInteractiveEventSource.project(declared, nativeID: 20,
+            rootID: 10, liveIDs: [10, 20, 30], identities: bindings())
+        XCTAssertNil(projected.sourceRejection)
+        XCTAssertEqual(projected.sourceInstanceAlias, "plan.first")
+        XCTAssertEqual(projected.properties, declared.properties)
     }
 
     func testUnnamedRootAndEventsWithoutNativeSourcePreserveExistingScope() {

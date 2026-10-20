@@ -9,7 +9,8 @@ enum ExperienceInteractiveEventSource {
         nativeID: UInt64?,
         rootID: UInt64?,
         liveIDs: Set<UInt64>,
-        identities: [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference]
+        identities: [ExperienceInteractiveViewModelIdentity: ExperienceInteractiveViewModelReference],
+        controlActionIds: Set<String> = []
     ) -> ExperienceInteractiveReportedEvent {
         guard let nativeID else { return event }
         func reject(_ reason: String) -> ExperienceInteractiveReportedEvent {
@@ -32,6 +33,15 @@ enum ExperienceInteractiveEventSource {
         }) {
             return reject("event source identity refers to multiple native instances")
         }
+        // An emit's source comes from the runtime's report alone: a property
+        // named instanceId is the author's value, sent as written (D2.54).
+        guard event.name == "Nuxie Interaction" || controlActionIds.contains(event.name) else {
+            var projected = event
+            projected.sourceInstanceAlias = alias
+            return projected
+        }
+        // A signed control names its instance in its properties, which must
+        // agree with the native source; the control reads it from there.
         let declared = event.properties.filter { ["instanceId", "instance_id"].contains($0.key) }
         guard declared.count <= 1 else {
             return reject("event source contains duplicate instance identities")
@@ -47,11 +57,14 @@ enum ExperienceInteractiveEventSource {
                 return reject("event instance identity conflicts with its native source")
             }
         }
-        guard declared.isEmpty, let alias else { return event }
+        var projected = event
+        projected.sourceInstanceAlias = alias
+        guard declared.isEmpty, let alias else { return projected }
         return ExperienceInteractiveReportedEvent(
             localIndex: event.localIndex, coreType: event.coreType, name: event.name,
             url: event.url, target: event.target, delay: event.delay,
-            properties: event.properties + [.init(key: "instanceId", value: .string(alias))]
+            properties: event.properties + [.init(key: "instanceId", value: .string(alias))],
+            sourceInstanceAlias: alias
         )
     }
 }

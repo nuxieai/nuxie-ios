@@ -1,0 +1,118 @@
+{
+  "publisherSourceCommit": "9378be249c3f01ad029f7a95bdd172cca9e0439f",
+  "superprojectCommit": "9378be249c3f01ad029f7a95bdd172cca9e0439f",
+  "source": "tools/sdk-fixtures/emit-values",
+  "publisher": "the parent repository's full publisher, through its publish_folder example",
+  "sha256": "9b74243f728469af3753269b615c913bdf33e6c61a44510f44ce7c315a7a53e2",
+  "sizeBytes": 18491,
+  "fonts": [
+    {
+      "assetUniqueName": "font-system-700-normal-42d2e562-0",
+      "authoredAssetId": 0,
+      "family": "System",
+      "kind": "font",
+      "location": "system",
+      "required": true,
+      "style": "normal",
+      "weight": "700"
+    }
+  ],
+  "reportedEventNames": [
+    "$nuxie.relay.changed",
+    "$nuxie.relay.rated",
+    "counted",
+    "goal_removed",
+    "noted",
+    "picked",
+    "rated"
+  ],
+  "valuePolicy": {
+    "state": {
+      "goals": {
+        "type": "list",
+        "items": {
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "qualification": "Real publisher output through the bridge's publish_folder example. The parent's emit_values_tests checks the same folder, its tap points and each emit's values in the editor and in the native runtime; the native SDK tests are separate.",
+  "files": {
+    "NOTES.md": {
+      "sha256": "516102deba0c439bb28b5f30aaec8febf4d95443267ab0c5a5c4fca6f199acd3",
+      "sizeBytes": 2638
+    },
+    "screen.riv": {
+      "sha256": "9b74243f728469af3753269b615c913bdf33e6c61a44510f44ce7c315a7a53e2",
+      "sizeBytes": 18491
+    },
+    "source/components/counter-button/frame.json": {
+      "sha256": "b0e5d87c62b3bb4a780fbdd1f8a5582d9fd734240546a3584eddaf2401e449fa",
+      "sizeBytes": 244
+    },
+    "source/components/counter-button/index.html": {
+      "sha256": "1fce1858384b54fde8e5fde351ea50caf6d14e0c2e64ea2167fc4b5da319e8aa",
+      "sizeBytes": 314
+    },
+    "source/components/counter-button/style.css": {
+      "sha256": "331c3da0c8371db31ae0a294731dc57064ce86b2d6171593e9fcad9b170451d4",
+      "sizeBytes": 334
+    },
+    "source/components/goal-row/frame.json": {
+      "sha256": "16bf0a727d524ec5f1b4b23fc2bd35a9f04d8bc82a7f96691fbaefcf0b2493f3",
+      "sizeBytes": 247
+    },
+    "source/components/goal-row/index.html": {
+      "sha256": "372fe20225ed34308b342a43789dea80b16e9be8b462790d162182a74cea17a9",
+      "sizeBytes": 270
+    },
+    "source/components/goal-row/style.css": {
+      "sha256": "cea09f6d1c9acb981b573a482adc5024e6f403fea4e14902ac00bef589fdb888",
+      "sizeBytes": 322
+    },
+    "source/components/plan-row/frame.json": {
+      "sha256": "3107f776d7ef33b8eeefb51772940e636b89ea89e47e1f89c19676892cf56a3a",
+      "sizeBytes": 245
+    },
+    "source/components/plan-row/index.html": {
+      "sha256": "f973145c0ff491f6310299f3273463a273401801a973072c304f28c0e22b632d",
+      "sizeBytes": 267
+    },
+    "source/components/plan-row/style.css": {
+      "sha256": "48be4901ac2e80ca8a41445a8a84c8309b1990150819b8b5c51df48990a747d7",
+      "sizeBytes": 322
+    },
+    "source/components/star-rater/frame.json": {
+      "sha256": "7d17ca1789837eef99b0d98d008fedb280a56f178d456ba67d9c23ef9d7cb502",
+      "sizeBytes": 236
+    },
+    "source/components/star-rater/index.html": {
+      "sha256": "09be478eba553eb7ccc415bccf4c98faf7b9fab3b51cbe344b1022349884cfbd",
+      "sizeBytes": 258
+    },
+    "source/components/star-rater/style.css": {
+      "sha256": "9d661cb51f96e58c9345ec45fdae7a71c78e5bb91e77dbcc0cd36bc0e8eec4c5",
+      "sizeBytes": 326
+    },
+    "source/experience.json": {
+      "sha256": "9be4f6c67264523085d14cb25aa309ed9d12b2583f3116b17d3c4ded81031732",
+      "sizeBytes": 720
+    },
+    "source/screens/emits/frame.json": {
+      "sha256": "a25072cd1984e68e7d1b636e2b5bdf54d0e6f5128ff98a35228e7fb043a58471",
+      "sizeBytes": 855
+    },
+    "source/screens/emits/index.html": {
+      "sha256": "8c1a68912e0c16db8cf3f75ceac9f632245c9c4509355f479d32e47f565259c5",
+      "sizeBytes": 1710
+    },
+    "source/screens/emits/style.css": {
+      "sha256": "9fb09ced5242afaf67babe0e5edf852c358f85f7db4bb39c89ca384b5a0cdccd",
+      "sizeBytes": 508
+    }
+  }
+}
