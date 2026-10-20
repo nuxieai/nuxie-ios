@@ -282,6 +282,13 @@ struct PurchaseFeature: Codable, Sendable {
         case unlimited
     }
 
+    /// The key apps pass to `hasFeature` and `features.isAllowed`. The server
+    /// sends it as `ext_id`; `id` is its internal Feature id.
+    var featureKey: String {
+        guard let extId, !extId.isEmpty else { return id }
+        return extId
+    }
+
     /// Convert to FeatureAccess for cache update
     var toFeatureAccess: FeatureAccess {
         FeatureAccess(from: self)

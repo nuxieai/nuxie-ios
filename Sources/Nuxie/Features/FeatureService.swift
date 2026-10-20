@@ -638,12 +638,15 @@ internal actor FeatureService: FeatureServiceProtocol {
         var accessMap: [String: FeatureAccess] = [:]
         let cachedAt = dateProvider.now()
         for purchaseFeature in features {
-            featureMutationRevisions[purchaseFeature.id, default: 0] &+= 1
+            // Apps ask for a Feature by its key, as the profile names it. The
+            // purchase response carries the key as ext_id beside the internal id.
+            let featureKey = purchaseFeature.featureKey
+            featureMutationRevisions[featureKey, default: 0] &+= 1
             let access = purchaseFeature.toFeatureAccess
-            accessMap[purchaseFeature.id] = access
-            let cacheKey = makeCacheKey(featureId: purchaseFeature.id, entityId: nil)
+            accessMap[featureKey] = access
+            let cacheKey = makeCacheKey(featureId: featureKey, entityId: nil)
             realTimeCache[cacheKey] = (override: CachedFeatureOverride(purchase: purchaseFeature), cachedAt: cachedAt)
-            committedCacheRevisions[cacheKey] = featureMutationRevisions[purchaseFeature.id]
+            committedCacheRevisions[cacheKey] = featureMutationRevisions[featureKey]
         }
 
         let updates = accessMap
