@@ -269,6 +269,63 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
 
     @MainActor
     func testNestedRowVideoBindsDecodesAndRetiresWithTheRow() async throws {
+        try await withVideoLayer { layer in
+            try await layer.insert(screenID: "screen", at: 0)
+            try await layer.setPhases([("screen", .active)])
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                _ = try await layer.step(elapsedSeconds: 1 / 60)
+                if await layer.deliveredVideoFrames > 0 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            } while Date() < deadline
+            let occurrences = try await layer.runtime.videos()
+            XCTAssertEqual(occurrences.count, 1)
+            let frames = await layer.deliveredVideoFrames
+            XCTAssertGreaterThan(frames, 0, "The layer's shared video host must deliver decoded frames from its nested row")
+            let binding = try await layer.binding(screenID: "screen")
+            _ = try await binding.applyStateCommand(.value(.init(viewModelName: "Runtime", instanceID: nil,
+                instanceName: nil, path: "paused", value: .bool(true))))
+            _ = try await layer.step(elapsedSeconds: 0)
+            let paused = try await layer.runtime.videos()
+            XCTAssertEqual(paused.first?.wantsPlay, false)
+            try await layer.remove(screenID: "screen")
+            let removed = try await layer.runtime.videos()
+            XCTAssertTrue(removed.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testExpandingLayerViewportAdmitsPreviouslyOffscreenNestedVideo() async throws {
+        try await withVideoLayer(pixelWidth: 1, pixelHeight: 1) { layer in
+            try await layer.insert(screenID: "screen", at: 0)
+            try await layer.setPhases([("screen", .active)])
+            _ = try await layer.step(elapsedSeconds: 0)
+            let ids = try await layer.runtime.videos().map(\.componentID)
+            XCTAssertEqual(ids.count, 1)
+            let initialVisible = try await layer.runtime.visibleVideoIDs(ids,
+                viewport: CGRect(x: 0, y: 0, width: 1, height: 1))
+            XCTAssertTrue(initialVisible.isEmpty, "The video starts outside the initial viewport")
+            let initialFrames = await layer.deliveredVideoFrames
+            XCTAssertEqual(initialFrames, 0)
+            try await layer.setLayoutSize(width: 320, height: 640)
+            _ = try await layer.step(elapsedSeconds: 0)
+            XCTAssertEqual(layer.artboardBounds.size, CGSize(width: 320, height: 640))
+            let expandedVisible = try await layer.runtime.visibleVideoIDs(ids, viewport: layer.artboardBounds)
+            XCTAssertEqual(expandedVisible, Set(ids), "The settled layout now includes the nested video")
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                _ = try await layer.step(elapsedSeconds: 1 / 60)
+                if await layer.deliveredVideoFrames > 0 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            } while Date() < deadline
+            let frames = await layer.deliveredVideoFrames
+            XCTAssertGreaterThan(frames, 0, "The enlarged viewport must admit a decoder and deliver video frames")
+        }
+    }
+
+    @MainActor
+    private func withVideoLayer(pixelWidth: UInt32 = 320, pixelHeight: UInt32 = 640,
+                                _ body: (ExperienceInteractiveLayer) async throws -> Void) async throws {
         let root = experiencePreparationRepositoryRoot()
         let scene = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/layer-host-video/layer-host.riv"))
         let mediaURL = root.appendingPathComponent("fixtures/video/greeting.mp4")
@@ -295,31 +352,10 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
             assets: [.init(kind: .video, authoredAssetID: id, assetUniqueName: uniqueName, sourceKey: key,
                 contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: mediaURL)])
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
-        let layer = try await preparation.openLayer(pixelWidth: 320, pixelHeight: 640)
-        do {
-            try await layer.insert(screenID: "screen", at: 0)
-            try await layer.setPhases([("screen", .active)])
-            let deadline = Date().addingTimeInterval(5)
-            repeat {
-                _ = try await layer.step(elapsedSeconds: 1 / 60)
-                if await layer.deliveredVideoFrames > 0 { break }
-                try await Task.sleep(nanoseconds: 10_000_000)
-            } while Date() < deadline
-            let occurrences = try await layer.runtime.videos()
-            XCTAssertEqual(occurrences.count, 1)
-            let frames = await layer.deliveredVideoFrames
-            XCTAssertGreaterThan(frames, 0, "The layer's shared video host must deliver decoded frames from its nested row")
-            let binding = try await layer.binding(screenID: "screen")
-            _ = try await binding.applyStateCommand(.value(.init(viewModelName: "Runtime", instanceID: nil,
-                instanceName: nil, path: "paused", value: .bool(true))))
-            _ = try await layer.step(elapsedSeconds: 0)
-            let paused = try await layer.runtime.videos()
-            XCTAssertEqual(paused.first?.wantsPlay, false)
-            try await layer.remove(screenID: "screen")
-            let removed = try await layer.runtime.videos()
-            XCTAssertTrue(removed.isEmpty)
-            try await layer.close()
-        } catch { try? await layer.close(); throw error }
+        let layer = try await preparation.openLayer(pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+            videoDecoderPool: ExperienceVideoDecoderPool.shared)
+        do { try await body(layer); try await layer.close() }
+        catch { try? await layer.close(); throw error }
     }
 
     private func number(_ snapshot: NuxieNativeViewModelSnapshot, _ name: String) throws -> Float {
