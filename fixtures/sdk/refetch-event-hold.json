@@ -54,6 +54,18 @@
       ]
     },
     {
+      "name": "a_failed_fetch_resolves_the_waits_that_ran_out_meanwhile",
+      "steps": [
+        { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },
+        { "op": "track start_waiting", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-begin", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "withdraw", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "advance-past-deadline", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "app-active", "starts": 1, "tookGo": 0, "timedOut": 0 },
+        { "op": "refetch-settle", "starts": 1, "tookGo": 0, "timedOut": 1 }
+      ]
+    },
+    {
       "name": "a_superseded_fetch_holds_until_the_newer_fetch_lands",
       "steps": [
         { "op": "commit-saved", "starts": 0, "tookGo": 0, "timedOut": 0 },

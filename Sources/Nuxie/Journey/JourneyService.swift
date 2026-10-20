@@ -178,6 +178,8 @@ actor JourneyService {
     private var refetchRoutingDeferral: (distinctId: String, generation: UInt64)?
     /// Customers whose held events are replaying after a refetch.
     private var refetchReplaysInFlight: [String: Int] = [:]
+    /// An event left a due timeout for a pass at the current time.
+    private var timeoutPassDue = false
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
     private var foreground = true
@@ -1672,6 +1674,8 @@ private extension JourneyService {
               event != nil || !refetchHoldsCurrentCustomer,
               let journal,
               isCurrentIdentity(journal: journal) else { return }
+        // This pass resolves every timeout due now.
+        if event == nil { timeoutPassDue = false }
         do {
             for parked in try await journal.runs()
             where parked.park != nil
@@ -1756,7 +1760,12 @@ private extension JourneyService {
                 // wait that a held event after it satisfies.
                 let now = dateProvider.now()
                 let timeoutClock = event.map { min($0.timestamp, now) } ?? now
-                if acceptedEvent == nil, let wake = parked.park?.wakeAt, wake > timeoutClock { continue }
+                if acceptedEvent == nil, let wake = parked.park?.wakeAt, wake > timeoutClock {
+                    // Due now, but not when the event happened: the next wake
+                    // resolves it once the events before it are handled.
+                    if wake <= now { timeoutPassDue = true }
+                    continue
+                }
                 guard let expectedPark = parked.park,
                       let resumed = try await journal.resumeParked(
                     parked.id,
@@ -3934,13 +3943,14 @@ private extension JourneyService {
         let next: Date?
         do {
             let now = dateProvider.now()
-            next = try await journal.runs().compactMap { run in
+            let upcoming: Date? = try await journal.runs().compactMap { run -> Date? in
                 guard run.completion == nil,
                       let wake = run.park?.wakeAt else { return nil }
                 if let retry = nativeRestoreRetryAt[run.id] { return retry }
                 if run.park?.pendingEvent != nil || run.park?.candidateEvents?.isEmpty == false { return now }
                 return wake > now ? wake : nil
             }.min()
+            next = timeoutPassDue ? min(upcoming ?? now, now) : upcoming
         } catch {
             LogWarning("JourneyService: failed to inspect park points: \(error)")
             return
