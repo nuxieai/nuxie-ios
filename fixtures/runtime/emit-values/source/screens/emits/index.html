@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head><link rel="component" href="../../components/plan-row/"><link rel="component" href="../../components/counter-button/"><link rel="component" href="../../components/star-rater/"><link rel="component" href="../../components/goal-row/"><link rel="stylesheet" href="style.css"></head>
+<body>
+<main id="emits_root">
+  <button id="emits_annual" class="emits_button" data-on:click="set(state.plan, 'annual')"><p class="emits_label">Choose annual</p></button>
+  <button id="emits_send_plan" class="emits_button" data-on:click="emit('picked', plan: state.plan, screenId: 'author-screen')"><p class="emits_label">Send plan</p></button>
+  <div id="emits_plans" class="emits_list">
+    <plan-row id="emits_plan_row" data-repeat="state.plans as plan" data-bind:name="plan.name" data-on:select="emit('picked', plan: plan.id)"></plan-row>
+  </div>
+  <counter-button id="emits_counter" data-bind:count="state.count" data-on:changed="emit('counted', count: state.count)"></counter-button>
+  <star-rater id="emits_rater" data-on:rated="emit('rated', stars: $event.stars)"></star-rater>
+  <button id="emits_set_send" class="emits_button" data-on:click="set(state.note, 'after'); emit('noted', note: state.note)"><p class="emits_label">Set, then send</p></button>
+  <button id="emits_send_clear" class="emits_button" data-on:click="emit('noted', note: state.note); set(state.note, '')"><p class="emits_label">Send, then clear</p></button>
+  <div id="emits_goals" class="emits_list">
+    <goal-row id="emits_goal_row" data-repeat="experience.goals as goal" data-bind:title="goal.title" data-on:deleted="remove(goal); emit('goal_removed', title: goal.title)"></goal-row>
+  </div>
+</main>
+</body>
+</html>

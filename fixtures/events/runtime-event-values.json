@@ -1,0 +1,184 @@
+{
+  "suite": "events/runtime-event-values",
+  "version": 1,
+  "description": "An emit's values as the editor and Preview send them (the data plan's phone events step, D2.54). A literal property is sent under its name; a text property named $<field> names a path, property names joined by '/', in the screen's root view model, and the value there, as the step left it, is sent under <field>. Only text, numbers and yes or no are sent. No $ property is sent itself. A number is the shortest decimal that reads back as the same 32-bit value. The first of two properties with one name is kept.",
+  "snapshot": {
+    "root": 1,
+    "instances": [
+      {
+        "id": 1,
+        "values": {
+          "state": {
+            "reference": 2
+          },
+          "experience": {
+            "reference": 3
+          }
+        }
+      },
+      {
+        "id": 2,
+        "values": {
+          "emit:screens>emits>index.html#emits_send_plan:click:0:plan": {
+            "string": "annual"
+          },
+          "emit:screens>emits>index.html#emits_counter:changed:0:count": {
+            "number": 1
+          },
+          "emit:screens>emits>index.html#emits_rater:rated:0:stars": {
+            "number": 0.1
+          },
+          "emit:screens>emits>index.html#emits_sure:click:0:sure": {
+            "boolean": true
+          },
+          "plan": {
+            "enum": 1
+          }
+        }
+      },
+      {
+        "id": 3,
+        "values": {
+          "name": {
+            "string": "Ada"
+          }
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "a state value is sent under its field, never its dollar name",
+      "properties": [
+        {
+          "name": "$plan",
+          "string": "state/emit:screens>emits>index.html#emits_send_plan:click:0:plan"
+        },
+        {
+          "name": "screenId",
+          "string": "author-screen"
+        }
+      ],
+      "expected": {
+        "plan": "annual",
+        "screenId": "author-screen"
+      }
+    },
+    {
+      "name": "a number and a yes or no",
+      "properties": [
+        {
+          "name": "$count",
+          "string": "state/emit:screens>emits>index.html#emits_counter:changed:0:count"
+        },
+        {
+          "name": "$sure",
+          "string": "state/emit:screens>emits>index.html#emits_sure:click:0:sure"
+        }
+      ],
+      "expected": {
+        "count": 1,
+        "sure": true
+      }
+    },
+    {
+      "name": "a number is its shortest decimal, read or written",
+      "properties": [
+        {
+          "name": "$stars",
+          "string": "state/emit:screens>emits>index.html#emits_rater:rated:0:stars"
+        },
+        {
+          "name": "tenth",
+          "number": 0.1
+        }
+      ],
+      "expected": {
+        "stars": 0.1,
+        "tenth": 0.1
+      }
+    },
+    {
+      "name": "a value in the shared Experience model",
+      "properties": [
+        {
+          "name": "$name",
+          "string": "experience/name"
+        }
+      ],
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "a value the screen does not hold is left out",
+      "properties": [
+        {
+          "name": "$gone",
+          "string": "state/emit:missing"
+        },
+        {
+          "name": "$deeper",
+          "string": "state/plan/value"
+        },
+        {
+          "name": "kept",
+          "boolean": false
+        }
+      ],
+      "expected": {
+        "kept": false
+      }
+    },
+    {
+      "name": "a path is split only at slashes",
+      "properties": [
+        {
+          "name": "$plan",
+          "string": "state.emit:screens>emits>index.html#emits_send_plan:click:0:plan"
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "a choice is not one of the values an emit copies",
+      "properties": [
+        {
+          "name": "$plan",
+          "string": "state/plan"
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "a dollar property that is not text is dropped",
+      "properties": [
+        {
+          "name": "$count",
+          "number": 3
+        },
+        {
+          "name": "$",
+          "string": "state"
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "the first of two properties with one name is kept",
+      "properties": [
+        {
+          "name": "note",
+          "string": "first"
+        },
+        {
+          "name": "note",
+          "string": "second"
+        }
+      ],
+      "expected": {
+        "note": "first"
+      }
+    }
+  ]
+}

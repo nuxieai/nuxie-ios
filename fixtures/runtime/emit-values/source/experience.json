@@ -1,0 +1,21 @@
+{
+  "$schema": "https://nuxie.ai/schema/experience/1.json",
+  "platforms": ["ios:apple_app_store"],
+  "state": {
+    "goals": {
+      "type": "list",
+      "items": { "title": { "type": "string" } },
+      "default": [{ "title": "Read" }, { "title": "Walk" }, { "title": "Swim" }]
+    }
+  },
+  "entry": {
+    "steps": [{ "type": "navigate", "screen": "screens/emits" }]
+  },
+  "journey": [
+    { "screen": "screens/emits", "on": "picked", "steps": [] },
+    { "screen": "screens/emits", "on": "counted", "steps": [] },
+    { "screen": "screens/emits", "on": "rated", "steps": [] },
+    { "screen": "screens/emits", "on": "noted", "steps": [] },
+    { "screen": "screens/emits", "on": "goal_removed", "steps": [] }
+  ]
+}

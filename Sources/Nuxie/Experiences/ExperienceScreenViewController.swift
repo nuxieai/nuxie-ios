@@ -1348,14 +1348,10 @@ final class ExperienceScreenViewController: UIViewController {
             let properties = Dictionary(event.properties.map {
                 ($0.key, Self.rendererValue($0.value))
             }, uniquingKeysWith: { first, _ in first })
-            let eventScreenID = Self.stringProperty(
-                ["screenId", "screen_id"],
-                in: properties
-            ) ?? screenId
-            let instanceID = event.sourceRejection == nil ? Self.stringProperty(
-                ["instanceId", "instance_id"],
-                in: properties
-            ) : nil
+            // Whose event it is comes from the runtime's report, never from
+            // its values: a field named screenId or instanceId is the
+            // author's (D2.54).
+            let instanceID = event.sourceRejection == nil ? event.sourceInstanceAlias : nil
             if !event.url.isEmpty {
                 return .link(ExperienceRendererOpenLinkRequest(
                     urlString: event.url,
@@ -1369,12 +1365,9 @@ final class ExperienceScreenViewController: UIViewController {
                         ScreenEmissionValue.init(rendererValue:)
                     )),
                     source: ScreenEmissionSource(
-                        screenId: eventScreenID,
+                        screenId: screenId,
                         actionId: "runtime:\(effect.correlationID)",
-                        componentId: Self.stringProperty(
-                            ["componentId", "component_id", "elementId", "element_id"],
-                            in: properties
-                        ),
+                        componentId: nil,
                         instanceId: instanceID
                     )
                 )

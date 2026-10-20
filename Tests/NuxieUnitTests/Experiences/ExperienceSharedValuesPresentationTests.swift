@@ -242,6 +242,97 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         }
     }
 
+    /// The SDKs' emit-values fixture, the parent's `tools/sdk-fixtures/emit-values`,
+    /// played through the real Journey (the data plan's phone events step, D2.54,
+    /// [UNIV-5180](https://universe.basis.dev/issue/UNIV-5180)): each emit reaches
+    /// the Journey with its values under their own names, read from state, a
+    /// repeated row's item, a copy's output and an action's value, never as
+    /// `$` paths; and a field named screenId stays the author's. The fixture's
+    /// Walk row, which removes its own item, waits on UNIV-5205: the player
+    /// step after the removal fails on phones. The points come from the
+    /// fixture's CSS
+    /// (`EMIT_VALUES_POINTS` in the parent's bridge), and the expected values
+    /// from its source.
+    func testPublishedEmitsReachTheJourneyWithTheirValues() async throws {
+        let fixture = try await signedFixture(kind: .emitValues)
+        try await withPresentation(fixture: fixture) { presentations, _, events in
+            let screen = try await waitForScreen("emits", presentations: presentations)
+            let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
+            let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
+                $0.label == "interactiveScreen"
+            }?.value as? ExperienceInteractiveScreen)
+            let transform = try XCTUnwrap(ExperienceLayoutTransform(
+                artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
+            let observer = try XCTUnwrap(surface.runtimeObserver)
+            let authored = ["picked", "counted", "rated", "noted", "goal_removed"]
+            func sent() -> [NuxieEvent] { events.routedEvents.filter { authored.contains($0.name) } }
+            @MainActor func tap(_ label: String, y: CGFloat, emits: Bool) async throws {
+                let before = sent().count
+                let point = transform.viewportRect(fromArtboard: CGRect(x: 195, y: y, width: 0, height: 0)).origin
+                let pointer = NSObject()
+                let now = ProcessInfo.processInfo.systemUptime
+                // The same platform pointer seam as touchesBegan/touchesEnded.
+                observer.runtimeSurfaceViewDidReceivePointerEvents([
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .down, location: point, timestampSeconds: now),
+                    .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .up, location: point, timestampSeconds: now + 0.01),
+                ])
+                if emits {
+                    for _ in 0..<200 where sent().count == before { try await Task.sleep(nanoseconds: 25_000_000) }
+                } else {
+                    try await Task.sleep(nanoseconds: 300_000_000)
+                }
+                XCTAssertEqual(sent().count, before + (emits ? 1 : 0), label)
+            }
+            // Tap only once the screen's buttons take the pointer: a press and
+            // an exit find the hit without firing anything.
+            var ready = false
+            for _ in 0..<200 where !ready {
+                let down = try await interactive.step(pointers: [.init(kind: .down, x: 195, y: 104)], elapsedSeconds: 0)
+                let exit = try await interactive.step(pointers: [.init(kind: .exit, x: 195, y: 104)], elapsedSeconds: 0)
+                XCTAssertTrue((down.effects + exit.effects).allSatisfy { effect in
+                    if case .reportedEvent(let event) = effect.kind { return event.name.hasPrefix("$") }
+                    return true
+                }, "A probe fires no emit")
+                ready = down.pointerHits.contains { $0 != .none }
+                if !ready { try await Task.sleep(nanoseconds: 25_000_000) }
+            }
+            XCTAssertTrue(ready, "Send plan takes the pointer")
+            try await tap("Send plan", y: 104, emits: true)
+            try await tap("Choose annual", y: 48, emits: false)
+            try await tap("Send plan", y: 104, emits: true)
+            try await tap("Yearly plan", y: 216, emits: true)
+            try await tap("Add one", y: 272, emits: true)
+            try await tap("Rate four", y: 328, emits: true)
+            try await tap("Set, then send", y: 384, emits: true)
+            try await tap("Send, then clear", y: 440, emits: true)
+            func value(_ event: NuxieEvent, _ key: String) -> AnyHashable? {
+                switch event.properties[key] {
+                case let text as String: text
+                case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID(): number.doubleValue
+                case let flag as Bool: flag
+                default: nil
+                }
+            }
+            let expected: [(String, [String: AnyHashable])] = [
+                ("picked", ["plan": "monthly", "screenId": "author-screen"]),
+                ("picked", ["plan": "annual", "screenId": "author-screen"]),
+                ("picked", ["plan": "yearly"]),
+                ("counted", ["count": 1.0]),
+                ("rated", ["stars": 4.0]),
+                ("noted", ["note": "before"]),
+                ("noted", ["note": "after"]),
+            ]
+            let delivered = sent()
+            XCTAssertEqual(delivered.map(\.name), expected.map(\.0))
+            for (event, (name, values)) in zip(delivered, expected) {
+                for (key, wanted) in values { XCTAssertEqual(value(event, key), wanted, "\(name).\(key)") }
+                for key in values.keys { XCTAssertNil(event.properties["$" + key], "\(name) carries no $\(key) path") }
+                XCTAssertNil(event.properties["instanceId"], "\(name) carries no instance the author did not write")
+                XCTAssertEqual(event.properties["screen_id"] as? String, "emits", "\(name) comes from its screen")
+            }
+        }
+    }
+
     func testPublishedEnvironmentReceivesHostInsetsAndMotionBeforeAndAfterMount() async throws {
         let fixture = try await signedFixture(kind: .publishedRunValues)
         try await withPresentation(fixture: fixture) { presentations, _, _ in
@@ -541,7 +632,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let supported: JourneyReleaseSupportedRuntime
     }
 
-    private enum FixtureKind { case sharedValues, publishedRunValues, publishedForms }
+    private enum FixtureKind { case sharedValues, publishedRunValues, publishedForms, emitValues }
 
     private func signedFixture(kind: FixtureKind = .sharedValues, formsScreen: String = "feedback", formsEvent: String = "sent", publishedFormRoutes: Bool = false) async throws -> Fixture {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -551,13 +642,16 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         var descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(Data(base64Encoded: XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))) as? [String: Any])
         let directory = kind == .sharedValues ? SharedValuesFixture.directory : kind == .publishedForms
-            ? SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves") : PublishedRunValuesFixture.directory
+            ? SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+            : kind == .emitValues ? SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("emit-values")
+            : PublishedRunValuesFixture.directory
         let forms = kind == .publishedForms ? try XCTUnwrap(JSONSerialization.jsonObject(with:
             Data(contentsOf: directory.appendingPathComponent("release.json"))) as? [String: Any]) : nil
         let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
         let provenance = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("provenance.json"))) as? [String: Any])
         let names: [String]
         if kind == .sharedValues { names = ["first", "long", "short"] }
+        else if kind == .emitValues { names = ["emits"] }
         else if let forms {
             names = try XCTUnwrap(XCTUnwrap(forms["leg"] as? [String: Any])["screens"] as? [[String: Any]]).map { try XCTUnwrap($0["id"] as? String) }
         } else { names = try PublishedRunValuesFixture.expectations().screens }
@@ -568,6 +662,11 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         leg["entryStepId"] = "present"
         leg["steps"] = [["kind": "action", "id": "present", "action": ["type": "navigate", "screenId": entryScreen], "outlets": [:]]]
         leg["screens"] = names.map { ["id": $0, "defaultViewModelName": "Runtime \($0) scr_screens_s\($0)", "defaultInstanceId": "\($0)-root", "responseCaptures": []] as [String: Any] }
+        if kind == .emitValues {
+            // The publish_folder publisher names the root model by its artboard.
+            leg["screens"] = names.map { ["id": $0, "defaultViewModelName": "vm_runtime_root_scr_screens_s\($0)",
+                "defaultInstanceId": "vmi_runtime_scr_screens_s\($0)", "responseCaptures": []] as [String: Any] }
+        }
         leg["routes"] = []
         if kind == .publishedRunValues {
             let expected = try PublishedRunValuesFixture.expectations()
@@ -582,6 +681,10 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 ["kind": "complete", "id": "stale", "outcome": "stale"]
             ]
             leg["routes"] = [["eventName": "continue", "host": ["kind": "screen", "screenId": "tap"], "entryStepId": "read-new-value"]]
+        }
+        if kind == .emitValues {
+            // The release declares the Experience's list as its publisher does.
+            descriptor["state"] = ["goals": ["type": "list", "items": ["title": ["type": "string"]]]]
         }
         if let forms {
             leg["screens"] = try XCTUnwrap(forms["leg"] as? [String: Any])["screens"]

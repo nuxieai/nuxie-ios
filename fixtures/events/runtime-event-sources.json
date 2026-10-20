@@ -1,6 +1,7 @@
 {
   "suite": "events/runtime-event-sources",
-  "version": 1,
+  "version": 2,
+  "description": "Whose event it is comes from the runtime's report alone (the data plan's phone events step, D2.54). The source's signed alias is the alias of the native instance that reported the event, or none; a property named instanceId is the author's value, sent as written, and never changes or rejects the source.",
   "cases": [
     {
       "name": "unaliased component",
@@ -124,7 +125,7 @@
         }
       ],
       "declared": "first",
-      "accepted": false,
+      "accepted": true,
       "alias": null
     },
     {
@@ -144,8 +145,8 @@
         }
       ],
       "declared": "second",
-      "accepted": false,
-      "alias": null
+      "accepted": true,
+      "alias": "first"
     },
     {
       "name": "unaliased declaration",
@@ -158,7 +159,7 @@
       ],
       "aliases": [],
       "declared": "made-up",
-      "accepted": false,
+      "accepted": true,
       "alias": null
     },
     {

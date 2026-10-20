@@ -151,8 +151,12 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             let effects = router.project(reportedEvents: [projected, sibling], viewModelChanges: [],
                 hostCommands: [], declaredEventNames: [], correlationID: 1)
             var drafts: [ScreenEmissionDraft] = []
+            var sources: [ScreenEmissionSource] = []
             for effect in effects {
-                if case .draft(let draft, _) = await controller.route(effect) { drafts.append(draft) }
+                if case .draft(let draft, let source) = await controller.route(effect) {
+                    drafts.append(draft)
+                    sources.append(source)
+                }
             }
             let dispatcher = ScreenEmissionDispatcher(createId: { UUID().uuidString },
                 now: { "2026-10-04T12:00:00.000Z" }, executeScriptAction: { _ in [] })
@@ -168,8 +172,75 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             XCTAssertEqual(batch.emissions.map(\.sequence), vector.accepted ? [0, 1] : [0], vector.name)
             if vector.accepted {
                 XCTAssertEqual(batch.emissions[0].payload["value"], .string("literal"), vector.name)
-                XCTAssertEqual(batch.emissions[0].payload["instanceId"], vector.alias.map(ScreenEmissionValue.string), vector.name)
+                // A property named instanceId is the author's value; the
+                // source carries the runtime's alias.
+                XCTAssertEqual(batch.emissions[0].payload["instanceId"], vector.declared.map(ScreenEmissionValue.string), vector.name)
+                XCTAssertEqual(sources.first?.instanceId, vector.alias, vector.name)
+                XCTAssertEqual(sources.first?.screenId, controller.screenId, vector.name)
             }
+        }
+    }
+
+    @MainActor
+    func testSharedEventValuesAreSentUnderTheirFieldsFromTheRootModel() async throws {
+        struct Suite: Decodable {
+            struct Value: Decodable {
+                let reference: UInt64?
+                let string: String?
+                let number: Float?
+                let boolean: Bool?
+                let `enum`: UInt64?
+            }
+            struct Instance: Decodable { let id: UInt64; let values: [String: Value] }
+            struct Snapshot: Decodable { let root: UInt64; let instances: [Instance] }
+            struct Property: Decodable { let name: String; let string: String?; let number: Float?; let boolean: Bool? }
+            struct Case: Decodable { let name: String; let properties: [Property]; let expected: [String: ScreenEmissionValue] }
+            let version: Int
+            let snapshot: Snapshot
+            let cases: [Case]
+        }
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/events/runtime-event-values.json")
+        let suite = try JSONDecoder().decode(Suite.self, from: Data(contentsOf: fixtureURL))
+        XCTAssertEqual(suite.version, 1)
+        var instances: [NuxieNativeViewModelSnapshot.Instance] = []
+        var values: [NuxieNativeViewModelSnapshot.Value] = []
+        for instance in suite.snapshot.instances {
+            let start = values.count
+            for (index, (name, value)) in instance.values.sorted(by: { $0.key < $1.key }).enumerated() {
+                let native: NuxieNativeViewModelValue
+                if let reference = value.reference { native = .referencedInstance(reference) }
+                else if let text = value.string { native = .bytes(Data(text.utf8)) }
+                else if let number = value.number { native = .number(number) }
+                else if let flag = value.boolean { native = .bool(flag) }
+                else { native = .integer(try XCTUnwrap(value.enum)) }
+                values.append(.init(ownerInstanceID: instance.id, propertyIndex: index, name: name, value: native))
+            }
+            instances.append(.init(id: instance.id, schemaIndex: 0, valueRange: start..<values.count))
+        }
+        let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: suite.snapshot.root, instances: instances, values: values)
+        let (experience, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
+        let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
+            screen: try XCTUnwrap(artifact.payload.renderPlan.screens.first), reduceMotion: false, delegate: nil)
+        for vector in suite.cases {
+            let properties = try vector.properties.map { property -> NuxieNativeEventProperty in
+                if let text = property.string { return .init(name: property.name, value: .bytes(Data(text.utf8))) }
+                if let number = property.number { return .init(name: property.name, value: .number(number)) }
+                return .init(name: property.name, value: .bool(try XCTUnwrap(property.boolean)))
+            }
+            let event = NuxieNativeEvent(localIndex: 0, coreType: 128, name: "picked", url: "", target: "",
+                delay: 0, properties: properties, sourceViewModelInstanceID: nil)
+            let reported = ExperienceInteractiveScreen.reportedEvent(event, snapshot: snapshot)
+            var router = ExperienceInteractiveEffectRouter()
+            let effects = router.project(reportedEvents: [reported], viewModelChanges: [],
+                hostCommands: [], declaredEventNames: [], correlationID: 1)
+            var payloads: [[String: ScreenEmissionValue]] = []
+            for effect in effects {
+                if case .draft(.event(_, let payload), _) = await controller.route(effect) { payloads.append(payload) }
+            }
+            XCTAssertEqual(payloads, [vector.expected], vector.name)
         }
     }
 
