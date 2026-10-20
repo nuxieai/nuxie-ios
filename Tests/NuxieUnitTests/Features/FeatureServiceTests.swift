@@ -364,6 +364,30 @@ final class FeatureServiceTests: AsyncSpec {
                 expect(allCached[featureId]?.balance).to(equal(5))
             }
 
+            it("files purchase-synced access under the Feature key the app asks for") {
+                // The purchase response names each Feature by its internal id and
+                // carries the key apps use (and the profile uses) as ext_id.
+                await featureService.updateFromPurchase([
+                    PurchaseFeature(
+                        id: "feat_01internal",
+                        extId: "pro-training",
+                        type: .boolean,
+                        allowed: true,
+                        balance: nil,
+                        unlimited: false
+                    )
+                ], distinctId: "customer-123")
+
+                let cached = await featureService.getCached(featureId: "pro-training", entityId: nil)
+                let byInternalId = await featureService.getCached(featureId: "feat_01internal", entityId: nil)
+                let info = featureInfo!
+                let published = await MainActor.run { info.isAllowed("pro-training") }
+
+                expect(cached?.allowed).to(beTrue())
+                expect(byInternalId).to(beNil())
+                expect(published).to(beTrue())
+            }
+
             it("exposes purchase-synced access even when no profile is cached") {
                 let featureId = "plan:team_members"
 
