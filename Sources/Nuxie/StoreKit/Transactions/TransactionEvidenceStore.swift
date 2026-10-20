@@ -104,10 +104,18 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.sendAttempts = sendAttempts
     }
 
+    /// The previous SDK's name for `answeredAt`.
+    private enum PreviousCodingKeys: String, CodingKey {
+        case backendSyncedAt
+    }
+
     /// Entries written before the outbox fields existed read as syncs for a
-    /// signed-in customer, the kind the server can move but never merge.
+    /// signed-in customer, the kind the server can move but never merge. The
+    /// server's earlier acknowledgement (`backendSyncedAt`) still answers
+    /// the send, so such an entry finishes its bookkeeping and expires.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let previous = try decoder.container(keyedBy: PreviousCodingKeys.self)
         self.init(
             scope: try container.decode(PurchaseStorageScope.self, forKey: .scope),
             transactionJws: try container.decode(String.self, forKey: .transactionJws),
@@ -128,7 +136,8 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             completionDeliveredAt: try container.decodeIfPresent(
                 Date.self, forKey: .completionDeliveredAt
             ),
-            answeredAt: try container.decodeIfPresent(Date.self, forKey: .answeredAt),
+            answeredAt: try container.decodeIfPresent(Date.self, forKey: .answeredAt)
+                ?? previous.decodeIfPresent(Date.self, forKey: .backendSyncedAt),
             appAccountToken: try container.decodeIfPresent(UUID.self, forKey: .appAccountToken),
             reason: try container.decodeIfPresent(PurchaseSyncReason.self, forKey: .reason) ?? .sync,
             customerKind: try container.decodeIfPresent(
