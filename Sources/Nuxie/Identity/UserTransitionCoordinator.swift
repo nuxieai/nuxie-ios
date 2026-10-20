@@ -33,24 +33,27 @@ final class UserTransitionCoordinator: @unchecked Sendable {
     private let featureService: FeatureServiceProtocol
     private let experienceService: ExperienceServiceProtocol
     private let journeyService: (any JourneyServiceProtocol)?
+    private let identity: IdentityServiceProtocol?
+
+    private static let supersededRefreshAttempts = 3
 
     init(
         profile: ProfileServiceProtocol,
         eventLog: EventIdentityMigrating,
         features: FeatureServiceProtocol,
         experiences: ExperienceServiceProtocol,
-        journeys: (any JourneyServiceProtocol)? = nil
+        journeys: (any JourneyServiceProtocol)? = nil,
+        identity: IdentityServiceProtocol? = nil
     ) {
         self.profileService = profile
         self.eventLog = eventLog
         self.featureService = features
         self.experienceService = experiences
         self.journeyService = journeys
+        self.identity = identity
     }
 
     /// FIFO chain: each enqueued transition awaits the previous one.
-    private static let supersededRefreshAttempts = 3
-
     private let lock = NSLock()
     private var tail: Task<Void, Never>?
 
@@ -125,13 +128,15 @@ final class UserTransitionCoordinator: @unchecked Sendable {
         await profileService.handleUserChange(from: transition.from, to: transition.to)
         // A refresh superseded by another one (the startup prefetch, a
         // foreground revalidation, a locale change) has not settled this
-        // customer's profile, so ask again, a bounded number of times.
+        // customer's profile, so ask again, a bounded number of times. Once a
+        // newer identify() has moved the identity on, that transition asks.
         for attempt in 1...Self.supersededRefreshAttempts {
             do {
                 _ = try await profileService.refetchProfile(distinctId: transition.to)
                 break
             } catch is ProfileRefreshCancellationError
-                where attempt < Self.supersededRefreshAttempts && !Task.isCancelled {
+                where attempt < Self.supersededRefreshAttempts && !Task.isCancelled
+                    && (identity?.getDistinctId() ?? transition.to) == transition.to {
                 continue
             } catch {
                 LogDebug("Identity profile refresh failed: \(error)")

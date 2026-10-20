@@ -260,12 +260,33 @@ final class FeatureIdentityReadinessTests: XCTestCase {
         let transitions = UserTransitionCoordinator(profile: profile,
             eventLog: ReadinessEventMigration(), features: features,
             experiences: MockExperienceService(),
-            journeys: FinishRecordingJourneyProbe(log: log))
+            journeys: FinishRecordingJourneyProbe(log: log), identity: identity)
         identity.setDistinctId("customer")
         transitions.enqueue(.init(kind: .identify, from: "anonymous", to: "customer", migrateEvents: true))
         await transitions.drain()
         XCTAssertEqual(log.entries, [
             "profile.refetch",
+            "profile.refetch",
+            "journeys.finishUserChangeRouting(customer)",
+        ])
+    }
+
+    /// Once a newer identify() has moved the identity on, the obsolete
+    /// transition does not ask for its customer's profile again.
+    func testAnObsoleteTransitionDoesNotAskForTheProfileAgain() async {
+        let log = TransitionOrderLog()
+        let identity = MockIdentityService()
+        let profile = SupersededProfileProbe(log: log)
+        let features = FeatureService(api: ReadinessFeatureCheck(), identity: identity,
+            profile: profile, dateProvider: MockDateProvider(), featureInfo: FeatureInfo(), cacheTTL: 300)
+        let transitions = UserTransitionCoordinator(profile: profile,
+            eventLog: ReadinessEventMigration(), features: features,
+            experiences: MockExperienceService(),
+            journeys: FinishRecordingJourneyProbe(log: log), identity: identity)
+        identity.setDistinctId("other-customer")
+        transitions.enqueue(.init(kind: .identify, from: "anonymous", to: "customer", migrateEvents: true))
+        await transitions.drain()
+        XCTAssertEqual(log.entries, [
             "profile.refetch",
             "journeys.finishUserChangeRouting(customer)",
         ])

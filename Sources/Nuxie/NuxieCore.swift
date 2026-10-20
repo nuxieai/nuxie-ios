@@ -388,7 +388,8 @@ final class NuxieCore: @unchecked Sendable {
       eventLog: eventLog,
       features: features,
       experiences: experiences,
-      journeys: journeys
+      journeys: journeys,
+      identity: identity
     )
 
     self.dateProvider = dateProvider
