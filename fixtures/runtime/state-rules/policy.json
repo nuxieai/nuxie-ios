@@ -1,0 +1,523 @@
+{
+  "stateRules": [
+    {
+      "model": "Experience",
+      "property": "trip_days",
+      "kind": 1,
+      "mode": 1,
+      "number_bound": 1.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "min",
+      "message": "Enter a larger number."
+    },
+    {
+      "model": "Experience",
+      "property": "trip_days",
+      "kind": 2,
+      "mode": 1,
+      "number_bound": 30.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "max",
+      "message": "Enter a smaller number."
+    },
+    {
+      "model": "vm_runtime_root_scr_screens_splan.state",
+      "property": "code",
+      "kind": 8,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 1,
+      "minimum": 2,
+      "maximum": 0,
+      "code": "minLength",
+      "message": "Enter more characters."
+    },
+    {
+      "model": "vm_runtime_root_scr_screens_splan.state",
+      "property": "code",
+      "kind": 8,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 2,
+      "minimum": 0,
+      "maximum": 8,
+      "code": "maxLength",
+      "message": "Enter fewer characters."
+    },
+    {
+      "model": "vm_runtime_root_scr_screens_splan.state",
+      "property": "email",
+      "kind": 9,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "[a-zA-Z0-9\\.\\!\\#\\$\\%\\&'\\*\\+\\/\\=\\?\\^_\\`\\{\\|\\}\\~\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?)*",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "format",
+      "message": "Enter an email address."
+    },
+    {
+      "model": "vm_runtime_root_scr_screens_splan.state",
+      "property": "site",
+      "kind": 11,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "format",
+      "message": "Enter a valid URL."
+    },
+    {
+      "model": "vm_runtime_root_scr_screens_splan.state",
+      "property": "code",
+      "kind": 9,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "[a-z]+",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "pattern",
+      "message": "Use the requested format."
+    },
+    {
+      "model": "Experience.profile",
+      "property": "birthday",
+      "kind": 3,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "1900-01-01",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "min",
+      "message": "Choose a later date."
+    },
+    {
+      "model": "Experience.profile",
+      "property": "birthday",
+      "kind": 4,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "2026-12-31",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "max",
+      "message": "Choose an earlier date."
+    },
+    {
+      "model": "Experience.profile",
+      "property": "birthday",
+      "kind": 12,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "date",
+      "message": "Enter a real date in YYYY-MM-DD format."
+    },
+    {
+      "model": "vm_declared_list:multi_select:experience/\"interests\"",
+      "property": "options",
+      "kind": 7,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "picked",
+      "bound_flags": 1,
+      "minimum": 1,
+      "maximum": 0,
+      "code": "minItems",
+      "message": "Choose more options."
+    },
+    {
+      "model": "vm_declared_list:multi_select:experience/\"interests\"",
+      "property": "options",
+      "kind": 7,
+      "mode": 1,
+      "number_bound": 0.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "picked",
+      "bound_flags": 2,
+      "minimum": 0,
+      "maximum": 2,
+      "code": "maxItems",
+      "message": "Choose fewer options."
+    },
+    {
+      "model": "cmp_components_sstepper::props",
+      "property": "state:count",
+      "kind": 1,
+      "mode": 1,
+      "number_bound": 1.0,
+      "text": "",
+      "values": [],
+      "value_count": 0,
+      "picked_property": "",
+      "bound_flags": 0,
+      "minimum": 0,
+      "maximum": 0,
+      "code": "min",
+      "message": "Enter a larger number."
+    }
+  ],
+  "refused": [
+    {
+      "case": "a minimum that only marks",
+      "rule": {
+        "model": "Experience",
+        "property": "trip_days",
+        "kind": 1,
+        "mode": 0,
+        "number_bound": 1.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "min",
+        "message": "Enter a larger number."
+      }
+    },
+    {
+      "case": "a maximum that only marks",
+      "rule": {
+        "model": "Experience",
+        "property": "trip_days",
+        "kind": 2,
+        "mode": 0,
+        "number_bound": 30.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "max",
+        "message": "Enter a smaller number."
+      }
+    },
+    {
+      "case": "allowed values belong to forms",
+      "rule": {
+        "model": "Experience",
+        "property": "trip_days",
+        "kind": 5,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "",
+        "values": [
+          "a"
+        ],
+        "value_count": 1,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "values",
+        "message": "Enter a larger number."
+      }
+    },
+    {
+      "case": "required belongs to forms",
+      "rule": {
+        "model": "Experience",
+        "property": "trip_days",
+        "kind": 10,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "required",
+        "message": "Enter a larger number."
+      }
+    },
+    {
+      "case": "item count is not a state rule",
+      "rule": {
+        "model": "vm_declared_list:multi_select:experience/\"interests\"",
+        "property": "options",
+        "kind": 6,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 1,
+        "minimum": 1,
+        "maximum": 0,
+        "code": "minItems",
+        "message": "Choose more options."
+      }
+    },
+    {
+      "case": "a path instead of a property",
+      "rule": {
+        "model": "Experience.profile",
+        "property": "profile/birthday",
+        "kind": 3,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "1900-01-01",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "min",
+        "message": "Choose a later date."
+      }
+    },
+    {
+      "case": "an item count on another list",
+      "rule": {
+        "model": "vm_declared_list:multi_select:experience/\"interests\"",
+        "property": "picks",
+        "kind": 7,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "picked",
+        "bound_flags": 1,
+        "minimum": 1,
+        "maximum": 0,
+        "code": "minItems",
+        "message": "Choose more options."
+      }
+    },
+    {
+      "case": "an item count without its picked flag",
+      "rule": {
+        "model": "vm_declared_list:multi_select:experience/\"interests\"",
+        "property": "options",
+        "kind": 7,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 1,
+        "minimum": 1,
+        "maximum": 0,
+        "code": "minItems",
+        "message": "Choose more options."
+      }
+    },
+    {
+      "case": "a format with the wrong code",
+      "rule": {
+        "model": "vm_runtime_root_scr_screens_splan.state",
+        "property": "site",
+        "kind": 11,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "url",
+        "message": "Enter a valid URL."
+      }
+    },
+    {
+      "case": "a pattern with no pattern",
+      "rule": {
+        "model": "vm_runtime_root_scr_screens_splan.state",
+        "property": "code",
+        "kind": 9,
+        "mode": 1,
+        "number_bound": 0.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "pattern",
+        "message": "Use the requested format."
+      }
+    },
+    {
+      "case": "a number bound on text",
+      "rule": {
+        "model": "vm_runtime_root_scr_screens_splan.state",
+        "property": "code",
+        "kind": 8,
+        "mode": 1,
+        "number_bound": 1.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 1,
+        "minimum": 2,
+        "maximum": 0,
+        "code": "minLength",
+        "message": "Enter more characters."
+      }
+    },
+    {
+      "case": "a rule with no model",
+      "rule": {
+        "model": "",
+        "property": "trip_days",
+        "kind": 1,
+        "mode": 1,
+        "number_bound": 1.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "min",
+        "message": "Enter a larger number."
+      }
+    },
+    {
+      "case": "a rule with no message",
+      "rule": {
+        "model": "Experience",
+        "property": "trip_days",
+        "kind": 1,
+        "mode": 1,
+        "number_bound": 1.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "min",
+        "message": ""
+      }
+    }
+  ],
+  "engine": {
+    "screen": "../run-values/screen.riv",
+    "rules": [
+      {
+        "model": "Experience",
+        "property": "trip_days",
+        "kind": 1,
+        "mode": 1,
+        "number_bound": 1.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "min",
+        "message": "Enter a larger number."
+      },
+      {
+        "model": "Experience",
+        "property": "trip_days",
+        "kind": 2,
+        "mode": 1,
+        "number_bound": 30.0,
+        "text": "",
+        "values": [],
+        "value_count": 0,
+        "picked_property": "",
+        "bound_flags": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "code": "max",
+        "message": "Enter a smaller number."
+      }
+    ],
+    "property": "trip_days",
+    "writes": [
+      {
+        "value": 12,
+        "kept": 12
+      },
+      {
+        "value": 0,
+        "kept": 12
+      },
+      {
+        "value": 31,
+        "kept": 12
+      },
+      {
+        "value": 30,
+        "kept": 30
+      },
+      {
+        "value": 1,
+        "kept": 1
+      }
+    ]
+  }
+}

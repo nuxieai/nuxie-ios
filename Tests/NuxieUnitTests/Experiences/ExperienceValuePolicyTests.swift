@@ -271,6 +271,70 @@ final class ExperienceValuePolicyTests: XCTestCase {
         } catch { }
     }
 
+    private static var stateRulesFixture: URL {
+        SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("state-rules/policy.json")
+    }
+
+    private func stateRulesFixture() throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: Self.stateRulesFixture)) as? [String: Any])
+    }
+
+    private func policyRoot(stateRules: Any) -> [String: Any] {
+        ["state": [String: Any](), "responses": [String: Any](), "ruleGroups": [Any](), "stateRules": stateRules]
+    }
+
+    func testStateRulesValidateAndInstallBesideFormRules() throws {
+        let fixture = try stateRulesFixture()
+        let records = try XCTUnwrap(fixture["stateRules"] as? [[String: Any]])
+        try JourneyReleaseValuePolicy.validate(policyRoot(stateRules: records))
+        let bytes = try JSONSerialization.data(withJSONObject: policyRoot(stateRules: records))
+        let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self, from: bytes)
+        let native = policy.native.rules
+        XCTAssertEqual(native.count, records.count)
+        for (rule, record) in zip(native, records) {
+            XCTAssertEqual(rule.model, record["model"] as? String)
+            XCTAssertEqual(rule.property, record["property"] as? String)
+            XCTAssertEqual(rule.kind, record["kind"] as? UInt32)
+            XCTAssertEqual(rule.mode, 1, "\(rule.code) refuses on a value in state")
+            XCTAssertEqual(rule.pickedProperty, record["picked_property"] as? String)
+        }
+        // A release without state rules is unchanged.
+        try JourneyReleaseValuePolicy.validate(["state": [String: Any](), "responses": [String: Any](), "ruleGroups": [Any]()])
+    }
+
+    func testStateRulesRefuseEachFixtureCase() throws {
+        let cases = try XCTUnwrap(stateRulesFixture()["refused"] as? [[String: Any]])
+        XCTAssertFalse(cases.isEmpty)
+        for refused in cases {
+            let rule = try XCTUnwrap(refused["rule"])
+            XCTAssertThrowsError(try JourneyReleaseValuePolicy.validate(policyRoot(stateRules: [rule])),
+                refused["case"] as? String ?? "")
+        }
+        XCTAssertThrowsError(try JourneyReleaseValuePolicy.validate(policyRoot(stateRules: ["not a rule"])))
+    }
+
+    func testStateRulesKeepTheLastValueThatHeldThemOnThePublishedScreen() async throws {
+        let engine = try XCTUnwrap(stateRulesFixture()["engine"] as? [String: Any])
+        let rules = try XCTUnwrap(engine["rules"] as? [[String: Any]])
+        let property = try XCTUnwrap(engine["property"] as? String)
+        let policy = try JSONDecoder().decode(JourneyReleaseValuePolicy.self,
+            from: JSONSerialization.data(withJSONObject: policyRoot(stateRules: rules)))
+        let screen = Self.stateRulesFixture.deletingLastPathComponent()
+            .appendingPathComponent(try XCTUnwrap(engine["screen"] as? String))
+        let file = try await NuxieNativePreparedFile.prepare(bytes: Data(contentsOf: screen), valuePolicy: policy.native)
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let result = try await run.native(in: file)
+        let native = try XCTUnwrap(result)
+        for write in try XCTUnwrap(engine["writes"] as? [[String: Any]]) {
+            let value = try XCTUnwrap(write["value"] as? Double)
+            _ = try await native.sessions.mutate([.setNumber(instance: native.reference, path: property, value: Float(value))])
+            let snapshot = try await native.sessions.snapshot(native.reference)
+            let kept = snapshot.values.first { $0.ownerInstanceID == native.reference.rawValue && $0.name == property }?.value
+            XCTAssertEqual(kept, .number(Float(try XCTUnwrap(write["kept"] as? Double))), "writing \(value)")
+        }
+    }
+
     func testCatalogMarkersUseSameModelAndFlattenedStateNames() throws {
         let fields: [(String, NuxieNativeViewModelPropertyKind)] = [
             ("days", .number), ("isset:days", .bool),

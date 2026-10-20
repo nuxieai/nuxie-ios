@@ -42,6 +42,10 @@ struct JourneyReleaseValuePolicy: Codable, Sendable {
     let state: [String: State]
     let responses: [String: Form]
     let ruleGroups: [Group]
+    /// Rules on values in `state`: the Experience's, each screen's and each component's own. Each
+    /// refuses a write that breaks it, since a value outside a form has no form to mark invalid.
+    /// A release that declares none leaves the key out.
+    var stateRules: [Rule]?
 
     static func validate(_ root: [String: Any]) throws {
         // Check keys before Codable can discard them, including recursive state items.
@@ -65,8 +69,16 @@ struct JourneyReleaseValuePolicy: Codable, Sendable {
                 _ = try shape(member, ["property", "errors_path", "item_model", "code_property", "message_property"])
             }
         }
-        let bytes = try JSONSerialization.data(withJSONObject: ["state": state, "responses": forms,
-            "ruleGroups": try array(root["ruleGroups"])])
+        var sections: [String: Any] = ["state": state, "responses": forms, "ruleGroups": try array(root["ruleGroups"])]
+        if let stateRules = root["stateRules"] {
+            let rules = try array(stateRules)
+            for rule in rules {
+                _ = try shape(rule, ["model", "property", "kind", "mode", "number_bound", "text", "values",
+                    "value_count", "picked_property", "bound_flags", "minimum", "maximum", "code", "message"])
+            }
+            sections["stateRules"] = rules
+        }
+        let bytes = try JSONSerialization.data(withJSONObject: sections)
         let policy = try JSONDecoder().decode(Self.self, from: bytes)
         for value in policy.state.values { try validateState(value) }
         try policy.validateForms()
@@ -119,8 +131,41 @@ struct JourneyReleaseValuePolicy: Codable, Sendable {
                 }
             }
         }
+        for rule in stateRules ?? [] {
+            try Self.validateStateRule(rule)
+            rules += 1
+            ruleBytes += Self.bytes(rule)
+        }
         guard rules <= 4096, members <= 4096, ruleBytes <= 8 * 1024 * 1024,
               groupBytes <= 8 * 1024 * 1024 else { throw invalid }
+    }
+
+    private static func bytes(_ rule: Rule) -> Int {
+        152 + [rule.model, rule.property, rule.text, rule.picked_property, rule.code,
+            rule.message].reduce(0) { $0 + $1.utf8.count } + rule.values.reduce(0) { $0 + 16 + $1.utf8.count }
+    }
+
+    /// A state value's rule refuses whatever its kind, and names a value the way the file holds it:
+    /// a property of the Experience, a screen's state or a group, a component's own `state:<name>`,
+    /// or a choice that allows several by its `options`. Allowed values and required belong to forms.
+    private static func validateStateRule(_ r: Rule) throws {
+        guard !r.model.isEmpty, !r.code.isEmpty, !r.message.isEmpty, r.mode == 1,
+              r.property.range(of: "^(state:)?[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil,
+              [1, 2, 3, 4, 7, 8, 9, 11, 12].contains(r.kind), r.number_bound.isFinite,
+              r.values.isEmpty, r.value_count == 0, r.bound_flags <= 2 else { throw invalid }
+        let codes: [UInt32: [String]] = [1: ["min"], 2: ["max"], 3: ["min"], 4: ["max"], 9: ["format", "pattern"],
+            11: ["format"], 12: ["date"]]
+        if let allowed = codes[r.kind] {
+            guard allowed.contains(r.code), r.bound_flags == 0, r.minimum == 0, r.maximum == 0 else { throw invalid }
+        } else {
+            let minimum = r.bound_flags == 1
+            let code = r.kind == 7 ? (minimum ? "minItems" : "maxItems") : (minimum ? "minLength" : "maxLength")
+            guard r.bound_flags != 0, r.code == code, minimum ? r.maximum == 0 : r.minimum == 0 else { throw invalid }
+        }
+        guard [1, 2].contains(r.kind) || r.number_bound == 0,
+              [3, 4, 9].contains(r.kind) || r.text.isEmpty,
+              r.kind == 7 ? (r.property == "options" && r.picked_property == "picked") : r.picked_property.isEmpty,
+              r.kind != 9 || !r.text.isEmpty else { throw invalid }
     }
 
     private static func validateRule(_ r: Rule) throws {
@@ -195,7 +240,8 @@ struct JourneyReleaseValuePolicy: Codable, Sendable {
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 extension JourneyReleaseValuePolicy {
     var native: NuxieNativeValuePolicy {
-        .init(rules: responses.sorted { $0.key < $1.key }.flatMap { $0.value.fields }.flatMap(\.rules).map {
+        .init(rules: (responses.sorted { $0.key < $1.key }.flatMap { $0.value.fields }.flatMap(\.rules)
+            + (stateRules ?? [])).map {
             .init(model: $0.model, property: $0.property, kind: $0.kind, mode: $0.mode,
                 numberBound: $0.number_bound, text: $0.text, values: $0.values,
                 pickedProperty: $0.picked_property, boundFlags: $0.bound_flags,

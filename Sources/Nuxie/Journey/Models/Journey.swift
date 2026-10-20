@@ -107,7 +107,10 @@ struct JourneyReleaseDescriptor {
     let state: [String: JourneyReleaseValuePolicy.State]
     let responses: [String: JourneyReleaseValuePolicy.Form]
     let ruleGroups: [JourneyReleaseValuePolicy.Group]
-    var valuePolicy: JourneyReleaseValuePolicy { .init(state: state, responses: responses, ruleGroups: ruleGroups) }
+    var stateRules: [JourneyReleaseValuePolicy.Rule]? = nil
+    var valuePolicy: JourneyReleaseValuePolicy {
+        .init(state: state, responses: responses, ruleGroups: ruleGroups, stateRules: stateRules)
+    }
     let schemaVersion: String
     let identity: JourneyReleaseIdentity
     let metadata: [String: JourneyReleaseJSONValue]

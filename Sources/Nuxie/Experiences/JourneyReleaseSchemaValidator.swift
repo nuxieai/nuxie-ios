@@ -8,7 +8,8 @@ enum JourneyReleaseSchemaValidator {
 
     static func validate(_ value: [String: Any]) throws {
         let root = try object(value, required: ["schemaVersion", "identity", "metadata", "presentation", "leg",
-            "products", "placements", "viewModelValues", "screenBehaviors", "render", "requirements", "provenance", "state", "responses", "ruleGroups"])
+            "products", "placements", "viewModelValues", "screenBehaviors", "render", "requirements", "provenance", "state", "responses", "ruleGroups"],
+            optional: ["stateRules"])
         guard root["schemaVersion"] as? String == JourneyReleaseDescriptor.wireSchemaVersion else { throw invalid }
         try JourneyReleaseValuePolicy.validate(root)
         try Common.validateMetadata(root)
