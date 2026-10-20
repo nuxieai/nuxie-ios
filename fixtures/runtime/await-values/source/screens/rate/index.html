@@ -1,0 +1,9 @@
+<!doctype html>
+<html>
+<head><link rel="component" href="../../components/rate-pair/"><link rel="stylesheet" href="style.css"></head>
+<body>
+<main id="rate_root">
+  <rate-pair id="rate_rater" data-on:rated="set(responses.feedback.stars, $event.stars); await save(responses.feedback); emit('rated', stars: $event.stars, mood: $event.mood, word: $event.word, liked: $event.liked)"></rate-pair>
+</main>
+</body>
+</html>

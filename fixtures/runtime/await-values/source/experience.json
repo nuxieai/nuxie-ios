@@ -1,0 +1,16 @@
+{
+  "$schema": "https://nuxie.ai/schema/experience/1.json",
+  "platforms": ["ios:apple_app_store"],
+  "responses": {
+    "feedback": {
+      "title": "Feedback",
+      "fields": [{ "key": "stars", "type": "number", "label": "Stars" }]
+    }
+  },
+  "entry": {
+    "steps": [{ "type": "navigate", "screen": "screens/rate" }]
+  },
+  "journey": [
+    { "screen": "screens/rate", "on": "rated", "steps": [] }
+  ]
+}

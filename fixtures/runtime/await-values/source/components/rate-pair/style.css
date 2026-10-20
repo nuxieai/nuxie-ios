@@ -1,0 +1,3 @@
+.rate_pair_root { width: 326px; height: 104px; display: flex; flex-direction: column; gap: 8px; }
+.rate_pair_button { width: 326px; height: 48px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 14px; display: flex; align-items: center; justify-content: center; }
+.rate_pair_label { width: 240px; height: 22px; color: #0f172a; font-size: 16px; font-weight: 700; line-height: 20px; text-align: center; }

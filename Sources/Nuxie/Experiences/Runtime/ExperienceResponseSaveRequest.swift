@@ -7,6 +7,12 @@ struct ExperienceResponseSaveRequest: Equatable, Sendable {
     let form: String
     let awaitTrigger: String?
     let answers: ExactJSONObject<JourneyReleaseJSONValue>
+    /// The values an awaited save keeps for what follows its `await`, as the
+    /// screen held them when the save was requested. Each `keep:<value>`
+    /// property names one in the screen's `state`. They are written back just
+    /// before `awaitTrigger` fires, so what follows reads its own call's
+    /// `$event` values though another call came first.
+    var kept: [ExperienceRunSnapshot.Field] = []
 
     static func capture(_ effect: ExperienceInteractiveEffectKind,
         snapshot: NuxieNativeViewModelSnapshot?, catalog: NuxieNativeViewModelCatalog,
@@ -43,7 +49,23 @@ struct ExperienceResponseSaveRequest: Equatable, Sendable {
         }
         let answers = try ExperienceResponseSheet.read(form: form, declaration: declaration,
             snapshot: snapshot, catalog: catalog, experienceRoot: root)
-        return Self(form: form, awaitTrigger: trigger, answers: answers)
+        let keep = try fields.filter { $0.key.hasPrefix("keep:") }.map { field -> String in
+            guard let path = text(field.value), path.hasPrefix("state/"),
+                  path.dropFirst("state/".count).allSatisfy({ $0 != "/" }), path.count > "state/".count
+            else { throw invalid }
+            return path
+        }
+        guard keep.isEmpty || trigger != nil else { throw invalid }
+        var kept: [ExperienceRunSnapshot.Field] = []
+        if !keep.isEmpty {
+            let held = ExperienceRunSnapshot.captureFields(native: snapshot, catalog: catalog,
+                root: snapshot.rootInstanceID)
+            kept = try keep.map { path in
+                guard let field = held.first(where: { $0.path == path }) else { throw invalid }
+                return field
+            }
+        }
+        return Self(form: form, awaitTrigger: trigger, answers: answers, kept: kept)
     }
 
     private static func text(_ value: ExperienceInteractiveValue?) -> String? {

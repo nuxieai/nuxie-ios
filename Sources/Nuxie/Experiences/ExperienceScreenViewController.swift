@@ -1244,7 +1244,7 @@ final class ExperienceScreenViewController: UIViewController {
                               let interactive = self.interactiveScreen,
                               let path = request.awaitTrigger else { return }
                         _ = self.presentationLoop?.enqueue(ExperienceRuntimePresentationQueuedWork {
-                            let step = try await interactive.confirmResponseSave(trigger: path)
+                            let step = try await interactive.confirmResponseSave(trigger: path, kept: request.kept)
                             return .work(requestsFrame: true) { [weak self] in
                                 await self?.deliverStep(effects: step.effects)
                             }
