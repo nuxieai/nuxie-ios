@@ -1899,6 +1899,36 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         add(attachment)
     }
 
+    func testResizedLayerRowsDrawIncomingAboveOutgoing() async throws {
+        let bytes = try Data(contentsOf: experiencePreparationRepositoryRoot()
+            .appendingPathComponent("fixtures/runtime/layer-host-interim/layer-host.riv"))
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+        func pixels(schemas: [Int]) async throws -> Data {
+            let runtime = try await NuxieNativeRuntime.open(bytes: bytes,
+                artboardName: "LayerList", player: .stateMachine("Host"),
+                pixelWidth: 510, pixelHeight: 710, bindDefaultViewModel: true,
+                importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: [:]))
+            do {
+                let root = try await runtime.rootViewModelReference()
+                for (index, schema) in schemas.enumerated() {
+                    let row = try await runtime.makeViewModel(schemaIndex: schema, authoredInstanceIndex: 0)
+                    _ = try await runtime.mutateViewModel([.listInsert(instance: root, path: "screens", index: index, value: row)])
+                }
+                try await runtime.setLayoutSize(width: 510, height: 710)
+                _ = try await runtime.step(elapsedSeconds: 0)
+                let frame = try await self.renderPixels(runtime, width: 510, height: 710)
+                XCTAssertEqual(frame.outcome.disposition, .presented)
+                try await runtime.close()
+                return frame.pixels
+            } catch { try? await runtime.close(); throw error }
+        }
+        let a = try await pixels(schemas: [0])
+        let b = try await pixels(schemas: [5])
+        let both = try await pixels(schemas: [0, 5])
+        XCTAssertTrue(a != b, "The two authored Screens must produce distinct frames")
+        XCTAssertTrue(both == b, "The incoming opaque Screen must cover the outgoing Screen at the resized root size")
+    }
+
     private func renderPixels(
         _ runtime: NuxieNativeRuntime,
         width: Int,
