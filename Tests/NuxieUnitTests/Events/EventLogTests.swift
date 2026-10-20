@@ -228,6 +228,63 @@ final class EventLogTests: AsyncSpec {
                     expect(mockStore.pendingStableRouteIds).to(beEmpty())
                 }
 
+                it("settles recovery while a released route captures new stable events") {
+                    // First launch: the trigger is captured while routing waits for
+                    // the Journey journal. Recovery releases it, the subscriber
+                    // standing in for the Journey starts a run and captures that
+                    // run's own events, which are still queued when recovery ends.
+                    mockIdentity.setDistinctId("first-launch")
+                    let received = ReceivedEvents()
+                    let journeyLog = log!
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                        guard event.name == "onboarding_trigger" else { return }
+                        _ = await journeyLog.captureAndRouteSystemEvent(.init(
+                            name: "$journey_leg_started", properties: nil,
+                            eventId: "journey-leg-started", distinctId: "first-launch"
+                        ))
+                    }
+                    _ = await log.deferCommittedRouting()
+                    try await log.configure(configuration: testConfig)
+                    _ = await log.captureAndRouteSystemEvent(.init(
+                        name: "onboarding_trigger", properties: nil,
+                        eventId: "onboarding-trigger", distinctId: "first-launch"
+                    ))
+                    await expect { mockStore.pendingStableRouteIds }
+                        .toEventually(contain("onboarding-trigger"))
+                    await expect { await received.names }.to(beEmpty())
+
+                    let recovered = await log.replayPendingStableRoutes(
+                        distinctId: "first-launch"
+                    )
+
+                    expect(recovered).to(beTrue())
+                    await expect { await received.names }.toEventually(equal([
+                        "onboarding_trigger", "$journey_leg_started",
+                    ]))
+                    await expect { mockStore.pendingStableRouteIds }.toEventually(beEmpty())
+                }
+
+                it("still fails recovery when a route left by a prior process cannot be delivered") {
+                    let reservation = log.reserveCommittedAdmission { 1 }
+                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { _, _ in false }
+                    try await log.configure(configuration: testConfig)
+                    let stored = try StoredEvent(
+                        id: "unsettled-prior-route", name: "prior-process-route",
+                        properties: [:], timestamp: Date(timeIntervalSince1970: 1_000),
+                        distinctId: "customer-a"
+                    )
+                    _ = try await mockStore.commitStableCaptureAndStageRoute(
+                        eventId: stored.id, event: stored, recordedAt: stored.timestamp,
+                        assigningCommitSequence: false, admission: nil
+                    )
+
+                    let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
+
+                    expect(recovered).to(beFalse())
+                    expect(mockStore.pendingStableRouteIds).to(contain(stored.id))
+                }
+
                 it("replays a stable local route left pending by a prior process") {
                     let received = ReceivedEvents()
                     await log.subscribeCommitted { event in
