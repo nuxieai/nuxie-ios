@@ -21,7 +21,7 @@ All three paths apply `beforeSend`. Returning `nil` is a terminal privacy decisi
 | `$screen_dismissed` | A Journey screen was dismissed or replaced. | stable |
 | `$products_unavailable` | Required live products could not be resolved before presentation. | stable |
 
-Leg lifecycle facts carry `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. A completion also carries `started_at`, `completed_at`, `outcome`, and the exact declared `outputs`. Experiment exposure carries the Journey, experience/version, leg identity, selected variant, holdout flag, and whether the selection came from the profile assignment or the authored fallback. Assignment alone never emits an exposure.
+Leg lifecycle facts carry `journey_id`, `experience_id`, `experience_version_id`, `leg_id`, and `leg_generation`. A completion also carries `started_at`, `completed_at`, `outcome`, and the exact declared `outputs`. Experiment exposure carries the Journey, experience/version, leg identity, selected variant, holdout flag, whether the selection came from the profile assignment or the authored fallback, and its `exposure_basis`: `selected` when a treatment was selected, `suppressed` for a holdout. Assignment alone never emits an exposure.
 
 ## Experience and host effects
 

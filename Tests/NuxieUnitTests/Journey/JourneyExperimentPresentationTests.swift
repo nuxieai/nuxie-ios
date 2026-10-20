@@ -85,6 +85,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         // Exposure metadata comes from the authenticated variant definition,
         // not the untrusted assignment hint supplied above.
         XCTAssertEqual(exposures.first?.properties["is_holdout"] as? Bool, false)
+        XCTAssertEqual(
+            exposures.first?.properties["exposure_basis"] as? String,
+            "selected"
+        )
         let shownRuns = try await journal.runs()
         let shownRun = try XCTUnwrap(shownRuns.first)
         let shownExposure = try XCTUnwrap(shownRun.experimentExposures.first)
@@ -435,6 +439,59 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         XCTAssertEqual(
             fallback.properties["assignment_source"] as? String,
             "fallback"
+        )
+        XCTAssertEqual(fallback.properties["is_holdout"] as? Bool, false)
+        XCTAssertEqual(
+            fallback.properties["exposure_basis"] as? String,
+            "selected"
+        )
+    }
+
+    func testHoldoutExposureSaysItsTreatmentWasSuppressed() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = renderedExperimentSnapshot(
+            try await authenticatedRenderedSnapshot(fixture),
+            assignment: .init(variantId: "variant_b", isHoldout: false),
+            variantBIsHoldout: true
+        )
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = await MainActor.run {
+            let value = RecordingJourneyPresenter()
+            value.automaticallyRevealsShownPresentation = false
+            return value
+        }
+        let service = makeService(
+            identity: identity,
+            events: events,
+            directory: directory,
+            presenter: presenter
+        )
+
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let presentedRequest = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presentedRequest)
+        await request.onPresentationRevealed("screen_welcome")
+
+        let holdout = try XCTUnwrap(events.routedEvents.first {
+            $0.name == JourneyEvents.experimentExposure
+        })
+        XCTAssertEqual(holdout.properties["variant_key"] as? String, "variant_b")
+        XCTAssertEqual(
+            holdout.properties["assignment_source"] as? String,
+            "profile"
+        )
+        // Holdout truth comes from the authenticated variant definition, not
+        // the assignment hint, which says otherwise here.
+        XCTAssertEqual(holdout.properties["is_holdout"] as? Bool, true)
+        XCTAssertEqual(
+            holdout.properties["exposure_basis"] as? String,
+            "suppressed"
         )
     }
 

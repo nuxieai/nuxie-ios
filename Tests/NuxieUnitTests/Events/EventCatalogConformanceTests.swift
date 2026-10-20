@@ -255,6 +255,7 @@ $tracking_denied	processCapture|captureStableSystemEvent	governed|governed	batch
             "variant_key",
             "is_holdout",
             "assignment_source",
+            "exposure_basis",
         ] {
             XCTAssertEqual(exposure.properties[property]?.required, true, property)
         }
