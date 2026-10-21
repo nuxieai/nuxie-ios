@@ -136,8 +136,13 @@ like any other pass.
 An entry is answered only by the answer to a send of its own admission. No send, outbox pass or retry skips sending because the purchase
 was accepted earlier in the session; the server answers a repeat send the
 same way. A send that finds one of the same admission already in flight takes
-that send's answer; one of another admission is waited out, then this one is
-sent. The SDK remembers which accepted sends it reported as
+that send's answer; one of another admission is waited out. A send is built
+from its entry as it is right before it goes out, in the purchase's
+serialized step, after any wait and once no answer for the purchase is being
+applied. If the entry was answered or admitted again meanwhile, the send is
+dropped, so an obsolete claim never reaches the server, where it could move
+the purchase back: its caller gets the answer its admission already got, or
+nothing, and a Restore does not count a dropped claim. The SDK remembers which accepted sends it reported as
 `$purchase_synced`, by transaction, customer and admission, for telemetry
 only. Commits of one purchase run one at a time, and each reads the entry
 rather than an earlier commit's result. The outbox pass sends an entry only
