@@ -114,7 +114,9 @@ actor TransactionService {
     /// Process-local Journey authority. Durable checkout records preserve
     /// commercial attribution after relaunch, but only a checkout still
     /// executing in this process may route an ordinary checkout completion.
-    private var activeCheckoutKeys: Set<String> = []
+    /// Counted, so a checkout that ends never clears another still open for
+    /// the same customer and product.
+    private var activeCheckoutCounts: [String: Int] = [:]
 
     private func activeCheckoutKey(
         appAccountToken: UUID,
@@ -145,10 +147,10 @@ actor TransactionService {
            ) {
             return false
         }
-        return activeCheckoutKeys.contains(activeCheckoutKey(
+        return (activeCheckoutCounts[activeCheckoutKey(
             appAccountToken: appAccountToken,
             productId: productId
-        ))
+        )] ?? 0) > 0
     }
 
     private func pendingKey(productId: String, distinctId: String) -> String {
@@ -407,6 +409,29 @@ actor TransactionService {
         return match.value
     }
 
+    /// One checkout's binding, found by its own identity.
+    func checkoutBinding(named checkoutId: String) -> PendingPurchaseRecord? {
+        pendingPurchases().values.first {
+            $0.scope == purchaseStorageScope && $0.checkoutCompletionEventId == checkoutId
+        }
+    }
+
+    /// Retires one checkout's binding by its own identity, the check and the
+    /// write in one step. Another checkout's binding, even for the same
+    /// customer and product, is left alone. Succeeds when that binding is
+    /// durably absent: retired now, earlier, or replaced by a newer
+    /// checkout's.
+    func retireCheckoutBinding(named checkoutId: String) -> Bool {
+        var entries = pendingPurchases()
+        guard !pendingPurchaseStateUnreadable else { return false }
+        guard let key = entries.first(where: {
+            $0.value.scope == purchaseStorageScope
+                && $0.value.checkoutCompletionEventId == checkoutId
+        })?.key else { return true }
+        entries.removeValue(forKey: key)
+        return setPendingPurchases(entries)
+    }
+
     /// Succeeds when the exact marker is durably absent. Another StoreKit
     /// delivery may win the race and retire it first; a failed persistence
     /// attempt leaves the marker cached and therefore fails closed here.
@@ -481,10 +506,13 @@ actor TransactionService {
 
         var activeCheckoutKeyToClear: String?
         defer {
-            if let activeCheckoutKeyToClear {
-                activeCheckoutKeys.remove(activeCheckoutKeyToClear)
+            if let activeCheckoutKeyToClear,
+               let count = activeCheckoutCounts[activeCheckoutKeyToClear] {
+                activeCheckoutCounts[activeCheckoutKeyToClear] = count > 1 ? count - 1 : nil
             }
         }
+        // The binding this checkout writes, by its own identity.
+        var checkoutBindingId: String?
 
         // Checkout belongs to the customer who initiated it. Every store and
         // provider call below can suspend while identify/reset changes the
@@ -603,6 +631,7 @@ actor TransactionService {
                 )
                 checkoutProduct = prepared.product
                 checkoutBindingSaved = prepared.bindingSaved
+                checkoutBindingId = prepared.bindingId
                 if !prepared.bindingSaved {
                     // The checkout carries on with its in-memory context;
                     // the outbox is off before its purchase is delivered.
@@ -613,7 +642,7 @@ actor TransactionService {
                         appAccountToken: appAccountToken,
                         productId: checkoutProduct.storeProductId
                     )
-                    activeCheckoutKeys.insert(key)
+                    activeCheckoutCounts[key, default: 0] += 1
                     activeCheckoutKeyToClear = key
                 }
                 let nativeOutcome = await nativePurchaseAdapter.purchase(
@@ -627,7 +656,8 @@ actor TransactionService {
                     customerKind: initiatingCustomerKind,
                     testStoreTransactionId: nil,
                     usesTestStore: false,
-                    outcomeCorrelation: outcomeCorrelation
+                    outcomeCorrelation: outcomeCorrelation,
+                    checkoutBindingId: prepared.bindingId
                 )
             }
         }
@@ -654,7 +684,7 @@ actor TransactionService {
             return PurchaseSyncResult(syncTask: commitResult.syncTask)
             
         case .alreadyOwned:
-            removeCheckoutRecovery(for: checkoutProduct)
+            removeCheckoutBinding(checkoutBindingId)
             LogInfo("TransactionService: Product already owned; reconciling access for \(product.productId)")
             if usesNativeStoreKit {
                 // The customer asked to buy what this Apple Account owns, so
@@ -678,7 +708,7 @@ actor TransactionService {
             return PurchaseSyncResult()
 
         case .subscriptionChangeRequired:
-            removeCheckoutRecovery(for: checkoutProduct)
+            removeCheckoutBinding(checkoutBindingId)
             let error = StoreKitError.subscriptionChangeRequired(product.storeProductId)
             LogInfo("TransactionService: Subscription change required for product: \(product.productId)")
             await publishCommerceOutcome(
@@ -695,12 +725,12 @@ actor TransactionService {
             throw error
 
         case .cancelled:
-            removeCheckoutRecovery(for: checkoutProduct)
+            removeCheckoutBinding(checkoutBindingId)
             LogInfo("TransactionService: Purchase cancelled by user for product: \(product.productId)")
             throw StoreKitError.purchaseCancelled
             
         case .failed(let error):
-            removeCheckoutRecovery(for: checkoutProduct)
+            removeCheckoutBinding(checkoutBindingId)
             if usesNativeStoreKit {
                 await productService.invalidate([product.storeProductId])
             }
@@ -725,11 +755,12 @@ actor TransactionService {
             // pre-checkout marker. External delegates own their pending state.
             if usesNativeStoreKit {
                 var entries = pendingPurchases()
-                let key = pendingKey(
-                    productId: checkoutProduct.storeProductId,
-                    distinctId: initiatingDistinctId
-                )
-                if let existing = entries[key] {
+                // The checkout marks its own binding deferred, by its own
+                // identity; a binding that replaced it is not its.
+                let key = checkoutBindingId.flatMap { id in
+                    entries.first { $0.value.checkoutCompletionEventId == id }?.key
+                }
+                if let key, let existing = entries[key] {
                     entries[key] = PendingPurchaseRecord(
                         scope: existing.scope,
                         distinctId: existing.distinctId,
@@ -757,12 +788,12 @@ actor TransactionService {
             throw StoreKitError.purchasePending
 
         case .productTermsChanged:
-            removeCheckoutRecovery(for: checkoutProduct)
+            removeCheckoutBinding(checkoutBindingId)
             await productService.invalidate([product.storeProductId])
             throw StoreKitError.productTermsChanged(product.storeProductId)
 
         case .invalidEligibilityOverride:
-            removeCheckoutRecovery(for: checkoutProduct)
+            removeCheckoutBinding(checkoutBindingId)
             if let request = checkoutProduct.introEligibilityTokenRequest {
                 await introEligibilityOverrideHealth.suppress(request)
             }
@@ -778,7 +809,8 @@ actor TransactionService {
         customerKind: PurchaseCustomerKind?,
         testStoreTransactionId: String?,
         usesTestStore: Bool,
-        outcomeCorrelation: CommerceOutcomeCorrelation?
+        outcomeCorrelation: CommerceOutcomeCorrelation?,
+        checkoutBindingId: String? = nil
     ) -> PurchaseOutcome {
         switch result {
         case .purchased(let evidence):
@@ -817,7 +849,11 @@ actor TransactionService {
                         product.localEntitlementGrants
                     ),
                     commercialContext: product.purchaseContext,
-                    checkoutCompletionEventId: outcomeCorrelation?.eventId,
+                    // The binding's identity is the checkout's completion
+                    // event id.
+                    checkoutCompletionEventId: checkoutBindingId
+                        ?? outcomeCorrelation?.eventId,
+                    checkoutBindingId: checkoutBindingId,
                     finishRequired: settings.purchaseHandlingMode() != .observer,
                     resolvesPendingPurchase: true,
                     allowsDurableCheckoutAuthority: true,
@@ -849,12 +885,11 @@ actor TransactionService {
         }
     }
 
-    private func removeCheckoutRecovery(for product: StoreProduct) {
-        guard let token = product.nativeCheckoutAppAccountToken else { return }
-        _ = consumeCheckoutRecovery(
-            appAccountToken: token,
-            productId: product.storeProductId
-        )
+    /// Retires a checkout's own binding when the checkout ends without a
+    /// purchase.
+    private func removeCheckoutBinding(_ checkoutBindingId: String?) {
+        guard let checkoutBindingId else { return }
+        _ = retireCheckoutBinding(named: checkoutBindingId)
     }
 
     /// Persists exact checkout attribution and installs the same deterministic
@@ -866,7 +901,7 @@ actor TransactionService {
         localEntitlementGrants: [StoreProduct.LocalEntitlementGrant],
         outcomeEventId: String?,
         priorOriginalTransactionIds: Set<String>
-    ) throws -> (product: StoreProduct, bindingSaved: Bool) {
+    ) throws -> (product: StoreProduct, bindingSaved: Bool, bindingId: String) {
         guard let commercialContext = product.purchaseContext else {
             throw StoreKitError.apiMisuse(
                 reason: "StoreKit checkout requires an authenticated release context"
@@ -940,7 +975,7 @@ actor TransactionService {
         )
         // Record only the signed grants the verified-evidence path may project.
         prepared.localEntitlementGrants = localEntitlementGrants
-        return (prepared, bindingSaved)
+        return (prepared, bindingSaved, recovery.checkoutCompletionEventId)
     }
 
     private func checkoutIntroEligibilityToken(
