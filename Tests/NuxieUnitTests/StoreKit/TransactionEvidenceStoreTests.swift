@@ -442,6 +442,92 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertEqual(api.recordedCustomers.count, 2)
     }
 
+    /// A timer pass sends only entries that are due. The scan of StoreKit's
+    /// unfinished transactions runs at launch, identify, reset, catalog
+    /// change and Restore, never from the timer, so an unfinished purchase
+    /// waiting out its backoff is not sent when another entry's time comes.
+    func testTimedRetryLeavesUnfinishedTransactionsToTheScans() async throws {
+        let clock = MockDateProvider()
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = InMemoryTransactionEvidenceStore()
+        func failedEntry(_ name: String, owner: String, dueIn: TimeInterval) -> StoredTransactionEvidence {
+            StoredTransactionEvidence(
+                transactionJws: "\(name)-jws",
+                transactionId: "\(name)-transaction",
+                originalTransactionId: "\(name)-original",
+                productId: "product",
+                distinctId: owner,
+                recordedAt: clock.now(),
+                isRevoked: false,
+                sendAttempts: 3,
+                retryDueAt: clock.now().addingTimeInterval(dueIn)
+            )
+        }
+        let due = failedEntry("due", owner: "due-owner", dueIn: -1)
+        let unfinished = failedEntry("unfinished", owner: "unfinished-owner", dueIn: 600)
+        XCTAssertTrue(store.save([due.transactionId: due, unfinished.transactionId: unfinished]))
+        let item = StoreTransactionRecoveryItem(
+            update: VerifiedStoreTransactionUpdate(
+                transactionId: "unfinished-transaction",
+                originalTransactionId: "unfinished-original",
+                productId: "product",
+                appAccountToken: nil,
+                isRevoked: false,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "unfinished-jws"
+        )
+        let api = RecoverySyncAPI(succeeds: false)
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "retry-unfinished"))
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(
+            api: api,
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: clock,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { box.get() },
+            evidenceStore: store,
+            dateProvider: clock,
+            activeStoreOriginalTransactionIDs: { [] },
+            unfinishedRecoveryTransactions: { [item] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        box.set(TransactionService(
+            productService: mocks.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: clock,
+            settings: settings,
+            eventSink: TransactionEvidenceEventSink(),
+            identityService: identity
+        ))
+        addTeardownBlock { await observer.stopListening() }
+
+        await observer.retryDueOutboxEntries()
+        XCTAssertEqual(api.recordedCustomers, ["due-owner"], "the timer sends only the due entry")
+
+        // Restore scans the unfinished transactions, as launch, identify and
+        // reset do.
+        _ = await observer.syncCurrentEntitlements(distinctId: "customer", purpose: .restore)
+        var waited = 0
+        while !api.recordedCustomers.contains("unfinished-owner"), waited < 200 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            waited += 1
+        }
+        XCTAssertTrue(api.recordedCustomers.contains("unfinished-owner"), "Restore scans unfinished transactions")
+    }
+
     /// The outbox timer sends the failed entries that are due and leaves the
     /// rest to their own time, which an entry keeps across a restart. Once no
     /// failed entry is waiting, the timer is cancelled.

@@ -127,7 +127,9 @@ is retried after 30 s even while another entry waits out the hour; with no
 failed entry waiting it is cancelled. When it fires, every entry whose time
 has passed is sent; the others keep their own time. A due entry the timer's
 pass tries but cannot send counts one more failed attempt, so its time moves
-on. So does any send held back because a purchase-backed Feature command
+on. A timer pass sends only entries that are due: the scan of StoreKit's
+unfinished transactions runs at launch, identify or reset, catalog change and
+Restore, never from the timer. So does any send held back because a purchase-backed Feature command
 holds the purchase: the timer sends the entry again if the command's answer
 does not settle it.
 
