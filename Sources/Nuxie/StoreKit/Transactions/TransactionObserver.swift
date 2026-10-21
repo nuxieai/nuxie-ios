@@ -588,9 +588,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// Whether the next recovery pass sends every unsent entry (launch,
     /// identify or reset, profile load) instead of only the ones that are due.
     private var everyEntryPassRequested = false
-    /// One profile refresh per customer at a time after the server answers
-    /// a purchase; answers that land meanwhile ask for one more.
-    private var profileRefreshes: [String: Bool] = [:]
+    /// The profile refreshes answers asked for, per customer: the one
+    /// running, and at most one queued after it for the answers that landed
+    /// while it ran.
+    private var profileRefreshLines: [String: ProfileRefreshLine] = [:]
+    private var profileRefreshSequence: UInt64 = 0
     /// Serializes the one purchase-backed Feature command that may consume a
     /// transaction's initial metered grant. Actor reentrancy otherwise lets a
     /// background receipt sync race the atomic command while its request is
@@ -2387,8 +2389,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             dedupeKey: dedupeKey,
             lifecycleGeneration: requestLifecycleGeneration,
             publishesFeatures: updateLocalFeatures,
-            reportsPurchaseSync: emitSyncedEvent,
-            refreshesProfile: true
+            reportsPurchaseSync: emitSyncedEvent
         )).outcome
     }
 
@@ -2444,8 +2445,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let publishesFeatures: Bool
         /// Whether a matching acceptance is reported as purchase synced.
         let reportsPurchaseSync: Bool
-        /// Whether a matching answer asks for the profile again.
-        let refreshesProfile: Bool
     }
 
     /// Every `POST /purchase` answer lands here: a scan's send, the outbox
@@ -2550,10 +2549,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             if entryChanged {
                 await refreshOptimisticProjection()
             }
-            return AppliedPurchaseAnswer(
-                outcome: .refused,
-                refreshesProfile: target.refreshesProfile
-            )
+            return AppliedPurchaseAnswer(outcome: .refused, refreshesProfile: true)
         case .acceptedFeatureUse(let syncedEventId, let responseCustomerId, let result):
             var properties: [String: Any] = [
                 "transaction_id": target.transactionId,
@@ -2568,12 +2564,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 properties["journey_id"] = context.journeyId
                 properties["placement_id"] = context.placementId
             }
-            guard await eventSink.capture(.init(
-                name: SystemEventNames.purchaseSynced,
-                properties: properties,
-                eventId: syncedEventId,
-                distinctId: target.distinctId
-            )) else { return notUsable }
+            // Nothing is published until the answer is saved, the purchase
+            // synced report included.
             guard case .saved(let entryChanged) = saveAnswer(target) else {
                 return outboxIsOff ? profileOnly : notUsable
             }
@@ -2584,7 +2576,23 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             if entryChanged {
                 await refreshOptimisticProjection()
             }
-            return AppliedPurchaseAnswer(outcome: .accepted, refreshesProfile: false)
+            // The answer stands once saved: a report that cannot be captured
+            // is lost, as an ordinary send's report can be, and the caller
+            // still gets the server's result.
+            if !(await eventSink.capture(.init(
+                name: SystemEventNames.purchaseSynced,
+                properties: properties,
+                eventId: syncedEventId,
+                distinctId: target.distinctId
+            ))) {
+                LogWarning(
+                    "TransactionObserver: The purchase synced report of a Feature use could not be captured"
+                )
+            }
+            // Like every answer, it asks for the requester's profile again:
+            // the product may grant other Features, which come from the
+            // profile once the entry is answered.
+            return AppliedPurchaseAnswer(outcome: .accepted, refreshesProfile: true)
         case .accepted(let features):
             guard inLifecycle() else { return notUsable }
             guard case .saved(let entryChanged) = saveAnswer(target) else {
@@ -2635,10 +2643,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     properties: properties
                 )
             }
-            return AppliedPurchaseAnswer(
-                outcome: .accepted,
-                refreshesProfile: target.refreshesProfile
-            )
+            return AppliedPurchaseAnswer(outcome: .accepted, refreshesProfile: true)
         }
     }
 
@@ -2797,10 +2802,65 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     }
 
     /// Every answer can change what the customer holds, so their profile is
-    /// fetched again; the profile, not this answer, is their access.
+    /// fetched again; the profile, not this answer, is their access. The
+    /// caller waits for the refresh that covers its answer.
     private func refreshProfileAfterAnswer(for distinctId: String) async {
         guard !isStopped, identityService.getDistinctId() == distinctId else { return }
-        await refreshProfile(distinctId)
+        await profileRefreshCovering(distinctId).value
+    }
+
+    /// One customer's post-answer profile refreshes.
+    private struct ProfileRefreshLine {
+        /// The refresh running now.
+        var running: (id: UInt64, task: Task<Void, Never>)
+        /// The one refresh queued after it; it has not started its fetch.
+        var queued: (id: UInt64, task: Task<Void, Never>)?
+    }
+
+    /// The refresh that covers an answer landing now. Refreshes run one at a
+    /// time per customer, since a profile fetch supersedes earlier ones and
+    /// a later failing fetch could discard an earlier success. With none
+    /// running, one starts. While one runs, the answers that land share one
+    /// queued refresh that starts after it, so it covers them all.
+    private func profileRefreshCovering(_ distinctId: String) -> Task<Void, Never> {
+        profileRefreshSequence &+= 1
+        let id = profileRefreshSequence
+        guard var line = profileRefreshLines[distinctId] else {
+            let task = Task { [weak self] () -> Void in
+                guard let self else { return }
+                await self.runProfileRefresh(id: id, for: distinctId)
+            }
+            profileRefreshLines[distinctId] = ProfileRefreshLine(running: (id, task))
+            return task
+        }
+        if let queued = line.queued { return queued.task }
+        let previous = line.running.task
+        let task = Task { [weak self] () -> Void in
+            await previous.value
+            guard let self else { return }
+            await self.runProfileRefresh(id: id, for: distinctId)
+        }
+        line.queued = (id, task)
+        profileRefreshLines[distinctId] = line
+        return task
+    }
+
+    private func runProfileRefresh(id: UInt64, for distinctId: String) async {
+        // A queued refresh becomes the running one as it starts, so answers
+        // landing from now on queue the next.
+        if var line = profileRefreshLines[distinctId],
+           let queued = line.queued, queued.id == id {
+            line.running = queued
+            line.queued = nil
+            profileRefreshLines[distinctId] = line
+        }
+        if !isStopped, identityService.getDistinctId() == distinctId {
+            await refreshProfile(distinctId)
+        }
+        if let line = profileRefreshLines[distinctId],
+           line.running.id == id, line.queued == nil {
+            profileRefreshLines.removeValue(forKey: distinctId)
+        }
     }
 
     // MARK: - Manual Sync
@@ -3317,8 +3377,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         dedupeKey: receiptSyncKey,
                         lifecycleGeneration: nil,
                         publishesFeatures: false,
-                        reportsPurchaseSync: false,
-                        refreshesProfile: false
+                        reportsPurchaseSync: false
                     )
                 )
                 releasePurchaseUsageClaim(transactionId: evidence.transactionId)

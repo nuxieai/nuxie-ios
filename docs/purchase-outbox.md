@@ -11,9 +11,12 @@ The machine-readable contract is `fixtures/purchases/purchase-outbox.json`;
    buyer's own fresh purchase: a StoreKit transaction whose account token is
    the one Nuxie derives for the current customer, not revoked, and not yet
    answered by the server unlocks at once. After any answer to a purchase,
-   accepted or refused, the SDK fetches that customer's profile again. A 200's
-   `features` are kept in memory only until a profile requested after that
-   answer lands. The SDK keeps no other copy of purchase access.
+   accepted or refused, the SDK fetches that customer's profile again. These
+   refreshes run one at a time per customer: answers that land while one runs
+   share one more that starts after it, and a caller waiting for its answer's
+   refresh waits for the one that covers it. A 200's `features` are kept in
+   memory only until a profile requested after that answer lands. The SDK
+   keeps no other copy of purchase access.
 2. **The owner is what the server last said.** The SDK never works out who
    owns a purchase on the phone. A checkout binding only matches a StoreKit
    delivery to the checkout that started it, which names the customer the
@@ -144,10 +147,13 @@ again meanwhile is left to its own send, never written back.
 A purchase-backed Feature command carries the admission of the entry it uses.
 Its accepted answer always returns the command's result and consumption
 receipt to the caller, since the server has consumed the Feature. A matching
-answer is captured as purchase synced, answers the entry and writes the
-command's own post-use Feature result, all in the answer's step. The command
-lets go of the purchase only after that, so a Restore waiting on it admits its
-claim afterwards and the claim's Features land last. A superseded one only
+answer answers the entry, writes the command's own post-use Feature result and
+is captured as purchase synced, all in the answer's step and in that order:
+nothing is reported for an answer that was not saved. The command lets go of
+the purchase only after that, so a Restore waiting on it admits its claim
+afterwards and the claim's Features land last. Like every answer, it then
+asks for the profile again, since the product may grant other Features that
+come from the profile once the entry is answered. A superseded one only
 refreshes the profile: like every superseded answer, from any producer, it
 changes no Feature authority, cache, entry or hold.
 
@@ -178,9 +184,11 @@ reset, and when a newly loaded profile changes the product catalog.
 
 When the outbox cannot save (an entry, checkout binding or catalog-mapping
 write fails, or a store cannot be read right now), it is off for the rest of
-the session. While it is off nothing unlocks early, so access comes from the
-profile alone; the timer is cancelled and stays off; and nothing is written
-or held in memory. Each purchase the store delivers (the checkout's result,
+the session. While it is off nothing unlocks early, and an answer that
+arrives while it is off publishes nothing; a 200 hold from an answer saved
+before it switched off stays until a profile requested after it lands, as
+usual. The timer is cancelled and stays off, and nothing is written or held
+in memory. Each purchase the store delivers (the checkout's result,
 a store update, a scan, Restore) is still sent once, and its answer only
 refreshes the profile: no `$purchase_synced` and no 200 Features. Its
 transaction is never finished, so the next launch finds it unfinished, saves
