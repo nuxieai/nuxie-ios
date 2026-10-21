@@ -103,7 +103,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                 operationId: nil,
                 outcomeEventId: evidence.checkoutCompletionEventId,
                 transactionId: evidence.transactionId,
-                distinctId: evidence.attributedDistinctId,
+                distinctId: evidence.requester?.distinctId,
                 productId: evidence.productId,
                 placementId: evidence.commercialContext?.placementId,
                 storeProductId: evidence.commercialContext?.storeProductId,
@@ -111,7 +111,7 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
                 failureReason: nil
             ))
             recordedPurchaseIds.append(evidence.transactionId)
-            if let distinctId = evidence.attributedDistinctId {
+            if let distinctId = evidence.requester?.distinctId {
                 recordedPurchaseDistinctIds.append(distinctId)
             }
             recordedPurchaseFinishRequirements.append(

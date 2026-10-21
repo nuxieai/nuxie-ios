@@ -730,7 +730,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                 try verifiedUpdate(for: action),
                 jwsRepresentation: try fixtureEvidence(for: action).signedPayload,
                 source: .transactionStream,
-                attributedDistinctId: identity.getDistinctId()
+                requester: .named(identity.getDistinctId())
             )
             return nil
 
@@ -748,7 +748,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                 try verifiedUpdate(for: action),
                 jwsRepresentation: try fixtureEvidence(for: action).signedPayload,
                 source: .transactionStream,
-                attributedDistinctId: identity.getDistinctId()
+                requester: .named(identity.getDistinctId())
             )
             return nil
 
@@ -848,7 +848,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                 appAccountToken: scope.appAccountToken(
                     distinctId: identity.getDistinctId()
                 ),
-                attributedDistinctId: identity.getDistinctId(),
+                requester: .named(identity.getDistinctId()),
                 productFeatureIds: storeProductFeatureIds(
                     product.localEntitlementGrants
                 ),
@@ -882,7 +882,7 @@ private final class PurchaseOutcomeFixtureHarness: @unchecked Sendable {
                 appAccountToken: scope.appAccountToken(
                     distinctId: identity.getDistinctId()
                 ),
-                attributedDistinctId: identity.getDistinctId(),
+                requester: .named(identity.getDistinctId()),
                 productFeatureIds: storeProductFeatureIds(
                     product.localEntitlementGrants
                 ),

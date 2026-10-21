@@ -1600,7 +1600,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 transactionId: "transaction-1",
                 originalTransactionId: "original-transaction-1",
                 productId: "product-transaction-1",
-                attributedDistinctId: "customer-a",
+                requester: .named("customer-a"),
                 resolvesPendingPurchase: false,
                 allowsDurableCheckoutAuthority: false,
                 requiresAuthorityResolution: false,

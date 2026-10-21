@@ -1672,7 +1672,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             ),
             jwsRepresentation: "provider-restored-jws",
             source: .startupRecovery,
-            attributedDistinctId: "customer-a",
+            requester: .named("customer-a"),
             resolvesPendingPurchase: false,
             allowsDurableCheckoutAuthority: false
         )
@@ -1708,7 +1708,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             ),
             jwsRepresentation: "provider-restored-stale-jws",
             source: .startupRecovery,
-            attributedDistinctId: "customer-a",
+            requester: .named("customer-a"),
             resolvesPendingPurchase: false,
             allowsDurableCheckoutAuthority: false
         )

@@ -811,7 +811,7 @@ actor TransactionService {
                     originalTransactionId: evidence.originalTransactionId,
                     productId: evidence.productId,
                     appAccountToken: product.nativeCheckoutAppAccountToken,
-                    attributedDistinctId: distinctId,
+                    requester: .named(distinctId),
                     recordedAt: dateProvider.now(),
                     productFeatureIds: storeProductFeatureIds(
                         product.localEntitlementGrants
