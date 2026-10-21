@@ -1555,7 +1555,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             deliversLiveCheckout = false
         }
         let makeCommittedEvidence = {
-            [self] (current: StoredTransactionEvidence?) -> StoredTransactionEvidence in
+            [self] (current: StoredTransactionEvidence?) -> EvidenceWrite in
             let existing = current.flatMap {
                 Self.givesWay($0, to: verified.attributedDistinctId) ? nil : $0
             }
@@ -1565,6 +1565,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 : verified.syncReason
             // A refund the entry has not sent yet is a new send, as a sync.
             let sendsRevocation = verified.isRevoked && existing?.isRevoked != true
+            // A producer whose store read came before the purchase's refund
+            // adds nothing to what the entry sends: an admission built from
+            // an earlier store read never downgrades the entry, which keeps
+            // its signed revocation, reason and admission. Its explicit claim
+            // is dropped.
+            let readPredatesEntry = existing?.isNewerThanStoreRead(
+                revoked: verified.isRevoked
+            ) == true
+            let admitsClaim = verified.explicitClaim && !readPredatesEntry
             let reason: PurchaseSyncReason
             if sendsRevocation {
                 reason = .sync
@@ -1572,7 +1581,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 // An unsent entry takes a later purchase or Restore's reason;
                 // an answered one is claimed again only by a direct send, so
                 // it keeps what it has.
-                reason = existing.answeredAt == nil && incomingReason.claimsOwnership
+                reason = !readPredatesEntry
+                    && existing.answeredAt == nil
+                    && incomingReason.claimsOwnership
                     ? incomingReason.strongest(existing.reason)
                     : existing.reason
             } else {
@@ -1602,7 +1613,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             } else {
                 transactionJws = verified.transactionJws
             }
-            return StoredTransactionEvidence(
+            return EvidenceWrite(evidence: StoredTransactionEvidence(
                 scope: existing?.scope ?? pendingRecord?.scope ?? purchaseStorageScope,
                 // A revoked row's signed payload is authoritative: an active
                 // producer arriving after revocation must not rewrite it.
@@ -1646,11 +1657,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? identityService.purchaseCustomerKind(of: owner)
                     ?? .identified,
                 // A refund's revocation and an explicit claim are new sends.
-                sendAttempts: sendsRevocation || verified.explicitClaim
+                sendAttempts: sendsRevocation || admitsClaim
                     ? 0 : existing?.sendAttempts ?? 0,
-                retryDueAt: sendsRevocation || verified.explicitClaim
+                retryDueAt: sendsRevocation || admitsClaim
                     ? nil : existing?.retryDueAt
-            )
+            ), isNewAdmission: admitsClaim)
         }
         if routeCompletionToJourneys {
             purchaseCommitJourneyRouting.insert(commitKey)
@@ -1662,24 +1673,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // A new admission waits while an answer for the purchase is applied.
         await waitForPurchaseChanges(transactionId: verified.transactionId)
         var superseded = false
-        let initialChange = reloadAndApplyEvidenceChange(
-            transactionId: verified.transactionId,
-            newAdmission: verified.explicitClaim,
-            { current in
-                guard current?.admissionId == basedOnAdmission else {
-                    superseded = true
-                    return nil
-                }
-                return makeCommittedEvidence(current)
+        let initialChange = reloadAndApplyEvidenceWrite(
+            transactionId: verified.transactionId
+        ) { current in
+            guard current?.admissionId == basedOnAdmission else {
+                superseded = true
+                return nil
             }
-        )
+            return makeCommittedEvidence(current)
+        }
         if superseded {
             return PurchaseCommitResult(committed: false, syncTask: nil, isTerminal: false)
         }
         guard let initialChange else {
             guard outboxIsOff else { return .rejected }
             return await deliverWithOutboxOff(
-                makeCommittedEvidence(storedEvidence()[verified.transactionId]),
+                makeCommittedEvidence(storedEvidence()[verified.transactionId]).evidence,
                 transactionService: transactionService,
                 checkoutRecovery: checkoutRecovery,
                 pendingRecord: pendingRecord,
@@ -2780,9 +2789,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     // customer, and the server decides whether it moves.
                     if claimable {
                         group.addTask {
-                            PurchaseSyncOutcome?.some(await self.claimCurrentEntitlement(
+                            await self.claimCurrentEntitlement(
                                 item, distinctId: distinctId, reason: reason
-                            ))
+                            )
                         }
                     }
                     continue
@@ -2831,9 +2840,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         // was answered): the claim is admitted and sent
                         // itself.
                         group.addTask {
-                            PurchaseSyncOutcome?.some(await self.claimCurrentEntitlement(
+                            await self.claimCurrentEntitlement(
                                 item, distinctId: distinctId, reason: reason
-                            ))
+                            )
                         }
                     }
                 } else if let syncTask = ownSend {
@@ -2866,12 +2875,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     /// Sends one current entitlement for `distinctId` with `reason`, bypassing
     /// the in-process record of earlier syncs: an explicit Restore or purchase
-    /// always asks the server.
+    /// always asks the server. Returns nil when the send is dropped because
+    /// the store read it was built from came before the purchase's refund: a
+    /// fresh read leaves a refunded purchase out, so the scan does not count
+    /// it.
     private func claimCurrentEntitlement(
         _ item: StoreTransactionRecoveryItem,
         distinctId: String,
         reason: PurchaseSyncReason
-    ) async -> PurchaseSyncOutcome {
+    ) async -> PurchaseSyncOutcome? {
         // A purchase-backed Feature command holding this purchase answers
         // first; a Restore or purchase claim is admitted and sent after it.
         if reason.claimsOwnership {
@@ -2886,18 +2898,27 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         var customerKind: PurchaseCustomerKind?
         var admissionId: UUID?
         if reason.claimsOwnership {
-            if let admitted = await admitClaim(
-                item, distinctId: distinctId, reason: reason
-            ) {
+            switch await admitClaim(item, distinctId: distinctId, reason: reason) {
+            case .admitted(let admitted):
                 customerKind = admitted.customerKind
                 admissionId = admitted.admissionId
-            } else if outboxIsOff {
+            case .stale:
+                return nil
+            case .notSaved:
                 // The outbox is off: the claim is sent once, unsaved.
+                guard outboxIsOff else { return .failed }
                 customerKind = identityService.purchaseCustomerKind(of: distinctId)
                     ?? .identified
-            } else {
-                return .failed
             }
+        } else if !outboxIsOff,
+                  storedEvidence()[item.update.transactionId]?.isNewerThanStoreRead(
+                      revoked: item.update.isRevoked
+                  ) == true {
+            // A refresh from a store read that came before the purchase's
+            // refund is dropped too: it would carry the entry's admission with
+            // the purchase as it stood before the refund, and the entry's next
+            // send is its signed revocation.
+            return nil
         }
         let outcome = await syncTransactionWithOptions(
             transactionJws: item.jwsRepresentation,
@@ -2919,21 +2940,38 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return outcome
     }
 
+    /// What admitting a claim did.
+    private enum ClaimAdmission {
+        /// The claim is the entry's new admission, to be sent.
+        case admitted(StoredTransactionEvidence)
+        /// The store read the claim was built from came before StoreKit
+        /// reported the purchase refunded, and the entry holds the signed
+        /// revocation. The claim is dropped: an admission built from an
+        /// earlier store read never downgrades the entry.
+        case stale
+        /// The claim could not be saved, so the outbox is off.
+        case notSaved
+    }
+
     /// Writes a claim into the outbox as the claiming customer's entry. Their
     /// earlier entry for the purchase keeps its bookkeeping and takes the
     /// claim as its next send. Another customer's entry gives way, since the
     /// claim is the newer intent for the purchase; a checkout completion that
-    /// customer never delivered goes with it.
+    /// customer never delivered goes with it. An entry newer than the store
+    /// read the claim was built from (it holds the refund's signed
+    /// revocation) does not: that claim is dropped, checked in the same step
+    /// as the write.
     private func admitClaim(
         _ item: StoreTransactionRecoveryItem,
         distinctId: String,
         reason: PurchaseSyncReason
-    ) async -> StoredTransactionEvidence? {
+    ) async -> ClaimAdmission {
         let update = item.update
         // A claim waits while an answer for the purchase is applied.
         await waitForPurchaseChanges(transactionId: item.update.transactionId)
         let customerKind = identityService.purchaseCustomerKind(of: distinctId) ?? .identified
         let admittedAt = dateProvider.now()
+        var stale = false
         // Each explicit claim is a new admission, even when it matches the
         // claim already queued.
         let change = reloadAndApplyEvidenceChange(
@@ -2941,6 +2979,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             newAdmission: true
         ) {
             [purchaseStorageScope] current in
+            if let current, current.isNewerThanStoreRead(revoked: update.isRevoked) {
+                stale = true
+                return nil
+            }
             let own = current?.distinctId == distinctId ? current : nil
             if let current, own == nil,
                current.commercialContext != nil, current.completionDeliveredAt == nil {
@@ -2969,11 +3011,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 sendAttempts: 0
             )
         }
-        guard let change else { return nil }
+        if stale { return .stale }
+        guard let change else { return .notSaved }
         if change.changed {
             await refreshOptimisticProjection()
         }
-        return change.evidence
+        return .admitted(change.evidence)
     }
 
     /// A scheduled sync reports only whether the server accepted it. When a
@@ -2983,7 +3026,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         _ item: StoreTransactionRecoveryItem,
         distinctId: String,
         reason: PurchaseSyncReason
-    ) async -> PurchaseSyncOutcome {
+    ) async -> PurchaseSyncOutcome? {
         let key = syncKey(
             transactionId: item.update.transactionId,
             originalTransactionId: item.update.originalTransactionId,
@@ -3381,13 +3424,34 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         newAdmission: Bool = false,
         _ change: (StoredTransactionEvidence?) -> StoredTransactionEvidence?
     ) -> (evidence: StoredTransactionEvidence, changed: Bool)? {
+        reloadAndApplyEvidenceWrite(transactionId: transactionId) { current in
+            change(current).map {
+                EvidenceWrite(evidence: $0, isNewAdmission: newAdmission)
+            }
+        }
+    }
+
+    /// One write to an entry: the entry as written, and whether it is a new
+    /// admission whatever it sends, as an explicit claim is.
+    private struct EvidenceWrite {
+        let evidence: StoredTransactionEvidence
+        let isNewAdmission: Bool
+    }
+
+    /// `reloadAndApplyEvidenceChange` for a write that decides from the
+    /// current row whether it is a new admission.
+    private func reloadAndApplyEvidenceWrite(
+        transactionId: String,
+        _ write: (StoredTransactionEvidence?) -> EvidenceWrite?
+    ) -> (evidence: StoredTransactionEvidence, changed: Bool)? {
         guard !outboxIsOff else { return nil }
         var entries = storedEvidence()
         let current = entries[transactionId]
-        guard !evidenceStoreUnreadable, let changed = change(current) else { return nil }
+        guard !evidenceStoreUnreadable, let written = write(current) else { return nil }
+        let changed = written.evidence
         // A write that changes what the entry sends is a new admission, and
         // so is every explicit claim that leaves the entry to be sent.
-        let proposed = newAdmission && changed.isUnsent
+        let proposed = written.isNewAdmission && changed.isUnsent
             ? changed.newlyAdmitted()
             : changed.admitted(over: current)
         guard proposed.scope == purchaseStorageScope,
