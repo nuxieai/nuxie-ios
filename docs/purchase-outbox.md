@@ -54,11 +54,14 @@ A kept entry records when it is due again: the time its send failed plus
 so do their attempt count and due time.
 
 The SDK keeps one timer for the whole outbox, set to the earliest time a
-failed entry is due. It is set again after every send result (accepted,
+failed entry is due, or to now when one already is (its time passed while the
+app was suspended). It is set again after every send result (accepted,
 refused or failed) and at launch, so a purchase that fails for the first time
 is retried after 30 s even while another entry waits out the hour; with no
-failed entry waiting it is cancelled. When it fires, the entries that are due
-are sent; the others keep their own time.
+failed entry waiting it is cancelled. When it fires, every entry whose time
+has passed is sent; the others keep their own time. A due entry the timer's
+pass tries but cannot send (a purchase-backed Feature command holds it)
+counts one more failed attempt, so its time moves on.
 
 Every entry still to be sent is also sent at every launch, at identify or
 reset, and when a newly loaded profile changes the product catalog.

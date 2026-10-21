@@ -520,7 +520,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// The one outbox timer, due at `outboxRetryDueAt`.
     private var outboxRetryTask: Task<Void, Never>?
     /// When the outbox timer fires: the earliest time a failed entry is due
-    /// again. Nil when no failed entry is waiting.
+    /// again, or now when one already is. Nil when no failed entry is waiting.
     private(set) var outboxRetryDueAt: Date?
     /// Whether the next recovery pass sends every unsent entry (launch,
     /// identify or reset, profile load) instead of only the ones that are due.
@@ -749,7 +749,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// Retry evidence that was safely recorded and finished locally while the
     /// backend was unavailable. StoreKit will not replay a transaction after
     /// finishing, so this queue is the recovery source on relaunch. A pass of
-    /// the outbox timer sends only the failed entries that are due again.
+    /// the outbox timer sends only the failed entries whose time has passed.
     private func processStoredEvidence(sendingEveryEntry: Bool) async {
         let now = dateProvider.now()
         for evidence in storedEvidence().values {
@@ -786,6 +786,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             ))
             _ = await result.syncTask?.value
             guard !Task.isCancelled else { return }
+            // A due entry this pass tried without getting an answer (a
+            // purchase-backed Feature command holds it, say) counts a failed
+            // attempt, so its time moves on and the timer does not fire on it
+            // again at once.
+            if let dueAt = evidence.retryDueAt, dueAt <= now,
+               storedEvidence()[evidence.transactionId]?.retryDueAt == dueAt {
+                await recordFailedSend(
+                    transactionId: evidence.transactionId,
+                    distinctId: evidence.distinctId
+                )
+            }
             if let retained = storedEvidence()[evidence.transactionId],
                retained.answeredAt != nil,
                !retained.finishRequired,
@@ -2224,20 +2235,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     static let outboxRetryInitialDelay: TimeInterval = 30
     static let outboxRetryMaximumDelay: TimeInterval = 3600
 
-    /// Sets the one outbox timer to the earliest time a failed entry is due
-    /// again, replacing a timer set for any other time, or cancels it when no
-    /// failed entry is waiting. It runs after every send result and after
-    /// every recovery pass, the first of which runs at launch. An entry
-    /// already past its time is left to the pass sending it, or to the next
-    /// launch, sign-in or profile load, so the timer never spins on it.
+    /// Sets the one outbox timer for the earliest time a failed entry is due
+    /// again, or for now when one already is (its time passed while the app
+    /// was suspended), replacing a timer set for any other time; with no
+    /// failed entry waiting it is cancelled. It runs after every send result
+    /// and after every recovery pass, the first of which runs at launch.
     private func rescheduleOutboxRetry() {
         guard !isStopped else { return }
         let now = dateProvider.now()
         let dueAt = storedEvidence().values
             .filter(\.isUnsent)
             .compactMap(\.retryDueAt)
-            .filter { $0 > now }
             .min()
+            .map { max($0, now) }
         if outboxRetryTask != nil, outboxRetryDueAt == dueAt { return }
         outboxRetryTask?.cancel()
         outboxRetryTask = nil
