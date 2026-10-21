@@ -547,6 +547,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// background receipt sync race the atomic command while its request is
     /// suspended.
     private var purchaseUsageClaims: Set<String> = []
+    /// Purchases with an answer being applied: its admission check, entry
+    /// change, Feature publication and 200 hold run together. A new
+    /// admission for the purchase waits until it has finished.
+    private var purchasesApplyingAnswer: Set<String> = []
+    private var purchaseAnswerWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var purchaseUsageWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// SDK teardown waits for accepted purchase-backed requests to finish
     /// retiring their exact evidence before another observer can open the
@@ -1337,6 +1342,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // A refund stops the entry unlocking at once, before checks that
             // may defer the rest of processing, and its signed revocation is
             // what the entry sends next.
+            await waitForPurchaseChanges(transactionId: verified.transactionId)
             _ = reloadAndApplyEvidenceChange(transactionId: verified.transactionId) {
                 $0.map { Self.revoking($0, with: verified.transactionJws) }
             }
@@ -1606,6 +1612,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // die on a failing store write: completion capture comes first (the
         // claim is persisted only after the event is durably captured), and
         // the unchanged row carries everything the capture needs.
+        // A new admission waits while an answer for the purchase is applied.
+        await waitForPurchaseChanges(transactionId: verified.transactionId)
         guard let initialChange = reloadAndApplyEvidenceChange(
             transactionId: verified.transactionId,
             makeCommittedEvidence
@@ -2181,10 +2189,46 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// its entry no longer holds is superseded and only asks for the
     /// customer's profile again. Only a matching answer may change its entry,
     /// publish Features or hold a 200's Features.
+    ///
+    /// Everything that changes one purchase runs one at a time: the answer is
+    /// applied alone for its purchase, and a new admission (a claim, a
+    /// commit's write, a refund) waits until it has finished. The profile
+    /// refresh the answer asks for runs after it.
     private func applyPurchaseAnswer(
         _ answer: PurchaseAnswer,
         to target: PurchaseAnswerTarget
     ) async -> PurchaseSyncOutcome {
+        await waitForPurchaseChanges(transactionId: target.transactionId)
+        purchasesApplyingAnswer.insert(target.transactionId)
+        let (outcome, refreshesProfile) = await applyPurchaseAnswerAlone(answer, to: target)
+        finishPurchaseChange(transactionId: target.transactionId)
+        if refreshesProfile {
+            await refreshProfileAfterAnswer(for: target.distinctId)
+        }
+        return outcome
+    }
+
+    /// Waits while an answer for `transactionId` is being applied.
+    private func waitForPurchaseChanges(transactionId: String) async {
+        while purchasesApplyingAnswer.contains(transactionId) {
+            await withCheckedContinuation { continuation in
+                purchaseAnswerWaiters[transactionId, default: []].append(continuation)
+            }
+        }
+    }
+
+    private func finishPurchaseChange(transactionId: String) {
+        purchasesApplyingAnswer.remove(transactionId)
+        let waiters = purchaseAnswerWaiters.removeValue(forKey: transactionId) ?? []
+        waiters.forEach { $0.resume() }
+    }
+
+    /// Applies one answer while no other change to its purchase runs, and
+    /// says whether it asks for the customer's profile again.
+    private func applyPurchaseAnswerAlone(
+        _ answer: PurchaseAnswer,
+        to target: PurchaseAnswerTarget
+    ) async -> (PurchaseSyncOutcome, Bool) {
         let outcome: PurchaseSyncOutcome
         switch answer {
         case .accepted, .acceptedFeatureUse: outcome = .accepted
@@ -2192,12 +2236,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         case .failed: outcome = .failed
         }
         let entry = storedEvidence()[target.transactionId]
-        guard !evidenceStoreUnreadable else { return .failed }
+        guard !evidenceStoreUnreadable else { return (.failed, false) }
         if let admissionId = target.admissionId, entry?.admissionId != admissionId {
-            if outcome != .failed {
-                await refreshProfileAfterAnswer(for: target.distinctId)
-            }
-            return outcome
+            return (outcome, outcome != .failed)
         }
         let inLifecycle = { [self] () -> Bool in
             guard let generation = target.lifecycleGeneration else { return true }
@@ -2209,16 +2250,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 transactionId: target.transactionId,
                 admissionId: target.admissionId
             )
-            return .failed
+            return (.failed, false)
         case .refused:
-            guard inLifecycle() else { return .refused }
+            guard inLifecycle() else { return (.refused, false) }
             // A refusal answers the send like an acceptance. Access is
             // whatever the profile the server sends next says.
-            guard await markAnswered(target) else { return .failed }
-            if target.refreshesProfile {
-                await refreshProfileAfterAnswer(for: target.distinctId)
-            }
-            return .refused
+            guard await markAnswered(target) else { return (.failed, false) }
+            return (.refused, target.refreshesProfile)
         case .acceptedFeatureUse(let syncedEventId, let responseCustomerId):
             var properties: [String: Any] = [
                 "transaction_id": target.transactionId,
@@ -2238,11 +2276,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 properties: properties,
                 eventId: syncedEventId,
                 distinctId: target.distinctId
-            )) else { return .failed }
-            guard await markAnswered(target) else { return .failed }
-            return .accepted
+            )) else { return (.failed, false) }
+            guard await markAnswered(target) else { return (.failed, false) }
+            return (.accepted, false)
         case .accepted(let features):
-            guard inLifecycle() else { return .failed }
+            guard inLifecycle() else { return (.failed, false) }
             // The 200's Features hold in memory only until the profile
             // refresh below lands; the profile is where access comes from.
             if target.publishesFeatures,
@@ -2253,8 +2291,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     distinctId: target.distinctId
                 )
             }
-            guard inLifecycle() else { return .failed }
-            guard await markAnswered(target) else { return .failed }
+            guard inLifecycle() else { return (.failed, false) }
+            guard await markAnswered(target) else { return (.failed, false) }
             let reportKey = [target.dedupeKey, target.admissionId?.uuidString ?? ""]
                 .joined(separator: "\u{1f}")
             if target.reportsPurchaseSync,
@@ -2278,10 +2316,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     properties: properties
                 )
             }
-            if target.refreshesProfile {
-                await refreshProfileAfterAnswer(for: target.distinctId)
-            }
-            return .accepted
+            return (.accepted, target.refreshesProfile)
         }
     }
 
@@ -2563,6 +2598,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         reason: PurchaseSyncReason
     ) async -> StoredTransactionEvidence? {
         let update = item.update
+        // A claim waits while an answer for the purchase is applied.
+        await waitForPurchaseChanges(transactionId: item.update.transactionId)
         let customerKind = identityService.purchaseCustomerKind(of: distinctId) ?? .identified
         let admittedAt = dateProvider.now()
         let change = reloadAndApplyEvidenceChange(transactionId: update.transactionId) {
