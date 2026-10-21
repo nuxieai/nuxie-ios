@@ -51,6 +51,10 @@ struct VerifiedPurchaseEvidence: Sendable {
     let productFeatureIds: [String]
     let commercialContext: PurchaseCommercialContext?
     let checkoutCompletionEventId: String?
+    /// The binding the checkout that produced this outcome wrote, by its own
+    /// identity. Only that binding is this purchase's checkout recovery;
+    /// another checkout's, even for the same customer and product, never is.
+    let checkoutBindingId: String?
     let completionDeliveredAt: Date?
     let answeredAt: Date?
     let finishRequired: Bool?
@@ -89,6 +93,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         productFeatureIds: [String] = [],
         commercialContext: PurchaseCommercialContext? = nil,
         checkoutCompletionEventId: String? = nil,
+        checkoutBindingId: String? = nil,
         completionDeliveredAt: Date? = nil,
         answeredAt: Date? = nil,
         finishRequired: Bool? = nil,
@@ -114,6 +119,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         self.productFeatureIds = productFeatureIds
         self.commercialContext = commercialContext
         self.checkoutCompletionEventId = checkoutCompletionEventId
+        self.checkoutBindingId = checkoutBindingId
         self.completionDeliveredAt = completionDeliveredAt
         self.answeredAt = answeredAt
         self.finishRequired = finishRequired
@@ -1440,11 +1446,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             : nil
         let checkoutRecovery: PendingPurchaseRecord?
         if let transactionService {
-            checkoutRecovery = await transactionService.checkoutRecoveryRecord(
-                appAccountToken: verified.appAccountToken,
-                productId: verified.productId,
-                originalTransactionId: verified.originalTransactionId
-            )
+            if let checkoutBindingId = verified.checkoutBindingId {
+                // A checkout's own result is matched only to its own binding.
+                // A newer checkout that replaced it keeps its binding.
+                checkoutRecovery = await transactionService.checkoutBinding(
+                    named: checkoutBindingId
+                )
+            } else {
+                checkoutRecovery = await transactionService.checkoutRecoveryRecord(
+                    appAccountToken: verified.appAccountToken,
+                    productId: verified.productId,
+                    originalTransactionId: verified.originalTransactionId
+                )
+            }
             // An unreadable binding store turns the outbox off: the
             // purchase is still delivered, without a binding.
             if await transactionService.pendingPurchaseStoreIsUnreadable() {
@@ -1522,6 +1536,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         if policy.resolvesPendingPurchase {
             if let checkoutRecovery {
                 pendingRecord = checkoutRecovery
+            } else if verified.checkoutBindingId != nil {
+                // A checkout whose own binding is gone never takes another
+                // checkout's deferred one.
+                pendingRecord = nil
             } else {
                 guard let transactionService else { return .rejected }
                 switch await transactionService.pendingPurchaseOwnership(
@@ -1750,18 +1768,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         var committedEvidence = initialChange.evidence
         var evidenceChanged = initialChange.changed
 
+        // The binding this purchase matched is retired by its own identity,
+        // never whichever binding the customer and product have now.
         var bindingRetired = true
-        if let checkoutRecovery {
-            bindingRetired = await retireCheckoutRecovery(
-                appAccountToken: checkoutRecovery.appAccountToken,
-                productId: verified.productId,
-                checkoutRecoveryExists: true
-            )
-        } else if pendingRecord?.state == .pending {
-            guard let transactionService else { return .rejected }
-            bindingRetired = await transactionService.consumePendingPurchase(
-                productId: verified.productId,
-                distinctId: committedEvidence.distinctId
+        if let binding = Self.matchedBinding(checkoutRecovery, pendingRecord) {
+            bindingRetired = await transactionServiceProvider().retireCheckoutBinding(
+                named: binding.checkoutCompletionEventId
             )
         }
         if !bindingRetired {
@@ -1931,6 +1943,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         )
     }
 
+    /// The checkout binding a delivery matched: the checkout recovery it was
+    /// matched to, else the deferred binding it resolves.
+    private static func matchedBinding(
+        _ checkoutRecovery: PendingPurchaseRecord?,
+        _ pendingRecord: PendingPurchaseRecord?
+    ) -> PendingPurchaseRecord? {
+        checkoutRecovery ?? (pendingRecord?.state == .pending ? pendingRecord : nil)
+    }
+
     /// Delivers a purchase while the outbox is off for the session: nothing is
     /// saved, the purchase is sent once, and its answer only refreshes the
     /// profile. Its transaction is left unfinished, so the next launch finds
@@ -1968,16 +1989,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
             if captured {
                 purchaseCommitJourneyRouting.remove(commitKey)
-                if let checkoutRecovery {
-                    _ = await retireCheckoutRecovery(
-                        appAccountToken: checkoutRecovery.appAccountToken,
-                        productId: purchase.productId,
-                        checkoutRecoveryExists: true
-                    )
-                } else if pendingRecord?.state == .pending, let transactionService {
-                    _ = await transactionService.consumePendingPurchase(
-                        productId: purchase.productId,
-                        distinctId: purchase.distinctId
+                if let binding = Self.matchedBinding(checkoutRecovery, pendingRecord) {
+                    _ = await transactionServiceProvider().retireCheckoutBinding(
+                        named: binding.checkoutCompletionEventId
                     )
                 }
             }

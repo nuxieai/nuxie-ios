@@ -246,6 +246,81 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
     }
 
 
+    /// Every checkout binding carries its own checkout's identity, and only
+    /// its own checkout or the delivery that matched it retires it. A first
+    /// checkout stays open past the binding's retry window, so a second
+    /// checkout of the same product by the same customer takes its place and
+    /// is deferred. When the first checkout then finishes, it completes with
+    /// its own context and leaves the second's binding alone, and the
+    /// deferred approval later completes the second checkout.
+    func testLateCheckoutLeavesANewerCheckoutsBindingAlone() async throws {
+        let clock = MockDateProvider()
+        let checkouts = TwoCheckoutAdapter(
+            first: StoreTransactionEvidence(
+                transactionJws: "first-checkout-jws",
+                transactionId: "first-checkout-transaction",
+                originalTransactionId: "first-checkout-original",
+                productId: storeProductId,
+                finish: {}
+            )
+        )
+        let harness = await makeHarness(customer: "buyer", nativeAdapter: checkouts, clock: clock)
+        func binding() -> PendingPurchaseRecord? {
+            harness.pending.load().valueTreatingAbsentAsEmpty([:])?.values.first
+        }
+
+        let first = Task { try await harness.service.purchase(product()) }
+        await checkouts.waitUntilFirstStarted()
+        let firstBinding = try XCTUnwrap(binding())
+        clock.advance(by: TransactionService.checkoutRecoveryTTL + 60)
+
+        do {
+            _ = try await harness.service.purchase(product())
+            XCTFail("the second checkout is deferred")
+        } catch StoreKitError.purchasePending {}
+        let secondBinding = try XCTUnwrap(binding())
+        XCTAssertNotEqual(secondBinding.checkoutCompletionEventId, firstBinding.checkoutCompletionEventId)
+        XCTAssertEqual(secondBinding.state, .pending)
+
+        await checkouts.releaseFirst()
+        _ = try await first.value
+
+        let firstEntry = try XCTUnwrap(
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["first-checkout-transaction"]
+        )
+        XCTAssertEqual(
+            firstEntry.checkoutCompletionEventId, firstBinding.checkoutCompletionEventId,
+            "the first checkout completes with its own identity"
+        )
+        XCTAssertEqual(
+            binding()?.checkoutCompletionEventId, secondBinding.checkoutCompletionEventId,
+            "the second checkout's binding survives"
+        )
+        XCTAssertEqual(binding()?.state, .pending)
+
+        // Ask to Buy approves the second purchase.
+        let approved = entitlement(
+            "second-checkout", productId: storeProductId, token: token("buyer")
+        )
+        let delivery = await harness.observer.handleVerifiedTransaction(
+            approved.update,
+            jwsRepresentation: approved.jwsRepresentation,
+            source: .transactionStream
+        )
+        _ = await delivery.syncTask?.value
+        let secondEntry = try XCTUnwrap(
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["second-checkout-transaction"]
+        )
+        XCTAssertEqual(secondEntry.distinctId, "buyer")
+        XCTAssertEqual(
+            secondEntry.checkoutCompletionEventId, secondBinding.checkoutCompletionEventId,
+            "the approval completes the second checkout"
+        )
+        XCTAssertNotNil(secondEntry.completionDeliveredAt)
+        XCTAssertNil(binding(), "the approval retires the second binding")
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseCompleted), 2)
+    }
+
     func testRetriedPurchaseKeepsItsReasonAndItsCustomersKindAfterReset() async throws {
         let harness = await makeHarness(customer: "buyer")
         harness.api.answer(.fail)
@@ -1667,9 +1742,12 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         customer: String,
         profile: MockProfileService? = nil,
         revisionGate: ClaimGate? = nil,
-        refreshProbe: RefreshProbe? = nil
+        refreshProbe: RefreshProbe? = nil,
+        nativeAdapter: (any NativeStoreKitPurchasing)? = nil,
+        clock: MockDateProvider? = nil
     ) async -> Harness {
         let mocks = MockFactory.shared
+        let clock = clock ?? mocks.dateProvider
         let identity = MockIdentityService()
         identity.setDistinctId(customer)
         let epoch = UUID()
@@ -1690,7 +1768,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             api: mocks.nuxieApi,
             identity: identity,
             profile: revisionGated ?? serverProfile,
-            dateProvider: mocks.dateProvider,
+            dateProvider: clock,
             featureInfo: featureInfo,
             cacheTTL: 300
         )
@@ -1730,7 +1808,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
                 }
             },
             purchaseStorageScope: scope,
-            dateProvider: mocks.dateProvider,
+            dateProvider: clock,
             unfinishedRecoveryTransactions: { [] },
             currentEntitlementRecoveryTransactions: { await entitlements.read() },
             refreshProfile: { distinctId in
@@ -1751,12 +1829,12 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             transactionObserver: observer,
             pendingPurchaseStore: pending,
             accountOwnershipStore: ownership,
-            dateProvider: mocks.dateProvider,
+            dateProvider: clock,
             settings: settings,
             eventSink: sink,
             purchaseStorageScope: scope,
             identityService: identity,
-            nativePurchaseAdapter: adapter,
+            nativePurchaseAdapter: nativeAdapter ?? adapter,
             featureService: features
         )
         box.set(service)
@@ -1971,6 +2049,48 @@ private final class RevisionGatedProfileService: ProfileServiceProtocol, @unchec
         await base.handleUserChange(from: oldDistinctId, to: newDistinctId)
     }
     func onAppBecameActive() async { await base.onAppBecameActive() }
+}
+
+/// A store whose first checkout stays open until the test releases it and
+/// whose second checkout is deferred (Ask to Buy).
+private actor TwoCheckoutAdapter: NativeStoreKitPurchasing {
+    private let first: StoreTransactionEvidence
+    private var calls = 0
+    private var firstStarted = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(first: StoreTransactionEvidence) {
+        self.first = first
+    }
+
+    func purchase(product: StoreProduct) async -> NativePurchaseResult {
+        calls += 1
+        guard calls == 1 else { return .pending }
+        firstStarted = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        if !released {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+        return .purchased(first)
+    }
+
+    func restorePurchases() async -> NativeRestoreResult { .noPurchases }
+
+    func heldOriginalTransactionIds(productId: String) async -> Set<String> { [] }
+
+    func waitUntilFirstStarted() async {
+        guard !firstStarted else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func releaseFirst() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
 }
 
 /// Counts the profile refreshes the observer runs and how many overlap,

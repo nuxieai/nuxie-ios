@@ -22,7 +22,12 @@ The machine-readable contract is `fixtures/purchases/purchase-outbox.json`;
    delivery to the checkout that started it, which names the customer the
    purchase is sent for. It is matched only by a purchase the store did not
    already own when that checkout began, so a completion only ever comes
-   from the checkout's own new purchase.
+   from the checkout's own new purchase. Each binding carries its own
+   checkout's identity: a checkout's own result is matched only to its own
+   binding, and a binding is retired only by that identity, by its own
+   checkout or by the delivery that matched it, in one step. A checkout that
+   finishes late therefore never retires or takes a newer checkout's binding
+   for the same customer and product.
 3. **One durable outbox entry per purchase**, keyed by the StoreKit
    transaction id (Google Play: the purchase token).
 
