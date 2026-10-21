@@ -926,7 +926,11 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         )
     }
 
-    func testAcceptedUseRetainsEvidenceUntilStablePurchaseEventCaptureSucceeds() async throws {
+    /// The answer is saved before purchase synced is captured, so a report
+    /// that cannot be captured does not undo it: the use still returns the
+    /// server's result, the entry stays answered, and the next use takes the
+    /// ordinary Feature command.
+    func testAcceptedUseIsSavedBeforeItsPurchaseSyncedReport() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
         let store = InMemoryTransactionEvidenceStore()
@@ -946,11 +950,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             balance: 4,
             type: .creditSystem
         )
-        let api = PurchaseBackedUsageAPI(results: [
-            .success(response),
-            .success(response),
-        ])
-        let events = PurchaseBackedEventSink(captureResults: [false, true])
+        let api = PurchaseBackedUsageAPI(results: [.success(response)])
+        let events = PurchaseBackedEventSink(captureResults: [false])
         let observer = makeObserver(
             api: api,
             features: PurchaseBackedFeatureRecorder(),
@@ -959,37 +960,28 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             eventSink: events
         )
 
-        do {
-            _ = try await observer.useFeatureWithPendingPurchase(
-                distinctId: "customer-a",
-                featureId: "credits",
-                amount: 1,
-                entityId: nil,
-                metadata: nil
-            )
-            XCTFail("Expected failed durable capture to fail the local command")
-        } catch NuxieNetworkError.invalidResponse {}
-        XCTAssertEqual(
-            store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.transactionJws,
-            "signed-transaction-1"
-        )
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
-        XCTAssertTrue(events.events().isEmpty)
-
-        _ = try await observer.useFeatureWithPendingPurchase(
+        let used = try await observer.useFeatureWithPendingPurchase(
             distinctId: "customer-a",
             featureId: "credits",
             amount: 1,
             entityId: nil,
             metadata: nil
         )
-
+        XCTAssertEqual(used?.success, true, "the server consumed the Feature")
         XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
-        let captures = events.captureAttempts()
-        XCTAssertEqual(captures.count, 2)
-        XCTAssertEqual(captures[0].eventId, captures[1].eventId)
-        XCTAssertEqual(captures[0].distinctId, "customer-a")
-        XCTAssertEqual(events.events().count, 1)
+        XCTAssertEqual(events.captureAttempts().count, 1)
+        XCTAssertTrue(events.events().isEmpty)
+
+        let next = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a",
+            featureId: "credits",
+            amount: 1,
+            entityId: nil,
+            metadata: nil
+        )
+        XCTAssertNil(next, "the next use takes the ordinary Feature command")
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
     }
 
     func testFractionalBalanceBelowDefaultUseRequirementIsNotAllowed() {
@@ -1554,6 +1546,92 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             ["invalidate credits", "use credits 4.0", "purchase credits 9.0"],
             "the Restore's Features are written after the command's result"
         )
+    }
+
+    /// Every answer asks for the requester's profile again, a purchase-backed
+    /// Feature command's included: once its entry is answered the early
+    /// unlock ends, and any other Feature the product grants comes from the
+    /// profile.
+    func testAcceptedUseAsksForTheProfileAgain() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"]
+            ),
+        ]))
+        let api = ControlledPurchaseBackedUsageAPI()
+        await api.release()
+        let profileRequests = ProfileRequestRecorder()
+        let observer = makeControlledObserver(
+            api: api,
+            features: PurchaseBackedFeatureRecorder(),
+            identity: identity,
+            store: store,
+            refreshProfile: { profileRequests.record($0) }
+        )
+        addTeardownBlock { await observer.stopListening() }
+
+        let used = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a",
+            featureId: "credits",
+            amount: 1,
+            entityId: nil,
+            metadata: nil
+        )
+
+        XCTAssertEqual(used?.success, true)
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?["transaction-1"]?.answeredAt)
+        XCTAssertEqual(profileRequests.requests, ["customer-a"], "the answer asks for the profile again")
+    }
+
+    /// Nothing is published until the answer is saved, `$purchase_synced`
+    /// included. A use whose answer cannot be saved still returns the
+    /// server's result, since the server consumed the Feature, but reports
+    /// no purchase synced.
+    func testUseWhoseAnswerCannotBeSavedReportsNoPurchaseSynced() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = WriteRefusingEvidenceStore(entries: [
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"]
+            ),
+        ])
+        let response = PurchaseBackedFeatureUseResponse(
+            customerId: "customer-a",
+            featureId: "credits",
+            code: "entitled",
+            allowed: true,
+            unlimited: false,
+            balance: 3,
+            type: .creditSystem
+        )
+        let events = PurchaseBackedEventSink()
+        let observer = makeObserver(
+            api: PurchaseBackedUsageAPI(results: [.success(response)]),
+            features: PurchaseBackedFeatureRecorder(),
+            identity: identity,
+            store: store,
+            eventSink: events
+        )
+        store.refusesWrites = true
+
+        let used = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a",
+            featureId: "credits",
+            amount: 1,
+            entityId: nil,
+            metadata: nil
+        )
+
+        XCTAssertEqual(used?.success, true, "the server consumed the Feature")
+        XCTAssertTrue(events.captureAttempts().isEmpty, "no purchase synced for an answer that was not saved")
+        XCTAssertTrue(events.events().isEmpty)
     }
 
     /// A purchase-backed Feature command whose entry is admitted again while

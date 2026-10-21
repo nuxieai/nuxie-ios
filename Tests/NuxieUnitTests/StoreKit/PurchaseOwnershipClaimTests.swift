@@ -1324,6 +1324,35 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         }
     }
 
+    /// Answers that land together (a Restore of several purchases) share
+    /// the profile refreshes they ask for. One runs at a time for the
+    /// customer, and the answers that land while it runs share one more
+    /// that starts after it, so a later fetch never races an earlier one.
+    func testAnswersThatLandTogetherShareOneTrailingProfileRefresh() async throws {
+        let probe = RefreshProbe(holdingTheFirstFor: 300_000_000)
+        let harness = await makeHarness(customer: "restorer", refreshProbe: probe)
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.entitlements.set([
+            entitlement("first", productId: storeProductId, token: nil),
+            entitlement("second", productId: "second-store-product", token: nil),
+            entitlement("third", productId: "third-store-product", token: nil),
+        ])
+        harness.adapter.restoreResult = .restored
+
+        let restore = Task { try await harness.service.restore() }
+        await gate.waitForArrival(count: 3)
+        await gate.open()
+        let result = try await restore.value
+
+        XCTAssertEqual(result, .restored)
+        let maxInFlight = await probe.maxInFlight
+        XCTAssertEqual(maxInFlight, 1, "one refresh at a time for the customer")
+        let count = await probe.count
+        XCTAssertEqual(count, 2, "the answers that landed during the first share one trailing refresh")
+        XCTAssertEqual(harness.profileRefreshes.requests, ["restorer", "restorer"])
+    }
+
     private func assertRestoreGetsNoAnswer(
         _ harness: Harness,
         file: StaticString = #filePath,
@@ -1579,7 +1608,8 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
     private func makeHarness(
         customer: String,
         profile: MockProfileService? = nil,
-        revisionGate: ClaimGate? = nil
+        revisionGate: ClaimGate? = nil,
+        refreshProbe: RefreshProbe? = nil
     ) async -> Harness {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
@@ -1646,6 +1676,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             unfinishedRecoveryTransactions: { [] },
             currentEntitlementRecoveryTransactions: { await entitlements.read() },
             refreshProfile: { distinctId in
+                await refreshProbe?.enter()
                 profileRefreshes.record(distinctId)
                 if profileFollowsAnswers {
                     serverProfile.setProfileResponse(
@@ -1654,6 +1685,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
                 }
                 _ = try? await serverProfile.refetchProfile(distinctId: distinctId)
                 await features.syncFeatureInfo()
+                await refreshProbe?.leave()
             }
         )
         let service = TransactionService(
@@ -1881,6 +1913,30 @@ private final class RevisionGatedProfileService: ProfileServiceProtocol, @unchec
         await base.handleUserChange(from: oldDistinctId, to: newDistinctId)
     }
     func onAppBecameActive() async { await base.onAppBecameActive() }
+}
+
+/// Counts the profile refreshes the observer runs and how many overlap,
+/// holding the first one open for a while.
+private actor RefreshProbe {
+    private let holdNanoseconds: UInt64
+    private var inFlight = 0
+    private(set) var maxInFlight = 0
+    private(set) var count = 0
+
+    init(holdingTheFirstFor nanoseconds: UInt64) {
+        holdNanoseconds = nanoseconds
+    }
+
+    func enter() async {
+        count += 1
+        inFlight += 1
+        maxInFlight = max(maxInFlight, inFlight)
+        if count == 1 {
+            try? await Task.sleep(nanoseconds: holdNanoseconds)
+        }
+    }
+
+    func leave() { inFlight -= 1 }
 }
 
 /// Holds purchase requests until the test opens it.
