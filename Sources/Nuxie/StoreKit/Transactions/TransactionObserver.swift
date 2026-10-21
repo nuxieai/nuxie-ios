@@ -577,9 +577,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private var projectionRefreshesInFlight = 0
     private var optimisticProjectionIsActive = false
     private var optimisticProjectionDistinctId: String?
-    /// The answer of each claiming send (restore or purchase) an explicit
+    /// What became of each claiming send (restore or purchase) an explicit
     /// scan is waiting on, by sync key; read once by that scan.
-    private var claimOutcomes: [String: PurchaseSyncOutcome] = [:]
+    private var claimOutcomes: [String: ClaimSendResult] = [:]
+    /// The answer each admission got this session. A send of an admission
+    /// already answered is not sent again; its caller gets this answer. It
+    /// reports, and decides nothing.
+    private var admissionAnswers: [UUID: PurchaseSyncOutcome] = [:]
+
+    /// What became of a claiming send.
+    private enum ClaimSendResult {
+        /// The server answered it.
+        case answered(PurchaseSyncOutcome)
+        /// It was dropped before it went out: its entry was answered or
+        /// admitted again while it waited.
+        case dropped
+    }
     /// The one outbox timer, due at `outboxRetryDueAt`.
     private var outboxRetryTask: Task<Void, Never>?
     /// When the outbox timer fires: the earliest time a failed entry is due
@@ -2230,7 +2243,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         updateLocalFeatures: Bool = true,
         isRevoked: Bool = false,
         refreshProviderState: Bool = false
-    ) async -> PurchaseSyncOutcome {
+    ) async -> PurchaseSyncOutcome? {
         guard !isStopped else { return .failed }
         let requestLifecycleGeneration = lifecycleGeneration
         // While the outbox is off, a send is made for no entry.
@@ -2242,17 +2255,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             ?? identityService.getDistinctId()
         // The send carries the admission it was made for: the outbox entry's
         // that asked for it, else the requester's entry as it stands now.
-        let admissionId = requestedAdmissionId
+        var admissionId = requestedAdmissionId
             ?? (durableEvidence?.distinctId == distinctId
                 ? durableEvidence?.admissionId
                 : nil)
-        // A purchase-backed Feature command holding this purchase sends it
-        // itself. This send counts a failed attempt, so the outbox timer
-        // sends the entry again if the command's answer does not settle it.
-        guard !purchaseUsageClaims.contains(transactionId) else {
-            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
-            return .failed
-        }
         let dedupeKey = syncKey(
             transactionId: transactionId,
             originalTransactionId: originalTransactionId,
@@ -2280,23 +2286,71 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return outcome
         }
 
-        // An entry sends the kind recorded when it was admitted; a send
-        // admitted now reads it with the identity it names. Unknown kind is
-        // "identified": the server merges only owners declared anonymous, so
-        // such a customer can be moved but never merged away.
-        let customerKind = recordedCustomerKind
-            ?? (durableEvidence?.distinctId == distinctId
-                ? durableEvidence?.customerKind
-                : nil)
-            ?? identityService.purchaseCustomerKind(of: distinctId)
-            ?? .identified
-        let request = PurchaseRequest(
-            transactionJwt: transactionJws,
-            distinctId: distinctId,
-            reason: reason,
-            customerKind: customerKind
-        )
+        // A send is built from its entry as it is right before it goes out,
+        // in the purchase's serialized step: after any wait, and once no
+        // answer for the purchase is being applied. A send of an entry's
+        // admission whose entry was answered or admitted again meanwhile is
+        // dropped, so an obsolete claim never reaches the server, where it
+        // could move the purchase back. Its caller gets the answer its
+        // admission already got, or nothing; a Restore does not count a
+        // dropped claim.
+        await waitForPurchaseChanges(transactionId: transactionId)
+        guard !isStopped, lifecycleGeneration == requestLifecycleGeneration else {
+            return .failed
+        }
+        // A purchase-backed Feature command holding this purchase sends it
+        // itself. This send counts a failed attempt, so the outbox timer
+        // sends the entry again if the command's answer does not settle it.
+        guard !purchaseUsageClaims.contains(transactionId) else {
+            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
+            return .failed
+        }
+        let entry = storedEvidence()[transactionId]
+        let request: PurchaseRequest
+        if let requestedAdmissionId {
+            guard let entry,
+                  entry.admissionId == requestedAdmissionId,
+                  entry.isUnsent else {
+                // An admission already answered gives that answer; one the
+                // entry no longer holds gives nothing.
+                let answered = entry?.admissionId == requestedAdmissionId
+                    ? admissionAnswers[requestedAdmissionId]
+                    : nil
+                if reason.claimsOwnership {
+                    claimOutcomes[dedupeKey] = answered.map(ClaimSendResult.answered) ?? .dropped
+                }
+                LogDebug("TransactionObserver: Dropped a send its entry no longer holds")
+                return answered
+            }
+            request = PurchaseRequest(
+                transactionJwt: entry.transactionJws,
+                distinctId: entry.distinctId,
+                reason: entry.reason,
+                customerKind: entry.customerKind
+            )
+        } else {
+            // A send made for no entry of its own carries the requester's
+            // entry as it stands now, if any.
+            let current = outboxIsOff ? nil : entry
+            admissionId = current?.distinctId == distinctId ? current?.admissionId : nil
+            // An entry sends the kind recorded when it was admitted; a send
+            // admitted now reads it with the identity it names. Unknown kind
+            // is "identified": the server merges only owners declared
+            // anonymous, so such a customer can be moved but never merged
+            // away.
+            let customerKind = recordedCustomerKind
+                ?? (current?.distinctId == distinctId ? current?.customerKind : nil)
+                ?? identityService.purchaseCustomerKind(of: distinctId)
+                ?? .identified
+            request = PurchaseRequest(
+                transactionJwt: transactionJws,
+                distinctId: distinctId,
+                reason: reason,
+                customerKind: customerKind
+            )
+        }
         let operationId = UUID()
+        let sendAdmissionId = admissionId
         let task = Task { [weak self] in
             guard let self else { return PurchaseSyncOutcome.failed }
             return await self.submitTransactionWithOptions(
@@ -2305,7 +2359,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 productId: productId,
                 originalTransactionId: originalTransactionId,
                 dedupeKey: dedupeKey,
-                admissionId: admissionId,
+                admissionId: sendAdmissionId,
                 lifecycleGeneration: requestLifecycleGeneration,
                 updateLocalFeatures: updateLocalFeatures,
                 emitSyncedEvent: !refreshProviderState
@@ -2314,7 +2368,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         transactionSyncOperations[dedupeKey] = TransactionSyncOperation(
             id: operationId,
             reason: reason,
-            admissionId: admissionId,
+            admissionId: sendAdmissionId,
             task: task
         )
         let outcome = await task.value
@@ -2322,7 +2376,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             transactionSyncOperations.removeValue(forKey: dedupeKey)
         }
         if reason.claimsOwnership {
-            claimOutcomes[dedupeKey] = outcome
+            claimOutcomes[dedupeKey] = .answered(outcome)
         }
         return outcome
     }
@@ -2543,7 +2597,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             }
             // A refusal answers the send like an acceptance. Access is
             // whatever the profile the server sends next says.
-            guard case .saved(let entryChanged) = saveAnswer(target) else {
+            guard case .saved(let entryChanged) = saveAnswer(target, as: outcome) else {
                 return outboxIsOff ? profileOnly : notUsable
             }
             if entryChanged {
@@ -2566,7 +2620,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             }
             // Nothing is published until the answer is saved, the purchase
             // synced report included.
-            guard case .saved(let entryChanged) = saveAnswer(target) else {
+            guard case .saved(let entryChanged) = saveAnswer(target, as: outcome) else {
                 return outboxIsOff ? profileOnly : notUsable
             }
             // The command's own result is written in this step, before the
@@ -2595,7 +2649,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return AppliedPurchaseAnswer(outcome: .accepted, refreshesProfile: true)
         case .accepted(let features):
             guard inLifecycle() else { return notUsable }
-            guard case .saved(let entryChanged) = saveAnswer(target) else {
+            guard case .saved(let entryChanged) = saveAnswer(target, as: outcome) else {
                 // The save switched the outbox off: no Features and no
                 // $purchase_synced; the answer only refreshes the profile.
                 return outboxIsOff ? profileOnly : notUsable
@@ -2663,7 +2717,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// as the server gave it: it only asks for the profile again. The caller
     /// steps the early unlock aside once it has published what the answer
     /// gives.
-    private func saveAnswer(_ target: PurchaseAnswerTarget) -> SavedAnswer {
+    private func saveAnswer(
+        _ target: PurchaseAnswerTarget,
+        as outcome: PurchaseSyncOutcome
+    ) -> SavedAnswer {
         let answeredAt = dateProvider.now()
         guard let change = reloadAndApplyEvidenceChange(
             transactionId: target.transactionId,
@@ -2679,6 +2736,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                   storedEvidence()[target.transactionId] == nil,
                   !evidenceStoreUnreadable else { return .notSaved }
             return .saved(entryChanged: false)
+        }
+        if let admissionId = target.admissionId {
+            admissionAnswers[admissionId] = outcome
         }
         return .saved(entryChanged: change.changed)
     }
@@ -3170,10 +3230,16 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             transactionJws: item.jwsRepresentation,
             distinctId: distinctId
         )
-        if let outcome = claimOutcomes.removeValue(forKey: key) {
+        switch claimOutcomes.removeValue(forKey: key) {
+        case .answered(let outcome):
             return outcome
+        case .dropped:
+            // A newer admission took the entry while the claim waited; this
+            // scan does not claim it again.
+            return nil
+        case nil:
+            return await claimCurrentEntitlement(item, distinctId: distinctId, reason: reason)
         }
-        return await claimCurrentEntitlement(item, distinctId: distinctId, reason: reason)
     }
 
     func currentEntitledStoreProductIds() async -> Set<String> {
@@ -3283,6 +3349,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 })
             guard candidates.count == 1, let evidence = candidates.first else {
                 return nil
+            }
+            // Like every send, the command is built from its entry inside the
+            // purchase's serialized step: an answer being applied finishes
+            // first, and the entry is read again.
+            if purchasesApplyingAnswer.contains(evidence.transactionId) {
+                await waitForPurchaseChanges(transactionId: evidence.transactionId)
+                continue
             }
 
             let receiptSyncKey = syncKey(

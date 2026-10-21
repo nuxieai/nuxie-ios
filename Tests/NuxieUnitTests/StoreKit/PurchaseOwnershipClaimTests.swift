@@ -946,6 +946,64 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         try assertRestoreClaimQueued("own-transaction", jws: "own-jws", in: harness)
     }
 
+    /// A send is built from the entry as it is right before it goes out. The
+    /// restorer's Restore claim waits behind their own earlier send of the
+    /// purchase; meanwhile another customer's Restore takes the entry and is
+    /// answered. The restorer's claim is then obsolete: it never reaches the
+    /// server, so it cannot move the purchase back, and nothing claims it
+    /// again for the restorer.
+    func testQueuedClaimIsDroppedWhenAnotherRestoreTakesTheEntryMeanwhile() async throws {
+        let harness = await makeHarness(customer: "restorer")
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        let item = entitlement("own", productId: storeProductId, token: token("restorer"))
+        harness.entitlements.set([item])
+        harness.adapter.restoreResult = .restored
+        func entry() -> StoredTransactionEvidence? {
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]
+        }
+
+        // The restorer's store update sends the purchase and waits at the
+        // server.
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        await gate.waitForArrival()
+
+        // The restorer restores: the claim is admitted and waits behind that
+        // send.
+        let restore = Task { try await harness.service.restore() }
+        for _ in 0..<500 {
+            if entry()?.reason == .restore { break }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTAssertEqual(entry()?.reason, .restore)
+        let restorerClaim = entry()?.admissionId
+
+        // Another customer restores and takes the entry.
+        harness.identity.setDistinctId("other")
+        let otherRestore = Task { try await harness.service.restore() }
+        await gate.waitForArrival(count: 2)
+        XCTAssertEqual(entry()?.distinctId, "other")
+        XCTAssertNotEqual(entry()?.admissionId, restorerClaim)
+
+        await gate.open()
+        _ = await streamed.syncTask?.value
+        let otherResult = try await otherRestore.value
+        XCTAssertEqual(otherResult, .restored)
+        _ = try? await restore.value
+
+        XCTAssertFalse(
+            harness.api.requests.contains { $0.distinctId == "restorer" && $0.reason == .restore },
+            "the obsolete claim never reaches the server"
+        )
+        XCTAssertEqual(harness.api.requests.map(\.distinctId), ["restorer", "other"])
+        XCTAssertEqual(entry()?.distinctId, "other")
+        XCTAssertNotNil(entry()?.answeredAt)
+    }
+
     /// The A to B to A case once more, with the first customer's earlier send
     /// accepted while their Restore claim waits. The claim's own send fails,
     /// and its retry sends the claim: an acceptance earlier in the session
