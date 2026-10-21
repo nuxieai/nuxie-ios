@@ -705,6 +705,59 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertNotNil(entry()?.answeredAt, "only its own answer answers the entry")
     }
 
+    /// Every write to an entry checks, in the same step, the admission it was
+    /// based on. An outbox retry that read the buyer's entry, then waited
+    /// while another customer's Restore took the entry, is dropped: it never
+    /// merges the old purchase into the Restore's claim.
+    func testStaleOutboxRetryNeverOverwritesARestoreClaim() async throws {
+        let revisions = ClaimGate()
+        let harness = await makeHarness(customer: "buyer", revisionGate: revisions)
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.api.answer(.accept, for: .purchase)
+        harness.api.answer(.fail, for: .restore)
+        harness.adapter.configureVerifiedPurchase(
+            transactionJws: "bought-jws",
+            transactionId: "bought-transaction",
+            originalTransactionId: "bought-original",
+            productId: storeProductId
+        )
+        harness.entitlements.set([entitlement("bought", productId: storeProductId, token: token("buyer"))])
+        harness.adapter.restoreResult = .restored
+        func entry() -> StoredTransactionEvidence? {
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["bought-transaction"]
+        }
+
+        let purchase = try await harness.service.purchase(product())
+        await gate.waitForArrival()
+        XCTAssertEqual(entry()?.reason, .purchase)
+
+        // The checkout's send is accepted; applying its answer waits.
+        harness.revisionGated?.arm()
+        await gate.open()
+        await revisions.waitForArrival()
+
+        // Another customer's Restore waits to admit its claim, and then an
+        // outbox retry of the buyer's entry waits to write.
+        harness.identity.setDistinctId("other")
+        let restore = Task { try await harness.service.restore() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let retry = Task { await harness.observer.retryStoredEvidence() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        await revisions.open()
+        _ = await purchase.syncTask?.value
+        _ = try? await restore.value
+        await retry.value
+
+        XCTAssertEqual(entry()?.distinctId, "other")
+        XCTAssertEqual(entry()?.reason, .restore, "the stale retry never overwrites the claim")
+        XCTAssertFalse(
+            harness.api.requests.contains { $0.distinctId == "other" && $0.reason == .purchase },
+            "nothing sends the old purchase for the restoring customer"
+        )
+    }
+
     /// Everything that changes one purchase runs one at a time. While a 200
     /// is being applied (its admission checked and its Features published),
     /// a Restore's new admission for the same purchase waits, so the check
