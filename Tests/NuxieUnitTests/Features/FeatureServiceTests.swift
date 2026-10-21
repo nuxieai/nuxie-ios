@@ -864,6 +864,60 @@ final class PurchaseAnswerHoldTests: XCTestCase {
         XCTAssertEqual(calls, 2)
     }
 
+    /// A check writes the Feature it asked about and the answer's balance
+    /// source. When a newer profile retires the source's purchase hold while
+    /// the check is out, the check is asked again, so its old answer never
+    /// writes over the profile's balance.
+    func testCheckAnsweredByAWalletWhoseHoldIsRetiredKeepsTheProfilesBalance() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let profile = MockProfileService()
+        profile.setProfileResponse(TestJourneyProfile.response(features: [Feature(
+            id: "credits", type: .creditSystem, balance: 3, unlimited: false,
+            nextResetAt: nil, interval: nil, entities: nil
+        )]))
+        let check = FirstHeldFeatureCheckFake(later: Self.wallet(balance: 3))
+        let featureInfo = FeatureInfo()
+        let features = FeatureService(
+            api: check,
+            identity: identity,
+            profile: profile,
+            dateProvider: MockDateProvider(),
+            featureInfo: featureInfo,
+            cacheTTL: 300
+        )
+        await features.updateFromPurchase([PurchaseFeature(
+            id: "feat_credits", extId: "credits", type: .creditSystem,
+            allowed: true, balance: 10, unlimited: false
+        )], distinctId: "customer")
+
+        // A check for a Feature that spends the credits wallet goes out.
+        let checking = Task { try await features.check(featureId: "ai-chat") }
+        await check.waitUntilStarted()
+        // A profile requested after the purchase answer lands with 3 credits
+        // and retires the wallet's hold.
+        _ = try await profile.refetchProfile(distinctId: "customer")
+        await features.syncFeatureInfo()
+        // The check's answer, from before that profile, still has 10.
+        await check.releaseFirst(Self.wallet(balance: 10))
+        _ = try? await checking.value
+
+        let wallet = await features.getCached(featureId: "credits", entityId: nil)
+        XCTAssertEqual(wallet?.balance, 3, "the profile that retired the hold decides the wallet")
+        let visible = await MainActor.run { featureInfo.feature("credits") }
+        XCTAssertEqual(visible?.balance, 3)
+        let calls = await check.callCount()
+        XCTAssertEqual(calls, 2, "the check is asked again")
+    }
+
+    private static func wallet(balance: Double) -> FeatureCheckResult {
+        FeatureCheckResult(
+            customerId: "customer", featureId: "credits", requiredBalance: 1,
+            code: "feature_found", allowed: true, unlimited: false, balance: balance,
+            type: .creditSystem, preview: nil
+        )
+    }
+
     private static func premium(allowed: Bool) -> FeatureCheckResult {
         FeatureCheckResult(
             customerId: "customer", featureId: "premium", requiredBalance: 1,
