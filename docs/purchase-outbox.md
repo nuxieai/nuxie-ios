@@ -175,8 +175,10 @@ or held in memory. Each purchase the store delivers (the checkout's result,
 a store update, a scan, Restore) is still sent once, and its answer only
 refreshes the profile: no `$purchase_synced` and no 200 Features. Its
 transaction is never finished, so the next launch finds it unfinished, saves
-its entry, sends it and finishes it as normal. Stored entries the store does
-not deliver wait for the next launch. A failed binding or catalog-mapping
+its entry, sends it and finishes it as normal. A delivered purchase whose
+entry on disk is already answered is not sent again, because that entry is
+still its record. Stored entries the store does not deliver wait for the
+next launch. A failed binding or catalog-mapping
 write does not fail the checkout, which carries on with its in-memory
 context. The buyer's checkout still
 completes in the session, for the host and the Journey, and its checkout
