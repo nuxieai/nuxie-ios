@@ -871,7 +871,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             profileReadyEntitlementScanRequested = false
             let sendsEveryEntry = everyEntryPassRequested
             everyEntryPassRequested = false
-            await retryPendingPurchaseOutcomes()
+            // A timer pass sends only the entries that are due. Retained
+            // commit retries and the scan of StoreKit's unfinished
+            // transactions run at launch, identify, reset, catalog change and
+            // Restore, never from the timer.
+            if sendsEveryEntry {
+                await retryPendingPurchaseOutcomes()
+            }
             guard !Task.isCancelled else {
                 evidenceRecoveryTask = nil
                 return
@@ -881,7 +887,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 evidenceRecoveryTask = nil
                 return
             }
-            await processUnfinishedTransactions()
+            if sendsEveryEntry {
+                await processUnfinishedTransactions()
+            }
             guard !Task.isCancelled else {
                 evidenceRecoveryTask = nil
                 return
@@ -2415,6 +2423,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         LogInfo("TransactionObserver: Syncing current entitlements")
 
         await refreshOptimisticProjection()
+        if purpose == .restore {
+            // Restore scans StoreKit's unfinished transactions too, as
+            // launch, identify and reset do.
+            await processUnfinishedTransactions()
+        }
         let result = await processCurrentEntitlements(
             distinctId: distinctId,
             purpose: purpose
