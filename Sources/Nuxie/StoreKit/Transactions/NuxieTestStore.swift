@@ -51,6 +51,10 @@ protocol NuxieTestStorePurchasing: Sendable {
 actor NuxieTestStore: NuxieTestStorePurchasing {
     private let granting: any TestStoreGranting
     private var purchasedProductsByDistinctId: [String: [String: StoreProduct]] = [:]
+    /// A grant whose outcome is unknown (the server may have committed it)
+    /// keeps its transaction ID, so the customer's next Purchased of the same
+    /// Product replays that grant instead of granting again.
+    private var unsettledTransactionIds: [String: String] = [:]
 
     init(granting: any TestStoreGranting) {
         self.granting = granting
@@ -74,18 +78,22 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
         guard case .purchased = choice else {
             return purchaseResponse(for: choice, product: product, distinctId: distinctId)
         }
-        let transactionId = "nuxie-test-\(UUID().uuidString)"
+        let attempt = "\(distinctId)\u{0}\(product.productId)"
+        let transactionId = unsettledTransactionIds[attempt]
+            ?? "nuxie-test-\(UUID().uuidString)"
         do {
             guard let productId = product.purchaseContext?.productId else {
                 throw StoreKitError.apiMisuse(
                     reason: "Test Store purchases need a published Product"
                 )
             }
+            unsettledTransactionIds[attempt] = transactionId
             let response = try await granting.grantTestStorePurchase(
                 productId: productId,
                 transactionId: transactionId,
                 distinctId: distinctId
             )
+            unsettledTransactionIds[attempt] = nil
             guard response.success else {
                 throw StoreKitError.purchaseFailed(nil)
             }
@@ -97,11 +105,23 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
                 features: response.features
             )
         } catch {
+            if Self.refusesGrant(error) {
+                unsettledTransactionIds[attempt] = nil
+            }
             LogWarning("NuxieTestStore: grant failed: \(error)")
             return NuxieTestStorePurchaseResponse(
                 result: .failed(StoreKitError.purchaseFailed(error))
             )
         }
+    }
+
+    /// The server answered and granted nothing; any other failure may have
+    /// committed the grant.
+    private static func refusesGrant(_ error: Error) -> Bool {
+        guard let status = (error as? NuxieNetworkError)?.httpStatusCode else {
+            return false
+        }
+        return (400..<500).contains(status) && status != 408 && status != 429
     }
 
     func purchaseResponse(

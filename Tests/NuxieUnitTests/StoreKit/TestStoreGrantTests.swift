@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import Nuxie
 
-/// Records Test Store grants, answering with a fixed response or error.
+/// Records Test Store grants, answering each in turn; the last answer repeats.
 actor RecordingTestStoreGrants: TestStoreGranting {
     struct Grant: Equatable {
         let productId: String
@@ -11,10 +11,14 @@ actor RecordingTestStoreGrants: TestStoreGranting {
     }
 
     private(set) var grants: [Grant] = []
-    private let answer: Result<PurchaseResponse, Error>
+    private var answers: [Result<PurchaseResponse, Error>]
 
     init(answer: Result<PurchaseResponse, Error>) {
-        self.answer = answer
+        self.answers = [answer]
+    }
+
+    init(answers: [Result<PurchaseResponse, Error>]) {
+        self.answers = answers
     }
 
     func grantTestStorePurchase(
@@ -23,7 +27,7 @@ actor RecordingTestStoreGrants: TestStoreGranting {
         distinctId: String
     ) async throws -> PurchaseResponse {
         grants.append(Grant(productId: productId, transactionId: transactionId, distinctId: distinctId))
-        return try answer.get()
+        return try (answers.count > 1 ? answers.removeFirst() : answers[0]).get()
     }
 }
 
@@ -100,6 +104,58 @@ final class TestStoreGrantTests: XCTestCase {
             let restored = await store.restoreResponse(for: .restored, distinctId: "rider-1")
             XCTAssertTrue(restored.products.isEmpty)
         }
+    }
+
+    func testAnUnansweredGrantIsReplayedByTheNextPurchaseOfTheSameProduct() async {
+        let grants = RecordingTestStoreGrants(answers: [
+            .failure(NuxieNetworkError.timeout),
+            .failure(NuxieNetworkError.httpError(statusCode: 503, message: "unavailable")),
+            .success(success([pro])),
+        ])
+        let store = NuxieTestStore(granting: grants)
+
+        let unanswered = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+        let unavailable = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+        let granted = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+
+        guard case .failed = unanswered.result, case .failed = unavailable.result,
+              case .purchased = granted.result else {
+            return XCTFail("Expected two failures, then a purchase")
+        }
+        let ids = await grants.grants.map(\.transactionId)
+        XCTAssertEqual(ids.count, 3)
+        XCTAssertEqual(Set(ids).count, 1, "Every attempt must replay the first transaction")
+        XCTAssertEqual(granted.transactionId, ids.first)
+    }
+
+    func testARefusedOrSettledGrantStartsANewTransactionNextTime() async {
+        let grants = RecordingTestStoreGrants(answers: [
+            .failure(NuxieNetworkError.httpError(statusCode: 403, message: "live key")),
+            .success(success([pro])),
+            .success(success([pro])),
+        ])
+        let store = NuxieTestStore(granting: grants)
+
+        _ = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+        _ = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+        _ = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+
+        let ids = await grants.grants.map(\.transactionId)
+        XCTAssertEqual(Set(ids).count, 3)
+    }
+
+    func testAnUnansweredGrantIsKeptForItsOwnCustomerAndProduct() async {
+        let grants = RecordingTestStoreGrants(answers: [
+            .failure(NuxieNetworkError.timeout),
+            .success(success([pro])),
+        ])
+        let store = NuxieTestStore(granting: grants)
+
+        _ = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+        _ = await store.complete(.purchased, product: annual(), distinctId: "rider-2")
+
+        let ids = await grants.grants.map(\.transactionId)
+        XCTAssertEqual(Set(ids).count, 2)
     }
 
     func testTheGrantRequestNamesTheCatalogProductTransactionAndCustomer() throws {
