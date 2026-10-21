@@ -55,4 +55,108 @@ final class PurchaseOutboxEntryTests: XCTestCase {
         )
         XCTAssertEqual(Set(rewritten.keys), ["current-transaction"])
     }
+
+    /// Only an entry with no admission id is from the previous SDK. A
+    /// current-format entry that cannot be read (here a malformed admission
+    /// id) makes the whole outbox unreadable, as a malformed file does:
+    /// nothing is dropped, nothing is written over the file, and the log
+    /// names the entry and the field without their values.
+    func testUnreadableCurrentFormatEntryMakesTheOutboxUnreadable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("outbox-format-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let logs = LogLines()
+        let store = TransactionEvidenceStore(
+            customStoragePath: root,
+            scope: .testFixture,
+            logger: NuxieLogger { _, message in logs.append(message) }
+        )
+        let valid = StoredTransactionEvidence(
+            transactionJws: "valid-jws",
+            transactionId: "valid-transaction",
+            originalTransactionId: "valid-original",
+            productId: "product",
+            distinctId: "customer",
+            recordedAt: Date(timeIntervalSince1970: 1_000_000_000),
+            isRevoked: false
+        )
+        XCTAssertTrue(store.save([valid.transactionId: valid]))
+
+        let file = PurchaseStorageScope.testFixture
+            .storageDirectory(customStoragePath: root)
+            .appendingPathComponent("transaction-evidence.json")
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+        )
+        var broken = try XCTUnwrap(object[valid.transactionId] as? [String: Any])
+        broken["transactionId"] = "broken-transaction"
+        broken["admissionId"] = "not-a-uuid"
+        object["broken-transaction"] = broken
+        let contents = try JSONSerialization.data(withJSONObject: object)
+        try contents.write(to: file)
+
+        guard case .unreadable = store.load() else {
+            return XCTFail("a current-format entry that cannot be read fails closed")
+        }
+        XCTAssertFalse(store.save([valid.transactionId: valid]))
+        XCTAssertEqual(try Data(contentsOf: file), contents, "nothing is written over it")
+
+        let failure = logs.lines.joined(separator: "\n")
+        XCTAssertTrue(failure.contains("broken-transaction"), failure)
+        XCTAssertTrue(failure.contains("admissionId"), failure)
+        XCTAssertFalse(failure.contains("not-a-uuid"), "the log never carries the stored value")
+        XCTAssertFalse(failure.contains("valid-jws"), "the log never carries a signed transaction")
+
+        // The observer fails closed on it too: no send, and no write.
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let api = RecoverySyncAPI(succeeds: true)
+        let observer = TransactionObserver(
+            api: api,
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: mocks.dateProvider,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "outbox-unreadable")),
+            eventSink: RecoveryEventSink(),
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            dateProvider: mocks.dateProvider,
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        addTeardownBlock { await observer.stopListening() }
+        await observer.retryStoredEvidence()
+        let committed = await observer.commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: "new-jws",
+                transactionId: "new-transaction",
+                originalTransactionId: "new-original",
+                productId: "product",
+                attributedDistinctId: "customer",
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: false,
+                requiresAuthorityResolution: false
+            ),
+            source: .transactionStream
+        ))
+        XCTAssertFalse(committed.committed)
+        XCTAssertTrue(api.recordedCustomers.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: file), contents, "the file is left byte for byte")
+    }
+}
+
+/// Collects log lines written by a test's own logger.
+private final class LogLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func append(_ line: String) { lock.withLock { storage.append(line) } }
+    var lines: [String] { lock.withLock { storage } }
 }

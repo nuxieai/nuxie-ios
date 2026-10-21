@@ -232,11 +232,14 @@ protocol TransactionEvidenceStoreProtocol: Sendable {
 final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
     private let fileURL: URL
     private let readFailureLogger = StoreReadFailureLogger()
+    private let logger: NuxieLogger
 
     init(
         customStoragePath: URL? = nil,
-        scope: PurchaseStorageScope = .testFixture
+        scope: PurchaseStorageScope = .testFixture,
+        logger: NuxieLogger = .shared
     ) {
+        self.logger = logger
         let base = scope.storageDirectory(customStoragePath: customStoragePath)
         fileURL = base.appendingPathComponent("transaction-evidence.json")
         try? FileManager.default.createDirectory(
@@ -262,9 +265,19 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
                 )
             }
             return .value(entries)
+        } catch let unreadable as UnreadableEvidenceEntry {
+            // Fail closed: nothing is dropped or written while one current
+            // entry cannot be read. The log names the entry and the field,
+            // never their values.
+            if readFailureLogger.shouldLog() {
+                logger.error(
+                    "TransactionEvidenceStore: evidence entry \(unreadable.transactionId, privacy: .publicValue) is unreadable at \(unreadable.field, privacy: .publicValue)"
+                )
+            }
+            return .unreadable
         } catch {
             if readFailureLogger.shouldLog() {
-                LogError("TransactionEvidenceStore: evidence is unreadable: \(error)")
+                logger.error("TransactionEvidenceStore: evidence is unreadable: \(error)")
             }
             return .unreadable
         }
@@ -304,14 +317,57 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
     }
 }
 
-/// One stored entry, or nothing for an entry in a previous SDK's format.
-/// That is pre-GA local state, dropped rather than read: StoreKit redelivers
-/// unfinished transactions, which then go through the outbox normally.
+/// One stored entry, or nothing for an entry in a previous SDK's format,
+/// which is recognised by having no admission id. That is pre-GA local
+/// state, dropped rather than read: StoreKit redelivers unfinished
+/// transactions, which then go through the outbox normally. A
+/// current-format entry that cannot be read fails the whole load.
 private struct DecodedEntry: Decodable {
     let entry: StoredTransactionEvidence?
 
+    private enum FormatKey: String, CodingKey {
+        case admissionId
+    }
+
     init(from decoder: Decoder) throws {
-        entry = try? StoredTransactionEvidence(from: decoder)
+        let format = try decoder.container(keyedBy: FormatKey.self)
+        guard format.contains(.admissionId) else {
+            entry = nil
+            return
+        }
+        do {
+            entry = try StoredTransactionEvidence(from: decoder)
+        } catch let error as DecodingError {
+            throw UnreadableEvidenceEntry(
+                transactionId: decoder.codingPath.last?.stringValue ?? "unknown",
+                field: error.fieldPath
+            )
+        }
+    }
+}
+
+/// A current-format entry that could not be read: its transaction id and the
+/// field that failed, never their values.
+private struct UnreadableEvidenceEntry: Error {
+    let transactionId: String
+    let field: String
+}
+
+private extension DecodingError {
+    /// The path of the field that failed, by key names only.
+    var fieldPath: String {
+        let path: [CodingKey]
+        switch self {
+        case .typeMismatch(_, let context),
+             .valueNotFound(_, let context),
+             .dataCorrupted(let context):
+            path = context.codingPath
+        case .keyNotFound(let key, let context):
+            path = context.codingPath + [key]
+        @unknown default:
+            path = []
+        }
+        return path.dropFirst().map(\.stringValue).joined(separator: ".")
     }
 }
 
