@@ -242,11 +242,7 @@ final class NuxieContextBuilder: Sendable {
     }
     
     private static func isDebugBuild() -> Bool {
-        #if DEBUG
-        return true
-        #else
-        return false
-        #endif
+        NuxieBuild.isDebug
     }
     
     private func getNetworkType() -> String {

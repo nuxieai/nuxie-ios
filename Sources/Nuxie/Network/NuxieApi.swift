@@ -617,6 +617,23 @@ extension NuxieApi {
         )
     }
 
+    func grantTestStorePurchase(
+        productId: String,
+        transactionId: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        let request = TestStorePurchaseRequest(
+            productId: productId,
+            transactionId: transactionId,
+            distinctId: distinctId
+        )
+        return try await self.request(
+            endpoint: .testStorePurchase,
+            body: request,
+            responseType: PurchaseResponse.self
+        )
+    }
+
     func useFeatureWithPurchase(
         _ request: PurchaseBackedFeatureUseRequest
     ) async throws -> PurchaseBackedFeatureUseResponse {

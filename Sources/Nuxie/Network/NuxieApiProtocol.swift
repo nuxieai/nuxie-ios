@@ -121,6 +121,26 @@ extension IntroEligibilityTokenRequesting {
     }
 }
 
+/// Records a Nuxie Test Store purchase on the server, which grants the
+/// Product's Features as a store purchase would, without any revenue.
+protocol TestStoreGranting: AnyObject, Sendable {
+    func grantTestStorePurchase(
+        productId: String,
+        transactionId: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse
+}
+
+extension TestStoreGranting {
+    func grantTestStorePurchase(
+        productId: String,
+        transactionId: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        throw StoreKitError.apiMisuse(reason: "Test Store grants are unavailable")
+    }
+}
+
 /// Composition-root convenience. Feature modules depend on the narrower
 /// capability they use, while the concrete client implements every port.
 protocol NuxieApiProtocol:
@@ -130,5 +150,6 @@ protocol NuxieApiProtocol:
     PurchaseSynchronizing,
     PurchaseBackedFeatureUsing,
     IntroEligibilityTokenRequesting,
+    TestStoreGranting,
     JourneyResponseSaveTransport
 {}

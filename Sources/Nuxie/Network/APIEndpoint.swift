@@ -8,6 +8,7 @@ enum APIEndpoint {
     case responseSave
     case consumeFeature
     case purchase(PurchaseRequest)
+    case testStorePurchase
     case appStoreIntroEligibility(AppStoreIntroEligibilityRequest)
 
     var path: String {
@@ -24,7 +25,7 @@ enum APIEndpoint {
             return "/entitled"
         case .consumeFeature:
             return "/feature/consume"
-        case .purchase:
+        case .purchase, .testStorePurchase:
             return "/purchase"
         case .appStoreIntroEligibility:
             return "/app-store/intro-eligibility"
@@ -33,7 +34,7 @@ enum APIEndpoint {
 
     var method: HTTPMethod {
         switch self {
-        case .responseSave, .profile, .event, .batch, .checkFeature, .purchase, .appStoreIntroEligibility, .consumeFeature:
+        case .responseSave, .profile, .event, .batch, .checkFeature, .purchase, .testStorePurchase, .appStoreIntroEligibility, .consumeFeature:
             return .POST
         }
     }

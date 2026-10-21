@@ -38,10 +38,22 @@ struct NuxieCoreOverrides {
   /// The ordinary event and Journey lanes remain the execution authority.
   var qualificationPresentationAttempt: ExperiencePresentationAttempt?
   var restoredJourneyPresentationAttempt: ExperiencePresentationAttempt?
+  /// Test seam for Test Store admission; `nil` uses how the SDK was compiled.
+  var debugBuild: Bool?
 
   init(presentationDiagnosticsEnabled: Bool? = nil) {
     self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
   }
+}
+
+/// How the SDK was compiled. A Swift package compiles in the app's build
+/// configuration, so Release, TestFlight and App Store builds are not debug.
+enum NuxieBuild {
+#if DEBUG
+  static let isDebug = true
+#else
+  static let isDebug = false
+#endif
 }
 
 /// Composition root (cleanup Phase 4c). `NuxieSDK.setup` builds exactly one
@@ -354,7 +366,7 @@ final class NuxieCore: @unchecked Sendable {
         scope: purchaseStorageScope
       )
     let testStore: (any NuxieTestStorePurchasing)? = configuration.testStoreEnabled
-      ? NuxieTestStore()
+      ? NuxieTestStore(granting: api)
       : nil
     let transactionService = overrides.transactionService ?? TransactionService(
       productService: productService,

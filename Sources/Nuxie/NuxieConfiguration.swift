@@ -126,11 +126,11 @@ public class NuxieConfiguration {
     @_spi(Testing)
     public var testingOverrides = NuxieTestingOverrides()
 
-    /// Enables the isolated iOS-only Nuxie Test Store for local purchase qualification.
+    /// Enables the iOS-only Nuxie Test Store for purchase qualification.
     ///
-    /// Test Store mode is accepted only with a development environment and a
-    /// `pk_test_` API key. It never uses StoreKit, a configured purchase
-    /// delegate, or production purchase/reporting.
+    /// Test Store mode is accepted only with a `pk_test_` API key in a Debug
+    /// build, on any service. A purchase grants the Product's Features without
+    /// revenue; it never uses StoreKit or a configured purchase delegate.
     public var testStoreEnabled: Bool = false
     
     /// Logging settings

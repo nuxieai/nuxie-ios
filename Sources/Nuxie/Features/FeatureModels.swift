@@ -175,6 +175,21 @@ struct PurchaseRequest: Codable {
     }
 }
 
+/// A Nuxie Test Store purchase, sent to `/purchase` from a debug build.
+struct TestStorePurchaseRequest: Encodable {
+    let type: String = "test_store"
+    let productId: String
+    let transactionId: String
+    let distinctId: String
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case productId = "catalog_product_id"
+        case transactionId = "transaction_id"
+        case distinctId = "distinct_id"
+    }
+}
+
 struct PurchaseBackedFeatureUseRequest: Codable, Sendable {
     struct Purchase: Codable, Sendable {
         let transactionJwt: String

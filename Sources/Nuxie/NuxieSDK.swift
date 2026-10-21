@@ -90,14 +90,17 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
         "testStoreEnabled is supported only on iOS"
       )
 #else
-      guard configuration.environment == .development else {
-        throw NuxieError.invalidConfiguration(
-          "testStoreEnabled requires environment == .development"
-        )
-      }
+      // The key's mode selects test content on any service, so the Test
+      // Store needs only a test key. A release build (TestFlight and the App
+      // Store included) refuses it, so it can never reach customers.
       guard configuration.apiKey.hasPrefix("pk_test_") else {
         throw NuxieError.invalidConfiguration(
           "testStoreEnabled requires a pk_test_ API key"
+        )
+      }
+      guard overrides.debugBuild ?? NuxieBuild.isDebug else {
+        throw NuxieError.invalidConfiguration(
+          "testStoreEnabled requires a debug build"
         )
       }
 #endif

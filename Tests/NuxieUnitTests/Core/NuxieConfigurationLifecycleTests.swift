@@ -1123,36 +1123,55 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
         }
     }
 
-    func testTestStoreRequiresDevelopmentEnvironmentAndTestKey() async {
+    func testTestStoreNeedsATestKeyAndADebugBuildOnAnyService() async throws {
         let sdk = NuxieSDK.shared
         await sdk.shutdown()
+        let mocks = MockFactory.shared
+        await mocks.resetAll()
 
-        let production = NuxieConfiguration(apiKey: "pk_test_demo")
-        production.testStoreEnabled = true
-        XCTAssertThrowsError(try sdk.setup(with: production)) { error in
-            guard case .invalidConfiguration(let reason) = error as? NuxieError else {
-                return XCTFail("expected invalid configuration")
+        func testStore(_ apiKey: String, _ environment: Environment = .production) -> NuxieConfiguration {
+            let configuration = NuxieConfiguration(apiKey: apiKey)
+            configuration.environment = environment
+            configuration.testStoreEnabled = true
+            configuration.testingOverrides.suppressBackgroundWork = true
+            return configuration
+        }
+        func rejection(_ configuration: NuxieConfiguration, debugBuild: Bool) -> String? {
+            var overrides = mocks.unitTestOverrides()
+            overrides.debugBuild = debugBuild
+            do {
+                try sdk.setup(with: configuration, overrides: overrides)
+                return nil
+            } catch NuxieError.invalidConfiguration(let reason) {
+                return reason
+            } catch {
+                return "\(error)"
             }
-#if os(iOS)
-            XCTAssertEqual(reason, "testStoreEnabled requires environment == .development")
-#else
-            XCTAssertEqual(reason, "testStoreEnabled is supported only on iOS")
-#endif
         }
 
-        let developmentWithLiveKey = NuxieConfiguration(apiKey: "pk_live_demo")
-        developmentWithLiveKey.environment = .development
-        developmentWithLiveKey.testStoreEnabled = true
-        XCTAssertThrowsError(try sdk.setup(with: developmentWithLiveKey)) { error in
-            guard case .invalidConfiguration(let reason) = error as? NuxieError else {
-                return XCTFail("expected invalid configuration")
-            }
 #if os(iOS)
-            XCTAssertEqual(reason, "testStoreEnabled requires a pk_test_ API key")
-#else
-            XCTAssertEqual(reason, "testStoreEnabled is supported only on iOS")
-#endif
+        // The key's mode selects test content, so the default service works
+        // as well as a local one.
+        for environment in [Environment.production, .development] {
+            XCTAssertNil(rejection(testStore("pk_test_demo", environment), debugBuild: true))
+            XCTAssertTrue(sdk.isSetup)
+            await sdk.shutdown()
         }
+        XCTAssertEqual(
+            rejection(testStore("pk_live_demo"), debugBuild: true),
+            "testStoreEnabled requires a pk_test_ API key"
+        )
+        XCTAssertEqual(
+            rejection(testStore("pk_test_demo"), debugBuild: false),
+            "testStoreEnabled requires a debug build"
+        )
+#else
+        XCTAssertEqual(
+            rejection(testStore("pk_test_demo"), debugBuild: true),
+            "testStoreEnabled is supported only on iOS"
+        )
+#endif
+        XCTAssertFalse(sdk.isSetup)
     }
 
     func testRuntimeSettingsApplyOnlyThroughExplicitControls() async {
