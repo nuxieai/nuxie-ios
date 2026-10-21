@@ -75,8 +75,10 @@ refused or failed) and at launch, so a purchase that fails for the first time
 is retried after 30 s even while another entry waits out the hour; with no
 failed entry waiting it is cancelled. When it fires, every entry whose time
 has passed is sent; the others keep their own time. A due entry the timer's
-pass tries but cannot send (a purchase-backed Feature command holds it)
-counts one more failed attempt, so its time moves on.
+pass tries but cannot send counts one more failed attempt, so its time moves
+on. So does any send held back because a purchase-backed Feature command
+holds the purchase: the timer sends the entry again if the command's answer
+does not settle it.
 
 Every entry still to be sent is also sent at every launch, at identify or
 reset, and when a newly loaded profile changes the product catalog.
@@ -107,7 +109,10 @@ server accepted earlier and a purchase another customer on this device has an
 entry for: one entry per purchase, so the claim, the newer intent, takes that
 entry over (a checkout completion that customer never delivered goes with
 it). A Restore claim never unlocks before the server answers; Restore waits
-for the answer. The result:
+for the answer. Writes to a purchase's entry are serialized with that
+purchase's Feature command: a Restore (or purchase) claim of a purchase that a
+purchase-backed Feature command holds waits for the command to finish, then
+admits its claim and sends it. The result:
 
 - `.restored` once the server accepted at least one;
 - `.failed(restoreFailed(RestoreClaimError.ownedByAnotherAccount))` when it
