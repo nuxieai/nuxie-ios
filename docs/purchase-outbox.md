@@ -47,6 +47,21 @@ checkout's completion event while it has not been delivered.
 An entry whose StoreKit finish or completion delivery is still outstanding
 stays answered (never sent again) until that bookkeeping is done.
 
+### Admissions
+
+Every write that changes what an entry sends (a new purchase, a Restore or
+purchase claim, a refund's signed revocation, a stronger reason), or opens an
+answered entry again, is an admission: the entry gets a fresh admission id.
+Writes that only keep the books (the StoreKit finish, a delivered completion,
+a failed attempt) keep the id. Each send carries the admission id of the entry
+it sends. The server's answer clears the entry, marks it answered or counts a
+failed attempt only while the entry still holds that id; otherwise it only
+triggers the profile refresh. So when a Restore rewrites an entry while the
+entry's earlier send is in flight, that send's answer leaves the Restore claim
+waiting for its own. A send that finds the purchase already accepted for the
+same customer in this session, sent or in flight, takes that acceptance as its
+answer; a refusal or failure answers only a send of the same admission.
+
 ### Retry rule
 
 A kept entry records when it is due again: the time its send failed plus

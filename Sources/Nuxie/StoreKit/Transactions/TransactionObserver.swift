@@ -498,6 +498,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         /// Why this send was made; a sync's refusal does not answer a send
         /// that claims the purchase.
         let reason: PurchaseSyncReason
+        /// The admission of the outbox entry this send carries, if any.
+        let admissionId: UUID?
         let task: Task<PurchaseSyncOutcome, Never>
     }
 
@@ -794,7 +796,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                storedEvidence()[evidence.transactionId]?.retryDueAt == dueAt {
                 await recordFailedSend(
                     transactionId: evidence.transactionId,
-                    distinctId: evidence.distinctId
+                    admissionId: evidence.admissionId
                 )
             }
             if let retained = storedEvidence()[evidence.transactionId],
@@ -1726,6 +1728,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 distinctId: evidence.distinctId,
                 reason: evidence.reason,
                 customerKind: evidence.customerKind,
+                admissionId: evidence.admissionId,
                 updateLocalFeatures: evidence.distinctId
                     == self.identityService.getDistinctId(),
                 isRevoked: evidence.isRevoked
@@ -1781,7 +1784,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             reason: evidence.reason,
             customerKind: evidence.customerKind,
             sendAttempts: evidence.sendAttempts,
-            retryDueAt: evidence.retryDueAt
+            retryDueAt: evidence.retryDueAt,
+            admissionId: evidence.admissionId
         )
     }
 
@@ -1932,6 +1936,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         distinctId requestedDistinctId: String? = nil,
         reason: PurchaseSyncReason = .sync,
         customerKind recordedCustomerKind: PurchaseCustomerKind? = nil,
+        admissionId requestedAdmissionId: UUID? = nil,
         updateLocalFeatures: Bool = true,
         isRevoked: Bool = false,
         retainEvidenceAfterSync: Bool = false,
@@ -1947,6 +1952,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let distinctId = requestedDistinctId
             ?? durableEvidence?.distinctId
             ?? identityService.getDistinctId()
+        // The send carries the admission it was made for: the outbox entry's
+        // that asked for it, else the requester's entry as it stands now.
+        let admissionId = requestedAdmissionId
+            ?? (durableEvidence?.distinctId == distinctId
+                ? durableEvidence?.admissionId
+                : nil)
         let dedupeKey = syncKey(
             transactionId: transactionId,
             originalTransactionId: originalTransactionId,
@@ -1959,7 +1970,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogDebug("TransactionObserver: Transaction already synced, finishing fast path")
             return await reconcileEvidenceAfterDeduplicatedSync(
                 transactionId: transactionId,
-                distinctId: distinctId,
+                admissionId: admissionId,
                 retainEvidenceAfterSync: retainEvidenceAfterSync
             ) ? .accepted : .failed
         }
@@ -1973,17 +1984,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                   lifecycleGeneration == requestLifecycleGeneration else {
                 return .failed
             }
-            // A refresh, or a send that claims the purchase when the earlier
-            // send did not, asks with its own reason: the earlier send's
-            // refusal or failure does not answer it.
+            // An acceptance for this customer answers any send of the
+            // purchase. A refusal or failure answers only a send of the same
+            // admission, and never a refresh or a send that claims the
+            // purchase when the earlier send did not: those ask themselves.
             let answersThisSend = outcome == .accepted
-                || (!refreshProviderState
+                || (operation.admissionId == admissionId
+                    && !refreshProviderState
                     && (operation.reason.claimsOwnership || !reason.claimsOwnership))
             guard answersThisSend else { continue }
             guard outcome == .accepted else { return outcome }
             return await reconcileEvidenceAfterDeduplicatedSync(
                 transactionId: transactionId,
-                distinctId: distinctId,
+                admissionId: admissionId,
                 retainEvidenceAfterSync: retainEvidenceAfterSync
             ) ? .accepted : .failed
         }
@@ -2013,6 +2026,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 productId: productId,
                 originalTransactionId: originalTransactionId,
                 dedupeKey: dedupeKey,
+                admissionId: admissionId,
                 lifecycleGeneration: requestLifecycleGeneration,
                 updateLocalFeatures: updateLocalFeatures,
                 retainEvidenceAfterSync: retainEvidenceAfterSync,
@@ -2022,6 +2036,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         transactionSyncOperations[dedupeKey] = TransactionSyncOperation(
             id: operationId,
             reason: reason,
+            admissionId: admissionId,
             task: task
         )
         let outcome = await task.value
@@ -2036,12 +2051,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     private func reconcileEvidenceAfterDeduplicatedSync(
         transactionId: String,
-        distinctId: String,
+        admissionId: UUID?,
         retainEvidenceAfterSync: Bool
     ) async -> Bool {
-        // Another customer's entry for this purchase is theirs to reconcile.
+        // An entry admitted since this send (or another customer's entry) is
+        // answered only by its own send.
         if let stored = storedEvidence()[transactionId],
-           stored.distinctId != distinctId {
+           stored.admissionId != admissionId {
             return true
         }
         // Transaction.updates can win the race with the direct purchase
@@ -2077,6 +2093,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         productId: String?,
         originalTransactionId: String?,
         dedupeKey: String,
+        admissionId: UUID?,
         lifecycleGeneration requestLifecycleGeneration: UInt64,
         updateLocalFeatures: Bool,
         retainEvidenceAfterSync: Bool,
@@ -2100,14 +2117,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             // Access is whatever the profile the server sends next says.
             guard await retireAnsweredEntry(
                 transactionId: transactionId,
-                distinctId: distinctId,
+                admissionId: admissionId,
                 retainEvidenceAfterSync: retainEvidenceAfterSync
             ) else { return .failed }
             await refreshProfileAfterAnswer(for: distinctId)
             return .refused
         } catch {
             LogError("TransactionObserver: Failed to sync transaction \(transactionId): \(error)")
-            await recordFailedSend(transactionId: transactionId, distinctId: distinctId)
+            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
             return .failed
         }
 
@@ -2115,7 +2132,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogError(
                 "TransactionObserver: Backend sync failed for transaction \(transactionId): \(response.error ?? "Unknown error")"
             )
-            await recordFailedSend(transactionId: transactionId, distinctId: distinctId)
+            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
             return .failed
         }
         // The current service returns its internal UUID rather than
@@ -2129,7 +2146,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             LogError(
                 "TransactionObserver: Invalid sync customer for \(transactionId)"
             )
-            await recordFailedSend(transactionId: transactionId, distinctId: distinctId)
+            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
             return .failed
         }
         let acceptedEvidence = storedEvidence()[transactionId]
@@ -2155,7 +2172,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         syncedTransactionIds.insert(dedupeKey)
         guard await retireAnsweredEntry(
             transactionId: transactionId,
-            distinctId: distinctId,
+            admissionId: admissionId,
             retainEvidenceAfterSync: retainEvidenceAfterSync
         ) else { return .failed }
 
@@ -2182,17 +2199,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return .accepted
     }
 
-    /// The server answered (accepted or refused) the requester's send, so
-    /// their outbox entry is done. It stays only while its StoreKit finish or
-    /// completion delivery is outstanding; another customer's entry for the
-    /// same purchase is left to its own send.
+    /// The server answered (accepted or refused) a send, so the entry whose
+    /// admission it carried is done. It stays only while its StoreKit finish
+    /// or completion delivery is outstanding. An entry admitted since the
+    /// send, or another customer's entry, is left to its own send.
     private func retireAnsweredEntry(
         transactionId: String,
-        distinctId: String,
+        admissionId: UUID?,
         retainEvidenceAfterSync: Bool
     ) async -> Bool {
         let stored = storedEvidence()[transactionId]
-        if let stored, stored.distinctId != distinctId {
+        if let stored, stored.admissionId != admissionId {
             return true
         }
         if let stored,
@@ -2212,12 +2229,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     /// A send failed without an answer (transport, 5xx, auth): the entry
     /// stays and is due again after a backoff that grows with each failure.
-    /// It is also sent at every launch, sign-in and profile load.
-    private func recordFailedSend(transactionId: String, distinctId: String) async {
+    /// It is also sent at every launch, sign-in and profile load. Only the
+    /// admission the send carried counts the failure.
+    private func recordFailedSend(transactionId: String, admissionId: UUID?) async {
         guard !isStopped else { return }
         let failedAt = dateProvider.now()
         _ = reloadAndApplyEvidenceChange(transactionId: transactionId) { current in
-            guard let current, current.distinctId == distinctId,
+            guard let current, current.admissionId == admissionId,
                   current.isUnsent else { return current }
             return current.replacingAfterFailedSend(at: failedAt)
         }
@@ -2431,11 +2449,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // goes out, so a claim the server never answers is retried, also
         // after a relaunch.
         var customerKind: PurchaseCustomerKind?
+        var admissionId: UUID?
         if reason.claimsOwnership {
             guard let admitted = await admitClaim(
                 item, distinctId: distinctId, reason: reason
             ) else { return .failed }
             customerKind = admitted.customerKind
+            admissionId = admitted.admissionId
         }
         let outcome = await syncTransactionWithOptions(
             transactionJws: item.jwsRepresentation,
@@ -2445,6 +2465,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             distinctId: distinctId,
             reason: reason,
             customerKind: customerKind,
+            admissionId: admissionId,
             refreshProviderState: true
         )
         claimOutcomes.removeValue(forKey: syncKey(
@@ -2739,8 +2760,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 // false after consuming the final finite unit.
                 let acceptedAt = dateProvider.now()
                 guard let current = storedEvidence()[evidence.transactionId],
-                      current.distinctId == distinctId,
-                      current.transactionJws == evidence.transactionJws,
+                      current.admissionId == evidence.admissionId,
                       await persistEvidence(current.replacing(
                           answeredAt: acceptedAt
                       )) else {
@@ -2937,8 +2957,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         _ change: (StoredTransactionEvidence?) -> StoredTransactionEvidence?
     ) -> (evidence: StoredTransactionEvidence, changed: Bool)? {
         var entries = storedEvidence()
+        let current = entries[transactionId]
+        // A write that changes what the entry sends is a new admission.
         guard !evidenceStoreUnreadable,
-              let proposed = change(entries[transactionId]),
+              let proposed = change(current)?.admitted(over: current),
               proposed.scope == purchaseStorageScope,
               proposed.transactionId == transactionId else { return nil }
         guard entries[transactionId] != proposed else {

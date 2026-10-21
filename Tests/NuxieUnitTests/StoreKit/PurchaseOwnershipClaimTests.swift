@@ -590,6 +590,64 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"])
     }
 
+    /// The A to B to A case: another customer's Restore takes the entry, then
+    /// the first customer restores and takes it back while their own earlier
+    /// send is still in flight. Their claim is a new admission, so the
+    /// earlier send's refusal answers only what it sent, and the claim stays
+    /// queued for its own answer.
+    func testEarlierSendsRefusalDoesNotAnswerTheRestoreClaimThatReplacedIt() async throws {
+        let harness = await makeHarness(customer: "restorer")
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.api.answer(.refuse(409), for: .sync)
+        harness.api.answer(.fail, for: .restore)
+        let item = entitlement("own", productId: storeProductId, token: token("restorer"))
+        harness.entitlements.set([item])
+        harness.adapter.restoreResult = .restored
+        func entry() -> StoredTransactionEvidence? {
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]
+        }
+
+        // The store update's send for the restorer waits at the server.
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        await gate.waitForArrival()
+
+        // Another customer on the device restores and takes the entry.
+        harness.identity.setDistinctId("other")
+        let otherRestore = Task { try await harness.service.restore() }
+        await gate.waitForArrival(count: 2)
+        XCTAssertEqual(entry()?.distinctId, "other")
+
+        // The restorer comes back and restores, taking the entry back while
+        // their first send is still waiting.
+        harness.identity.setDistinctId("restorer")
+        let restore = Task { try await harness.service.restore() }
+        for _ in 0..<500 {
+            if entry()?.distinctId == "restorer" { break }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTAssertEqual(entry()?.distinctId, "restorer")
+        XCTAssertEqual(entry()?.reason, .restore)
+
+        await gate.open()
+        let synced = await streamed.syncTask?.value
+        XCTAssertEqual(synced, false)
+        _ = try? await otherRestore.value
+        do {
+            _ = try await restore.value
+            XCTFail("A Restore the server has not answered must not report restored")
+        } catch StoreKitError.restoreFailed(let underlying) {
+            XCTAssertEqual(underlying as? RestoreClaimError, .unconfirmed)
+        }
+
+        XCTAssertEqual(harness.api.requests.map(\.distinctId), ["restorer", "other", "restorer"])
+        try assertRestoreClaimQueued("own-transaction", jws: "own-jws", in: harness)
+    }
+
     private func assertRestoreGetsNoAnswer(
         _ harness: Harness,
         file: StaticString = #filePath,
