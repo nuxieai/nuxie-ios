@@ -207,6 +207,10 @@ internal actor FeatureService: FeatureServiceProtocol {
     // These values are newer than the profile snapshot and should win until they expire.
     private var invalidatedProfileRevisions: [String: UInt64] = [:]
     private var invalidatedCacheRevisions: [String: UInt64] = [:]
+    /// Per Feature, the revision at which a newer profile last retired a
+    /// purchase's 200 hold. A check that began before it is discarded and
+    /// asked again, so its caller gets the current answer.
+    private var heldGrantRetirementRevisions: [String: UInt64] = [:]
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
     /// A purchase answer's Features hold only until a profile requested after
     /// them lands: the profile is the customer's access. By key, the latest
@@ -414,7 +418,8 @@ internal actor FeatureService: FeatureServiceProtocol {
     private func performCheck(
         featureId: String,
         requiredBalance: Double?,
-        entityId: String?
+        entityId: String?,
+        attempt: Int = 0
     ) async throws -> (result: FeatureCheckResult, requestRevision: UInt64) {
         let identityFence = await synchronizeCustomerScopeIfNeeded()
         let customerId = identityFence.distinctId
@@ -439,6 +444,19 @@ internal actor FeatureService: FeatureServiceProtocol {
 
         if let invalidatedAt = invalidatedCacheRevisions[featureId], invalidatedAt > requestRevision {
             throw CancellationError()
+        }
+
+        // A newer profile retired a purchase's 200 hold while this check was
+        // out, so its answer may be from before that profile. It is
+        // discarded, and the check is asked again for the current answer.
+        if let retiredAt = heldGrantRetirementRevisions[featureId], retiredAt > requestRevision {
+            guard attempt < 2 else { throw CancellationError() }
+            return try await performCheck(
+                featureId: featureId,
+                requiredBalance: requiredBalance,
+                entityId: entityId,
+                attempt: attempt + 1
+            )
         }
 
         // A purchase or newer check may have completed while the request was
@@ -599,8 +617,11 @@ internal actor FeatureService: FeatureServiceProtocol {
                 realTimeCache.removeValue(forKey: key)
                 purchaseGrantProfileRevisions.removeValue(forKey: key)
                 // Retiring the hold is a change to the Feature: a check that
-                // began before it cannot publish over the profile.
+                // began before it cannot publish over the profile, nor give
+                // its caller the answer from before it.
                 featureMutationRevisions[key.featureId, default: 0] &+= 1
+                heldGrantRetirementRevisions[key.featureId] =
+                    featureMutationRevisions[key.featureId]
             }
         }
         let allFeatures = await getAllCached()
@@ -785,6 +806,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         realTimeCache.removeAll()
         purchaseGrantProfileRevisions.removeAll()
         invalidatedCacheRevisions.removeAll()
+        heldGrantRetirementRevisions.removeAll()
         invalidatedProfileRevisions.removeAll()
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()

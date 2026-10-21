@@ -99,7 +99,8 @@ checkout completion.
 
 Retiring a 200's Features is itself a change to each Feature, so a Feature
 check that began before a newer profile retired the hold cannot publish its
-answer over that profile.
+answer over that profile. That check is discarded and asked again, so its
+caller gets the current answer rather than the one from before the profile.
 
 Every answer passes one admission check before it may change its entry,
 publish Features or hold a 200's Features: a scan's send, the outbox pass, a
