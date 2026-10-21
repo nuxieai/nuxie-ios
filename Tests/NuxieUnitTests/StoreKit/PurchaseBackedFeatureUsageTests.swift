@@ -1196,6 +1196,65 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(syncCount, 0)
     }
 
+    /// A due outbox entry the timer's pass cannot send, because a
+    /// purchase-backed Feature command holds the purchase, counts a failed
+    /// attempt: its time moves on, and the timer waits for that time instead
+    /// of firing again at once.
+    func testDueEntryHeldByAFeatureCommandWaitsForItsNextTime() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 100))
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"],
+                sendAttempts: 1,
+                retryDueAt: clock.now().addingTimeInterval(-1)
+            ),
+        ]))
+        let api = ControlledPurchaseBackedUsageAPI()
+        let observer = TransactionObserver(
+            api: api,
+            features: PurchaseBackedFeatureRecorder(),
+            identity: identity,
+            settings: NuxieRuntimeSettings(
+                configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+            ),
+            eventSink: PurchaseBackedEventSink(),
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            purchaseStorageScope: scope,
+            dateProvider: clock,
+            activeStoreOriginalTransactionIDs: { [] }
+        )
+        addTeardownBlock { await observer.stopListening() }
+
+        let use = Task {
+            try await observer.useFeatureWithPendingPurchase(
+                distinctId: "customer-a",
+                featureId: "credits",
+                amount: 1,
+                entityId: nil,
+                metadata: nil
+            )
+        }
+        await api.waitUntilStarted()
+        await observer.retryDueOutboxEntries()
+
+        let held = try XCTUnwrap(store.load().valueTreatingAbsentAsEmpty([:])?["transaction-1"])
+        XCTAssertEqual(held.sendAttempts, 2)
+        XCTAssertEqual(held.retryDueAt, clock.now().addingTimeInterval(60))
+        let dueAt = await observer.outboxRetryDueAt
+        XCTAssertEqual(dueAt, clock.now().addingTimeInterval(60), "the timer waits for the entry's next time")
+        let syncCount = await api.recordedSyncRequestCount()
+        XCTAssertEqual(syncCount, 0)
+
+        await api.release()
+        _ = try await use.value
+    }
+
     func testReceiptSyncWinningTheClaimFallsBackWithoutSubmittingEvidenceTwice() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
@@ -1671,7 +1730,9 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         isRevoked: Bool = false,
         transactionJws: String? = nil,
         answeredAt: Date? = nil,
-        scope: PurchaseStorageScope? = nil
+        scope: PurchaseStorageScope? = nil,
+        sendAttempts: Int = 0,
+        retryDueAt: Date? = nil
     ) -> StoredTransactionEvidence {
         let scope = scope ?? self.scope
         return StoredTransactionEvidence(
@@ -1689,7 +1750,9 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             answeredAt: answeredAt,
             // The customer's own checkout: its account token names them.
             appAccountToken: scope.appAccountToken(distinctId: distinctId),
-            reason: .purchase
+            reason: .purchase,
+            sendAttempts: sendAttempts,
+            retryDueAt: retryDueAt
         )
     }
 

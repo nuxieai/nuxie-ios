@@ -372,6 +372,76 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         )
     }
 
+    /// An entry whose time passed while no timer ran (the app was suspended)
+    /// is due at once: when another send is answered, the timer is set for
+    /// now and its pass sends the overdue entry.
+    func testEntryThatBecameDueWhileSuspendedIsSentAfterAnotherAnswer() async throws {
+        let clock = MockDateProvider()
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = InMemoryTransactionEvidenceStore()
+        let overdue = StoredTransactionEvidence(
+            transactionJws: "overdue-jws",
+            transactionId: "overdue-transaction",
+            originalTransactionId: "overdue-original",
+            productId: "product",
+            distinctId: "customer",
+            recordedAt: clock.now(),
+            isRevoked: false,
+            sendAttempts: 1,
+            retryDueAt: clock.now().addingTimeInterval(30)
+        )
+        XCTAssertTrue(store.save([overdue.transactionId: overdue]))
+        let api = RecoverySyncAPI(succeeds: true)
+        let observer = TransactionObserver(
+            api: api,
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: clock,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "retry-overdue")),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            dateProvider: clock
+        )
+        addTeardownBlock { await observer.stopListening() }
+        // The app was suspended past the entry's time, so no timer ran.
+        clock.advance(by: 31)
+
+        let other = await observer.commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: "other-jws",
+                transactionId: "other-transaction",
+                originalTransactionId: "other-original",
+                productId: "product",
+                attributedDistinctId: "customer",
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: false,
+                requiresAuthorityResolution: false
+            ),
+            source: .transactionStream
+        ))
+        let synced = await other.syncTask?.value
+        XCTAssertEqual(synced, true)
+
+        for _ in 0..<300 {
+            if store.load().valueTreatingAbsentAsEmpty([:])?["overdue-transaction"] == nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertNil(
+            store.load().valueTreatingAbsentAsEmpty([:])?["overdue-transaction"],
+            "the overdue entry is sent"
+        )
+        XCTAssertEqual(api.recordedCustomers.count, 2)
+    }
+
     /// The outbox timer sends the failed entries that are due and leaves the
     /// rest to their own time, which an entry keeps across a restart. Once no
     /// failed entry is waiting, the timer is cancelled.
