@@ -2315,14 +2315,36 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private enum PurchaseAnswer {
         /// 2xx, with the Features the server granted.
         case accepted(features: [PurchaseFeature]?)
-        /// 2xx to a purchase-backed Feature command. The command applies its
-        /// own post-use result; the answer is captured as purchase synced
-        /// under the command's stable event id before it answers the entry.
-        case acceptedFeatureUse(syncedEventId: String, responseCustomerId: String)
+        /// 2xx to a purchase-backed Feature command. A matching one is
+        /// captured as purchase synced under the command's stable event id,
+        /// answers the entry, and then writes the command's post-use result,
+        /// all in the answer's step.
+        case acceptedFeatureUse(
+            syncedEventId: String,
+            responseCustomerId: String,
+            result: FeatureUseResult
+        )
         /// 409 or 400.
         case refused
         /// No answer the SDK can act on.
         case failed
+    }
+
+    /// The post-use result a purchase-backed Feature command writes once its
+    /// answer is saved.
+    private struct FeatureUseResult {
+        /// The server's result for the use.
+        let check: FeatureCheckResult
+        /// The Feature the caller used.
+        let featureId: String
+        /// The Feature the server answered with, its balance source (a
+        /// credit wallet, say); it may differ from the one used.
+        let answeredFeatureId: String
+        let entityId: String?
+        /// The server replayed an earlier use, so its balance is not newer.
+        let isReplay: Bool
+        /// The observer lifecycle the command began in.
+        let lifecycleGeneration: UInt64
     }
 
     /// The send an answer belongs to.
@@ -2375,11 +2397,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let outcome: PurchaseSyncOutcome
         /// Whether the answer asks for the requester's profile again.
         let refreshesProfile: Bool
-        /// Whether the answer may change local state: Feature authority, the
-        /// cache, an entry or a 200 hold. A superseded answer, from any
-        /// producer, and an answer while the outbox is off may not; they
-        /// only ask for the profile again.
-        let changesLocalState: Bool
     }
 
     /// Waits while an answer for `transactionId` is being applied.
@@ -2397,43 +2414,37 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         waiters.forEach { $0.resume() }
     }
 
-    /// Applies one answer while no other change to its purchase runs, and
-    /// says whether it asks for the customer's profile again.
+    /// Applies one answer while no other change to its purchase runs: its
+    /// admission check, the entry change and what the answer publishes (a
+    /// 200's Features and their hold, or a Feature command's post-use
+    /// result) happen together. Nothing is published before the answer is
+    /// saved on its entry, so an answer that cannot be saved publishes
+    /// nothing: the outbox is then off, and the answer only asks for the
+    /// profile again.
     private func applyPurchaseAnswerAlone(
         _ answer: PurchaseAnswer,
         to target: PurchaseAnswerTarget
     ) async -> AppliedPurchaseAnswer {
-        let (outcome, refreshesProfile, changesLocalState) = await applyPurchaseAnswerWithoutWaiting(
-            answer,
-            to: target
-        )
-        return AppliedPurchaseAnswer(
-            outcome: outcome,
-            refreshesProfile: refreshesProfile,
-            changesLocalState: changesLocalState
-        )
-    }
-
-    private func applyPurchaseAnswerWithoutWaiting(
-        _ answer: PurchaseAnswer,
-        to target: PurchaseAnswerTarget
-    ) async -> (PurchaseSyncOutcome, Bool, Bool) {
         let outcome: PurchaseSyncOutcome
         switch answer {
         case .accepted, .acceptedFeatureUse: outcome = .accepted
         case .refused: outcome = .refused
         case .failed: outcome = .failed
         }
+        // An answer that changes nothing local only asks for the profile
+        // again (a failure not even that).
+        let profileOnly = AppliedPurchaseAnswer(
+            outcome: outcome,
+            refreshesProfile: outcome != .failed
+        )
+        let notUsable = AppliedPurchaseAnswer(outcome: .failed, refreshesProfile: false)
         let entry = outboxIsOff ? nil : storedEvidence()[target.transactionId]
         // While the outbox is off (reading it may have just switched it off),
-        // an answer changes nothing local: it only asks for the requester's
-        // profile again.
-        if outboxIsOff {
-            return (outcome, outcome != .failed, false)
-        }
+        // an answer changes nothing local.
+        if outboxIsOff { return profileOnly }
         // A superseded answer only asks for the profile again.
         if let admissionId = target.admissionId, entry?.admissionId != admissionId {
-            return (outcome, outcome != .failed, false)
+            return profileOnly
         }
         let inLifecycle = { [self] () -> Bool in
             guard let generation = target.lifecycleGeneration else { return true }
@@ -2445,14 +2456,24 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 transactionId: target.transactionId,
                 admissionId: target.admissionId
             )
-            return (.failed, false, false)
+            return notUsable
         case .refused:
-            guard inLifecycle() else { return (.refused, false, false) }
+            guard inLifecycle() else {
+                return AppliedPurchaseAnswer(outcome: .refused, refreshesProfile: false)
+            }
             // A refusal answers the send like an acceptance. Access is
             // whatever the profile the server sends next says.
-            guard await markAnswered(target) || outboxIsOff else { return (.failed, false, false) }
-            return (.refused, target.refreshesProfile, !outboxIsOff)
-        case .acceptedFeatureUse(let syncedEventId, let responseCustomerId):
+            guard case .saved(let entryChanged) = saveAnswer(target) else {
+                return outboxIsOff ? profileOnly : notUsable
+            }
+            if entryChanged {
+                await refreshOptimisticProjection()
+            }
+            return AppliedPurchaseAnswer(
+                outcome: .refused,
+                refreshesProfile: target.refreshesProfile
+            )
+        case .acceptedFeatureUse(let syncedEventId, let responseCustomerId, let result):
             var properties: [String: Any] = [
                 "transaction_id": target.transactionId,
                 "original_transaction_id": target.originalTransactionId ?? "",
@@ -2471,16 +2492,30 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 properties: properties,
                 eventId: syncedEventId,
                 distinctId: target.distinctId
-            )) else { return (.failed, false, false) }
-            guard await markAnswered(target) || outboxIsOff else { return (.failed, false, false) }
-            // The save switched the outbox off: the answer only refreshes
-            // the profile.
-            guard !outboxIsOff else { return (.accepted, true, false) }
-            return (.accepted, false, true)
+            )) else { return notUsable }
+            guard case .saved(let entryChanged) = saveAnswer(target) else {
+                return outboxIsOff ? profileOnly : notUsable
+            }
+            // The command's own result is written in this step, before the
+            // purchase is let go, so a Restore waiting on the purchase admits
+            // its claim after it and that claim's Features land last.
+            await writeFeatureUse(result, for: target.distinctId)
+            if entryChanged {
+                await refreshOptimisticProjection()
+            }
+            return AppliedPurchaseAnswer(outcome: .accepted, refreshesProfile: false)
         case .accepted(let features):
-            guard inLifecycle() else { return (.failed, false, false) }
+            guard inLifecycle() else { return notUsable }
+            guard case .saved(let entryChanged) = saveAnswer(target) else {
+                // The save switched the outbox off: no Features and no
+                // $purchase_synced; the answer only refreshes the profile.
+                return outboxIsOff ? profileOnly : notUsable
+            }
             // The 200's Features hold in memory only until the profile
-            // refresh below lands; the profile is where access comes from.
+            // refresh after this step lands; the profile is where access
+            // comes from. They are published after the answer is saved and
+            // before the early unlock steps aside, so access does not drop
+            // in between.
             if target.publishesFeatures,
                identityService.getDistinctId() == target.distinctId,
                let features {
@@ -2489,11 +2524,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     distinctId: target.distinctId
                 )
             }
-            guard inLifecycle() else { return (.failed, false, false) }
-            guard await markAnswered(target) || outboxIsOff else { return (.failed, false, false) }
-            // The save switched the outbox off: no $purchase_synced; the
-            // answer only refreshes the profile.
-            guard !outboxIsOff else { return (.accepted, true, false) }
+            if entryChanged {
+                await refreshOptimisticProjection()
+            }
+            // The observer stopped while the Features were published: the
+            // answer stays saved, but this lifecycle reports nothing more and
+            // its caller gets no answer.
+            guard inLifecycle() else { return notUsable }
             let reportKey = [target.dedupeKey, target.admissionId?.uuidString ?? ""]
                 .joined(separator: "\u{1f}")
             if target.reportsPurchaseSync,
@@ -2517,17 +2554,30 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     properties: properties
                 )
             }
-            return (.accepted, target.refreshesProfile, true)
+            return AppliedPurchaseAnswer(
+                outcome: .accepted,
+                refreshesProfile: target.refreshesProfile
+            )
         }
     }
 
-    /// A matching answer answers its entry: it is no longer sent. When the
-    /// write fails the outbox switches off, and the answer still stands as
-    /// the server gave it: it only asks for the profile again. The entry
+    /// What saving a matching answer on its entry did.
+    private enum SavedAnswer {
+        /// The entry records the answer, or the send was made for no entry.
+        case saved(entryChanged: Bool)
+        /// The write failed, so the outbox is off.
+        case notSaved
+    }
+
+    /// Saves a matching answer on its entry: it is no longer sent. The entry
     /// stays as the purchase's record (finished, completion delivered) until
     /// it expires with the retention window, so a later delivery of the same
-    /// purchase reads its flags instead of sending or finishing again.
-    private func markAnswered(_ target: PurchaseAnswerTarget) async -> Bool {
+    /// purchase reads its flags instead of sending or finishing again. When
+    /// the write fails the outbox switches off, and the answer still stands
+    /// as the server gave it: it only asks for the profile again. The caller
+    /// steps the early unlock aside once it has published what the answer
+    /// gives.
+    private func saveAnswer(_ target: PurchaseAnswerTarget) -> SavedAnswer {
         let answeredAt = dateProvider.now()
         guard let change = reloadAndApplyEvidenceChange(
             transactionId: target.transactionId,
@@ -2537,13 +2587,45 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 return current.replacing(answeredAt: answeredAt)
             }
         ) else {
-            // No entry for the send, or the store could not be written.
-            return storedEvidence()[target.transactionId] == nil && !evidenceStoreUnreadable
+            // A send made for no entry has nothing to save; otherwise the
+            // store could not be written.
+            guard !outboxIsOff,
+                  storedEvidence()[target.transactionId] == nil,
+                  !evidenceStoreUnreadable else { return .notSaved }
+            return .saved(entryChanged: false)
         }
-        if change.changed {
-            await refreshOptimisticProjection()
+        return .saved(entryChanged: change.changed)
+    }
+
+    /// Writes a purchase-backed Feature command's post-use result. The server
+    /// consumed the Feature, so the cached access for it and for the answer's
+    /// balance source is discarded, and the server's balance is written
+    /// unless it replayed an earlier use. Nothing is written once the
+    /// command's lifecycle or customer has ended; the command then returns
+    /// no result.
+    private func writeFeatureUse(_ use: FeatureUseResult, for distinctId: String) async {
+        guard !isStopped,
+              lifecycleGeneration == use.lifecycleGeneration,
+              identityService.getDistinctId() == distinctId else { return }
+        await featureService.invalidateAccess(
+            featureId: use.featureId,
+            entityId: use.entityId,
+            distinctId: distinctId
+        )
+        if use.answeredFeatureId != use.featureId {
+            await featureService.invalidateAccess(
+                featureId: use.answeredFeatureId,
+                entityId: use.entityId,
+                distinctId: distinctId
+            )
         }
-        return true
+        guard !use.isReplay else { return }
+        await featureService.applyAuthoritativeUse(
+            use.check,
+            requestedFeatureId: use.featureId,
+            distinctId: distinctId,
+            entityId: use.entityId
+        )
     }
 
     /// A send failed without an answer (transport, 5xx, auth): the entry
@@ -3081,17 +3163,30 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     throw NuxieNetworkError.invalidResponse
                 }
 
+                let check = response.featureCheckResult(
+                    requiredBalance: amount
+                )
                 // The command's answer passes the same admission check as
                 // every purchase answer. A matching one is captured as
-                // purchase synced and answers the entry; a superseded one
-                // (a refund admitted meanwhile, say) only asks for the
-                // profile again and changes no Feature authority. The
-                // command's own result is the caller's either way: the
-                // server consumed the Feature.
+                // purchase synced, answers the entry and writes the command's
+                // post-use result, in one step; only then is the purchase let
+                // go, so a Restore waiting on it admits its claim after that
+                // result. A superseded one (a refund admitted meanwhile, say),
+                // or one while the outbox is off, only asks for the profile
+                // again and writes no Feature. The command's own result is
+                // the caller's either way: the server consumed the Feature.
                 let applied = await applyPurchaseAnswer(
                     .acceptedFeatureUse(
                         syncedEventId: purchaseSyncedEventId(evidence: evidence),
-                        responseCustomerId: response.customerId
+                        responseCustomerId: response.customerId,
+                        result: FeatureUseResult(
+                            check: check,
+                            featureId: featureId,
+                            answeredFeatureId: response.featureId,
+                            entityId: entityId,
+                            isReplay: response.idempotentReplay == true,
+                            lifecycleGeneration: requestGeneration
+                        )
                     ),
                     to: PurchaseAnswerTarget(
                         transactionId: evidence.transactionId,
@@ -3115,27 +3210,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                       lifecycleGeneration == requestGeneration,
                       identityService.getDistinctId() == distinctId else {
                     throw CancellationError()
-                }
-                let check = response.featureCheckResult(
-                    requiredBalance: amount
-                )
-                // A superseded answer (or one while the outbox is off) never
-                // changes Feature authority or the cache: the caller still
-                // gets the server's result, and the profile was asked for
-                // again.
-                if applied.changesLocalState {
-                    await featureService.invalidateAccess(featureId: featureId, entityId: entityId, distinctId: distinctId)
-                    if response.featureId != featureId {
-                        await featureService.invalidateAccess(featureId: response.featureId, entityId: entityId, distinctId: distinctId)
-                    }
-                }
-                if applied.changesLocalState, response.idempotentReplay != true {
-                    await featureService.applyAuthoritativeUse(
-                        check,
-                        requestedFeatureId: featureId,
-                        distinctId: distinctId,
-                        entityId: entityId
-                    )
                 }
                 let access = FeatureAccess(
                     authoritative: check,
