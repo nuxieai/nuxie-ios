@@ -42,6 +42,10 @@ struct VerifiedPurchaseEvidence: Sendable {
     /// outbox pass). Once that entry was answered or admitted again, the
     /// commit leaves it to its own send rather than writing it back.
     let outboxAdmissionId: UUID?
+    /// An explicit Restore or purchase claim of the purchase: it is always a
+    /// new admission and sends its own claim, even when its fields match a
+    /// claim already queued.
+    let explicitClaim: Bool
     let finish: (@Sendable () async -> Void)?
 
     init(
@@ -67,6 +71,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         syncReason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind? = nil,
         outboxAdmissionId: UUID? = nil,
+        explicitClaim: Bool = false,
         finish: (@Sendable () async -> Void)? = nil
     ) {
         self.transactionJws = transactionJws
@@ -91,6 +96,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         self.syncReason = syncReason
         self.customerKind = customerKind
         self.outboxAdmissionId = outboxAdmissionId
+        self.explicitClaim = explicitClaim
         self.finish = finish
     }
 }
@@ -998,6 +1004,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         source: PurchaseOutcomeSource,
         attributedDistinctId: String? = nil,
         syncReason: PurchaseSyncReason = .sync,
+        explicitClaim: Bool = false,
         resolvesPendingPurchase: Bool = true,
         allowsDurableCheckoutAuthority: Bool = true
     ) async -> PurchaseCommitResult {
@@ -1021,6 +1028,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 isRevoked: transaction.isRevoked,
                 isUpgraded: transaction.isUpgraded,
                 syncReason: syncReason,
+                explicitClaim: explicitClaim,
                 finish: transaction.finish
             ),
             source: resolvedSource
@@ -1614,8 +1622,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? verified.customerKind
                     ?? identityService.purchaseCustomerKind(of: owner)
                     ?? .identified,
-                sendAttempts: sendsRevocation ? 0 : existing?.sendAttempts ?? 0,
-                retryDueAt: sendsRevocation ? nil : existing?.retryDueAt
+                // A refund's revocation and an explicit claim are new sends.
+                sendAttempts: sendsRevocation || verified.explicitClaim
+                    ? 0 : existing?.sendAttempts ?? 0,
+                retryDueAt: sendsRevocation || verified.explicitClaim
+                    ? nil : existing?.retryDueAt
             )
         }
         if routeCompletionToJourneys {
@@ -1630,10 +1641,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         var superseded = false
         let initialChange = reloadAndApplyEvidenceChange(
             transactionId: verified.transactionId,
+            newAdmission: verified.explicitClaim,
             { current in
                 guard current?.admissionId == basedOnAdmission else {
                     superseded = true
-                    return current
+                    return nil
                 }
                 return makeCommittedEvidence(current)
             }
@@ -2515,6 +2527,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     source: .startupRecovery,
                     attributedDistinctId: distinctId,
                     syncReason: reason,
+                    explicitClaim: purpose != nil && reason.claimsOwnership,
                     // A current-entitlement scan can race unfinished/updates for
                     // the same deferred native purchase. Let the committer attach
                     // and retire any exact pending marker so the scan cannot win
@@ -2648,7 +2661,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         await waitForPurchaseChanges(transactionId: item.update.transactionId)
         let customerKind = identityService.purchaseCustomerKind(of: distinctId) ?? .identified
         let admittedAt = dateProvider.now()
-        let change = reloadAndApplyEvidenceChange(transactionId: update.transactionId) {
+        // Each explicit claim is a new admission, even when it matches the
+        // claim already queued.
+        let change = reloadAndApplyEvidenceChange(
+            transactionId: update.transactionId,
+            newAdmission: true
+        ) {
             [purchaseStorageScope] current in
             let own = current?.distinctId == distinctId ? current : nil
             if let current, own == nil,
@@ -3090,14 +3108,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// current row rather than persisting a pre-await snapshot.
     private func reloadAndApplyEvidenceChange(
         transactionId: String,
+        newAdmission: Bool = false,
         _ change: (StoredTransactionEvidence?) -> StoredTransactionEvidence?
     ) -> (evidence: StoredTransactionEvidence, changed: Bool)? {
         var entries = storedEvidence()
         let current = entries[transactionId]
-        // A write that changes what the entry sends is a new admission.
-        guard !evidenceStoreUnreadable,
-              let proposed = change(current)?.admitted(over: current),
-              proposed.scope == purchaseStorageScope,
+        guard !evidenceStoreUnreadable, let changed = change(current) else { return nil }
+        // A write that changes what the entry sends is a new admission, and
+        // so is every explicit claim that leaves the entry to be sent.
+        let proposed = newAdmission && changed.isUnsent
+            ? changed.newlyAdmitted()
+            : changed.admitted(over: current)
+        guard proposed.scope == purchaseStorageScope,
               proposed.transactionId == transactionId else { return nil }
         guard entries[transactionId] != proposed else {
             return (proposed, false)

@@ -120,6 +120,14 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.admissionId = admissionId
     }
 
+    /// This entry as a new admission, whatever it sends: an explicit
+    /// Restore or purchase claim is always one.
+    func newlyAdmitted() -> Self {
+        var written = self
+        written.admissionId = UUID()
+        return written
+    }
+
     /// This entry as written over `current`. A write that changes what is
     /// sent, or opens an answered entry again, is a new admission; any other
     /// write keeps the current one.

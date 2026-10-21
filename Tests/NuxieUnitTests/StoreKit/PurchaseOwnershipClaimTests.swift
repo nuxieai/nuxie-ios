@@ -705,6 +705,36 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertNotNil(entry()?.answeredAt, "only its own answer answers the entry")
     }
 
+    /// Each explicit Restore is a new admission and sends its own claim, even
+    /// when the queued claim it finds has the same fields: an earlier
+    /// Restore's send never answers it.
+    func testEachRestoreSendsItsOwnClaim() async throws {
+        let harness = await makeHarness(customer: "restorer")
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.api.answer(.accept, for: .restore)
+        harness.entitlements.set([entitlement("own", productId: storeProductId, token: token("restorer"))])
+        harness.adapter.restoreResult = .restored
+
+        let first = Task { try await harness.service.restore() }
+        await gate.waitForArrival()
+        let firstAdmission = harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]?.admissionId
+        let second = Task { try await harness.service.restore() }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let secondAdmission = harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]?.admissionId
+        XCTAssertNotEqual(firstAdmission, secondAdmission, "the second Restore is a new admission")
+
+        await gate.open()
+        let firstResult = try await first.value
+        let secondResult = try await second.value
+        XCTAssertEqual(firstResult, .restored)
+        XCTAssertEqual(secondResult, .restored)
+        XCTAssertEqual(
+            harness.api.requests.filter { $0.reason == .restore }.count, 2,
+            "each Restore sends its own claim"
+        )
+    }
+
     /// Every write to an entry checks, in the same step, the admission it was
     /// based on. An outbox retry that read the buyer's entry, then waited
     /// while another customer's Restore took the entry, is dropped: it never
