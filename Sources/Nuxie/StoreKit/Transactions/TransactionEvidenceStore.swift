@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 struct StoredLocalEntitlementGrant: Codable, Equatable, Sendable {
@@ -119,76 +118,6 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.sendAttempts = sendAttempts
         self.retryDueAt = retryDueAt
         self.admissionId = admissionId
-    }
-
-    /// The previous SDK's name for `answeredAt`.
-    private enum PreviousCodingKeys: String, CodingKey {
-        case backendSyncedAt
-    }
-
-    /// Entries written before the outbox fields existed read as syncs for a
-    /// signed-in customer, the kind the server can move but never merge. The
-    /// server's earlier acknowledgement (`backendSyncedAt`) still answers
-    /// the send, so such an entry finishes its bookkeeping and expires.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let previous = try decoder.container(keyedBy: PreviousCodingKeys.self)
-        let transactionJws = try container.decode(String.self, forKey: .transactionJws)
-        let transactionId = try container.decode(String.self, forKey: .transactionId)
-        let distinctId = try container.decode(String.self, forKey: .distinctId)
-        self.init(
-            scope: try container.decode(PurchaseStorageScope.self, forKey: .scope),
-            transactionJws: transactionJws,
-            transactionId: transactionId,
-            originalTransactionId: try container.decode(String.self, forKey: .originalTransactionId),
-            productId: try container.decode(String.self, forKey: .productId),
-            distinctId: distinctId,
-            recordedAt: try container.decode(Date.self, forKey: .recordedAt),
-            productFeatureIds: try container.decode([String].self, forKey: .productFeatureIds),
-            isRevoked: try container.decode(Bool.self, forKey: .isRevoked),
-            finishRequired: try container.decode(Bool.self, forKey: .finishRequired),
-            commercialContext: try container.decodeIfPresent(
-                PurchaseCommercialContext.self, forKey: .commercialContext
-            ),
-            checkoutCompletionEventId: try container.decodeIfPresent(
-                String.self, forKey: .checkoutCompletionEventId
-            ),
-            completionDeliveredAt: try container.decodeIfPresent(
-                Date.self, forKey: .completionDeliveredAt
-            ),
-            answeredAt: try container.decodeIfPresent(Date.self, forKey: .answeredAt)
-                ?? previous.decodeIfPresent(Date.self, forKey: .backendSyncedAt),
-            appAccountToken: try container.decodeIfPresent(UUID.self, forKey: .appAccountToken),
-            reason: try container.decodeIfPresent(PurchaseSyncReason.self, forKey: .reason) ?? .sync,
-            customerKind: try container.decodeIfPresent(
-                PurchaseCustomerKind.self, forKey: .customerKind
-            ) ?? .identified,
-            sendAttempts: try container.decodeIfPresent(Int.self, forKey: .sendAttempts) ?? 0,
-            retryDueAt: try container.decodeIfPresent(Date.self, forKey: .retryDueAt),
-            admissionId: try container.decodeIfPresent(UUID.self, forKey: .admissionId)
-                ?? Self.previousAdmissionId(
-                    transactionId: transactionId,
-                    transactionJws: transactionJws,
-                    distinctId: distinctId
-                )
-        )
-    }
-
-    /// An entry the previous SDK wrote has no admission id. It gets one
-    /// derived from what it sends, so every read of it names the same
-    /// admission until it is next written.
-    private static func previousAdmissionId(
-        transactionId: String,
-        transactionJws: String,
-        distinctId: String
-    ) -> UUID {
-        let material = ["previous-admission", transactionId, distinctId, transactionJws]
-            .joined(separator: "\u{1f}")
-        let d = Array(SHA256.hash(data: Data(material.utf8)))
-        return UUID(uuid: (
-            d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
-            d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]
-        ))
     }
 
     /// This entry as written over `current`. A write that changes what is
@@ -324,10 +253,15 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
         decoder.dateDecodingStrategy = .iso8601
         do {
             let data = try Data(contentsOf: fileURL)
-            return .value(try decoder.decode(
-                [String: StoredTransactionEvidence].self,
-                from: data
-            ))
+            let decoded = try decoder.decode([String: DecodedEntry].self, from: data)
+            let entries = decoded.compactMapValues(\.entry)
+            let dropped = decoded.count - entries.count
+            if dropped > 0 {
+                LogWarning(
+                    "TransactionEvidenceStore: Dropped \(dropped, privacy: .publicValue) entries in a previous format"
+                )
+            }
+            return .value(entries)
         } catch {
             if readFailureLogger.shouldLog() {
                 LogError("TransactionEvidenceStore: evidence is unreadable: \(error)")
@@ -367,6 +301,17 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
             return false
         }
         return true
+    }
+}
+
+/// One stored entry, or nothing for an entry in a previous SDK's format.
+/// That is pre-GA local state, dropped rather than read: StoreKit redelivers
+/// unfinished transactions, which then go through the outbox normally.
+private struct DecodedEntry: Decodable {
+    let entry: StoredTransactionEvidence?
+
+    init(from decoder: Decoder) throws {
+        entry = try? StoredTransactionEvidence(from: decoder)
     }
 }
 

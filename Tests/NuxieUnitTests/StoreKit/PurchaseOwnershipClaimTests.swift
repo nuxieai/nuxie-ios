@@ -1018,26 +1018,6 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             harness.identity.reset(keepAnonymousId: false)
             harness.api.answer(.accept)
             await harness.observer.retryStoredEvidence()
-        case "retry_unrecorded":
-            // An entry written before the outbox recorded a reason or kind.
-            let entry = StoredTransactionEvidence(
-                scope: scope, transactionJws: "unrecorded-jws",
-                transactionId: "unrecorded-transaction", originalTransactionId: "unrecorded-original",
-                productId: storeProductId, distinctId: "departed-customer",
-                recordedAt: Date(timeIntervalSince1970: 100), isRevoked: false
-            )
-            var object = try XCTUnwrap(JSONSerialization.jsonObject(
-                with: JSONEncoder().encode(entry)
-            ) as? [String: Any])
-            object.removeValue(forKey: "reason")
-            object.removeValue(forKey: "customerKind")
-            object.removeValue(forKey: "sendAttempts")
-            let legacy = try JSONDecoder().decode(
-                StoredTransactionEvidence.self,
-                from: JSONSerialization.data(withJSONObject: object)
-            )
-            _ = harness.store.save([legacy.transactionId: legacy])
-            await harness.observer.retryStoredEvidence()
         default:
             XCTFail("Unknown producer \(producer)")
         }

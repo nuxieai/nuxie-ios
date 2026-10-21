@@ -5,13 +5,15 @@
     "One durable outbox entry per purchase, keyed by the store transaction id (Google Play: the purchase token).",
     "An entry records, when its send is admitted: signedTransaction, reason, requesterDistinctId and customerKind. Every retry sends exactly these; it never works them out again.",
     "reason is 'purchase' for the customer's own checkout (including a store delivery of a checkout still running, and the product the store says they already own, for that product only), 'restore' for Restore, and 'sync' for every other send: store updates, launch recovery, deferred approvals, and the scans after identify or reset.",
-    "customerKind is 'identified' when the requester signed in with identify and 'anonymous' when they did not. When the SDK cannot tell (a requester no longer on the device whose entry has no recorded kind) it is 'identified': the server merges only owners declared anonymous, so such a customer can be moved but never merged away.",
+    "customerKind is 'identified' when the requester signed in with identify and 'anonymous' when they did not. When the SDK cannot tell (a requester no longer on the device when their entry is admitted) it is 'identified': the server merges only owners declared anonymous, so such a customer can be moved but never merged away.",
     "requesterDistinctId is the customer the send is for: the one an explicit producer (checkout, Restore, already owned) names, else the customer of the checkout binding the store delivery matches, else the current customer. The SDK never works out who owns a purchase; the owner is what the server last said.",
     "A 200 or a refusal (409, 400) answers the send and clears the entry. Any other failure (transport, 5xx, 401, 403) keeps it with one more attempt and records when it is due again: the failure time plus the delay for its attempt count. The attempt count and due time survive restarts. One outbox timer is set to the earliest due time of the entries still waiting, or to now when one is already due, after every send result (accepted, refused or failed) and at launch, and is cancelled when none is waiting; when it fires it sends every entry whose due time has passed, and a due entry it tries but cannot send counts one more failed attempt. Every unsent entry is also sent at every launch, at identify or reset, and when a newly loaded profile changes the product catalog.",
     "Every write that changes what an entry sends (signedTransaction, requesterDistinctId, reason, customerKind, or a refund's signed revocation), or opens an answered entry again, is an admission with a fresh admissionId; bookkeeping writes keep it. Each send carries its entry's admissionId, and its answer clears, answers or counts a failed attempt on the entry only while the entry still holds that admissionId; otherwise it only triggers the profile refresh.",
     "Every answer, from a scan's send, the outbox pass, a Restore or purchase claim, or a purchase-backed Feature command, passes one admission check before it may change its entry or a 200 hold. A superseded answer (its admission is no longer the entry's) only refreshes the profile. No session cache decides sending, clearing or access: an answered entry stays as the purchase's record (finished, completion delivered) until it expires, and a later delivery of the purchase reads its flags instead of sending again.",
     "After any answer, accepted or refused, the SDK fetches the requester's profile again when they are the current customer. Access comes only from the server profile, plus the early unlock of the buyer's own unanswered, unrevoked purchase (its account token is the one derived for the current customer). A 200's features hold in memory only until a profile requested after them lands.",
     "Restore sends every current store entitlement for the restoring customer as 'restore' and reports restored only when the server accepted at least one. Each claim is written into the outbox as the restoring customer's entry before it is sent, so an unanswered claim is retried like any other entry. With one entry per purchase, a claim takes over another customer's entry for the same purchase. A Restore claim never unlocks before the server answers.",
+    "Android has no client refund signal: its early unlock is the buyer's own unanswered entry, sent until the server answers, so a refund or cancellation before that answer keeps the early unlock until it arrives (seconds online, or until back online), the same class as the accepted offline case. iOS keeps StoreKit's signed revocation as a fact on the entry, which stops the early unlock at once.",
+    "Entries in a previous SDK's format are dropped when the outbox is read: pre-GA local state with no compatibility handling. The store redelivers unfinished purchases, which then go through the outbox normally.",
     "Runners drive production entry points (checkout, already-owned checkout, Restore, store update, launch scan, stored retry) against a transport that records each request and answers as the case says."
   ],
   "request": {
@@ -79,12 +81,6 @@
       "producer": "retry_after_reset",
       "customer": { "distinctId": "buyer", "identified": true },
       "expectedRequest": { "distinct_id": "buyer", "reason": "purchase", "customer_kind": "identified" }
-    },
-    {
-      "name": "an entry with no recorded kind or reason, for a requester no longer here",
-      "producer": "retry_unrecorded",
-      "customer": { "distinctId": "current-customer", "identified": true },
-      "expectedRequest": { "distinct_id": "departed-customer", "reason": "sync", "customer_kind": "identified" }
     }
   ],
   "answers": [
