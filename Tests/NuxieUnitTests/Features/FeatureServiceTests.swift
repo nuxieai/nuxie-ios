@@ -733,6 +733,45 @@ final class FeatureServiceTests: AsyncSpec {
     }
 }
 
+/// Answers the first check when the test releases it; every later check
+/// answers at once with `later`.
+private actor FirstHeldFeatureCheckFake: FeatureChecking {
+    private var first: CheckedContinuation<FeatureCheckResult, Error>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var calls = 0
+    private let later: FeatureCheckResult
+
+    init(later: FeatureCheckResult) { self.later = later }
+
+    func waitUntilStarted() async {
+        guard calls == 0 else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func releaseFirst(_ result: FeatureCheckResult) {
+        first?.resume(returning: result)
+        first = nil
+    }
+
+    func callCount() -> Int { calls }
+
+    func checkFeature(
+        customerId: String,
+        featureId: String,
+        requiredBalance: Double?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult {
+        calls += 1
+        guard calls == 1 else { return later }
+        return try await withCheckedThrowingContinuation { continuation in
+            first = continuation
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+}
+
 /// A purchase answer's Features hold until a profile requested after that
 /// answer lands. Each answer keeps the profile request revision it arrived
 /// at, so a profile requested between two answers ends only the first one's.
@@ -770,7 +809,7 @@ final class PurchaseAnswerHoldTests: XCTestCase {
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let profile = MockProfileService()
-        let check = ControlledFeatureCheckFake()
+        let check = FirstHeldFeatureCheckFake(later: Self.premium(allowed: false))
         let features = FeatureService(
             api: check,
             identity: identity,
@@ -788,15 +827,49 @@ final class PurchaseAnswerHoldTests: XCTestCase {
         _ = try await profile.refetchProfile(distinctId: "customer")
         await features.syncFeatureInfo()
 
-        await check.resolve(FeatureCheckResult(
-            customerId: "customer", featureId: "premium", requiredBalance: 1,
-            code: "feature_found", allowed: true, unlimited: false, balance: nil,
-            type: .boolean, preview: nil
-        ))
+        await check.releaseFirst(Self.premium(allowed: true))
         _ = try? await checking.value
 
         let cached = await features.getCached(featureId: "premium", entityId: nil)
         XCTAssertNotEqual(cached?.allowed, true, "the profile that retired the hold decides")
+    }
+
+    /// A check that began before a newer profile retired the hold is
+    /// discarded, so its caller never gets the stale answer: the check is
+    /// asked again and the caller gets the current one.
+    func testCheckStartedBeforeAHoldIsRetiredReturnsTheCurrentAnswer() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let profile = MockProfileService()
+        let check = FirstHeldFeatureCheckFake(later: Self.premium(allowed: false))
+        let features = FeatureService(
+            api: check,
+            identity: identity,
+            profile: profile,
+            dateProvider: MockDateProvider(),
+            featureInfo: FeatureInfo(),
+            cacheTTL: 300
+        )
+        await features.updateFromPurchase([Self.grant("premium")], distinctId: "customer")
+
+        let checking = Task { try await features.check(featureId: "premium") }
+        await check.waitUntilStarted()
+        _ = try await profile.refetchProfile(distinctId: "customer")
+        await features.syncFeatureInfo()
+        await check.releaseFirst(Self.premium(allowed: true))
+
+        let answer = try await checking.value
+        XCTAssertFalse(answer.allowed, "the caller never gets the answer from before the profile")
+        let calls = await check.callCount()
+        XCTAssertEqual(calls, 2)
+    }
+
+    private static func premium(allowed: Bool) -> FeatureCheckResult {
+        FeatureCheckResult(
+            customerId: "customer", featureId: "premium", requiredBalance: 1,
+            code: "feature_found", allowed: allowed, unlimited: false, balance: nil,
+            type: .boolean, preview: nil
+        )
     }
 
     private static func grant(_ key: String) -> PurchaseFeature {
