@@ -299,6 +299,149 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertTrue(scheduled, "the failed send's retry is scheduled")
     }
 
+    /// A purchase that fails for the first time is retried after the first
+    /// backoff step, even while another entry is waiting out the one-hour cap.
+    func testFirstFailureIsRetriedSoonWhileAnotherEntryWaitsAnHour() async {
+        let clock = MockDateProvider()
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = InMemoryTransactionEvidenceStore()
+        let capped = StoredTransactionEvidence(
+            transactionJws: "capped-jws",
+            transactionId: "capped-transaction",
+            originalTransactionId: "capped-original",
+            productId: "product",
+            distinctId: "customer",
+            recordedAt: clock.now(),
+            isRevoked: false,
+            sendAttempts: 7
+        )
+        XCTAssertTrue(store.save([capped.transactionId: capped]))
+        let observer = TransactionObserver(
+            api: UnavailablePurchaseSyncAPI(),
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: clock,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "retry-due")),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            dateProvider: clock
+        )
+        addTeardownBlock { await observer.stopListening() }
+
+        // Its eighth failure puts the capped entry an hour out.
+        await observer.retryStoredEvidence()
+        XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])?["capped-transaction"]?.sendAttempts, 8)
+        var dueAt = await observer.outboxRetryDueAt
+        XCTAssertEqual(dueAt, clock.now().addingTimeInterval(3600))
+
+        clock.advance(by: 60)
+        let fresh = await observer.commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: "fresh-jws",
+                transactionId: "fresh-transaction",
+                originalTransactionId: "fresh-original",
+                productId: "product",
+                attributedDistinctId: "customer",
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: false,
+                requiresAuthorityResolution: false
+            ),
+            source: .transactionStream
+        ))
+        let synced = await fresh.syncTask?.value
+        XCTAssertEqual(synced, false)
+        XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])?["fresh-transaction"]?.sendAttempts, 1)
+
+        dueAt = await observer.outboxRetryDueAt
+        XCTAssertEqual(dueAt, clock.now().addingTimeInterval(30), "the new failure is not held behind the hour")
+        let stored = store.load().valueTreatingAbsentAsEmpty([:])
+        XCTAssertEqual(stored?["fresh-transaction"]?.retryDueAt, clock.now().addingTimeInterval(30))
+        XCTAssertEqual(
+            stored?["capped-transaction"]?.retryDueAt,
+            clock.now().addingTimeInterval(3600 - 60),
+            "the capped entry keeps its own time"
+        )
+    }
+
+    /// The outbox timer sends the failed entries that are due and leaves the
+    /// rest to their own time, which an entry keeps across a restart. Once no
+    /// failed entry is waiting, the timer is cancelled.
+    func testTimedRetrySendsOnlyTheEntriesThatAreDue() async throws {
+        let clock = MockDateProvider()
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = InMemoryTransactionEvidenceStore()
+        func failedEntry(_ name: String, attempts: Int, dueIn: TimeInterval) -> StoredTransactionEvidence {
+            StoredTransactionEvidence(
+                transactionJws: "\(name)-jws",
+                transactionId: "\(name)-transaction",
+                originalTransactionId: "\(name)-original",
+                productId: "product",
+                distinctId: "customer",
+                recordedAt: clock.now(),
+                isRevoked: false,
+                sendAttempts: attempts,
+                retryDueAt: clock.now().addingTimeInterval(dueIn)
+            )
+        }
+        let due = failedEntry("due", attempts: 2, dueIn: -1)
+        let waiting = failedEntry("waiting", attempts: 6, dueIn: 600)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let reread = try decoder.decode(StoredTransactionEvidence.self, from: encoder.encode(waiting))
+        XCTAssertEqual(reread.retryDueAt, waiting.retryDueAt, "the due time is stored with the entry")
+        XCTAssertTrue(store.save([due.transactionId: due, waiting.transactionId: waiting]))
+        let api = RecoverySyncAPI(succeeds: true)
+        let observer = TransactionObserver(
+            api: api,
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: clock,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "retry-timed")),
+            eventSink: TransactionEvidenceEventSink(),
+            transactionServiceProvider: { fatalError("unused") },
+            evidenceStore: store,
+            dateProvider: clock
+        )
+        addTeardownBlock { await observer.stopListening() }
+
+        await observer.retryDueOutboxEntries()
+        XCTAssertEqual(api.recordedCustomers.count, 1, "only the due entry is sent")
+        var stored = store.load().valueTreatingAbsentAsEmpty([:])
+        XCTAssertNil(stored?["due-transaction"], "the accepted entry clears")
+        XCTAssertEqual(stored?["waiting-transaction"]?.sendAttempts, 6)
+        var dueAt = await observer.outboxRetryDueAt
+        XCTAssertEqual(dueAt, clock.now().addingTimeInterval(600))
+
+        clock.advance(by: 600)
+        await observer.retryDueOutboxEntries()
+        XCTAssertEqual(api.recordedCustomers.count, 2)
+        stored = store.load().valueTreatingAbsentAsEmpty([:])
+        XCTAssertNil(stored?["waiting-transaction"])
+        dueAt = await observer.outboxRetryDueAt
+        XCTAssertNil(dueAt)
+        let scheduled = await observer.hasScheduledOutboxRetry
+        XCTAssertFalse(scheduled, "with no failed entry waiting the timer is cancelled")
+    }
+
     func testExternalDelegatePurchaseDoesNotCreateOverlayThroughProjectionRefresh() async throws {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
