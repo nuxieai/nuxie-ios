@@ -509,7 +509,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             XCTAssertEqual(updateCount, replay ? 0 : 1)
             let invalidationCount = await features.invalidationCount()
             XCTAssertEqual(invalidationCount, 1)
-            XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+            XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
         }
     }
 
@@ -611,7 +611,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             result?.authoritativeAccess?.balance,
             contract.acceptance.postUseAccess.balanceAfterFinalFiniteUnit
         )
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
         XCTAssertEqual(
             events.events().map(\.0),
             Array(
@@ -831,7 +831,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             metadata: nil
         )
 
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
         let captures = events.captureAttempts()
         XCTAssertEqual(captures.count, 2)
         XCTAssertEqual(captures[0].eventId, captures[1].eventId)
@@ -1141,7 +1141,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let testRequests = await testApi.recordedRequests()
         XCTAssertEqual(providerRequests.count, 1)
         XCTAssertTrue(testRequests.isEmpty)
-        XCTAssertNil(providerStore.load().valueTreatingAbsentAsEmpty([:])!["provider"])
+        XCTAssertNotNil(providerStore.load().valueTreatingAbsentAsEmpty([:])!["provider"]?.answeredAt)
         XCTAssertEqual(testStore.load().valueTreatingAbsentAsEmpty([:])!["test-store"]?.transactionJws, "signed-test-store")
     }
 
@@ -1466,7 +1466,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertNil(useResult)
         let usageCount = await api.recordedUsageRequestCount()
         XCTAssertEqual(usageCount, 0)
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
     }
 
     func testIdentityChangeWhileAwaitingReceiptSyncCancelsOrdinaryFallback() async throws {
@@ -1523,7 +1523,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         } catch is CancellationError {}
         let usageCount = await api.recordedUsageRequestCount()
         XCTAssertEqual(usageCount, 0)
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
     }
 
     func testOrdinaryReceiptSyncRejectsWrongCustomerResponse() async {
@@ -1741,7 +1741,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let purchaseUpdateCount = await features.recordedPurchaseUpdateCount()
         XCTAssertEqual(purchaseUpdateCount, 1)
         XCTAssertEqual(events.events().count, 1)
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
     }
 
     func testShutdownDrainsAcceptedUseBeforeClosingTheEvidenceStoreLifecycle() async throws {
@@ -1791,7 +1791,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             _ = try await use.value
             XCTFail("Expected teardown to cancel the stale lifecycle result")
         } catch is CancellationError {}
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
         XCTAssertEqual(events.captureAttempts().count, 1)
         XCTAssertEqual(events.events().count, 1)
     }
@@ -1835,7 +1835,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             _ = try await use.value
             XCTFail("Expected the stale customer request to be cancelled")
         } catch is CancellationError {}
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])!["transaction-1"]?.answeredAt)
         let updateCount = await features.recordedUpdates().count
         XCTAssertEqual(updateCount, 0)
         let captures = events.captureAttempts()

@@ -36,16 +36,22 @@ Alongside it the entry keeps local bookkeeping that is not purchase
 authority: whether the StoreKit transaction still has to be finished, and the
 checkout's completion event while it has not been delivered.
 
-### When an entry clears
+### When an entry is answered
 
 | Server answer | Entry | Profile refetched |
 | --- | --- | --- |
-| 200 | cleared | yes |
-| 409 (`app_store_purchase_conflict`) or 400 | cleared | yes |
+| 200 | answered | yes |
+| 409 (`app_store_purchase_conflict`) or 400 | answered | yes |
 | 5xx, 401, 403, transport failure, a body the SDK cannot use | kept, one more attempt | no |
 
-An entry whose StoreKit finish or completion delivery is still outstanding
-stays answered (never sent again) until that bookkeeping is done.
+An answered entry is never sent again and its signed transaction is dropped.
+It stays as the purchase's record, with its own flags for the StoreKit finish
+and the checkout's completion delivery, until it expires with the 90-day
+retention window. A later delivery of the same purchase (the store update
+after the checkout, a launch scan) reads those flags: it does not send,
+finish or deliver the completion again. Another customer's settled entry
+(answered, finished, completion delivered) is only that record, so a
+producer for a different customer starts the purchase's entry afresh.
 
 ### Admissions
 
@@ -54,30 +60,37 @@ purchase claim, a refund's signed revocation, a stronger reason), or opens an
 answered entry again, is an admission: the entry gets a fresh admission id.
 Writes that only keep the books (the StoreKit finish, a delivered completion,
 a failed attempt) keep the id. Each send carries the admission id of the entry
-it sends. The server's answer clears the entry, marks it answered or counts a
-failed attempt only while the entry still holds that id; otherwise the answer
+it sends. The server's answer marks the entry answered or counts a failed
+attempt only while the entry still holds that id; otherwise the answer
 is superseded and only triggers the profile refresh: it publishes no Features,
-holds none and leaves the entry alone, even when that profile fetch fails. So when a Restore rewrites an entry while the
-entry's earlier send is in flight, that send's answer leaves the Restore claim
-waiting for its own.
+holds none and leaves the entry alone, even when that profile fetch fails.
+So when a Restore rewrites an entry while the entry's earlier send is in
+flight, that send's answer leaves the Restore claim waiting for its own.
 
-An entry is cleared or answered only by the answer to a send of its own
-admission. No send, outbox pass or retry skips sending because the purchase
+Every answer passes one admission check before it may change its entry,
+publish Features or hold a 200's Features: a scan's send, the outbox pass, a
+Restore or purchase claim, and a purchase-backed Feature command alike. No
+session cache decides sending, clearing or access; the entry's own state
+does. A launch or identity scan with no purpose sends every unanswered entry
+like any other pass.
+
+An entry is answered only by the answer to a send of its own admission. No send, outbox pass or retry skips sending because the purchase
 was accepted earlier in the session; the server answers a repeat send the
 same way. A send that finds one of the same admission already in flight takes
 that send's answer; one of another admission is waited out, then this one is
 sent. The SDK remembers which accepted sends it reported as
 `$purchase_synced`, by transaction, customer and admission, for telemetry
-only. A commit the SDK already made for a purchase (its StoreKit finish and
-completion bookkeeping) is reused only for the same customer, and never by
-the outbox pass. The outbox pass sends an entry
-only while it still holds the admission the pass read; one answered or
-admitted again meanwhile is left to its own send, never written back.
+only. Commits of one purchase run one at a time, and each reads the entry
+rather than an earlier commit's result. The outbox pass sends an entry only
+while it still holds the admission the pass read; one answered or admitted
+again meanwhile is left to its own send, never written back.
 
 A purchase-backed Feature command carries the admission of the entry it uses.
 Its accepted answer always returns the command's result and consumption
-receipt to the caller, since the server has consumed the Feature; the fence
-decides only whether that answer clears or answers the entry.
+receipt to the caller, and the command applies its own post-use Feature
+result, since the server has consumed the Feature. The admission check
+decides only whether the answer is captured as purchase synced and answers
+the entry; a superseded one only refreshes the profile.
 
 ### Retry rule
 
@@ -151,5 +164,8 @@ admits its claim and sends it. The result:
   customer, no longer unlocks before the server answers.
 - `restorePurchases()` reports `.restored` only after the server grants at
   least one restored purchase.
+- An answered purchase stays on the device as a small record, without its
+  signed transaction, for the 90-day retention window, so a later delivery of
+  it is not sent, finished or reported again.
 - The Journey store-ownership check counts a StoreKit entitlement only when
   its account token is the current customer's.

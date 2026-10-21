@@ -328,7 +328,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
 
         harness.api.answer(.accept)
         await harness.observer.retryStoredEvidence()
-        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["queued-transaction"])
+        XCTAssertNotNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["queued-transaction"]?.answeredAt)
     }
 
     func testOutboxRetryBackoffGrowsAndIsCapped() {
@@ -523,7 +523,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         // One entry per purchase: the Restore claim was the newer intent and
         // took the earlier customer's entry, so once answered nothing is left
         // to send for them. The server decides who owns the purchase.
-        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"])
+        XCTAssertNotNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"]?.answeredAt)
         await harness.observer.retryStoredEvidence()
         XCTAssertEqual(harness.api.requests.count, 1)
     }
@@ -562,7 +562,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             reason: .restore,
             customerKind: .identified
         ))
-        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"])
+        XCTAssertNotNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"]?.answeredAt)
     }
 
     func testRestoreClaimOnAnAcceptedPurchaseStaysQueuedWithoutAnAnswer() async throws {
@@ -575,7 +575,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         )
         let synced = await streamed.syncTask?.value
         XCTAssertEqual(synced, true)
-        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"])
+        XCTAssertNotNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]?.answeredAt)
 
         harness.entitlements.set([item])
         harness.adapter.restoreResult = .restored
@@ -587,7 +587,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         await harness.observer.retryStoredEvidence()
         XCTAssertEqual(harness.api.requests.last?.reason, .restore)
         XCTAssertEqual(harness.api.requests.last?.distinctId, "restorer")
-        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"])
+        XCTAssertNotNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]?.answeredAt)
     }
 
     /// The A to B to A case: another customer's Restore takes the entry, then
@@ -702,7 +702,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertEqual(harness.api.requests.count, sent + 1, "the retry sends the claim")
         XCTAssertEqual(harness.api.requests.last?.reason, .restore)
         XCTAssertEqual(harness.api.requests.last?.distinctId, "restorer")
-        XCTAssertNil(entry())
+        XCTAssertNotNil(entry()?.answeredAt, "only its own answer answers the entry")
     }
 
     /// Another customer's Restore replaces the entry while the first
@@ -768,7 +768,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         )
         let synced = await streamed.syncTask?.value
         XCTAssertEqual(synced, true)
-        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"])
+        XCTAssertNotNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"]?.answeredAt)
 
         harness.identity.setDistinctId("restorer")
         harness.entitlements.set([item])

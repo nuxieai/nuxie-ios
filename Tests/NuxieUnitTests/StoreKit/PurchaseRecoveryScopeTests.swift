@@ -588,9 +588,9 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let refreshed = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(refreshed?.allowed, true)
         // Another ordinary restore sends again: an acceptance earlier in the
-        // session never stands in for a send. The first answer cleared the
-        // entry, so this Restore admits a new one, and its accepted send is
-        // reported once as purchase synced.
+        // session never stands in for a send. The answered entry is only the
+        // purchase's record, so the commit sends nothing and the Restore
+        // claim is admitted and sent itself, as a refresh.
         await features.clearCache()
         _ = try await service.restore()
         XCTAssertEqual(api.calls, 2)
@@ -598,7 +598,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             .init(jwt: "current-verified-jws", distinctId: "restore-owner"),
             .init(jwt: "current-verified-jws", distinctId: "restore-owner")
         ])
-        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 1)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 0)
         XCTAssertEqual(sink.routedCaptureCount, 0)
         let refreshedAgain = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(refreshedAgain?.allowed, true)
@@ -2300,7 +2300,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertTrue(TransactionEvidenceStore(
             customStoragePath: root,
             scope: scope
-        ).load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        ).load().valueTreatingAbsentAsEmpty([:])!.values.allSatisfy(\.isSettled))
         XCTAssertTrue(finalEvents.events.filter {
             $0.name == SystemEventNames.purchaseCompleted
         }.isEmpty)
@@ -2372,7 +2372,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let acknowledgedAPI = RecoverySyncAPI(succeeds: true)
         await makeObserver(api: acknowledgedAPI).retryStoredEvidence()
         XCTAssertEqual(acknowledgedAPI.recordedCustomers, ["customer-a"])
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.values.allSatisfy(\.isSettled))
     }
 
     func testCompletionIsClaimedOnlyAfterDurableEventCapture() async {
@@ -2523,7 +2523,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             transactionId: evidence.transactionId
         )
 
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.values.allSatisfy(\.isSettled))
         XCTAssertEqual(eventStore.stableDroppedIds, Set([eventId]))
         XCTAssertTrue(eventStore.storedEvents.isEmpty)
         XCTAssertTrue(eventStore.pendingIds.isEmpty)
@@ -2714,7 +2714,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let derivationCount = await projectionDerivations.count()
         XCTAssertEqual(recordedCustomers, ["customer-a"])
         XCTAssertEqual(derivationCount, 1)
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.values.allSatisfy(\.isSettled))
     }
 
     func testConcurrentTransactionSyncsShareOneBackendSubmissionAndEvent() async {
@@ -2959,7 +2959,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             activeStoreOriginalTransactionIDs: { [] }
         )
         await nextSetup.retryStoredEvidence()
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.values.allSatisfy(\.isSettled))
     }
 
     func testStopListeningJoinsDirectSyncThroughAnInFlightFeatureUpdate() async {
@@ -3084,7 +3084,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
         mocks.identityService.setDistinctId("customer-a")
         await makeObserver().retryStoredEvidence()
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.values.allSatisfy(\.isSettled))
         XCTAssertEqual(api.recordedCustomers, ["customer-a"])
         XCTAssertEqual(events.events.filter {
             $0.name == SystemEventNames.purchaseCompleted

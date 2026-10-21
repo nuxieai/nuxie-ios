@@ -9,9 +9,9 @@ import XCTest
 final class PurchaseOutboxEntryTests: XCTestCase {
     /// The previous SDK stored the server's acknowledgement as
     /// `backendSyncedAt` and dropped the signed receipt once answered. Such an
-    /// entry reads as answered, so recovery finishes its bookkeeping and
-    /// retires it without sending anything.
-    func testEntryTheServerAnsweredBeforeTheOutboxReadsAsAnsweredAndRetires() async throws {
+    /// entry reads as answered: it stays as the purchase's record and is
+    /// never sent again.
+    func testEntryTheServerAnsweredBeforeTheOutboxReadsAsAnsweredAndIsNeverSentAgain() async throws {
         let mocks = MockFactory.shared
         // Whole seconds: the store writes ISO 8601 dates.
         let answeredAt = Date(
@@ -48,7 +48,7 @@ final class PurchaseOutboxEntryTests: XCTestCase {
 
         await observer.retryStoredEvidence()
 
-        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])?[legacy.transactionId])
+        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?[legacy.transactionId]?.answeredAt)
         XCTAssertTrue(api.recordedCustomers.isEmpty, "an answered entry is never sent again")
     }
 
