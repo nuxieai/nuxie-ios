@@ -1806,9 +1806,10 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         )
     }
 
-    /// An unreadable outbox turns the outbox off for the session, and while
-    /// it is off no purchase backs a Feature use: the use takes the ordinary
-    /// Feature command.
+    /// An outbox that cannot be read right now (its permissions deny
+    /// reading, as data protection does before the first unlock) turns the
+    /// outbox off for the session, and while it is off no purchase backs a
+    /// Feature use: the use takes the ordinary Feature command.
     func testUnreadableEvidenceSendsTheUseThroughTheOrdinaryCommand() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "pending-use-corruption-\(UUID().uuidString)",
@@ -1822,8 +1823,11 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             at: directory,
             withIntermediateDirectories: true
         )
-        try Data("{ unreadable".utf8).write(
-            to: directory.appendingPathComponent("transaction-evidence.json")
+        let file = directory.appendingPathComponent("transaction-evidence.json")
+        try Data("{}".utf8).write(to: file)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: file.path
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
@@ -1916,8 +1920,9 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
     }
 
-    /// An unreadable outbox is off for the session: the receipt is still
-    /// sent once, and its answer publishes no Features and reports nothing.
+    /// An outbox that cannot be read right now is off for the session: the
+    /// receipt is still sent once, and its answer publishes no Features and
+    /// reports nothing.
     func testOrdinaryReceiptSyncWithAnUnreadableOutboxIsSentOnceAndChangesNothingLocal() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "ordinary-sync-corruption-\(UUID().uuidString)",
@@ -1931,8 +1936,11 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             at: directory,
             withIntermediateDirectories: true
         )
-        try Data("{ unreadable".utf8).write(
-            to: directory.appendingPathComponent("transaction-evidence.json")
+        let file = directory.appendingPathComponent("transaction-evidence.json")
+        try Data("{}".utf8).write(to: file)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: file.path
         )
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")

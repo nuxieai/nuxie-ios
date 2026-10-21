@@ -150,20 +150,27 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
 }
 
 /// Scope-isolated flat-file store under Application Support. A small JSON
-/// dictionary is written atomically and uses iOS data protection.
+/// dictionary is written atomically and uses iOS data protection. A corrupt
+/// file is set aside and an empty store takes its place (see
+/// `PurchaseStoreFile`).
 final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
 
-    private let fileURL: URL
-    private let readFailureLogger = StoreReadFailureLogger()
+    private let file: PurchaseStoreFile
+    private var fileURL: URL { file.url }
 
     init(
         customStoragePath: URL? = nil,
-        scope: PurchaseStorageScope = .testFixture
+        scope: PurchaseStorageScope = .testFixture,
+        logger: NuxieLogger = .shared
     ) {
         let baseStoragePath = scope.storageDirectory(
             customStoragePath: customStoragePath
         )
-        self.fileURL = baseStoragePath.appendingPathComponent("pending-purchases.json")
+        file = PurchaseStoreFile(
+            url: baseStoragePath.appendingPathComponent("pending-purchases.json"),
+            storeName: "PendingPurchaseStore",
+            logger: logger
+        )
 
         do {
             try FileManager.default.createDirectory(
@@ -176,23 +183,10 @@ final class PendingPurchaseStore: PendingPurchaseStoreProtocol {
     }
 
     func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return .absent
-        }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        do {
-            let data = try Data(contentsOf: fileURL)
-            return .value(try decoder.decode(
-                [String: PendingPurchaseRecord].self,
-                from: data
-            ))
-        } catch {
-            if readFailureLogger.shouldLog() {
-                LogError("PendingPurchaseStore: markers are unreadable: \(error)")
-            }
-            return .unreadable
+        file.read { data in
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode([String: PendingPurchaseRecord].self, from: data)
         }
     }
 

@@ -58,20 +58,15 @@ final class PurchaseOutboxEntryTests: XCTestCase {
 
     /// Only an entry with no admission id is from the previous SDK. A
     /// current-format entry that cannot be read (here a malformed admission
-    /// id) makes the whole outbox unreadable, as a malformed file does:
-    /// nothing is dropped, nothing is written over the file, and the log
-    /// names the entry and the field without their values. The outbox is
-    /// then off for the session, so a purchase is still sent once.
-    func testUnreadableCurrentFormatEntryMakesTheOutboxUnreadable() async throws {
+    /// id) makes the outbox file corrupt, as a malformed file is: it is
+    /// renamed aside and never read again, an empty outbox takes its place,
+    /// and the outbox is on. StoreKit's unfinished transaction is then saved,
+    /// sent and finished as usual.
+    func testCorruptOutboxIsSetAsideAndAnUnfinishedPurchaseIsSavedSentAndFinished() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("outbox-format-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let logs = LogLines()
-        let store = TransactionEvidenceStore(
-            customStoragePath: root,
-            scope: .testFixture,
-            logger: NuxieLogger { _, message in logs.append(message) }
-        )
+        let store = TransactionEvidenceStore(customStoragePath: root, scope: .testFixture)
         let valid = StoredTransactionEvidence(
             transactionJws: "valid-jws",
             transactionId: "valid-transaction",
@@ -96,45 +91,70 @@ final class PurchaseOutboxEntryTests: XCTestCase {
         let contents = try JSONSerialization.data(withJSONObject: object)
         try contents.write(to: file)
 
-        guard case .unreadable = store.load() else {
-            return XCTFail("a current-format entry that cannot be read fails closed")
-        }
-        XCTAssertFalse(store.save([valid.transactionId: valid]))
-        XCTAssertEqual(try Data(contentsOf: file), contents, "nothing is written over it")
-
-        let failure = logs.lines.joined(separator: "\n")
-        XCTAssertTrue(failure.contains("broken-transaction"), failure)
-        XCTAssertTrue(failure.contains("admissionId"), failure)
-        XCTAssertFalse(failure.contains("not-a-uuid"), "the log never carries the stored value")
-        XCTAssertFalse(failure.contains("valid-jws"), "the log never carries a signed transaction")
-
-        // The observer fails closed on it too: no send, and no write.
-        let mocks = MockFactory.shared
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let api = RecoverySyncAPI(succeeds: true)
-        let observer = TransactionObserver(
-            api: api,
-            features: FeatureService(
-                api: mocks.nuxieApi,
-                identity: identity,
-                profile: mocks.profileService,
-                dateProvider: mocks.dateProvider,
-                featureInfo: FeatureInfo(),
-                cacheTTL: 300
+        let finished = OutboxFinishRecorder()
+        let harness = makeObserver(store: store, unfinished: [StoreTransactionRecoveryItem(
+            update: VerifiedStoreTransactionUpdate(
+                transactionId: "unfinished-transaction",
+                originalTransactionId: "unfinished-original",
+                productId: "product",
+                appAccountToken: PurchaseStorageScope.testFixture
+                    .appAccountToken(distinctId: "customer"),
+                isRevoked: false,
+                isUpgraded: false,
+                finish: { finished.record() }
             ),
-            identity: identity,
-            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "outbox-unreadable")),
-            eventSink: RecoveryEventSink(),
-            transactionServiceProvider: { fatalError("unused") },
-            evidenceStore: store,
-            dateProvider: mocks.dateProvider,
-            unfinishedRecoveryTransactions: { [] },
-            currentEntitlementRecoveryTransactions: { [] }
+            jwsRepresentation: "unfinished-jws"
+        )])
+        await harness.observer.retryStoredEvidence()
+
+        let directory = file.deletingLastPathComponent()
+        let quarantined = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("transaction-evidence.unreadable-") }
+        XCTAssertEqual(quarantined.count, 1, "the corrupt outbox is set aside")
+        let aside = try XCTUnwrap(quarantined.first)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(aside)), contents)
+        let saved = try XCTUnwrap(store.load().readableValue)
+        XCTAssertEqual(Set(saved.keys), ["unfinished-transaction"], "an empty outbox took its place")
+        XCTAssertNotNil(saved["unfinished-transaction"]?.answeredAt, "the purchase is saved and sent")
+        XCTAssertEqual(saved["unfinished-transaction"]?.finishRequired, false)
+        XCTAssertEqual(finished.count, 1, "and finished")
+        XCTAssertEqual(harness.api.recordedCustomers, ["customer"])
+    }
+
+    /// An outbox that cannot be read right now (its permissions deny reading,
+    /// as data protection does before the first unlock) is not corrupt. It
+    /// is not renamed, and the outbox is off for the session: a purchase is
+    /// sent once and nothing is written, even once the file can be read
+    /// again. The next launch reads it.
+    func testOutboxThatCannotBeReadNowStaysOffForTheSession() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("outbox-locked-\(UUID().uuidString)")
+        let file = PurchaseStorageScope.testFixture
+            .storageDirectory(customStoragePath: root)
+            .appendingPathComponent("transaction-evidence.json")
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let store = TransactionEvidenceStore(customStoragePath: root, scope: .testFixture)
+        let kept = StoredTransactionEvidence(
+            transactionJws: "kept-jws",
+            transactionId: "kept-transaction",
+            originalTransactionId: "kept-original",
+            productId: "product",
+            distinctId: "customer",
+            recordedAt: Date(timeIntervalSince1970: 1_000_000_000),
+            isRevoked: false,
+            answeredAt: Date(timeIntervalSince1970: 1_000_000_100)
         )
-        addTeardownBlock { await observer.stopListening() }
-        await observer.retryStoredEvidence()
-        let committed = await observer.commit(.verified(
+        XCTAssertTrue(store.save([kept.transactionId: kept]))
+        let contents = try Data(contentsOf: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+
+        let harness = makeObserver(store: store, unfinished: [])
+        await harness.observer.retryStoredEvidence()
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        let delivery = await harness.observer.commit(.verified(
             VerifiedPurchaseEvidence(
                 transactionJws: "new-jws",
                 transactionId: "new-transaction",
@@ -147,20 +167,78 @@ final class PurchaseOutboxEntryTests: XCTestCase {
             ),
             source: .transactionStream
         ))
-        // The outbox is off for the session: the purchase is still sent
-        // once, and nothing is written over the file.
-        XCTAssertTrue(committed.committed)
-        _ = await committed.syncTask?.value
-        XCTAssertEqual(api.recordedCustomers, ["customer"])
-        XCTAssertEqual(try Data(contentsOf: file), contents, "the file is left byte for byte")
+        XCTAssertTrue(delivery.committed)
+        _ = await delivery.syncTask?.value
+
+        XCTAssertEqual(harness.api.recordedCustomers, ["customer"], "the purchase is sent once")
+        let names = try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
+        XCTAssertFalse(names.contains { $0.contains(".unreadable-") }, "nothing is renamed")
+        XCTAssertEqual(try Data(contentsOf: file), contents, "nothing is written for the rest of the session")
+
+        // The next launch reads the store again.
+        XCTAssertEqual(
+            TransactionEvidenceStore(customStoragePath: root, scope: .testFixture).load().readableValue,
+            [kept.transactionId: kept]
+        )
+    }
+
+    private struct ObserverHarness {
+        let observer: TransactionObserver
+        let api: RecoverySyncAPI
+    }
+
+    private func makeObserver(
+        store: TransactionEvidenceStore,
+        unfinished: [StoreTransactionRecoveryItem]
+    ) -> ObserverHarness {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let api = RecoverySyncAPI(succeeds: true)
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "outbox-store"))
+        let sink = RecoveryEventSink()
+        let features = FeatureService(
+            api: mocks.nuxieApi,
+            identity: identity,
+            profile: mocks.profileService,
+            dateProvider: mocks.dateProvider,
+            featureInfo: FeatureInfo(),
+            cacheTTL: 300
+        )
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            settings: settings,
+            eventSink: sink,
+            transactionServiceProvider: { box.get() },
+            evidenceStore: store,
+            dateProvider: mocks.dateProvider,
+            unfinishedRecoveryTransactions: { unfinished },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        box.set(TransactionService(
+            productService: mocks.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            accountOwnershipStore: InMemoryPurchaseAccountOwnershipStore(),
+            dateProvider: mocks.dateProvider,
+            settings: settings,
+            eventSink: sink,
+            purchaseStorageScope: .testFixture,
+            identityService: identity,
+            featureService: features
+        ))
+        addTeardownBlock { await observer.stopListening() }
+        return ObserverHarness(observer: observer, api: api)
     }
 }
 
-/// Collects log lines written by a test's own logger.
-private final class LogLines: @unchecked Sendable {
+private final class OutboxFinishRecorder: @unchecked Sendable {
     private let lock = NSLock()
-    private var storage: [String] = []
+    private var calls = 0
 
-    func append(_ line: String) { lock.withLock { storage.append(line) } }
-    var lines: [String] { lock.withLock { storage } }
+    func record() { lock.withLock { calls += 1 } }
+    var count: Int { lock.withLock { calls } }
 }

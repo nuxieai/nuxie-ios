@@ -245,20 +245,23 @@ protocol TransactionEvidenceStoreProtocol: Sendable {
 
 /// Protected, minimal transaction evidence retained until the backend accepts
 /// it. This is deliberately separate from preferences, analytics, and Journey
-/// state. The file uses iOS data protection when available.
+/// state. The file uses iOS data protection when available. A corrupt file is
+/// set aside and an empty outbox takes its place (see `PurchaseStoreFile`).
 final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
-    private let fileURL: URL
-    private let readFailureLogger = StoreReadFailureLogger()
-    private let logger: NuxieLogger
+    private let file: PurchaseStoreFile
+    private var fileURL: URL { file.url }
 
     init(
         customStoragePath: URL? = nil,
         scope: PurchaseStorageScope = .testFixture,
         logger: NuxieLogger = .shared
     ) {
-        self.logger = logger
         let base = scope.storageDirectory(customStoragePath: customStoragePath)
-        fileURL = base.appendingPathComponent("transaction-evidence.json")
+        file = PurchaseStoreFile(
+            url: base.appendingPathComponent("transaction-evidence.json"),
+            storeName: "TransactionEvidenceStore",
+            logger: logger
+        )
         try? FileManager.default.createDirectory(
             at: base,
             withIntermediateDirectories: true
@@ -266,13 +269,11 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
     }
 
     func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return .absent
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        do {
-            let data = try Data(contentsOf: fileURL)
+        file.read { data in
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            // One current-format entry that cannot be read makes the whole
+            // file corrupt, as a malformed file is: it is set aside whole.
             let decoded = try decoder.decode([String: DecodedEntry].self, from: data)
             let entries = decoded.compactMapValues(\.entry)
             let dropped = decoded.count - entries.count
@@ -281,22 +282,7 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
                     "TransactionEvidenceStore: Dropped \(dropped, privacy: .publicValue) entries in a previous format"
                 )
             }
-            return .value(entries)
-        } catch let unreadable as UnreadableEvidenceEntry {
-            // Fail closed: nothing is dropped or written while one current
-            // entry cannot be read. The log names the entry and the field,
-            // never their values.
-            if readFailureLogger.shouldLog() {
-                logger.error(
-                    "TransactionEvidenceStore: evidence entry \(unreadable.transactionId, privacy: .publicValue) is unreadable at \(unreadable.field, privacy: .publicValue)"
-                )
-            }
-            return .unreadable
-        } catch {
-            if readFailureLogger.shouldLog() {
-                logger.error("TransactionEvidenceStore: evidence is unreadable: \(error)")
-            }
-            return .unreadable
+            return entries
         }
     }
 
@@ -338,7 +324,7 @@ final class TransactionEvidenceStore: TransactionEvidenceStoreProtocol {
 /// which is recognised by having no admission id. That is pre-GA local
 /// state, dropped rather than read: StoreKit redelivers unfinished
 /// transactions, which then go through the outbox normally. A
-/// current-format entry that cannot be read fails the whole load.
+/// current-format entry that cannot be read makes the whole file corrupt.
 private struct DecodedEntry: Decodable {
     let entry: StoredTransactionEvidence?
 
@@ -355,36 +341,12 @@ private struct DecodedEntry: Decodable {
         do {
             entry = try StoredTransactionEvidence(from: decoder)
         } catch let error as DecodingError {
-            throw UnreadableEvidenceEntry(
-                transactionId: decoder.codingPath.last?.stringValue ?? "unknown",
-                field: error.fieldPath
+            throw StoreEntryDecodingFailure(
+                entryId: decoder.codingPath.last?.stringValue ?? "unknown",
+                field: error.failingKeyPath.dropFirst()
+                    .map(\.stringValue).joined(separator: ".")
             )
         }
-    }
-}
-
-/// A current-format entry that could not be read: its transaction id and the
-/// field that failed, never their values.
-private struct UnreadableEvidenceEntry: Error {
-    let transactionId: String
-    let field: String
-}
-
-private extension DecodingError {
-    /// The path of the field that failed, by key names only.
-    var fieldPath: String {
-        let path: [CodingKey]
-        switch self {
-        case .typeMismatch(_, let context),
-             .valueNotFound(_, let context),
-             .dataCorrupted(let context):
-            path = context.codingPath
-        case .keyNotFound(let key, let context):
-            path = context.codingPath + [key]
-        @unknown default:
-            path = []
-        }
-        return path.dropFirst().map(\.stringValue).joined(separator: ".")
     }
 }
 

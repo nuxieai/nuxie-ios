@@ -52,9 +52,9 @@ Entries in a previous SDK's format, recognised by having no admission id, are
 dropped when the outbox is read. They are pre-GA local state, with no
 compatibility handling: StoreKit redelivers unfinished transactions, which
 then go through the outbox normally. A current-format entry that cannot be
-read makes the whole outbox unreadable, as a malformed file does: nothing is
-dropped or written over it, and the log names the entry and the field that
-failed, never their values.
+read makes the whole outbox file corrupt, as a malformed file is: the file is
+set aside whole (see When a store is corrupt below), and nothing in it is
+read.
 
 ### When an entry is answered
 
@@ -168,8 +168,8 @@ reset, and when a newly loaded profile changes the product catalog.
 ### When the outbox cannot save
 
 When the outbox cannot save (an entry, checkout binding or catalog-mapping
-write fails, or a store is unreadable), it is off for the rest of the
-session. While it is off nothing unlocks early, so access comes from the
+write fails, or a store cannot be read right now), it is off for the rest of
+the session. While it is off nothing unlocks early, so access comes from the
 profile alone; the timer is cancelled and stays off; and nothing is written
 or held in memory. Each purchase the store delivers (the checkout's result,
 a store update, a scan, Restore) is still sent once, and its answer only
@@ -184,6 +184,27 @@ binding is retired once that completion is captured, so the next launch's
 recovery does not report it again; if the binding stays, that report reuses
 the completion's stable event id. A purchase-backed Feature use takes the
 ordinary Feature command while the outbox is off.
+
+### When a store is corrupt
+
+Each purchase store is one file: the outbox, the checkout bindings, and the
+account ownership with the catalog mapping. A file whose bytes are read but do
+not decode (it is not valid JSON, or a current-format entry is rejected) is
+corrupt. It is renamed aside next to the store, for example
+`transaction-evidence.unreadable-<epoch millis>.json`, and never read again;
+an empty store takes its place, and the outbox is on. Only the newest
+quarantined file of each store is kept: making one deletes the older ones.
+Each quarantine is logged once, with the reason (the entry and the field that
+failed, never their values) and the path it was renamed to. StoreKit then
+rebuilds the entries: the launch scans find its unfinished transactions and
+current entitlements, which are saved, sent and finished as usual, so an old
+purchase may be sent once more.
+
+A file that cannot be read right now is not corrupt: a file-system read
+error, including data protection before the first unlock, reads no bytes. It
+is left as it is, the outbox is off for the session, and the next launch
+reads it again. A write that fails during the session also keeps the outbox
+off for the session, as above.
 
 ## Request
 
