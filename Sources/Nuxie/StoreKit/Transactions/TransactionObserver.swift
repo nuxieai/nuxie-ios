@@ -38,6 +38,10 @@ struct VerifiedPurchaseEvidence: Sendable {
     /// Whether the attributed customer had signed in when the producer
     /// started, when it knows; otherwise the committer derives it.
     let customerKind: PurchaseCustomerKind?
+    /// The admission of the outbox entry this commit sends again (the
+    /// outbox pass). Once that entry was answered or admitted again, the
+    /// commit leaves it to its own send rather than writing it back.
+    let outboxAdmissionId: UUID?
     let finish: (@Sendable () async -> Void)?
 
     init(
@@ -62,6 +66,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         isUpgraded: Bool = false,
         syncReason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind? = nil,
+        outboxAdmissionId: UUID? = nil,
         finish: (@Sendable () async -> Void)? = nil
     ) {
         self.transactionJws = transactionJws
@@ -85,6 +90,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         self.isUpgraded = isUpgraded
         self.syncReason = syncReason
         self.customerKind = customerKind
+        self.outboxAdmissionId = outboxAdmissionId
         self.finish = finish
     }
 }
@@ -214,15 +220,25 @@ struct PurchaseCommitResult: Sendable {
     let committed: Bool
     let syncTask: Task<Bool, Never>?
     let isTerminal: Bool
+    /// The result is another producer's commit of the purchase, made earlier
+    /// or still running, not this call's own. Its send is not this
+    /// producer's, so a Restore or purchase claim never counts its answer.
+    let isReplay: Bool
 
     init(
         committed: Bool,
         syncTask: Task<Bool, Never>?,
-        isTerminal: Bool? = nil
+        isTerminal: Bool? = nil,
+        isReplay: Bool = false
     ) {
         self.committed = committed
         self.syncTask = syncTask
         self.isTerminal = isTerminal ?? committed
+        self.isReplay = isReplay
+    }
+
+    func asReplay() -> Self {
+        Self(committed: committed, syncTask: syncTask, isTerminal: isTerminal, isReplay: true)
     }
 
     static let handled = Self(
@@ -468,6 +484,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private struct CompletedPurchaseCommit: Sendable {
         let id: UUID
         let result: PurchaseCommitResult
+        /// The customer the commit was made for. Only a producer for the same
+        /// customer reuses it, so a session acceptance never crosses
+        /// customers.
+        let customer: String?
     }
 
     private struct PurchaseCommitRetryState: Sendable {
@@ -754,8 +774,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// the outbox timer sends only the failed entries whose time has passed.
     private func processStoredEvidence(sendingEveryEntry: Bool) async {
         let now = dateProvider.now()
-        for evidence in storedEvidence().values {
+        for read in storedEvidence().values {
             guard !Task.isCancelled else { return }
+            // An entry answered while this pass ran is not sent again.
+            guard let evidence = storedEvidence()[read.transactionId] else { continue }
             if !sendingEveryEntry, evidence.isUnsent,
                let dueAt = evidence.retryDueAt, dueAt > now {
                 continue
@@ -782,7 +804,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     // A retry is the same send: it keeps the reason and the
                     // customer kind recorded when it was admitted.
                     syncReason: evidence.reason,
-                    customerKind: evidence.customerKind
+                    customerKind: evidence.customerKind,
+                    outboxAdmissionId: evidence.admissionId
                 ),
                 source: .startupRecovery
             ))
@@ -1013,8 +1036,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return .handled
         }
 
+        let customer = commitCustomer(for: outcome)
         while true {
-            if let completed = completedPurchaseCommits[key] {
+            if let completed = completedPurchaseCommits[key],
+               completed.customer == customer {
                 // Keep one exact sync task for every accepted commit attempt. A
                 // failed receipt submission invalidates only the in-memory
                 // marker; durable evidence and completion state make the next
@@ -1030,7 +1055,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         continue
                     }
                     if synced {
-                        return completed.result
+                        return completed.result.asReplay()
                     }
                     completedPurchaseCommits.removeValue(forKey: key)
                     // A duplicate checkout-recovery producer reports the
@@ -1039,15 +1064,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     // stored-evidence pump's next pass.
                     if case .verified(let evidence, _) = outcome,
                        evidence.requiresCheckoutBinding {
-                        return completed.result
+                        return completed.result.asReplay()
                     }
                     continue
                 }
-                return completed.result
+                return completed.result.asReplay()
             }
             guard !isStopped else { return .rejected }
             if let operation = purchaseCommitOperations[key] {
-                return await operation.task.value
+                return await operation.task.value.asReplay()
             }
 
             let operationId = UUID()
@@ -1066,7 +1091,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             if result.isTerminal {
                 completedPurchaseCommits[key] = CompletedPurchaseCommit(
                     id: UUID(),
-                    result: result
+                    result: result,
+                    customer: customer
                 )
                 retryablePurchaseCommits.removeValue(forKey: key)
                 purchaseCommitJourneyRouting.remove(key)
@@ -1218,6 +1244,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
     }
 
+    /// The customer a producer commits for, as far as it says: the one it
+    /// names, else the current customer.
+    private func commitCustomer(for outcome: PurchaseOutcome) -> String? {
+        switch outcome {
+        case .verified(let evidence, _):
+            return evidence.attributedDistinctId ?? identityService.getDistinctId()
+        case .external(let declaration, _):
+            return declaration.distinctId
+        case .cancelled, .pending, .failed:
+            return nil
+        }
+    }
+
     private func purchaseCommitKey(
         for outcome: PurchaseOutcome
     ) -> PurchaseCommitKey? {
@@ -1311,6 +1350,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             transactionId: verified.transactionId,
             revoked: verified.isRevoked
         )
+        if let admissionId = verified.outboxAdmissionId,
+           storedEvidence()[verified.transactionId]?.admissionId != admissionId {
+            // The entry the outbox pass read was answered or admitted again
+            // since; it is not this pass's to send.
+            return PurchaseCommitResult(committed: false, syncTask: nil, isTerminal: false)
+        }
         var existing = storedEvidence()[verified.transactionId]
         if verified.isRevoked, let current = existing, !current.isRevoked {
             // A refund stops the entry unlocking at once, before checks that
@@ -1990,14 +2035,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                   lifecycleGeneration == requestLifecycleGeneration else {
                 return .failed
             }
-            // An acceptance for this customer answers any send of the
-            // purchase. A refusal or failure answers only a send of the same
-            // admission, and never a refresh or a send that claims the
-            // purchase when the earlier send did not: those ask themselves.
-            let answersThisSend = outcome == .accepted
-                || (operation.admissionId == admissionId
-                    && !refreshProviderState
-                    && (operation.reason.claimsOwnership || !reason.claimsOwnership))
+            // A Restore claim counts only its own send: one of the same
+            // admission. Otherwise an acceptance for this customer answers any
+            // send of the purchase; a refusal or failure answers only a send
+            // of the same admission, and never a refresh or a send that
+            // claims the purchase when the earlier send did not.
+            let answersThisSend = reason == .restore
+                ? operation.admissionId == admissionId
+                : outcome == .accepted
+                    || (operation.admissionId == admissionId
+                        && !refreshProviderState
+                        && (operation.reason.claimsOwnership || !reason.claimsOwnership))
             guard answersThisSend else { continue }
             guard outcome == .accepted else { return outcome }
             return await reconcileEvidenceAfterDeduplicatedSync(
@@ -2400,9 +2448,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         group.addTask { PurchaseSyncOutcome.failed }
                         continue
                     }
-                    if !previouslySynced, let syncTask = result.syncTask {
-                        // The commit is sending the receipt for this customer
-                        // with this reason; its answer is the claim's.
+                    if !previouslySynced, !result.isReplay,
+                       let syncTask = result.syncTask {
+                        // This commit admitted the claim and is sending it for
+                        // this customer with this reason; its answer is the
+                        // claim's. Another producer's commit is never counted.
                         group.addTask {
                             guard await syncTask.value else {
                                 return await self.claimAfterUnacceptedSync(
