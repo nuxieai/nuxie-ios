@@ -648,6 +648,59 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         try assertRestoreClaimQueued("own-transaction", jws: "own-jws", in: harness)
     }
 
+    /// A Restore never takes an acceptance from earlier in the session as
+    /// its answer, least of all another customer's. After the first
+    /// customer's purchase was accepted and its entry cleared, the restoring
+    /// customer's Restore sends its own claim, and only that answer decides.
+    func testRestoreSendsItsOwnClaimAfterAnotherCustomersAcceptance() async throws {
+        let harness = await makeHarness(customer: "first")
+        let item = entitlement("shared", productId: storeProductId, token: token("first"))
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        let synced = await streamed.syncTask?.value
+        XCTAssertEqual(synced, true)
+        XCTAssertNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["shared-transaction"])
+
+        harness.identity.setDistinctId("restorer")
+        harness.entitlements.set([item])
+        harness.adapter.restoreResult = .restored
+        harness.api.answer(.refuse(409), for: .restore)
+        do {
+            _ = try await harness.service.restore()
+            XCTFail("The restorer's claim was refused; the first customer's acceptance must not count for it")
+        } catch StoreKitError.restoreFailed(let underlying) {
+            XCTAssertEqual(underlying as? RestoreClaimError, .ownedByAnotherAccount)
+        }
+        XCTAssertEqual(harness.api.requests.map(\.distinctId), ["first", "restorer"])
+        XCTAssertEqual(harness.api.requests.last?.reason, .restore)
+    }
+
+    /// Reusing a commit the SDK already made for a purchase is keyed by the
+    /// customer too: after the first customer's purchase was accepted, the
+    /// next customer's ordinary scan sends the purchase for that customer.
+    func testScanAfterAnotherCustomersAcceptanceSendsForTheCurrentCustomer() async throws {
+        let harness = await makeHarness(customer: "first")
+        let item = entitlement("shared", productId: storeProductId, token: token("first"))
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        let synced = await streamed.syncTask?.value
+        XCTAssertEqual(synced, true)
+
+        harness.identity.setDistinctId("second")
+        harness.entitlements.set([item])
+        harness.api.answer(.refuse(409))
+        await harness.observer.retryAfterProfileReady()
+
+        XCTAssertEqual(harness.api.requests.map(\.distinctId), ["first", "second"])
+        XCTAssertEqual(harness.api.requests.last?.reason, .sync)
+    }
+
     private func assertRestoreGetsNoAnswer(
         _ harness: Harness,
         file: StaticString = #filePath,

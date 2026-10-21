@@ -60,7 +60,12 @@ triggers the profile refresh. So when a Restore rewrites an entry while the
 entry's earlier send is in flight, that send's answer leaves the Restore claim
 waiting for its own. A send that finds the purchase already accepted for the
 same customer in this session, sent or in flight, takes that acceptance as its
-answer; a refusal or failure answers only a send of the same admission.
+answer (a Restore claim never does: it sends its own); a refusal or failure
+answers only a send of the same admission. Every reuse of a session acceptance, including a
+commit the SDK already made for the purchase, is keyed by the purchase and
+the customer, so it never crosses customers. The outbox pass sends an entry
+only while it still holds the admission the pass read; one answered or
+admitted again meanwhile is left to its own send, never written back.
 
 A purchase-backed Feature command carries the admission of the entry it uses.
 Its accepted answer always returns the command's result and consumption
@@ -114,7 +119,9 @@ server accepted earlier and a purchase another customer on this device has an
 entry for: one entry per purchase, so the claim, the newer intent, takes that
 entry over (a checkout completion that customer never delivered goes with
 it). A Restore claim never unlocks before the server answers; Restore waits
-for the answer. Writes to a purchase's entry are serialized with that
+for the answer. A Restore claim never reuses an earlier acceptance either,
+this customer's or another's: it always admits its own claim and sends it,
+and only its own answer counts. Writes to a purchase's entry are serialized with that
 purchase's Feature command: a Restore (or purchase) claim of a purchase that a
 purchase-backed Feature command holds waits for the command to finish, then
 admits its claim and sends it. The result:
