@@ -58,12 +58,18 @@ it sends. The server's answer clears the entry, marks it answered or counts a
 failed attempt only while the entry still holds that id; otherwise it only
 triggers the profile refresh. So when a Restore rewrites an entry while the
 entry's earlier send is in flight, that send's answer leaves the Restore claim
-waiting for its own. A send that finds the purchase already accepted for the
-same customer in this session, sent or in flight, takes that acceptance as its
-answer (a Restore claim never does: it sends its own); a refusal or failure
-answers only a send of the same admission. Every reuse of a session acceptance, including a
-commit the SDK already made for the purchase, is keyed by the purchase and
-the customer, so it never crosses customers. The outbox pass sends an entry
+waiting for its own.
+
+An entry is cleared or answered only by the answer to a send of its own
+admission. No send, outbox pass or retry skips sending because the purchase
+was accepted earlier in the session; the server answers a repeat send the
+same way. A send that finds one of the same admission already in flight takes
+that send's answer; one of another admission is waited out, then this one is
+sent. The SDK remembers which accepted sends it reported as
+`$purchase_synced`, by transaction, customer and admission, for telemetry
+only. A commit the SDK already made for a purchase (its StoreKit finish and
+completion bookkeeping) is reused only for the same customer, and never by
+the outbox pass. The outbox pass sends an entry
 only while it still holds the admission the pass read; one answered or
 admitted again meanwhile is left to its own send, never written back.
 
