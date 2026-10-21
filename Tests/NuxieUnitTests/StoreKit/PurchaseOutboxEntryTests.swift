@@ -5,80 +5,54 @@ import XCTest
 @testable import NuxieTestSupport
 #endif
 
-/// Outbox entries written by the previous SDK keep what they knew.
+/// The outbox reads only entries in its own format.
 final class PurchaseOutboxEntryTests: XCTestCase {
-    /// The previous SDK stored the server's acknowledgement as
-    /// `backendSyncedAt` and dropped the signed receipt once answered. Such an
-    /// entry reads as answered: it stays as the purchase's record and is
-    /// never sent again.
-    func testEntryTheServerAnsweredBeforeTheOutboxReadsAsAnsweredAndIsNeverSentAgain() async throws {
-        let mocks = MockFactory.shared
-        // Whole seconds: the store writes ISO 8601 dates.
-        let answeredAt = Date(
-            timeIntervalSince1970: (mocks.dateProvider.now().timeIntervalSince1970 - 60).rounded(.down)
-        )
-        let legacy = try Self.legacyEntry(answeredAt: answeredAt, recordedAt: answeredAt)
-
-        XCTAssertEqual(legacy.answeredAt, answeredAt)
-        XCTAssertFalse(legacy.isUnsent)
-
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let store = InMemoryTransactionEvidenceStore()
-        XCTAssertTrue(store.save([legacy.transactionId: legacy]))
-        let api = RecoverySyncAPI(succeeds: true)
-        let observer = TransactionObserver(
-            api: api,
-            features: FeatureService(
-                api: mocks.nuxieApi,
-                identity: identity,
-                profile: mocks.profileService,
-                dateProvider: mocks.dateProvider,
-                featureInfo: FeatureInfo(),
-                cacheTTL: 300
-            ),
-            identity: identity,
-            settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "legacy-entry")),
-            eventSink: RecoveryEventSink(),
-            transactionServiceProvider: { fatalError("unused") },
-            evidenceStore: store,
-            dateProvider: mocks.dateProvider
-        )
-        addTeardownBlock { await observer.stopListening() }
-
-        await observer.retryStoredEvidence()
-
-        XCTAssertNotNil(store.load().valueTreatingAbsentAsEmpty([:])?[legacy.transactionId]?.answeredAt)
-        XCTAssertTrue(api.recordedCustomers.isEmpty, "an answered entry is never sent again")
-    }
-
-    /// An entry as the previous SDK wrote it: the acknowledgement under
-    /// `backendSyncedAt`, no outbox fields, and the receipt already dropped.
-    private static func legacyEntry(answeredAt: Date, recordedAt: Date) throws -> StoredTransactionEvidence {
+    /// An entry in the previous SDK's format (its answer under
+    /// `backendSyncedAt`, with no reason, customer kind, attempt count or
+    /// admission) is dropped when the outbox is read: pre-GA local state,
+    /// with no compatibility handling. The rest of the outbox still loads,
+    /// and the next write leaves the old entry out.
+    func testEntryInThePreviousFormatIsDroppedWhenTheOutboxIsRead() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("outbox-format-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = TransactionEvidenceStore(customStoragePath: root, scope: .testFixture)
         let current = StoredTransactionEvidence(
-            transactionJws: "",
-            transactionId: "legacy-transaction",
-            originalTransactionId: "legacy-original",
-            productId: "legacy-product",
+            transactionJws: "current-jws",
+            transactionId: "current-transaction",
+            originalTransactionId: "current-original",
+            productId: "product",
             distinctId: "customer",
-            recordedAt: recordedAt,
-            isRevoked: false,
-            answeredAt: answeredAt
+            recordedAt: Date(timeIntervalSince1970: 1_000_000_000),
+            isRevoked: false
         )
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        XCTAssertTrue(store.save([current.transactionId: current]))
+
+        // Add an entry as the previous SDK wrote it.
+        let file = PurchaseStorageScope.testFixture
+            .storageDirectory(customStoragePath: root)
+            .appendingPathComponent("transaction-evidence.json")
         var object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: encoder.encode(current)) as? [String: Any]
+            JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
         )
-        object["backendSyncedAt"] = object.removeValue(forKey: "answeredAt")
-        for key in ["reason", "customerKind", "sendAttempts", "appAccountToken"] {
-            object.removeValue(forKey: key)
+        var previous = try XCTUnwrap(object[current.transactionId] as? [String: Any])
+        previous["transactionId"] = "previous-transaction"
+        previous["transactionJws"] = ""
+        previous["backendSyncedAt"] = "2001-09-09T01:46:40Z"
+        for key in ["reason", "customerKind", "sendAttempts", "admissionId", "retryDueAt"] {
+            previous.removeValue(forKey: key)
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(
-            StoredTransactionEvidence.self,
-            from: JSONSerialization.data(withJSONObject: object)
+        object["previous-transaction"] = previous
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let loaded = try XCTUnwrap(store.load().valueTreatingAbsentAsEmpty([:]))
+        XCTAssertEqual(Set(loaded.keys), ["current-transaction"])
+        XCTAssertEqual(loaded["current-transaction"], current)
+
+        XCTAssertTrue(store.save(loaded))
+        let rewritten = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
         )
+        XCTAssertEqual(Set(rewritten.keys), ["current-transaction"])
     }
 }

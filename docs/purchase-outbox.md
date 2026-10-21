@@ -21,6 +21,16 @@ The machine-readable contract is `fixtures/purchases/purchase-outbox.json`;
 3. **One durable outbox entry per purchase**, keyed by the StoreKit
    transaction id (Google Play: the purchase token).
 
+### Early unlock on Android
+
+Android has no client refund signal. Its early unlock is the buyer's own
+unanswered outbox entry, sent until the server answers, so a refund or
+cancellation before the server answers keeps the early unlock until that
+answer: seconds online, or until the device is back online. That is the same
+class of trade-off as the accepted offline case below. iOS keeps StoreKit's
+signed revocation as a fact on the entry, so a refund StoreKit reports stops
+the early unlock at once.
+
 ## The outbox entry
 
 Recorded when the send is admitted, and sent unchanged by every retry:
@@ -30,11 +40,15 @@ Recorded when the send is admitted, and sent unchanged by every retry:
 | signed transaction | The StoreKit JWS (Play: purchase JSON and signature). A refund replaces it with the signed revocation, sent as a sync. |
 | `reason` | `purchase` for the customer's own checkout (including a store delivery of a checkout still running, and the product the store says they already own, for that product only); `restore` for Restore; `sync` for everything else (store updates, launch recovery, deferred approvals, the scans after identify or reset). |
 | requester distinct id | The customer the send is for: the one an explicit producer names (checkout, Restore, already owned), else the customer of the checkout binding the delivery matches, else the current customer. |
-| `customer_kind` | `identified` if the requester signed in with `identify`, `anonymous` if not. When the SDK cannot tell (an entry with no recorded kind, for a customer no longer on the device) it is `identified`: the server merges only owners declared anonymous, so such a customer can be moved but never merged away. |
+| `customer_kind` | `identified` if the requester signed in with `identify`, `anonymous` if not. When the SDK cannot tell (an entry admitted for a customer no longer on the device) it is `identified`: the server merges only owners declared anonymous, so such a customer can be moved but never merged away. |
 
 Alongside it the entry keeps local bookkeeping that is not purchase
 authority: whether the StoreKit transaction still has to be finished, and the
 checkout's completion event while it has not been delivered.
+
+Entries in a previous SDK's format are dropped when the outbox is read. They
+are pre-GA local state, with no compatibility handling: StoreKit redelivers
+unfinished transactions, which then go through the outbox normally.
 
 ### When an entry is answered
 
