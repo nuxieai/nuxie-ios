@@ -51,11 +51,12 @@ protocol NuxieTestStorePurchasing: Sendable {
 actor NuxieTestStore: NuxieTestStorePurchasing {
     private let granting: any TestStoreGranting
     private var purchasedProductsByDistinctId: [String: [String: StoreProduct]] = [:]
-    /// A grant whose outcome is unknown (the server may have committed it)
-    /// keeps its transaction ID, so the customer's next Purchased of the same
-    /// Product replays that grant instead of granting again. A purchase takes
-    /// the ID while it runs, so one that overlaps it is a purchase of its own.
-    private var unsettledTransactionIds: [String: String] = [:]
+    /// Grants whose outcome is unknown (the server may have committed them)
+    /// keep their transaction IDs, oldest first, so the customer's next
+    /// Purchased of the same Product replays one instead of granting again. A
+    /// purchase takes its ID while it runs, so one that overlaps it is a
+    /// purchase of its own.
+    private var unsettledTransactionIds: [String: [String]] = [:]
 
     init(granting: any TestStoreGranting) {
         self.granting = granting
@@ -80,7 +81,7 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
             return purchaseResponse(for: choice, product: product, distinctId: distinctId)
         }
         let attempt = "\(distinctId)\u{0}\(product.productId)"
-        let transactionId = unsettledTransactionIds.removeValue(forKey: attempt)
+        let transactionId = takeUnsettledTransactionId(for: attempt)
             ?? "nuxie-test-\(UUID().uuidString)"
         do {
             guard let productId = product.purchaseContext?.productId else {
@@ -97,7 +98,7 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
                 )
             } catch {
                 if !Self.refusesGrant(error) {
-                    unsettledTransactionIds[attempt] = transactionId
+                    unsettledTransactionIds[attempt, default: []].append(transactionId)
                 }
                 throw error
             }
@@ -117,6 +118,15 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
                 result: .failed(StoreKitError.purchaseFailed(error))
             )
         }
+    }
+
+    private func takeUnsettledTransactionId(for attempt: String) -> String? {
+        guard var unsettled = unsettledTransactionIds[attempt], !unsettled.isEmpty else {
+            return nil
+        }
+        let transactionId = unsettled.removeFirst()
+        unsettledTransactionIds[attempt] = unsettled.isEmpty ? nil : unsettled
+        return transactionId
     }
 
     /// The server answered and granted nothing; any other failure may have

@@ -31,11 +31,17 @@ actor RecordingTestStoreGrants: TestStoreGranting {
     }
 }
 
-/// Holds the first grant open until released; every grant succeeds.
+/// Holds the first grant open until released. Grants listed in `timingOut`
+/// (by call number, from 1) time out; the rest succeed.
 actor HeldTestStoreGrants: TestStoreGranting {
     private(set) var transactionIds: [String] = []
+    private let timingOut: Set<Int>
     private var release: CheckedContinuation<Void, Never>?
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(timingOut: Set<Int> = []) {
+        self.timingOut = timingOut
+    }
 
     func grantTestStorePurchase(
         productId: String,
@@ -43,10 +49,14 @@ actor HeldTestStoreGrants: TestStoreGranting {
         distinctId: String
     ) async throws -> PurchaseResponse {
         transactionIds.append(transactionId)
-        if transactionIds.count == 1 {
+        let call = transactionIds.count
+        if call == 1 {
             startWaiters.forEach { $0.resume() }
             startWaiters = []
             await withCheckedContinuation { release = $0 }
+        }
+        if timingOut.contains(call) {
+            throw NuxieNetworkError.timeout
         }
         return PurchaseResponse(success: true, customerId: "customer-1", features: [], error: nil)
     }
@@ -192,6 +202,27 @@ final class TestStoreGrantTests: XCTestCase {
         let ids = await grants.transactionIds
         XCTAssertEqual(ids.count, 2)
         XCTAssertEqual(Set(ids).count, 2, "An overlapping purchase must not share the transaction in flight")
+    }
+
+    func testOverlappingUnansweredGrantsAreEachReplayedOnce() async {
+        let grants = HeldTestStoreGrants(timingOut: [1, 2])
+        let store = NuxieTestStore(granting: grants)
+        let product = annual()
+
+        let first = Task { await store.complete(.purchased, product: product, distinctId: "rider-1") }
+        await grants.firstGrantStarted()
+        _ = await store.complete(.purchased, product: product, distinctId: "rider-1")
+        await grants.releaseFirst()
+        _ = await first.value
+        for _ in 0..<3 {
+            _ = await store.complete(.purchased, product: product, distinctId: "rider-1")
+        }
+
+        let ids = await grants.transactionIds
+        XCTAssertEqual(ids.count, 5)
+        XCTAssertNotEqual(ids[0], ids[1])
+        XCTAssertEqual(Set(ids[2...3]), Set(ids[0...1]), "Each unanswered grant must be replayed")
+        XCTAssertFalse(ids[0...1].contains(ids[4]), "Once both are settled, a purchase is new")
     }
 
     func testAnUnansweredGrantIsKeptForItsOwnCustomerAndProduct() async {
