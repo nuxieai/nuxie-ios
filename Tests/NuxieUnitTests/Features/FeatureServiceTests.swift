@@ -763,6 +763,42 @@ final class PurchaseAnswerHoldTests: XCTestCase {
         XCTAssertEqual(second?.allowed, true, "the second answer holds until a profile requested after it")
     }
 
+    /// Retiring a 200 hold is a change to the Feature, so a check that began
+    /// before a newer profile retired the hold cannot cache its answer over
+    /// that profile.
+    func testCheckStartedBeforeAHoldIsRetiredCannotPublishOverTheProfile() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let profile = MockProfileService()
+        let check = ControlledFeatureCheckFake()
+        let features = FeatureService(
+            api: check,
+            identity: identity,
+            profile: profile,
+            dateProvider: MockDateProvider(),
+            featureInfo: FeatureInfo(),
+            cacheTTL: 300
+        )
+        await features.updateFromPurchase([Self.grant("premium")], distinctId: "customer")
+
+        let checking = Task { try await features.check(featureId: "premium") }
+        await check.waitUntilStarted()
+        // A profile requested after the answer lands without premium, and
+        // retires the hold.
+        _ = try await profile.refetchProfile(distinctId: "customer")
+        await features.syncFeatureInfo()
+
+        await check.resolve(FeatureCheckResult(
+            customerId: "customer", featureId: "premium", requiredBalance: 1,
+            code: "feature_found", allowed: true, unlimited: false, balance: nil,
+            type: .boolean, preview: nil
+        ))
+        _ = try? await checking.value
+
+        let cached = await features.getCached(featureId: "premium", entityId: nil)
+        XCTAssertNotEqual(cached?.allowed, true, "the profile that retired the hold decides")
+    }
+
     private static func grant(_ key: String) -> PurchaseFeature {
         PurchaseFeature(
             id: "feat_\(key)",
