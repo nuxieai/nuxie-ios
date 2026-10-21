@@ -118,3 +118,6 @@ Examples/*/*.xcworkspace
 /.bazel-artifacts/
 /.bazel-cache.local.bazelrc
 /.bazel-cache.*.tmp
+
+# Buildkite evidence and exported native products
+/output/
