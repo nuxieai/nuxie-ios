@@ -88,24 +88,20 @@ Add the package to your app:
 
 1) Xcode → File → Add Package Dependencies…
 - Package URL: `https://github.com/nuxieai/nuxie-ios`
-- Dependency Rule: a branch or commit SHA
+- Dependency Rule: Up to Next Major Version, starting at `1.0.0`
 - Add the `Nuxie` product to your app target
 
-The SDK pins an immutable runtime release URL and checksum. Selecting an SDK
-branch or commit therefore also selects one qualified runtime artifact.
+Each SDK release pins an immutable runtime release URL and checksum. Swift
+Package Manager downloads that runtime automatically; app builds do not compile Rust.
 
-This private-beta SDK uses one hard-cut Experience contract. Apps adopting a
-new SDK commit must republish their Experiences so they contain authenticated
-Journey routes, named screen actions, and declared buffered outputs in the
-current canonical shape. Unsupported descriptors and actions fail closed; the
-SDK does not keep compatibility aliases or fallback decoders for superseded
-authored behavior.
+Experiences use authenticated Journey routes, named screen actions, and declared
+buffered outputs. Unsupported descriptors and actions are rejected.
 
 Or via `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/nuxieai/nuxie-ios", branch: "main")
+  .package(url: "https://github.com/nuxieai/nuxie-ios", from: "1.0.0")
 ]
 ```
 
