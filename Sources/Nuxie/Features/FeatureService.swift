@@ -207,10 +207,14 @@ internal actor FeatureService: FeatureServiceProtocol {
     // These values are newer than the profile snapshot and should win until they expire.
     private var invalidatedProfileRevisions: [String: UInt64] = [:]
     private var invalidatedCacheRevisions: [String: UInt64] = [:]
-    /// Per Feature, the revision at which a newer profile last retired a
-    /// purchase's 200 hold. A check that began before it is discarded and
-    /// asked again, so its caller gets the current answer.
-    private var heldGrantRetirementRevisions: [String: UInt64] = [:]
+    /// Counts every retirement of a purchase's 200 hold by a newer profile,
+    /// and is never reset. A check notes it as it goes out.
+    private var holdRetirementCount: UInt64 = 0
+    /// Per Feature, the count at which a newer profile last retired a
+    /// purchase's 200 hold on it. A check that would write a Feature retired
+    /// after the check went out is discarded and asked again, so its caller
+    /// gets the current answer.
+    private var heldGrantRetirements: [String: UInt64] = [:]
     private var realTimeCache: [FeatureCacheKey: (override: CachedFeatureOverride, cachedAt: Date)] = [:]
     /// A purchase answer's Features hold only until a profile requested after
     /// them lands: the profile is the customer's access. By key, the latest
@@ -426,6 +430,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         let requestGeneration = stateGeneration
         featureMutationRevisions[featureId, default: 0] &+= 1
         let requestRevision = featureMutationRevisions[featureId, default: 0]
+        let retirementsAtRequest = holdRetirementCount
 
         let result = try await api.checkFeature(
             customerId: customerId,
@@ -446,10 +451,15 @@ internal actor FeatureService: FeatureServiceProtocol {
             throw CancellationError()
         }
 
-        // A newer profile retired a purchase's 200 hold while this check was
-        // out, so its answer may be from before that profile. It is
-        // discarded, and the check is asked again for the current answer.
-        if let retiredAt = heldGrantRetirementRevisions[featureId], retiredAt > requestRevision {
+        // The check writes the Feature it asked about and the answer's
+        // balance source (a credit wallet, say). A newer profile retired a
+        // purchase's 200 hold on either while this check was out, so the
+        // answer may be from before that profile. It is discarded, and the
+        // check is asked again for the current answer.
+        let writesRetiredFeature = Set([featureId, result.featureId]).contains {
+            (heldGrantRetirements[$0] ?? 0) > retirementsAtRequest
+        }
+        if writesRetiredFeature {
             guard attempt < 2 else { throw CancellationError() }
             return try await performCheck(
                 featureId: featureId,
@@ -620,8 +630,8 @@ internal actor FeatureService: FeatureServiceProtocol {
                 // began before it cannot publish over the profile, nor give
                 // its caller the answer from before it.
                 featureMutationRevisions[key.featureId, default: 0] &+= 1
-                heldGrantRetirementRevisions[key.featureId] =
-                    featureMutationRevisions[key.featureId]
+                holdRetirementCount &+= 1
+                heldGrantRetirements[key.featureId] = holdRetirementCount
             }
         }
         let allFeatures = await getAllCached()
@@ -806,7 +816,7 @@ internal actor FeatureService: FeatureServiceProtocol {
         realTimeCache.removeAll()
         purchaseGrantProfileRevisions.removeAll()
         invalidatedCacheRevisions.removeAll()
-        heldGrantRetirementRevisions.removeAll()
+        heldGrantRetirements.removeAll()
         invalidatedProfileRevisions.removeAll()
         featureMutationRevisions.removeAll()
         committedCacheRevisions.removeAll()
