@@ -705,6 +705,51 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertNotNil(entry()?.answeredAt, "only its own answer answers the entry")
     }
 
+    /// Everything that changes one purchase runs one at a time. While a 200
+    /// is being applied (its admission checked and its Features published),
+    /// a Restore's new admission for the same purchase waits, so the check
+    /// and the publication are never split by it.
+    func testRestoreWaitsWhileAnAnswerForThePurchaseIsApplied() async throws {
+        let revisions = ClaimGate()
+        let harness = await makeHarness(customer: "restorer", revisionGate: revisions)
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.api.answer(.accept)
+        let item = entitlement("own", productId: storeProductId, token: token("restorer"))
+        harness.entitlements.set([item])
+        harness.adapter.restoreResult = .restored
+        func entry() -> StoredTransactionEvidence? {
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]
+        }
+
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        await gate.waitForArrival()
+        XCTAssertEqual(entry()?.reason, .sync)
+
+        // The first send is accepted; publishing its Features waits.
+        harness.revisionGated?.arm()
+        await gate.open()
+        await revisions.waitForArrival()
+
+        // A Restore starts while that answer is being applied.
+        let restore = Task { try await harness.service.restore() }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(entry()?.reason, .sync, "no new admission while the answer is applied")
+        XCTAssertNil(entry()?.answeredAt)
+
+        await revisions.open()
+        let synced = await streamed.syncTask?.value
+        XCTAssertEqual(synced, true)
+        let restored = try await restore.value
+        XCTAssertEqual(restored, .restored)
+        XCTAssertEqual(harness.api.requests.map(\.reason), [.sync, .restore])
+        XCTAssertNotNil(entry()?.answeredAt)
+    }
+
     /// Another customer's Restore replaces the entry while the first
     /// customer's send is in flight, and the first customer comes back. The
     /// old 200 answers an admission its entry no longer holds, so it is
@@ -1038,6 +1083,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         let sink: RecoveryEventSink
         let entitlements: EntitlementBox
         let profileRefreshes: ProfileRefreshRecorder
+        let revisionGated: RevisionGatedProfileService?
 
         func visiblePremium() async -> FeatureAccess? {
             await MainActor.run { featureInfo.feature("premium") }
@@ -1057,7 +1103,8 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
     /// answer: an acceptance grants premium, a refusal does not.
     private func makeHarness(
         customer: String,
-        profile: MockProfileService? = nil
+        profile: MockProfileService? = nil,
+        revisionGate: ClaimGate? = nil
     ) async -> Harness {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()
@@ -1073,10 +1120,13 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         }
         let serverProfile = profile ?? MockProfileService()
         let profileFollowsAnswers = profile == nil
+        let revisionGated = revisionGate.map {
+            RevisionGatedProfileService(base: serverProfile, gate: $0)
+        }
         let features = FeatureService(
             api: mocks.nuxieApi,
             identity: identity,
-            profile: serverProfile,
+            profile: revisionGated ?? serverProfile,
             dateProvider: mocks.dateProvider,
             featureInfo: featureInfo,
             cacheTTL: 300
@@ -1146,7 +1196,8 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         return Harness(
             identity: identity, api: api, store: store, featureInfo: featureInfo,
             features: features, observer: observer, service: service, adapter: adapter,
-            sink: sink, entitlements: entitlements, profileRefreshes: profileRefreshes
+            sink: sink, entitlements: entitlements, profileRefreshes: profileRefreshes,
+            revisionGated: revisionGated
         )
     }
 
@@ -1231,6 +1282,41 @@ private final class EntitlementBox: @unchecked Sendable {
 
     func set(_ items: [StoreTransactionRecoveryItem]) { lock.withLock { self.items = items } }
     func get() -> [StoreTransactionRecoveryItem] { lock.withLock { items } }
+}
+
+/// The server profile, except that reading the latest request revision (which
+/// publishing a 200's Features does) waits at `gate` while it is armed.
+private final class RevisionGatedProfileService: ProfileServiceProtocol, @unchecked Sendable {
+    private let base: MockProfileService
+    private let gate: ClaimGate
+    private let lock = NSLock()
+    private var armed = false
+
+    init(base: MockProfileService, gate: ClaimGate) {
+        self.base = base
+        self.gate = gate
+    }
+
+    func arm() { lock.withLock { armed = true } }
+
+    func latestRequestRevision() async -> UInt64 {
+        if lock.withLock({ armed }) { await gate.pass() }
+        return await base.latestRequestRevision()
+    }
+    func getCachedProfile(distinctId: String) async -> ProfileResponse? {
+        await base.getCachedProfile(distinctId: distinctId)
+    }
+    func localeDidChange() async { await base.localeDidChange() }
+    func clearCache(distinctId: String) async { await base.clearCache(distinctId: distinctId) }
+    func clearAllCache() async { await base.clearAllCache() }
+    func cleanupExpired() async -> Int { await base.cleanupExpired() }
+    func refetchProfile(distinctId: String?) async throws -> ProfileResponse {
+        try await base.refetchProfile(distinctId: distinctId)
+    }
+    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {
+        await base.handleUserChange(from: oldDistinctId, to: newDistinctId)
+    }
+    func onAppBecameActive() async { await base.onAppBecameActive() }
 }
 
 /// Holds purchase requests until the test opens it.

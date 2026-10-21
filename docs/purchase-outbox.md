@@ -81,6 +81,13 @@ holds none and leaves the entry alone, even when that profile fetch fails.
 So when a Restore rewrites an entry while the entry's earlier send is in
 flight, that send's answer leaves the Restore claim waiting for its own.
 
+Everything that changes one purchase runs one at a time. While an answer is
+applied (its admission check, the entry change, the Feature publication and
+the 200 hold, together), a new admission for that purchase (a Restore or
+purchase claim, a commit's write, a refund) waits until it has finished, so a
+Restore can never split the check from the publication. The profile refresh
+the answer asks for runs after it.
+
 Every answer passes one admission check before it may change its entry,
 publish Features or hold a 200's Features: a scan's send, the outbox pass, a
 Restore or purchase claim, and a purchase-backed Feature command alike. No
