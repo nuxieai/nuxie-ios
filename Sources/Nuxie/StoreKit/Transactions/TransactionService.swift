@@ -1019,7 +1019,10 @@ actor TransactionService {
                 if claims.isEmpty {
                     result = .noPurchases
                 } else {
-                    let error: RestoreClaimError = claims.refused > 0
+                    // Owned by another account only when every claim was
+                    // refused; an unanswered claim may be the customer's,
+                    // so the Restore is unconfirmed and worth trying again.
+                    let error: RestoreClaimError = claims.refused > 0 && claims.failed == 0
                         ? .ownedByAnotherAccount
                         : .unconfirmed
                     LogWarning(
