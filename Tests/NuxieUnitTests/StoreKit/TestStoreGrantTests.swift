@@ -31,6 +31,37 @@ actor RecordingTestStoreGrants: TestStoreGranting {
     }
 }
 
+/// Holds the first grant open until released; every grant succeeds.
+actor HeldTestStoreGrants: TestStoreGranting {
+    private(set) var transactionIds: [String] = []
+    private var release: CheckedContinuation<Void, Never>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func grantTestStorePurchase(
+        productId: String,
+        transactionId: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        transactionIds.append(transactionId)
+        if transactionIds.count == 1 {
+            startWaiters.forEach { $0.resume() }
+            startWaiters = []
+            await withCheckedContinuation { release = $0 }
+        }
+        return PurchaseResponse(success: true, customerId: "customer-1", features: [], error: nil)
+    }
+
+    func firstGrantStarted() async {
+        guard transactionIds.isEmpty else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func releaseFirst() {
+        release?.resume()
+        release = nil
+    }
+}
+
 final class TestStoreGrantTests: XCTestCase {
     private let pro = PurchaseFeature(
         id: "feature_pro", extId: "pro-training", type: .boolean,
@@ -142,6 +173,25 @@ final class TestStoreGrantTests: XCTestCase {
 
         let ids = await grants.grants.map(\.transactionId)
         XCTAssertEqual(Set(ids).count, 3)
+    }
+
+    func testAPurchaseThatOverlapsOneInFlightIsAPurchaseOfItsOwn() async {
+        let grants = HeldTestStoreGrants()
+        let store = NuxieTestStore(granting: grants)
+        let product = annual()
+
+        let first = Task { await store.complete(.purchased, product: product, distinctId: "rider-1") }
+        await grants.firstGrantStarted()
+        let second = await store.complete(.purchased, product: product, distinctId: "rider-1")
+        await grants.releaseFirst()
+        let firstResponse = await first.value
+
+        guard case .purchased = firstResponse.result, case .purchased = second.result else {
+            return XCTFail("Expected both purchases to succeed")
+        }
+        let ids = await grants.transactionIds
+        XCTAssertEqual(ids.count, 2)
+        XCTAssertEqual(Set(ids).count, 2, "An overlapping purchase must not share the transaction in flight")
     }
 
     func testAnUnansweredGrantIsKeptForItsOwnCustomerAndProduct() async {
