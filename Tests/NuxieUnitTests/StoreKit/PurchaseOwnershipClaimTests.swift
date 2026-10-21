@@ -533,6 +533,38 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertEqual(harness.events(named: SystemEventNames.purchaseSynced), 0)
     }
 
+    /// Any write in a commit that fails turns the outbox off and delivers the
+    /// purchase as one, even after its entry was first saved. Here the entry
+    /// is saved and the transaction finished, but saving the finish fails:
+    /// the purchase is still sent once and its checkout completes in the
+    /// session, and nothing more is written.
+    func testFailedFinishWriteStillSendsThePurchaseAndCompletesTheCheckout() async throws {
+        let harness = await makeHarness(customer: "buyer")
+        harness.store.refusesWrite = { entries in
+            entries["finish-write-transaction"]?.finishRequired == false
+        }
+        harness.adapter.configureVerifiedPurchase(
+            transactionJws: "finish-write-jws",
+            transactionId: "finish-write-transaction",
+            originalTransactionId: "finish-write-original",
+            productId: storeProductId
+        )
+
+        let result = try await harness.service.purchase(product())
+        let synced = await result.syncTask?.value
+
+        XCTAssertEqual(synced, true)
+        XCTAssertEqual(harness.api.requests.map(\.transactionJwt), ["finish-write-jws"], "the purchase is sent once")
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseCompleted), 1, "its checkout completes in the session")
+        XCTAssertEqual(harness.adapter.finishCallCount, 1)
+        let entry = try XCTUnwrap(harness.store.load().valueTreatingAbsentAsEmpty([:])?["finish-write-transaction"])
+        XCTAssertNil(entry.answeredAt, "the outbox is off: nothing more is written")
+        let timerSet = await harness.observer.hasScheduledOutboxRetry
+        XCTAssertFalse(timerSet)
+        await harness.observer.retryStoredEvidence()
+        XCTAssertEqual(harness.api.requests.count, 1, "and no pass sends it again this session")
+    }
+
     /// While the outbox is off, no timer pass sends anything.
     func testNoTimerPassSendsWhileTheOutboxIsOff() async throws {
         let harness = await makeHarness(customer: "buyer")
@@ -1721,10 +1753,18 @@ private final class WriteSwitchEvidenceStore: TransactionEvidenceStoreProtocol, 
     private let lock = NSLock()
     private var entries: [String: StoredTransactionEvidence] = [:]
     private var refusesWritesStorage = false
+    private var refusesWriteStorage: (@Sendable ([String: StoredTransactionEvidence]) -> Bool)?
 
     var refusesWrites: Bool {
         get { lock.withLock { refusesWritesStorage } }
         set { lock.withLock { refusesWritesStorage = newValue } }
+    }
+
+    /// Refuses only the writes it matches, as a disk that fills partway
+    /// through a commit would.
+    var refusesWrite: (@Sendable ([String: StoredTransactionEvidence]) -> Bool)? {
+        get { lock.withLock { refusesWriteStorage } }
+        set { lock.withLock { refusesWriteStorage = newValue } }
     }
 
     func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
@@ -1734,7 +1774,7 @@ private final class WriteSwitchEvidenceStore: TransactionEvidenceStoreProtocol, 
     @discardableResult
     func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
         lock.withLock {
-            guard !refusesWritesStorage else { return false }
+            guard !refusesWritesStorage, refusesWriteStorage?(entries) != true else { return false }
             self.entries = entries
             return true
         }

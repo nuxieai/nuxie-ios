@@ -1777,7 +1777,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         finishRequired: false
                     )
                 }
-            ) else { return .rejected }
+            ) else {
+                // The finish could not be saved, so the outbox is off: the
+                // purchase, already finished, is delivered as one, sent once
+                // and its completion captured in the session.
+                guard outboxIsOff else { return .rejected }
+                return await deliverWithOutboxOff(
+                    replacingCommitState(committedEvidence, finishRequired: false),
+                    transactionService: transactionService,
+                    checkoutRecovery: checkoutRecovery,
+                    pendingRecord: pendingRecord,
+                    routeCompletionToJourneys: routeCompletionToJourneys,
+                    commitKey: commitKey,
+                    source: source
+                )
+            }
             committedEvidence = finishChange.evidence
             evidenceChanged = evidenceChanged || finishChange.changed
         }
@@ -1836,6 +1850,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         || committedEvidence.completionDeliveredAt != nil
                     evidenceChanged = evidenceChanged || completionChange.changed
                 } else {
+                    // The delivered completion could not be saved; it stands
+                    // for this session.
+                    committedEvidence = replacingCommitState(
+                        committedEvidence,
+                        completionDeliveredAt: deliveredAt
+                    )
                     completionAccepted = false
                 }
             }
@@ -1848,6 +1868,23 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // re-derivation for unchanged replays double-counts allowances work.
         if evidenceChanged {
             await refreshOptimisticProjection()
+        }
+        // A write of this commit failed after its entry was first saved, or
+        // another write turned the outbox off meanwhile: the purchase is
+        // delivered as one, with what this commit has already done, like a
+        // purchase whose first write failed. This is checked after the last
+        // suspension, so nothing can turn the outbox off before the read
+        // below.
+        if outboxIsOff {
+            return await deliverWithOutboxOff(
+                committedEvidence,
+                transactionService: transactionService,
+                checkoutRecovery: checkoutRecovery,
+                pendingRecord: pendingRecord,
+                routeCompletionToJourneys: routeCompletionToJourneys,
+                commitKey: commitKey,
+                source: source
+            )
         }
         // A duplicate token-ownership recovery producer whose commit changed
         // nothing durable never resubmits the receipt; the stored-evidence
