@@ -705,6 +705,55 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertNil(entry())
     }
 
+    /// Another customer's Restore replaces the entry while the first
+    /// customer's send is in flight, and the first customer comes back. The
+    /// old 200 answers an admission its entry no longer holds, so it is
+    /// superseded: it asks for the profile again but publishes no Features,
+    /// even when that profile fetch fails, and leaves the entry alone.
+    func testSupersededAnswerPublishesNoFeatures() async throws {
+        let profile = MockProfileService()
+        profile.shouldThrow = true
+        let harness = await makeHarness(customer: "restorer", profile: profile)
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.api.answer(.accept, for: .sync)
+        harness.api.answer(.fail, for: .restore)
+        let item = entitlement("own", productId: storeProductId, token: token("restorer"))
+        harness.entitlements.set([item])
+        harness.adapter.restoreResult = .restored
+        func entry() -> StoredTransactionEvidence? {
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]
+        }
+
+        // The store update's send for the restorer waits at the server.
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        await gate.waitForArrival()
+
+        // Another customer restores and takes the entry; then the restorer
+        // comes back before the first send is answered.
+        harness.identity.setDistinctId("other")
+        let otherRestore = Task { try await harness.service.restore() }
+        await gate.waitForArrival(count: 2)
+        XCTAssertEqual(entry()?.distinctId, "other")
+        harness.identity.setDistinctId("restorer")
+
+        await gate.open()
+        let synced = await streamed.syncTask?.value
+        XCTAssertEqual(synced, true)
+        _ = try? await otherRestore.value
+
+        let visible = await harness.visiblePremium()
+        XCTAssertNotEqual(visible?.allowed, true, "a superseded answer publishes no Features")
+        XCTAssertTrue(harness.profileRefreshes.requests.contains("restorer"), "it still asks for the profile")
+        XCTAssertEqual(entry()?.distinctId, "other")
+        XCTAssertEqual(entry()?.reason, .restore)
+        XCTAssertTrue(entry()?.isUnsent ?? false)
+    }
+
     /// A Restore never takes an acceptance from earlier in the session as
     /// its answer, least of all another customer's. After the first
     /// customer's purchase was accepted and its entry cleared, the restoring

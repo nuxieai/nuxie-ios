@@ -55,8 +55,9 @@ answered entry again, is an admission: the entry gets a fresh admission id.
 Writes that only keep the books (the StoreKit finish, a delivered completion,
 a failed attempt) keep the id. Each send carries the admission id of the entry
 it sends. The server's answer clears the entry, marks it answered or counts a
-failed attempt only while the entry still holds that id; otherwise it only
-triggers the profile refresh. So when a Restore rewrites an entry while the
+failed attempt only while the entry still holds that id; otherwise the answer
+is superseded and only triggers the profile refresh: it publishes no Features,
+holds none and leaves the entry alone, even when that profile fetch fails. So when a Restore rewrites an entry while the
 entry's earlier send is in flight, that send's answer leaves the Restore claim
 waiting for its own.
 

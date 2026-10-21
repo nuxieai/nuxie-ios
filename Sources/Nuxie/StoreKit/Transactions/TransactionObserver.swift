@@ -2203,6 +2203,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
               lifecycleGeneration == requestLifecycleGeneration else {
             return .failed
         }
+        // An answer to an admission its entry no longer holds (another
+        // customer's Restore took the entry, say) is superseded. It only asks
+        // for the customer's profile again: it publishes no Features, holds
+        // none, reports nothing and leaves the entry alone.
+        if let admissionId, acceptedEvidence?.admissionId != admissionId {
+            await refreshProfileAfterAnswer(for: distinctId)
+            return .accepted
+        }
         // The 200's Features hold in memory only until the profile refresh
         // below lands; the profile is where access comes from.
         if updateLocalFeatures,
