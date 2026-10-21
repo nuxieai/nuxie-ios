@@ -116,7 +116,7 @@ targets:
       # cleanup plan: ratchet down, never up.
       SWIFT_STRICT_CONCURRENCY: complete
       SWIFT_PACKAGE_NAME: Nuxie
-      MARKETING_VERSION: 0.1.0
+      MARKETING_VERSION: 0.1.1
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
       ENABLE_TESTABILITY: YES
@@ -161,7 +161,7 @@ targets:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.macos
       PRODUCT_NAME: Nuxie
       SWIFT_PACKAGE_NAME: Nuxie
-      MARKETING_VERSION: 0.1.0
+      MARKETING_VERSION: 0.1.1
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
       ENABLE_TESTABILITY: YES
@@ -353,7 +353,7 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.storekit-test-host
       PRODUCT_NAME: NuxieStoreKitTestHost
-      MARKETING_VERSION: 0.1.0
+      MARKETING_VERSION: 0.1.1
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
       IPHONEOS_DEPLOYMENT_TARGET: 17.0
@@ -412,7 +412,7 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.experience-runtime-host
       PRODUCT_NAME: NuxieExperienceRuntimeHost
-      MARKETING_VERSION: 0.1.0
+      MARKETING_VERSION: 0.1.1
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
       SWIFT_PACKAGE_NAME: Nuxie
@@ -436,7 +436,7 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.sdk.experience-runtime-reference
       PRODUCT_NAME: NuxieExperienceRuntimeReference
-      MARKETING_VERSION: 0.1.0
+      MARKETING_VERSION: 0.1.1
       CURRENT_PROJECT_VERSION: 1
       SWIFT_VERSION: 5.9
       INFOPLIST_FILE: Examples/ExperienceRuntimeReferenceApp/Sources/Info.plist
