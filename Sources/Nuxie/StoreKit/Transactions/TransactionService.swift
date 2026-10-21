@@ -300,10 +300,19 @@ actor TransactionService {
 
     @discardableResult
     private func setPendingPurchases(_ entries: [String: PendingPurchaseRecord]) -> Bool {
-        guard !pendingPurchaseStateUnreadable else { return false }
-        guard pendingPurchaseStore.save(entries) else { return false }
+        guard !pendingPurchaseStateUnreadable, pendingPurchaseStore.save(entries) else {
+            reportOutboxCannotSave()
+            return false
+        }
         cachedPendingPurchases = entries
         return true
+    }
+
+    /// A checkout binding or catalog-mapping write failed, so the purchase
+    /// outbox is off for the rest of the session.
+    private func reportOutboxCannotSave() {
+        let observer = transactionObserver
+        Task { await observer.outboxCannotSave() }
     }
 
     func checkoutRecoveryRecord(
@@ -491,6 +500,7 @@ actor TransactionService {
             of: initiatingDistinctId
         )
         var checkoutProduct: StoreProduct
+        var checkoutBindingSaved = true
         let outcome: NativePurchaseResult?
         let purchaseOutcome: PurchaseOutcome
         let usesTestStore = testStore != nil
@@ -581,7 +591,7 @@ actor TransactionService {
                     .heldOriginalTransactionIds(
                         productId: checkoutProduct.storeProductId
                     )
-                checkoutProduct = try prepareStoreKitCheckout(
+                let prepared = try prepareStoreKitCheckout(
                     product: checkoutProduct,
                     distinctId: initiatingDistinctId,
                     evidenceAuthority: .nativeStoreKit,
@@ -591,6 +601,13 @@ actor TransactionService {
                     outcomeEventId: outcomeCorrelation?.eventId,
                     priorOriginalTransactionIds: priorOriginalTransactionIds
                 )
+                checkoutProduct = prepared.product
+                checkoutBindingSaved = prepared.bindingSaved
+                if !prepared.bindingSaved {
+                    // The checkout carries on with its in-memory context;
+                    // the outbox is off before its purchase is delivered.
+                    await transactionObserver.outboxCannotSave()
+                }
                 if let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken {
                     let key = activeCheckoutKey(
                         appAccountToken: appAccountToken,
@@ -726,10 +743,10 @@ actor TransactionService {
                         checkoutCompletionEventId: existing.checkoutCompletionEventId,
                         priorOriginalTransactionIds: existing.priorOriginalTransactionIds
                     )
-                    guard setPendingPurchases(entries) else {
-                        throw StoreKitError.purchaseFailed(nil)
-                    }
-                } else {
+                    // A failed write turns the outbox off; the approval is
+                    // still sent when StoreKit delivers it.
+                    setPendingPurchases(entries)
+                } else if checkoutBindingSaved {
                     // Every StoreKit-capable checkout must install its exact
                     // marker before invoking the delegate/adapter. Never
                     // invent token-bearing attribution after an uncorrelated
@@ -849,7 +866,7 @@ actor TransactionService {
         localEntitlementGrants: [StoreProduct.LocalEntitlementGrant],
         outcomeEventId: String?,
         priorOriginalTransactionIds: Set<String>
-    ) throws -> StoreProduct {
+    ) throws -> (product: StoreProduct, bindingSaved: Bool) {
         guard let commercialContext = product.purchaseContext else {
             throw StoreKitError.apiMisuse(
                 reason: "StoreKit checkout requires an authenticated release context"
@@ -858,16 +875,17 @@ actor TransactionService {
         let appAccountToken = purchaseStorageScope.appAccountToken(
             distinctId: distinctId
         )
-        guard accountOwnershipStore.upsert(StoredPurchaseAccountOwnership(
+        // The catalog mapping and the binding are written before checkout.
+        // When either write fails the outbox is off for the session, and the
+        // checkout carries on with its in-memory context.
+        var bindingSaved = accountOwnershipStore.upsert(StoredPurchaseAccountOwnership(
             scope: purchaseStorageScope,
             appAccountToken: appAccountToken,
             distinctId: distinctId,
             productAuthorities: [
                 product.storeProductId: evidenceAuthority.durableProductAuthority,
             ]
-        )) else {
-            throw StoreKitError.purchaseFailed(nil)
-        }
+        ))
         let recordedAt = dateProvider.now()
         let recovery = PendingPurchaseRecord(
             scope: purchaseStorageScope,
@@ -914,15 +932,15 @@ actor TransactionService {
             }
         }
         entries[recoveryKey] = recovery
-        guard setPendingPurchases(entries) else {
-            throw StoreKitError.purchaseFailed(nil)
+        if !setPendingPurchases(entries) {
+            bindingSaved = false
         }
         var prepared = product.preparedForNativeCheckout(
             appAccountToken: appAccountToken
         )
         // Record only the signed grants the verified-evidence path may project.
         prepared.localEntitlementGrants = localEntitlementGrants
-        return prepared
+        return (prepared, bindingSaved)
     }
 
     private func checkoutIntroEligibilityToken(

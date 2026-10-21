@@ -28,12 +28,6 @@ enum StoreReadResult<Value> {
 
 extension StoreReadResult: Sendable where Value: Sendable {}
 
-/// Unreadable durable transaction evidence must surface as a retryable failure,
-/// never as authoritative absence (internal review A12).
-enum TransactionEvidenceError: Error, Equatable, Sendable {
-    case unreadable
-}
-
 final class StoreReadFailureLogger {
     private let lock = NSLock()
     private var didLog = false

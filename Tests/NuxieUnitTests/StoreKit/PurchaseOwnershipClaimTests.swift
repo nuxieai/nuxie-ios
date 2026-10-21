@@ -298,6 +298,154 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertEqual(harness.profileRefreshes.requests, ["buyer"])
     }
 
+    // MARK: - A full disk
+
+    /// When the outbox cannot save, it is off for the session. The purchase
+    /// is sent once and the refreshed profile gives access, with no early
+    /// unlock, no timer and its transaction left unfinished. The next launch
+    /// finds it unfinished, saves its entry, sends it and finishes it, and
+    /// does not report the checkout's completion a second time.
+    func testFullDiskSendsThePurchaseOnceAndTheNextLaunchSavesAndFinishesIt() async throws {
+        let harness = await makeHarness(customer: "buyer")
+        harness.store.refusesWrites = true
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.adapter.configureVerifiedPurchase(
+            transactionJws: "full-disk-jws",
+            transactionId: "full-disk-transaction",
+            originalTransactionId: "full-disk-original",
+            productId: storeProductId
+        )
+
+        let result = try await harness.service.purchase(product())
+        await gate.waitForArrival()
+        let beforeAnswer = await harness.visiblePremium()
+        XCTAssertNotEqual(beforeAnswer?.allowed, true, "nothing unlocks early while the outbox is off")
+        await gate.open()
+        let synced = await result.syncTask?.value
+
+        XCTAssertEqual(synced, true)
+        XCTAssertEqual(harness.api.requests.map(\.transactionJwt), ["full-disk-jws"])
+        XCTAssertEqual(harness.profileRefreshes.requests, ["buyer"])
+        let access = await harness.visiblePremium()
+        XCTAssertEqual(access?.allowed, true, "the refreshed profile gives access")
+        XCTAssertEqual(harness.adapter.finishCallCount, 0, "the transaction is left unfinished")
+        let timerSet = await harness.observer.hasScheduledOutboxRetry
+        XCTAssertFalse(timerSet)
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseCompleted), 1)
+        XCTAssertEqual(harness.store.load().valueTreatingAbsentAsEmpty([:])?.isEmpty, true)
+
+        // The next launch, with room on the disk: StoreKit still holds the
+        // transaction unfinished.
+        await harness.observer.stopListening()
+        let finished = FinishRecorder()
+        let relaunchedStore = WriteSwitchEvidenceStore()
+        let box = LateBound<TransactionService>()
+        let relaunched = TransactionObserver(
+            api: harness.api,
+            features: harness.features,
+            identity: harness.identity,
+            settings: harness.settings,
+            eventSink: harness.sink,
+            transactionServiceProvider: { box.get() },
+            evidenceStore: relaunchedStore,
+            purchaseStorageScope: scope,
+            dateProvider: MockFactory.shared.dateProvider,
+            unfinishedRecoveryTransactions: { [scope] in
+                [StoreTransactionRecoveryItem(update: VerifiedStoreTransactionUpdate(
+                    transactionId: "full-disk-transaction",
+                    originalTransactionId: "full-disk-original",
+                    productId: "claim-store-product",
+                    appAccountToken: scope.appAccountToken(distinctId: "buyer"),
+                    isRevoked: false,
+                    isUpgraded: false,
+                    finish: { finished.record() }
+                ), jwsRepresentation: "full-disk-jws")]
+            },
+            currentEntitlementRecoveryTransactions: { [] },
+            refreshProfile: { distinctId in harness.profileRefreshes.record(distinctId) }
+        )
+        box.set(TransactionService(
+            productService: MockFactory.shared.productService,
+            transactionObserver: relaunched,
+            pendingPurchaseStore: harness.pending,
+            accountOwnershipStore: harness.ownership,
+            dateProvider: MockFactory.shared.dateProvider,
+            settings: harness.settings,
+            eventSink: harness.sink,
+            purchaseStorageScope: scope,
+            identityService: harness.identity,
+            featureService: harness.features
+        ))
+        addTeardownBlock { await relaunched.stopListening() }
+        await relaunched.retryStoredEvidence()
+
+        let saved = relaunchedStore.load().valueTreatingAbsentAsEmpty([:])?["full-disk-transaction"]
+        XCTAssertNotNil(saved?.answeredAt, "the next launch saves the entry and sends it")
+        XCTAssertEqual(harness.api.requests.map(\.transactionJwt), ["full-disk-jws", "full-disk-jws"])
+        XCTAssertEqual(finished.count, 1, "and finishes the transaction")
+        XCTAssertEqual(
+            harness.events(named: SystemEventNames.purchaseCompleted), 1,
+            "the checkout's completion is reported once"
+        )
+    }
+
+    /// A checkout whose binding cannot be saved turns the outbox off for the
+    /// session and carries on with its in-memory context: it still completes
+    /// and sends its purchase, and saves and finishes nothing.
+    func testCheckoutWhoseBindingCannotBeSavedCarriesOnWithTheOutboxOff() async throws {
+        let harness = await makeHarness(customer: "buyer")
+        harness.pending.refusesWrites = true
+        harness.adapter.configureVerifiedPurchase(
+            transactionJws: "unbound-jws",
+            transactionId: "unbound-transaction",
+            originalTransactionId: "unbound-original",
+            productId: storeProductId
+        )
+
+        let result = try await harness.service.purchase(product())
+        let synced = await result.syncTask?.value
+
+        XCTAssertEqual(synced, true)
+        XCTAssertEqual(harness.api.requests.map(\.transactionJwt), ["unbound-jws"])
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseCompleted), 1, "the checkout still completes")
+        XCTAssertEqual(harness.adapter.finishCallCount, 0, "the transaction is left unfinished")
+        XCTAssertEqual(harness.store.load().valueTreatingAbsentAsEmpty([:])?.isEmpty, true, "nothing is saved while off")
+        let timerSet = await harness.observer.hasScheduledOutboxRetry
+        XCTAssertFalse(timerSet)
+    }
+
+    /// While the outbox is off, no timer pass sends anything.
+    func testNoTimerPassSendsWhileTheOutboxIsOff() async throws {
+        let harness = await makeHarness(customer: "buyer")
+        let overdue = StoredTransactionEvidence(
+            scope: scope,
+            transactionJws: "overdue-jws",
+            transactionId: "overdue-transaction",
+            originalTransactionId: "overdue-original",
+            productId: storeProductId,
+            distinctId: "buyer",
+            recordedAt: MockFactory.shared.dateProvider.now(),
+            isRevoked: false,
+            reason: .purchase,
+            sendAttempts: 1,
+            retryDueAt: MockFactory.shared.dateProvider.now().addingTimeInterval(-1)
+        )
+        _ = harness.store.save([overdue.transactionId: overdue])
+        harness.store.refusesWrites = true
+        harness.api.answer(.fail)
+
+        // The send fails and its attempt cannot be saved: the outbox is off.
+        await harness.observer.retryDueOutboxEntries()
+        XCTAssertEqual(harness.api.requests.count, 1)
+        await harness.observer.retryDueOutboxEntries()
+        await harness.observer.retryDueOutboxEntries()
+
+        XCTAssertEqual(harness.api.requests.count, 1, "no timer pass sends while the outbox is off")
+        let timerSet = await harness.observer.hasScheduledOutboxRetry
+        XCTAssertFalse(timerSet)
+    }
+
     func testFailedSendStaysQueuedWithItsRecordedFieldsAndBacksOff() async throws {
         let harness = await makeHarness(customer: "buyer")
         harness.api.answer(.fail)
@@ -1180,7 +1328,10 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
     private struct Harness {
         let identity: MockIdentityService
         let api: ClaimAPI
-        let store: InMemoryTransactionEvidenceStore
+        let store: WriteSwitchEvidenceStore
+        let pending: WriteSwitchPendingStore
+        let ownership: InMemoryPurchaseAccountOwnershipStore
+        let settings: NuxieRuntimeSettings
         let featureInfo: FeatureInfo
         let features: FeatureService
         let observer: TransactionObserver
@@ -1240,7 +1391,9 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         let api = ClaimAPI()
         let profileRefreshes = ProfileRefreshRecorder()
         let grantedProfile = TestJourneyProfile.response(features: [premiumFeature])
-        let store = InMemoryTransactionEvidenceStore()
+        let store = WriteSwitchEvidenceStore()
+        let pending = WriteSwitchPendingStore()
+        let ownership = InMemoryPurchaseAccountOwnershipStore()
         let sink = RecoveryEventSink()
         let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "claim-test"))
         let entitlements = EntitlementBox()
@@ -1288,7 +1441,8 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         let service = TransactionService(
             productService: mocks.productService,
             transactionObserver: observer,
-            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            pendingPurchaseStore: pending,
+            accountOwnershipStore: ownership,
             dateProvider: mocks.dateProvider,
             settings: settings,
             eventSink: sink,
@@ -1300,7 +1454,8 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         box.set(service)
         addTeardownBlock { await observer.stopListening() }
         return Harness(
-            identity: identity, api: api, store: store, featureInfo: featureInfo,
+            identity: identity, api: api, store: store, pending: pending,
+            ownership: ownership, settings: settings, featureInfo: featureInfo,
             features: features, observer: observer, service: service, adapter: adapter,
             sink: sink, entitlements: entitlements, profileRefreshes: profileRefreshes,
             revisionGated: revisionGated
@@ -1372,6 +1527,65 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         let data = try JSONEncoder().encode(request)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
+}
+
+/// An evidence store whose writes the test can make fail, as a full disk
+/// would.
+private final class WriteSwitchEvidenceStore: TransactionEvidenceStoreProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: StoredTransactionEvidence] = [:]
+    private var refusesWritesStorage = false
+
+    var refusesWrites: Bool {
+        get { lock.withLock { refusesWritesStorage } }
+        set { lock.withLock { refusesWritesStorage = newValue } }
+    }
+
+    func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
+        lock.withLock { .value(entries) }
+    }
+
+    @discardableResult
+    func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
+        lock.withLock {
+            guard !refusesWritesStorage else { return false }
+            self.entries = entries
+            return true
+        }
+    }
+}
+
+/// A binding store whose writes the test can make fail.
+private final class WriteSwitchPendingStore: PendingPurchaseStoreProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: PendingPurchaseRecord] = [:]
+    private var refusesWritesStorage = false
+
+    var refusesWrites: Bool {
+        get { lock.withLock { refusesWritesStorage } }
+        set { lock.withLock { refusesWritesStorage = newValue } }
+    }
+
+    func load() -> StoreReadResult<[String: PendingPurchaseRecord]> {
+        lock.withLock { .value(entries) }
+    }
+
+    @discardableResult
+    func save(_ entries: [String: PendingPurchaseRecord]) -> Bool {
+        lock.withLock {
+            guard !refusesWritesStorage else { return false }
+            self.entries = entries
+            return true
+        }
+    }
+}
+
+private final class FinishRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+
+    func record() { lock.withLock { calls += 1 } }
+    var count: Int { lock.withLock { calls } }
 }
 
 private final class ProfileRefreshRecorder: @unchecked Sendable {

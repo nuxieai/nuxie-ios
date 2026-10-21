@@ -3276,7 +3276,9 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         }.count, 1)
     }
 
-    func testEvidenceDeletionRetriesAfterDurableSaveFailure() async {
+    /// A deletion that cannot be saved turns the outbox off for the rest of
+    /// the session, so nothing is written again until the next launch.
+    func testFailedEvidenceDeletionTurnsTheOutboxOffForTheSession() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-a")
         let scope = PurchaseStorageScope(
@@ -3340,8 +3342,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         let secondRemoval = await observer.removeEvidence(
             transactionId: evidence.transactionId
         )
-        XCTAssertTrue(secondRemoval)
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertFalse(secondRemoval, "the outbox stays off for the session")
+        XCTAssertNotNil(evidenceStore.load().valueTreatingAbsentAsEmpty([:])![evidence.transactionId])
     }
 
     func testExpiredEvidencePruneRetriesDurableSave() async {

@@ -126,10 +126,11 @@ again meanwhile is left to its own send, never written back.
 
 A purchase-backed Feature command carries the admission of the entry it uses.
 Its accepted answer always returns the command's result and consumption
-receipt to the caller, and the command applies its own post-use Feature
-result, since the server has consumed the Feature. The admission check
-decides only whether the answer is captured as purchase synced and answers
-the entry; a superseded one only refreshes the profile.
+receipt to the caller, since the server has consumed the Feature. A matching
+answer is captured as purchase synced, answers the entry, and the command
+applies its own post-use Feature result. A superseded one only refreshes the
+profile: like every superseded answer, from any producer, it changes no
+Feature authority, cache, entry or hold.
 
 ### Retry rule
 
@@ -153,6 +154,26 @@ does not settle it.
 
 Every entry still to be sent is also sent at every launch, at identify or
 reset, and when a newly loaded profile changes the product catalog.
+
+### When the outbox cannot save
+
+When the outbox cannot save (an entry, checkout binding or catalog-mapping
+write fails, or a store is unreadable), it is off for the rest of the
+session. While it is off nothing unlocks early, so access comes from the
+profile alone; the timer is cancelled and stays off; and nothing is written
+or held in memory. Each purchase the store delivers (the checkout's result,
+a store update, a scan, Restore) is still sent once, and its answer only
+refreshes the profile: no `$purchase_synced` and no 200 Features. Its
+transaction is never finished, so the next launch finds it unfinished, saves
+its entry, sends it and finishes it as normal. Stored entries the store does
+not deliver wait for the next launch. A failed binding or catalog-mapping
+write does not fail the checkout, which carries on with its in-memory
+context. The buyer's checkout still
+completes in the session, for the host and the Journey, and its checkout
+binding is retired once that completion is captured, so the next launch's
+recovery does not report it again; if the binding stays, that report reuses
+the completion's stable event id. A purchase-backed Feature use takes the
+ordinary Feature command while the outbox is off.
 
 ## Request
 

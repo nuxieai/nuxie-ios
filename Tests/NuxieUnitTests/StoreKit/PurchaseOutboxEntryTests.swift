@@ -60,7 +60,8 @@ final class PurchaseOutboxEntryTests: XCTestCase {
     /// current-format entry that cannot be read (here a malformed admission
     /// id) makes the whole outbox unreadable, as a malformed file does:
     /// nothing is dropped, nothing is written over the file, and the log
-    /// names the entry and the field without their values.
+    /// names the entry and the field without their values. The outbox is
+    /// then off for the session, so a purchase is still sent once.
     func testUnreadableCurrentFormatEntryMakesTheOutboxUnreadable() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("outbox-format-\(UUID().uuidString)")
@@ -146,8 +147,11 @@ final class PurchaseOutboxEntryTests: XCTestCase {
             ),
             source: .transactionStream
         ))
-        XCTAssertFalse(committed.committed)
-        XCTAssertTrue(api.recordedCustomers.isEmpty)
+        // The outbox is off for the session: the purchase is still sent
+        // once, and nothing is written over the file.
+        XCTAssertTrue(committed.committed)
+        _ = await committed.syncTask?.value
+        XCTAssertEqual(api.recordedCustomers, ["customer"])
         XCTAssertEqual(try Data(contentsOf: file), contents, "the file is left byte for byte")
     }
 }
