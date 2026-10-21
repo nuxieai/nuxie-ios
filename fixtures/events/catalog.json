@@ -1202,6 +1202,11 @@
         "source": "PurchaseOutcomeSource provenance",
         "type": "String"
       },
+      "store_environment": {
+        "required": false,
+        "source": "\"sandbox\" only for a StoreKit Sandbox transaction on a live key (App Review); absent otherwise",
+        "type": "String"
+      },
       "store_product_id": {
         "required": true,
         "source": "PurchaseCommercialContext StoreKit product",

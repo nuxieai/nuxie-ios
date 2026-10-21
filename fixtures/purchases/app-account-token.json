@@ -1,6 +1,6 @@
 {
   "suite": "purchases/app-account-token",
-  "description": "The appAccountToken an SDK puts on a native StoreKit purchase and the token the server derives from the signed transaction must be equal, or the purchase is unclaimed and grants nothing. The SDK derives it from the bundle id, the customer, the publishable key's mode and the store mode; the SDK's service environment takes no part. The server derives it from the bundle id, the customer and the transaction's StoreKit environment, and admits Production transactions only with a live key and Sandbox or Xcode transactions only with a test key. Test Store creates no StoreKit transaction, so every case here uses the App Store store mode.",
+  "description": "The appAccountToken an SDK puts on a native StoreKit purchase and the token the server derives from the signed transaction must be equal, or the purchase is unclaimed and grants nothing. The SDK derives it from the bundle id, the customer, the publishable key's mode and the store mode; the SDK's service environment takes no part. The server derives it from the same inputs: the bundle id, the customer and the publishable key's mode, never the transaction's StoreKit environment. A live key admits Production transactions and App Review's Sandbox purchase, which carries the live token; a test key admits Sandbox and Xcode transactions. Test Store creates no StoreKit transaction, so every case here uses the App Store store mode.",
   "algorithm": "sha256(hex(sha256(bundleId)) + NUL + environment + NUL + storeMode + NUL + distinctId), first 16 bytes, RFC 4122 version 5 and variant bits, lowercase. environment is production for a pk_live_ key and development otherwise; storeMode is appStore.",
   "cases": [
     {
@@ -9,6 +9,15 @@
       "publishableKey": "pk_live_example",
       "serviceEnvironment": "production",
       "storeKitEnvironment": "Production",
+      "distinctId": "customer",
+      "appAccountToken": "3f1de5e3-c0e1-5b48-825b-ecc3face315f"
+    },
+    {
+      "name": "live key, Sandbox purchase (App Review)",
+      "bundleId": "com.example.host-app",
+      "publishableKey": "pk_live_example",
+      "serviceEnvironment": "production",
+      "storeKitEnvironment": "Sandbox",
       "distinctId": "customer",
       "appAccountToken": "3f1de5e3-c0e1-5b48-825b-ecc3face315f"
     },
