@@ -162,6 +162,8 @@ private actor SuspendedNativePurchaseAdapter: NativeStoreKitPurchasing {
 
     func restorePurchases() async -> NativeRestoreResult { .noPurchases }
 
+    func heldOriginalTransactionIds(productId: String) async -> Set<String> { [] }
+
     func receivedProduct() -> StoreProduct? { product }
 
     func complete(_ result: NativePurchaseResult) {

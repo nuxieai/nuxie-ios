@@ -11,6 +11,7 @@ public final class MockNativeStoreKitPurchaseAdapter:
     private var purchasedProductsStorage: [StoreProduct] = []
     private var restoreCallCountStorage = 0
     private var finishCallCountStorage = 0
+    private var heldOriginalTransactionIdsStorage: [String: Set<String>] = [:]
 
     var purchaseResult: NativePurchaseResult {
         get { lock.withLock { purchaseResultStorage } }
@@ -32,6 +33,12 @@ public final class MockNativeStoreKitPurchaseAdapter:
 
     public var finishCallCount: Int {
         lock.withLock { finishCallCountStorage }
+    }
+
+    /// By store product, the original transaction ids the store holds.
+    public var heldOriginalTransactionIdsByProduct: [String: Set<String>] {
+        get { lock.withLock { heldOriginalTransactionIdsStorage } }
+        set { lock.withLock { heldOriginalTransactionIdsStorage = newValue } }
     }
 
     public init() {}
@@ -92,6 +99,10 @@ public final class MockNativeStoreKitPurchaseAdapter:
             purchasedProductsStorage.append(product)
             return purchaseResultStorage
         }
+    }
+
+    public func heldOriginalTransactionIds(productId: String) async -> Set<String> {
+        lock.withLock { heldOriginalTransactionIdsStorage[productId] ?? [] }
     }
 
     public func restorePurchases() async -> NativeRestoreResult {

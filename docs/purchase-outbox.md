@@ -17,7 +17,9 @@ The machine-readable contract is `fixtures/purchases/purchase-outbox.json`;
 2. **The owner is what the server last said.** The SDK never works out who
    owns a purchase on the phone. A checkout binding only matches a StoreKit
    delivery to the checkout that started it, which names the customer the
-   purchase is sent for.
+   purchase is sent for. It is matched only by a purchase the store did not
+   already own when that checkout began, so a completion only ever comes
+   from the checkout's own new purchase.
 3. **One durable outbox entry per purchase**, keyed by the StoreKit
    transaction id (Google Play: the purchase token).
 

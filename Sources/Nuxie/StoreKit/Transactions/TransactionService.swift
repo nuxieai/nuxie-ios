@@ -126,12 +126,25 @@ actor TransactionService {
     func isActiveCheckout(
         appAccountToken: UUID?,
         productId: String,
+        originalTransactionId: String? = nil,
         distinctId: String
     ) -> Bool {
         guard let appAccountToken,
               appAccountToken == purchaseStorageScope.appAccountToken(
                 distinctId: distinctId
               ) else { return false }
+        // A purchase the store already held when the checkout began is not
+        // that checkout's delivery.
+        if let binding = checkoutRecoveryRecord(
+               appAccountToken: appAccountToken,
+               productId: productId
+           ),
+           !Self.purchase(
+               originalTransactionId: originalTransactionId,
+               isNewTo: binding
+           ) {
+            return false
+        }
         return activeCheckoutKeys.contains(activeCheckoutKey(
             appAccountToken: appAccountToken,
             productId: productId
@@ -211,11 +224,16 @@ actor TransactionService {
     /// With multiple customers pending the same product, StoreKit's product ID
     /// alone is insufficient authority and synchronization must wait.
     func pendingPurchaseOwnership(
-        productId: String
+        productId: String,
+        originalTransactionId: String? = nil
     ) -> PendingPurchaseOwnershipResolution {
         let suffix = "::\(productId)"
         let matches = pendingPurchases().filter {
             $0.key.hasSuffix(suffix) && $0.value.state == .pending
+                && Self.purchase(
+                    originalTransactionId: originalTransactionId,
+                    isNewTo: $0.value
+                )
         }
         guard !pendingPurchaseStateUnreadable else { return .unavailable }
         switch matches.count {
@@ -290,14 +308,34 @@ actor TransactionService {
 
     func checkoutRecoveryRecord(
         appAccountToken: UUID?,
-        productId: String
+        productId: String,
+        originalTransactionId: String? = nil
     ) -> PendingPurchaseRecord? {
         guard let appAccountToken else { return nil }
         return pendingPurchases().values.first {
             $0.scope == purchaseStorageScope
                 && $0.appAccountToken == appAccountToken
                 && $0.commercialContext.storeProductId == productId
+                && Self.purchase(
+                    originalTransactionId: originalTransactionId,
+                    isNewTo: $0
+                )
         }
+    }
+
+    /// A checkout binding is matched only by a purchase the store did not
+    /// already hold when that checkout began, so a completion only ever comes
+    /// from the checkout's own new purchase. The binding recorded the
+    /// original transaction ids the store held for its product; a purchase
+    /// that shares one (an older purchase delivered again, a renewal of a
+    /// subscription the customer already had) is not the checkout's. Without
+    /// a purchase, the binding itself is looked up.
+    private static func purchase(
+        originalTransactionId: String?,
+        isNewTo binding: PendingPurchaseRecord
+    ) -> Bool {
+        guard let originalTransactionId else { return true }
+        return !binding.priorOriginalTransactionIds.contains(originalTransactionId)
     }
 
     func pendingPurchaseStoreIsUnreadable() -> Bool {
@@ -537,6 +575,12 @@ actor TransactionService {
                     purchaseOutcome = .pending(source: .externalDelegate)
                 }
             } else {
+                // What the store already holds for the product as the
+                // checkout begins; none of it is ever this checkout's purchase.
+                let priorOriginalTransactionIds = await nativePurchaseAdapter
+                    .heldOriginalTransactionIds(
+                        productId: checkoutProduct.storeProductId
+                    )
                 checkoutProduct = try prepareStoreKitCheckout(
                     product: checkoutProduct,
                     distinctId: initiatingDistinctId,
@@ -544,7 +588,8 @@ actor TransactionService {
                     localEntitlementGrants: optimisticLocalEntitlementGrants(
                         checkoutProduct.localEntitlementGrants
                     ),
-                    outcomeEventId: outcomeCorrelation?.eventId
+                    outcomeEventId: outcomeCorrelation?.eventId,
+                    priorOriginalTransactionIds: priorOriginalTransactionIds
                 )
                 if let appAccountToken = checkoutProduct.nativeCheckoutAppAccountToken {
                     let key = activeCheckoutKey(
@@ -678,7 +723,8 @@ actor TransactionService {
                         localEntitlementGrants: existing.localEntitlementGrants,
                         state: .pending,
                         evidenceAuthority: existing.evidenceAuthority,
-                        checkoutCompletionEventId: existing.checkoutCompletionEventId
+                        checkoutCompletionEventId: existing.checkoutCompletionEventId,
+                        priorOriginalTransactionIds: existing.priorOriginalTransactionIds
                     )
                     guard setPendingPurchases(entries) else {
                         throw StoreKitError.purchaseFailed(nil)
@@ -801,7 +847,8 @@ actor TransactionService {
         distinctId: String,
         evidenceAuthority: PurchaseEvidenceAuthority,
         localEntitlementGrants: [StoreProduct.LocalEntitlementGrant],
-        outcomeEventId: String?
+        outcomeEventId: String?,
+        priorOriginalTransactionIds: Set<String>
     ) throws -> StoreProduct {
         guard let commercialContext = product.purchaseContext else {
             throw StoreKitError.apiMisuse(
@@ -844,7 +891,8 @@ actor TransactionService {
             checkoutCompletionEventId: outcomeEventId
                 ?? (["purchase-completed-checkout"]
                     + purchaseStorageScope.storageComponents
-                    + [UUID().uuidString.lowercased()]).joined(separator: ":")
+                    + [UUID().uuidString.lowercased()]).joined(separator: ":"),
+            priorOriginalTransactionIds: priorOriginalTransactionIds
         )
         var entries = pendingPurchases()
         let recoveryKey = pendingKey(
