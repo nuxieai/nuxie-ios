@@ -272,6 +272,7 @@ class SourceIdentityTests(unittest.TestCase):
             def git(*args):
                 return subprocess.run(["git", *args], cwd=root, check=True, text=True, capture_output=True).stdout.strip()
             git("init", "--quiet")
+            (root / ".gitignore").write_text((sdk.ROOT / ".gitignore").read_text())
             source = root / "Swift source.swift"
             source.write_text("public let version = 1\n")
             git("add", ".")
@@ -285,6 +286,11 @@ class SourceIdentityTests(unittest.TestCase):
                 self.assertEqual(len(initial[2]), 64)
                 output.mkdir()
                 (output / "sdk-artifacts.json").write_text("generated output")
+                for name in ("output/pipeline/bazel/invocation.bep.json", "output/native-products/ios/Debug/sdk-artifacts.json",
+                             "output/native-products/ios/Release/sdk-artifacts.json"):
+                    generated = root / name
+                    generated.parent.mkdir(parents=True, exist_ok=True)
+                    generated.write_text("generated output")
                 self.assertEqual(sdk.source_identity([output]), initial)
                 source.write_text("public let version = 2\n")
                 modified = sdk.source_identity([output])
