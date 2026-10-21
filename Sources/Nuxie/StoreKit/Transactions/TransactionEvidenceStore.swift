@@ -161,6 +161,15 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             && (commercialContext == nil || completionDeliveredAt != nil)
     }
 
+    /// Whether this entry is newer than a store read of its purchase that saw
+    /// it as `readRevoked`: the entry holds a revocation the read did not
+    /// carry. StoreKit never takes a refund back, so such a read came before
+    /// the refund, and a send or admission built from it would downgrade the
+    /// entry.
+    func isNewerThanStoreRead(revoked readRevoked: Bool) -> Bool {
+        isRevoked && !readRevoked
+    }
+
     /// Whether this entry lets `distinctId` in before the server answers:
     /// their own unanswered, unrevoked purchase, by account token. A Restore
     /// claim waits for the server, as Restore itself does.

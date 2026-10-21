@@ -97,9 +97,15 @@ cannot be saved publishes nothing: the outbox is then off, and the answer only
 refreshes the profile. The profile refresh the answer asks for runs after it.
 Every write to an entry checks, in the same step, the admission it was based
 on: a commit that read one admission and waited while a Restore admitted
-another is dropped, never merged into the newer entry. Two facts are recorded
-on whichever entry holds the transaction, since they are about the purchase
-itself: the StoreKit finish and the captured checkout completion.
+another is dropped, never merged into the newer entry. A write or send built
+from a store read never downgrades the entry either. StoreKit never takes a
+refund back, so once an entry holds the purchase's signed revocation, a claim
+or send built from a read that saw the purchase active is dropped, and the
+entry keeps the revocation as its next send, a sync of its own admission. A
+Restore does not count such a claim, as a fresh read leaves a refunded
+purchase out. Two facts are recorded on whichever entry holds the transaction,
+since they are about the purchase itself: the StoreKit finish and the captured
+checkout completion.
 
 Retiring a 200's Features is itself a change to each Feature, so a Feature
 check that began before a newer profile retired the hold cannot publish its

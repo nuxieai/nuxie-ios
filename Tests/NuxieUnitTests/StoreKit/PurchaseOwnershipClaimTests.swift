@@ -1143,6 +1143,74 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertEqual(harness.api.requests.last?.reason, .sync)
     }
 
+    /// A send built from an earlier store read never downgrades the entry.
+    /// The buyer tries to buy a product StoreKit says they already own; the
+    /// scan reads two of their purchases active, and before its sends are
+    /// made StoreKit reports both refunded, so each entry holds the signed
+    /// revocation. The scan's claim and its refresh are dropped: each entry
+    /// keeps the revocation as its next send, a sync of its own admission,
+    /// and nothing unlocks while the server is unreachable.
+    func testSendsFromAStoreReadBeforeARefundNeverTakeTheRevocationOff() async throws {
+        let harness = await makeHarness(customer: "buyer")
+        harness.api.answer(.fail)
+        let owned = entitlement("owned", productId: storeProductId, token: token("buyer"))
+        let other = entitlement("other", productId: "other-store-product", token: token("buyer"))
+        harness.entitlements.set([owned, other])
+        let observer = harness.observer
+        harness.entitlements.afterNextRead {
+            for item in [owned, other] {
+                let refund = VerifiedStoreTransactionUpdate(
+                    transactionId: item.update.transactionId,
+                    originalTransactionId: item.update.originalTransactionId,
+                    productId: item.update.productId,
+                    appAccountToken: item.update.appAccountToken,
+                    isRevoked: true,
+                    isUpgraded: false,
+                    finish: {}
+                )
+                let refunded = await observer.handleVerifiedTransaction(
+                    refund,
+                    jwsRepresentation: "\(item.jwsRepresentation)-refund",
+                    source: .transactionStream
+                )
+                _ = await refunded.syncTask?.value
+            }
+        }
+        func entry(_ transactionId: String) -> StoredTransactionEvidence? {
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?[transactionId]
+        }
+        harness.adapter.configureAlreadyOwned()
+
+        _ = try await harness.service.purchase(product())
+        for item in [owned, other] {
+            let id = item.update.transactionId
+            let refunded = try XCTUnwrap(entry(id))
+            XCTAssertTrue(refunded.isRevoked, "\(id) keeps its revocation")
+            XCTAssertEqual(refunded.transactionJws, "\(item.jwsRepresentation)-refund")
+            XCTAssertEqual(refunded.reason, .sync, "the revocation is sent as a sync")
+            XCTAssertEqual(refunded.sendAttempts, 1, "only the refund's own send was tried")
+            XCTAssertFalse(refunded.unlocksEarly(for: "buyer"))
+        }
+        XCTAssertEqual(
+            harness.api.requests.map(\.transactionJwt),
+            ["owned-jws-refund", "other-jws-refund"],
+            "nothing sends the purchases as the store read them before the refund"
+        )
+        let visible = await harness.visiblePremium()
+        XCTAssertNotEqual(visible?.allowed, true, "a refunded purchase does not unlock")
+
+        // Each entry's next send is its revocation, and its answer answers it.
+        harness.api.answer(.accept)
+        await harness.observer.retryStoredEvidence()
+        XCTAssertEqual(
+            Array(harness.api.requests.dropFirst(2).map(\.transactionJwt)).sorted(),
+            ["other-jws-refund", "owned-jws-refund"]
+        )
+        for item in [owned, other] {
+            XCTAssertNotNil(entry(item.update.transactionId)?.answeredAt)
+        }
+    }
+
     private func assertRestoreGetsNoAnswer(
         _ harness: Harness,
         file: StaticString = #filePath,
@@ -1463,7 +1531,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
             purchaseStorageScope: scope,
             dateProvider: mocks.dateProvider,
             unfinishedRecoveryTransactions: { [] },
-            currentEntitlementRecoveryTransactions: { entitlements.get() },
+            currentEntitlementRecoveryTransactions: { await entitlements.read() },
             refreshProfile: { distinctId in
                 profileRefreshes.record(distinctId)
                 if profileFollowsAnswers {
@@ -1636,9 +1704,27 @@ private final class ProfileRefreshRecorder: @unchecked Sendable {
 private final class EntitlementBox: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [StoreTransactionRecoveryItem] = []
+    private var afterReadHook: (@Sendable () async -> Void)?
 
     func set(_ items: [StoreTransactionRecoveryItem]) { lock.withLock { self.items = items } }
     func get() -> [StoreTransactionRecoveryItem] { lock.withLock { items } }
+
+    /// Runs `hook` once, after the next read has taken its items and before
+    /// it returns them: something that lands between StoreKit's read and
+    /// the sends built from it.
+    func afterNextRead(_ hook: @escaping @Sendable () async -> Void) {
+        lock.withLock { afterReadHook = hook }
+    }
+
+    func read() async -> [StoreTransactionRecoveryItem] {
+        let (read, hook) = lock.withLock { () -> ([StoreTransactionRecoveryItem], (@Sendable () async -> Void)?) in
+            let hook = afterReadHook
+            afterReadHook = nil
+            return (items, hook)
+        }
+        await hook?()
+        return read
+    }
 }
 
 /// The server profile, except that reading the latest request revision (which
