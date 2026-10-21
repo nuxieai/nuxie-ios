@@ -1012,7 +1012,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         if source == .transactionStream,
            resolvesPendingPurchase,
            case .unique = await transactionServiceProvider()
-            .pendingPurchaseOwnership(productId: transaction.productId) {
+            .pendingPurchaseOwnership(
+                productId: transaction.productId,
+                originalTransactionId: transaction.originalTransactionId
+            ) {
             resolvedSource = .deferredUpdate
         }
         return await commit(.verified(
@@ -1381,7 +1384,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         if let transactionService {
             checkoutRecovery = await transactionService.checkoutRecoveryRecord(
                 appAccountToken: verified.appAccountToken,
-                productId: verified.productId
+                productId: verified.productId,
+                originalTransactionId: verified.originalTransactionId
             )
             guard !(await transactionService.pendingPurchaseStoreIsUnreadable()) else {
                 return .rejected
@@ -1459,7 +1463,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             } else {
                 guard let transactionService else { return .rejected }
                 switch await transactionService.pendingPurchaseOwnership(
-                    productId: verified.productId
+                    productId: verified.productId,
+                    originalTransactionId: verified.originalTransactionId
                 ) {
                 case .none:
                     pendingRecord = nil
@@ -1522,6 +1527,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             deliversLiveCheckout = await transactionService.isActiveCheckout(
                 appAccountToken: verified.appAccountToken,
                 productId: verified.productId,
+                originalTransactionId: verified.originalTransactionId,
                 distinctId: existing?.distinctId ?? newRecordOwner
             )
             routeCompletionToJourneys = deliversLiveCheckout

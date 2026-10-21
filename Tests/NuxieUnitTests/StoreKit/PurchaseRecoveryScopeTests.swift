@@ -542,6 +542,191 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
     }
 
+    /// A checkout binding is matched only by a purchase the store did not
+    /// already own when that checkout began. A purchase of the same product
+    /// from before the checkout (an unfinished one StoreKit delivers again,
+    /// say) never takes the binding, so it never reports that checkout's
+    /// completion, and the checkout keeps its binding.
+    func testPurchaseFromBeforeACheckoutNeverTakesItsBinding() async throws {
+        let mocks = MockFactory.shared
+        let clock = MockDateProvider()
+        let identity = MockIdentityService()
+        identity.setDistinctId("buyer")
+        let scope = PurchaseStorageScope.testFixture
+        let token = scope.appAccountToken(distinctId: "buyer")
+        let pending = InMemoryPendingPurchaseStore()
+        XCTAssertTrue(pending.save(["buyer::store-product-1": PendingPurchaseRecord(
+            scope: scope,
+            distinctId: "buyer",
+            appAccountToken: token,
+            commercialContext: commercialContext(),
+            recordedAt: clock.now(),
+            localEntitlementGrants: [],
+            state: .checkout,
+            checkoutCompletionEventId: "checkout-completion",
+            priorOriginalTransactionIds: ["earlier-original"]
+        )]))
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "binding-test"))
+        let sink = RecoveryEventSink()
+        let store = InMemoryTransactionEvidenceStore()
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(
+            api: RecoverySyncAPI(succeeds: true),
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: clock,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: settings,
+            eventSink: sink,
+            transactionServiceProvider: { box.get() },
+            evidenceStore: store,
+            purchaseStorageScope: scope,
+            dateProvider: clock,
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        box.set(TransactionService(
+            productService: mocks.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: pending,
+            dateProvider: clock,
+            settings: settings,
+            eventSink: sink,
+            purchaseStorageScope: scope,
+            identityService: identity
+        ))
+        addTeardownBlock { await observer.stopListening() }
+
+        // The same customer bought the same product before the checkout
+        // began, so the store held it then, and StoreKit delivers that
+        // purchase now.
+        let earlier = VerifiedStoreTransactionUpdate(
+            transactionId: "earlier-transaction",
+            originalTransactionId: "earlier-original",
+            productId: "store-product-1",
+            appAccountToken: token,
+            isRevoked: false,
+            isUpgraded: false,
+            finish: {}
+        )
+        let result = await observer.handleVerifiedTransaction(
+            earlier,
+            jwsRepresentation: "earlier-jws",
+            source: .startupRecovery
+        )
+        _ = await result.syncTask?.value
+
+        XCTAssertEqual(
+            sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0,
+            "an older purchase never reports the checkout's completion"
+        )
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])?["earlier-transaction"]?.commercialContext)
+        XCTAssertNotNil(
+            pending.load().valueTreatingAbsentAsEmpty([:])?["buyer::store-product-1"],
+            "the checkout keeps its binding for its own purchase"
+        )
+    }
+
+    /// The checkout records what the store already holds for its product, so
+    /// a renewal of a subscription the customer already had, dated after the
+    /// checkout began, never takes the checkout's binding: a renewal shares
+    /// its subscription's original transaction id.
+    func testRenewalOfAnOwnedSubscriptionNeverTakesACheckoutBinding() async throws {
+        let mocks = MockFactory.shared
+        let clock = MockDateProvider()
+        let identity = MockIdentityService()
+        identity.setDistinctId("buyer")
+        let scope = PurchaseStorageScope.testFixture
+        let token = scope.appAccountToken(distinctId: "buyer")
+        let pending = InMemoryPendingPurchaseStore()
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "binding-test"))
+        let sink = RecoveryEventSink()
+        let store = InMemoryTransactionEvidenceStore()
+        let adapter = MockNativeStoreKitPurchaseAdapter()
+        adapter.heldOriginalTransactionIdsByProduct = ["store-product-1": ["owned-original"]]
+        adapter.configurePending()
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(
+            api: RecoverySyncAPI(succeeds: true),
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: clock,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: settings,
+            eventSink: sink,
+            transactionServiceProvider: { box.get() },
+            evidenceStore: store,
+            purchaseStorageScope: scope,
+            dateProvider: clock,
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        let service = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: pending,
+            dateProvider: clock,
+            settings: settings,
+            eventSink: sink,
+            purchaseStorageScope: scope,
+            identityService: identity,
+            nativePurchaseAdapter: adapter
+        )
+        box.set(service)
+        addTeardownBlock { await observer.stopListening() }
+
+        // The checkout waits for approval, so its binding stays.
+        let native = MockStoreProduct(id: "store-product-1", displayName: "Subscription",
+            description: "Subscription", price: 9.99, displayPrice: "$9.99")
+        var product = StoreProduct(productId: "product-1", storeProductId: native.id,
+            placementId: "placement-1", name: native.displayName, description: native.description,
+            price: native.displayPrice, period: nil, productType: native.productType, appStoreProduct: native)
+        product.purchaseContext = commercialContext()
+        do {
+            _ = try await service.purchase(product)
+            XCTFail("the checkout waits for approval")
+        } catch StoreKitError.purchasePending {}
+        XCTAssertNotNil(pending.load().valueTreatingAbsentAsEmpty([:])?["buyer::store-product-1"])
+
+        // The subscription the customer already had renews after the
+        // checkout began.
+        let renewal = VerifiedStoreTransactionUpdate(
+            transactionId: "renewal-transaction",
+            originalTransactionId: "owned-original",
+            productId: "store-product-1",
+            appAccountToken: token,
+            isRevoked: false,
+            isUpgraded: false,
+            finish: {}
+        )
+        let result = await observer.handleVerifiedTransaction(
+            renewal,
+            jwsRepresentation: "renewal-jws",
+            source: .transactionStream
+        )
+        _ = await result.syncTask?.value
+
+        XCTAssertEqual(
+            sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }.count, 0,
+            "a renewal never reports the checkout's completion"
+        )
+        XCTAssertNil(store.load().valueTreatingAbsentAsEmpty([:])?["renewal-transaction"]?.commercialContext)
+        XCTAssertNotNil(
+            pending.load().valueTreatingAbsentAsEmpty([:])?["buyer::store-product-1"],
+            "the checkout keeps its binding for its own purchase"
+        )
+    }
+
     func testOrdinaryRestoreRefreshesAlreadySyncedCurrentSubscription() async throws {
         let mocks = MockFactory.shared
         let identity = MockIdentityService()

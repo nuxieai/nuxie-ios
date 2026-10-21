@@ -23,6 +23,9 @@ enum NativePurchaseResult: Sendable {
 protocol NativeStoreKitPurchasing: Sendable {
     func purchase(product: StoreProduct) async -> NativePurchaseResult
     func restorePurchases() async -> NativeRestoreResult
+    /// The original transaction ids of what the store holds for `productId`:
+    /// its current entitlements and its unfinished transactions.
+    func heldOriginalTransactionIds(productId: String) async -> Set<String>
 }
 
 enum NativeRestoreResult: Sendable {
@@ -103,6 +106,25 @@ struct NativeStoreKitPurchaseAdapter: NativeStoreKitPurchasing {
         } catch {
             return .failed(StoreKitError.from(storeKit2Error: error))
         }
+    }
+
+    func heldOriginalTransactionIds(productId: String) async -> Set<String> {
+        // Unverified transactions count too: the set only ever keeps a
+        // purchase from taking a checkout's binding.
+        var held: Set<String> = []
+        for await result in Transaction.currentEntitlements {
+            let transaction = result.unsafePayloadValue
+            if transaction.productID == productId {
+                held.insert(String(transaction.originalID))
+            }
+        }
+        for await result in Transaction.unfinished {
+            let transaction = result.unsafePayloadValue
+            if transaction.productID == productId {
+                held.insert(String(transaction.originalID))
+            }
+        }
+        return held
     }
 
     private func currentOwnership(for product: Product) async -> NativePurchaseResult? {

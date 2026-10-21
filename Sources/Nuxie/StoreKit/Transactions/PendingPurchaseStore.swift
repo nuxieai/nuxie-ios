@@ -77,6 +77,12 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
     let evidenceAuthority: PurchaseEvidenceAuthority
     /// Stable identity for this native checkout's completion event.
     let checkoutCompletionEventId: String
+    /// The original transaction ids the store already held for the product
+    /// when this checkout began: its current entitlements and unfinished
+    /// transactions. A purchase sharing one (an older purchase delivered
+    /// again, a renewal of a subscription the customer already had) is never
+    /// this checkout's purchase, so it never takes this binding.
+    let priorOriginalTransactionIds: Set<String>
 
     init(
         scope: PurchaseStorageScope,
@@ -88,7 +94,8 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
         localEntitlementGrants: [StoredLocalEntitlementGrant],
         state: PendingPurchaseState,
         evidenceAuthority: PurchaseEvidenceAuthority = .nativeStoreKit,
-        checkoutCompletionEventId: String = UUID().uuidString.lowercased()
+        checkoutCompletionEventId: String = UUID().uuidString.lowercased(),
+        priorOriginalTransactionIds: Set<String> = []
     ) {
         self.scope = scope
         self.distinctId = distinctId
@@ -100,6 +107,45 @@ struct PendingPurchaseRecord: Codable, Equatable, Sendable {
         self.state = state
         self.evidenceAuthority = evidenceAuthority
         self.checkoutCompletionEventId = checkoutCompletionEventId
+        self.priorOriginalTransactionIds = priorOriginalTransactionIds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope, distinctId, appAccountToken, commercialContext, recordedAt
+        case productFeatureIds, localEntitlementGrants, state, evidenceAuthority
+        case checkoutCompletionEventId, priorOriginalTransactionIds
+    }
+
+    /// A binding stored without the store's holdings reads as holding none,
+    /// as Android reads a binding without its prior tokens.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        scope = try container.decode(PurchaseStorageScope.self, forKey: .scope)
+        distinctId = try container.decode(String.self, forKey: .distinctId)
+        appAccountToken = try container.decode(UUID.self, forKey: .appAccountToken)
+        commercialContext = try container.decode(
+            PurchaseCommercialContext.self,
+            forKey: .commercialContext
+        )
+        recordedAt = try container.decode(Date.self, forKey: .recordedAt)
+        productFeatureIds = try container.decode([String].self, forKey: .productFeatureIds)
+        localEntitlementGrants = try container.decode(
+            [StoredLocalEntitlementGrant].self,
+            forKey: .localEntitlementGrants
+        )
+        state = try container.decode(PendingPurchaseState.self, forKey: .state)
+        evidenceAuthority = try container.decode(
+            PurchaseEvidenceAuthority.self,
+            forKey: .evidenceAuthority
+        )
+        checkoutCompletionEventId = try container.decode(
+            String.self,
+            forKey: .checkoutCompletionEventId
+        )
+        priorOriginalTransactionIds = try container.decodeIfPresent(
+            Set<String>.self,
+            forKey: .priorOriginalTransactionIds
+        ) ?? []
     }
 }
 

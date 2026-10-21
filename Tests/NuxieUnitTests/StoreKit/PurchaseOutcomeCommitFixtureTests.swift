@@ -488,6 +488,8 @@ private final class PurchaseOutcomeStoreAdapter {
         }
     }
 
+    func heldOriginalTransactionIds(productId: String) async -> Set<String> { [] }
+
     var purchaseCallCount: Int { lock.withLock { purchaseCalls } }
     var restoreCallCount: Int { lock.withLock { restoreCalls } }
 }
