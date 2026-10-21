@@ -13,7 +13,9 @@ SDK = 'ios'
 class PipelineTests(unittest.TestCase):
     def render(self, version='1', split='0', topology='consolidated', **controls):
         env = dict(os.environ, NUXIE_CI_RUNNER_POLICY_VERSION=version,
-                   NUXIE_SDK_SPLIT_LANES=split, NUXIE_CI_RUNNER_TOPOLOGY=topology, **controls)
+                   NUXIE_SDK_SPLIT_LANES=split, NUXIE_CI_RUNNER_TOPOLOGY=topology,
+                   NUXIE_SDK_PREPARE_PRODUCTS='0')
+        env.update(controls)
         return subprocess.run([sys.executable, str(ROOT / 'scripts/ci/pipeline.py')], env=env,
                               capture_output=True, text=True, timeout=10)
 
@@ -93,6 +95,17 @@ class PipelineTests(unittest.TestCase):
         controls['NUXIE_CI_BAZEL_REMOTE_CACHE_MODE'] = 'write'
         steps = json.loads(self.render('2', '1', **controls).stdout)['steps']
         self.assertTrue(all(step['env']['NUXIE_BAZEL_REMOTE_CACHE_MODE'] == 'off' for step in steps))
+
+    def test_requested_native_products_cover_both_ios_configurations_and_slices(self):
+        steps = json.loads(self.render('2', NUXIE_SDK_PREPARE_PRODUCTS='1').stdout)['steps']
+        commands = steps[0]['command'].splitlines()
+        self.assertEqual(commands[-4:-2], [
+            'python3 -B scripts/bazel/sdk.py prepare --configuration Debug --platform ios-device --platform ios-simulator --output output/native-products/ios/Debug',
+            'python3 -B scripts/bazel/sdk.py prepare --configuration Release --platform ios-device --platform ios-simulator --output output/native-products/ios/Release',
+        ])
+        self.assertIn('output/pipeline/**/*', steps[0]['artifact_paths'])
+        self.assertNotEqual(self.render('1', NUXIE_SDK_PREPARE_PRODUCTS='1').returncode, 0)
+        self.assertNotEqual(self.render('2', NUXIE_SDK_PREPARE_PRODUCTS='yes').returncode, 0)
 
     def test_repository_upload_v2_selector_has_initial_profile(self):
         steps = json.loads((ROOT / '.buildkite/pipeline.yml').read_text())['steps']

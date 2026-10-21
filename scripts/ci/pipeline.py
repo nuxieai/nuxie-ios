@@ -20,6 +20,9 @@ def pipeline(environment=None):
     environment = os.environ if environment is None else environment
     version = environment.get('NUXIE_CI_RUNNER_POLICY_VERSION', '1')
     split = environment.get('NUXIE_SDK_SPLIT_LANES', '0')
+    products = environment.get('NUXIE_SDK_PREPARE_PRODUCTS', '0')
+    if products not in ('0', '1') or products == '1' and version != '2':
+        raise ValueError('Native product export requires runner policy v2 and a 0 or 1 setting')
     if version not in ('1', '2') or split not in ('0', '1'):
         raise ValueError('Unsupported runner policy or SDK split setting')
     if split == '1' and version != '2':
@@ -46,6 +49,12 @@ def pipeline(environment=None):
                 'python3 scripts/bazel/lane_artifacts.py restore --input output/pipeline/android-products',
                 'bash scripts/ci.sh --platform ios'], depends_on='godot-android'),
         ]
+    if products == '1':
+        for configuration in ('Debug', 'Release'):
+            document['steps'][0]['command'] += (
+                'python3 -B scripts/bazel/sdk.py prepare --configuration ' + configuration
+                + ' --platform ios-device --platform ios-simulator --output output/native-products/ios/' + configuration + '\n')
+        document['steps'][0]['command'] += 'mkdir -p output/pipeline/native-products\ntar -czf output/pipeline/native-products/ios-products.tar.gz -C output/native-products ios\n'
     if version == '2':
         for index, step in enumerate(document['steps']):
             selected = step['agents'].get('nuxie-platform', 'linux')
