@@ -96,6 +96,48 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         await log.close()
     }
 
+    /// An event accepted just before the release is still being committed:
+    /// the release waits for it, so it joins the prefix the hold kept.
+    func testReleasingAHoldWaitsForCapturesAcceptedBeforeIt() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = MockEventStore()
+        let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+            apiClient: MockNuxieApi(), store: store)
+        let configuration = NuxieConfiguration(apiKey: "test-api-key")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        let received = RecoveredRouteRecorder()
+        let reservation = log.reserveCommittedAdmission { 1 }
+        await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
+            await received.append(event.name)
+            return true
+        }
+        try await log.configure(configuration: configuration)
+        let hold = await log.deferCommittedRouting()
+        store.suspendNextInsert()
+        log.track("held")
+        for _ in 0..<200 where store.waitingInsertIds.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let insert = try XCTUnwrap(store.waitingInsertIds.first)
+        let returned = RecoveredRouteRecorder()
+        let release = Task {
+            let released = await log.releaseCommittedRouting(ifGeneration: hold)
+            await returned.append("returned")
+            return released
+        }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let returnedEarly = await returned.snapshot()
+        XCTAssertEqual(returnedEarly, [], "The release waits for the capture it was sent after")
+
+        store.resumeInsert(id: insert)
+        let released = await release.value
+        XCTAssertTrue(released)
+        let delivered = await received.snapshot()
+        XCTAssertEqual(delivered, ["held"])
+        await log.close()
+    }
+
     func testFailedSubscriberKeepsDurableBacklogOnDiskAndReplaysInCaptureOrder() async throws {
         let stores: [any EventStoreProtocol] = [MockEventStore(), SQLiteEventStore()]
         for store in stores {

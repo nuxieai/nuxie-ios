@@ -344,8 +344,9 @@ protocol EventLogProtocol:
   func deferCommittedRouting() async -> UInt64
   func resumeCommittedRouting(ifGeneration: UInt64) async
   /// `resumeCommittedRouting(ifGeneration:)` that returns once the routes
-  /// the hold kept have reached their subscribers. A newer hold keeps
-  /// routing for its own owner, and then this returns false at once.
+  /// the hold kept, including those of captures accepted before this call,
+  /// have reached their subscribers. A newer hold keeps routing for its own
+  /// owner, and then this returns false at once.
   @discardableResult
   func releaseCommittedRouting(ifGeneration: UInt64) async -> Bool
 
@@ -1441,6 +1442,10 @@ actor EventLog: EventLogProtocol {
       routeContinuation.yield(.resumeAfterRecovery(generation: generation))
       return false
     }
+    // Captures accepted before this call commit first, so the routes they
+    // add join the prefix this release delivers.
+    await drainCaptureWorker()
+    guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
     return await withCheckedContinuation { completion in
       if case .terminated = routeContinuation.yield(
         .releaseHold(generation: generation, completion: completion)
