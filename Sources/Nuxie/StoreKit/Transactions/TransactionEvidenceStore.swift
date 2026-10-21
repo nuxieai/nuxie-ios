@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct StoredLocalEntitlementGrant: Codable, Equatable, Sendable {
@@ -15,7 +16,9 @@ struct StoredLocalEntitlementGrant: Codable, Equatable, Sendable {
 /// (`customerKind`), all recorded when the send was admitted so a retry never
 /// works them out again. The server's 200 or refusal (409/400) answers the
 /// send; a transport or 5xx failure keeps it for a retry with backoff, across
-/// restarts. The entry is not purchase authority: who owns the purchase is
+/// restarts. Each write that changes what the entry sends is a new admission
+/// (`admissionId`), and an answer applies only to the admission its send
+/// carried. The entry is not purchase authority: who owns the purchase is
 /// what the server last said, and access comes from the server profile, so
 /// the entry only lets the buyer's own unanswered purchase unlock early.
 ///
@@ -66,6 +69,13 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     /// When a failed send is due again: the time it failed plus the backoff
     /// for its attempt count. Nil until a send fails, and once answered.
     let retryDueAt: Date?
+    /// The admission that wrote what this entry sends. A write that changes
+    /// what is sent (the signed transaction, requester, reason or customer
+    /// kind), or opens an answered entry again, is a new admission with a
+    /// fresh id; other writes keep it. Each send carries the id of the
+    /// admission it sent, and its answer applies to the entry only while the
+    /// id still matches.
+    private(set) var admissionId: UUID
 
     init(
         scope: PurchaseStorageScope = .testFixture,
@@ -86,7 +96,8 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         reason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind = .identified,
         sendAttempts: Int = 0,
-        retryDueAt: Date? = nil
+        retryDueAt: Date? = nil,
+        admissionId: UUID = UUID()
     ) {
         self.scope = scope
         self.transactionJws = transactionJws
@@ -107,6 +118,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.customerKind = customerKind
         self.sendAttempts = sendAttempts
         self.retryDueAt = retryDueAt
+        self.admissionId = admissionId
     }
 
     /// The previous SDK's name for `answeredAt`.
@@ -121,13 +133,16 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let previous = try decoder.container(keyedBy: PreviousCodingKeys.self)
+        let transactionJws = try container.decode(String.self, forKey: .transactionJws)
+        let transactionId = try container.decode(String.self, forKey: .transactionId)
+        let distinctId = try container.decode(String.self, forKey: .distinctId)
         self.init(
             scope: try container.decode(PurchaseStorageScope.self, forKey: .scope),
-            transactionJws: try container.decode(String.self, forKey: .transactionJws),
-            transactionId: try container.decode(String.self, forKey: .transactionId),
+            transactionJws: transactionJws,
+            transactionId: transactionId,
             originalTransactionId: try container.decode(String.self, forKey: .originalTransactionId),
             productId: try container.decode(String.self, forKey: .productId),
-            distinctId: try container.decode(String.self, forKey: .distinctId),
+            distinctId: distinctId,
             recordedAt: try container.decode(Date.self, forKey: .recordedAt),
             productFeatureIds: try container.decode([String].self, forKey: .productFeatureIds),
             isRevoked: try container.decode(Bool.self, forKey: .isRevoked),
@@ -149,8 +164,52 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
                 PurchaseCustomerKind.self, forKey: .customerKind
             ) ?? .identified,
             sendAttempts: try container.decodeIfPresent(Int.self, forKey: .sendAttempts) ?? 0,
-            retryDueAt: try container.decodeIfPresent(Date.self, forKey: .retryDueAt)
+            retryDueAt: try container.decodeIfPresent(Date.self, forKey: .retryDueAt),
+            admissionId: try container.decodeIfPresent(UUID.self, forKey: .admissionId)
+                ?? Self.previousAdmissionId(
+                    transactionId: transactionId,
+                    transactionJws: transactionJws,
+                    distinctId: distinctId
+                )
         )
+    }
+
+    /// An entry the previous SDK wrote has no admission id. It gets one
+    /// derived from what it sends, so every read of it names the same
+    /// admission until it is next written.
+    private static func previousAdmissionId(
+        transactionId: String,
+        transactionJws: String,
+        distinctId: String
+    ) -> UUID {
+        let material = ["previous-admission", transactionId, distinctId, transactionJws]
+            .joined(separator: "\u{1f}")
+        let d = Array(SHA256.hash(data: Data(material.utf8)))
+        return UUID(uuid: (
+            d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+            d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]
+        ))
+    }
+
+    /// This entry as written over `current`. A write that changes what is
+    /// sent, or opens an answered entry again, is a new admission; any other
+    /// write keeps the current one.
+    func admitted(over current: Self?) -> Self {
+        var written = self
+        if let current, !isUnsent || (current.isUnsent && sendsSame(as: current)) {
+            written.admissionId = current.admissionId
+        } else {
+            written.admissionId = UUID()
+        }
+        return written
+    }
+
+    private func sendsSame(as other: Self) -> Bool {
+        transactionJws == other.transactionJws
+            && distinctId == other.distinctId
+            && reason == other.reason
+            && customerKind == other.customerKind
+            && isRevoked == other.isRevoked
     }
 
     /// Whether this entry is still to be sent.
@@ -190,7 +249,8 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             reason: reason,
             customerKind: customerKind,
             sendAttempts: answeredAt == nil ? sendAttempts : 0,
-            retryDueAt: answeredAt == nil ? retryDueAt : nil
+            retryDueAt: answeredAt == nil ? retryDueAt : nil,
+            admissionId: admissionId
         )
     }
 
@@ -218,7 +278,8 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             sendAttempts: sendAttempts + 1,
             retryDueAt: failedAt.addingTimeInterval(
                 TransactionObserver.outboxRetryDelay(afterAttempts: sendAttempts + 1)
-            )
+            ),
+            admissionId: admissionId
         )
     }
 }
