@@ -6,7 +6,8 @@ repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_root}"
 
 status=0
-owned_files="$(git ls-files --cached --others --exclude-standard)"
+# The fixture's documentary generator runs only after copying it into the compiler checkout.
+owned_files="$(git ls-files --cached --others --exclude-standard | awk '$0 != "fixtures/runtime/nested-values/generate.rs"')"
 if grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|rust-toolchain|rust-toolchain\.toml)$|\.rs$' <<< "${owned_files}"; then
     echo "nuxie-ios must not own Cargo manifests, Rust source, or a Rust toolchain" >&2
     status=1
