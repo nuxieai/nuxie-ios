@@ -220,25 +220,15 @@ struct PurchaseCommitResult: Sendable {
     let committed: Bool
     let syncTask: Task<Bool, Never>?
     let isTerminal: Bool
-    /// The result is another producer's commit of the purchase, made earlier
-    /// or still running, not this call's own. Its send is not this
-    /// producer's, so a Restore or purchase claim never counts its answer.
-    let isReplay: Bool
 
     init(
         committed: Bool,
         syncTask: Task<Bool, Never>?,
-        isTerminal: Bool? = nil,
-        isReplay: Bool = false
+        isTerminal: Bool? = nil
     ) {
         self.committed = committed
         self.syncTask = syncTask
         self.isTerminal = isTerminal ?? committed
-        self.isReplay = isReplay
-    }
-
-    func asReplay() -> Self {
-        Self(committed: committed, syncTask: syncTask, isTerminal: isTerminal, isReplay: true)
     }
 
     static let handled = Self(
@@ -481,13 +471,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let task: Task<PurchaseCommitResult, Never>
     }
 
+    /// An external declaration commits once per callback operation.
     private struct CompletedPurchaseCommit: Sendable {
         let id: UUID
         let result: PurchaseCommitResult
-        /// The customer the commit was made for. Only a producer for the same
-        /// customer reuses it, so a session acceptance never crosses
-        /// customers.
-        let customer: String?
     }
 
     private struct PurchaseCommitRetryState: Sendable {
@@ -501,6 +488,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// producer of the same evidence joins one ordered interpretation.
     private var purchaseCommitOperations: [PurchaseCommitKey: PurchaseCommitOperation] = [:]
     private var completedPurchaseCommits: [PurchaseCommitKey: CompletedPurchaseCommit] = [:]
+    /// Verified purchases committed this session, for the cross-SDK fixture's
+    /// commit count only. It decides nothing: a verified producer always
+    /// commits against the entry, whose own flags say what is left to do.
+    private var committedVerifiedPurchases: Set<PurchaseCommitKey> = []
     /// A nonterminal stable-event/Journey capture retries the exact same
     /// committer identity. External callbacks are never invoked again and have
     /// a bounded in-process tail; verified retries retain their finish closure.
@@ -779,6 +770,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             guard !Task.isCancelled else { return }
             // An entry answered while this pass ran is not sent again.
             guard let evidence = storedEvidence()[read.transactionId] else { continue }
+            // A settled entry is only the purchase's record.
+            if evidence.isSettled { continue }
             if !sendingEveryEntry, evidence.isUnsent,
                let dueAt = evidence.retryDueAt, dueAt > now {
                 continue
@@ -822,13 +815,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     transactionId: evidence.transactionId,
                     admissionId: evidence.admissionId
                 )
-            }
-            if let retained = storedEvidence()[evidence.transactionId],
-               retained.answeredAt != nil,
-               !retained.finishRequired,
-               retained.commercialContext == nil
-                || retained.completionDeliveredAt != nil {
-                _ = await removeEvidence(transactionId: evidence.transactionId)
             }
         }
     }
@@ -1037,51 +1023,25 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return .handled
         }
 
-        let customer = commitCustomer(for: outcome)
-        // The outbox pass sends its entry's admission; an earlier commit of
-        // the purchase never stands in for that send.
-        let resendsOutboxEntry: Bool
-        if case .verified(let evidence, _) = outcome {
-            resendsOutboxEntry = evidence.outboxAdmissionId != nil
-        } else {
-            resendsOutboxEntry = false
-        }
+        let isExternal: Bool
+        if case .external = outcome { isExternal = true } else { isExternal = false }
+        var awaitedOperationId: UUID?
         while true {
-            if let completed = completedPurchaseCommits[key],
-               completed.customer == customer, !resendsOutboxEntry {
-                // Keep one exact sync task for every accepted commit attempt. A
-                // failed receipt submission invalidates only the in-memory
-                // marker; durable evidence and completion state make the next
-                // producer a safe retry without replaying Journey advancement.
-                if case .verified = outcome,
-                   let syncTask = completed.result.syncTask {
-                    let synced = await syncTask.value
-                    guard !isStopped else { return .rejected }
-                    // Another waiter may have invalidated and replaced this
-                    // completion while the actor was suspended. Re-evaluate
-                    // the newest completed/in-flight state before proceeding.
-                    guard completedPurchaseCommits[key]?.id == completed.id else {
-                        continue
-                    }
-                    if synced {
-                        return completed.result.asReplay()
-                    }
-                    completedPurchaseCommits.removeValue(forKey: key)
-                    // A duplicate checkout-recovery producer reports the
-                    // recovery; it never resubmits a failed receipt itself.
-                    // The invalidated completion leaves the retry to the
-                    // stored-evidence pump's next pass.
-                    if case .verified(let evidence, _) = outcome,
-                       evidence.requiresCheckoutBinding {
-                        return completed.result.asReplay()
-                    }
-                    continue
-                }
-                return completed.result.asReplay()
+            if isExternal, let completed = completedPurchaseCommits[key] {
+                return completed.result
             }
             guard !isStopped else { return .rejected }
-            if let operation = purchaseCommitOperations[key] {
-                return await operation.task.value.asReplay()
+            if let operation = purchaseCommitOperations[key],
+               operation.id != awaitedOperationId {
+                // One commit of a purchase at a time. A verified producer
+                // waits for the running commit and then commits against the
+                // entry it left: the entry's own flags (answered, finished,
+                // completion delivered) decide what is left to do. No earlier
+                // commit stands in for it.
+                awaitedOperationId = operation.id
+                let result = await operation.task.value
+                if isExternal { return result }
+                continue
             }
 
             let operationId = UUID()
@@ -1098,11 +1058,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 purchaseCommitOperations.removeValue(forKey: key)
             }
             if result.isTerminal {
-                completedPurchaseCommits[key] = CompletedPurchaseCommit(
-                    id: UUID(),
-                    result: result,
-                    customer: customer
-                )
+                if isExternal {
+                    completedPurchaseCommits[key] = CompletedPurchaseCommit(
+                        id: UUID(),
+                        result: result
+                    )
+                } else if result.committed {
+                    committedVerifiedPurchases.insert(key)
+                }
                 retryablePurchaseCommits.removeValue(forKey: key)
                 purchaseCommitJourneyRouting.remove(key)
             } else if shouldRetainPurchaseCommitRetry(outcome, key: key) {
@@ -1127,6 +1090,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// completed identities are independent from evidence-row and event counts.
     func completedSuccessfulPurchaseCommitCount() -> Int {
         completedPurchaseCommits.values.filter(\.result.committed).count
+            + committedVerifiedPurchases.count
     }
 
     private func schedulePurchaseCommitRetry() {
@@ -1253,17 +1217,16 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
     }
 
-    /// The customer a producer commits for, as far as it says: the one it
-    /// names, else the current customer.
-    private func commitCustomer(for outcome: PurchaseOutcome) -> String? {
-        switch outcome {
-        case .verified(let evidence, _):
-            return evidence.attributedDistinctId ?? identityService.getDistinctId()
-        case .external(let declaration, _):
-            return declaration.distinctId
-        case .cancelled, .pending, .failed:
-            return nil
-        }
+    /// Another customer's settled entry (answered, finished, completion
+    /// delivered) is only the record of their purchase: a producer for a
+    /// different customer starts the purchase's entry afresh. Any other entry
+    /// of another customer stays theirs.
+    private static func givesWay(
+        _ entry: StoredTransactionEvidence,
+        to requester: String?
+    ) -> Bool {
+        guard let requester else { return false }
+        return entry.distinctId != requester && entry.isSettled
     }
 
     private func purchaseCommitKey(
@@ -1366,6 +1329,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return PurchaseCommitResult(committed: false, syncTask: nil, isTerminal: false)
         }
         var existing = storedEvidence()[verified.transactionId]
+        if let current = existing,
+           Self.givesWay(current, to: verified.attributedDistinctId) {
+            existing = nil
+        }
         if verified.isRevoked, let current = existing, !current.isRevoked {
             // A refund stops the entry unlocking at once, before checks that
             // may defer the rest of processing, and its signed revocation is
@@ -1538,7 +1505,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             deliversLiveCheckout = false
         }
         let makeCommittedEvidence = {
-            [self] (existing: StoredTransactionEvidence?) -> StoredTransactionEvidence in
+            [self] (current: StoredTransactionEvidence?) -> StoredTransactionEvidence in
+            let existing = current.flatMap {
+                Self.givesWay($0, to: verified.attributedDistinctId) ? nil : $0
+            }
             let owner = existing?.distinctId ?? newRecordOwner
             let incomingReason = deliversLiveCheckout
                 ? PurchaseSyncReason.purchase.strongest(verified.syncReason)
@@ -1771,6 +1741,19 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         for evidence: StoredTransactionEvidence
     ) -> Task<Bool, Never>? {
         guard evidence.isUnsent else { return nil }
+        let sendKey = syncKey(
+            transactionId: evidence.transactionId,
+            originalTransactionId: evidence.originalTransactionId,
+            transactionJws: evidence.transactionJws,
+            distinctId: evidence.distinctId,
+            isRevoked: evidence.isRevoked
+        )
+        if let operation = transactionSyncOperations[sendKey],
+           operation.admissionId == evidence.admissionId {
+            // This admission is already being sent; its answer is this
+            // commit's too.
+            return Task { await operation.task.value == .accepted }
+        }
         syncTaskScheduled(evidence.transactionId)
         return Task { [weak self] in
             guard let self else { return false }
@@ -1993,7 +1976,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         admissionId requestedAdmissionId: UUID? = nil,
         updateLocalFeatures: Bool = true,
         isRevoked: Bool = false,
-        retainEvidenceAfterSync: Bool = false,
         refreshProviderState: Bool = false
     ) async -> PurchaseSyncOutcome {
         guard !isStopped else { return .failed }
@@ -2041,12 +2023,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                   operation.reason.claimsOwnership || !reason.claimsOwnership else {
                 continue
             }
-            guard outcome == .accepted else { return outcome }
-            return await reconcileEvidenceAfterDeduplicatedSync(
-                transactionId: transactionId,
-                admissionId: admissionId,
-                retainEvidenceAfterSync: retainEvidenceAfterSync
-            ) ? .accepted : .failed
+            // That send's answer already went through the answer path.
+            return outcome
         }
 
         // An entry sends the kind recorded when it was admitted; a send
@@ -2077,7 +2055,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 admissionId: admissionId,
                 lifecycleGeneration: requestLifecycleGeneration,
                 updateLocalFeatures: updateLocalFeatures,
-                retainEvidenceAfterSync: retainEvidenceAfterSync,
                 emitSyncedEvent: !refreshProviderState
             )
         }
@@ -2097,37 +2074,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return outcome
     }
 
-    private func reconcileEvidenceAfterDeduplicatedSync(
-        transactionId: String,
-        admissionId: UUID?,
-        retainEvidenceAfterSync: Bool
-    ) async -> Bool {
-        // An entry admitted since this send (or another customer's entry) is
-        // answered only by its own send.
-        if let stored = storedEvidence()[transactionId],
-           stored.admissionId != admissionId {
-            return true
-        }
-        // Transaction.updates can win the race with the direct purchase
-        // callback. The callback may persist the same evidence after the
-        // observer already synced it, so the deduplicated path must drain
-        // that late write as well.
-        if let stored = storedEvidence()[transactionId],
-           retainEvidenceAfterSync
-            || stored.finishRequired
-            || (stored.commercialContext != nil
-                && stored.completionDeliveredAt == nil) {
-            return await persistEvidence(stored.replacing(
-                answeredAt: dateProvider.now()
-            ))
-        }
-        if !retainEvidenceAfterSync,
-           storedEvidence()[transactionId]?.finishRequired != true {
-            return await removeEvidence(transactionId: transactionId)
-        }
-        return true
-    }
-
     /// The server will not attach this purchase to the customer it was sent
     /// for: it belongs to someone else (409), or it is not a purchase this
     /// customer can hold (400).
@@ -2144,144 +2090,210 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         admissionId: UUID?,
         lifecycleGeneration requestLifecycleGeneration: UInt64,
         updateLocalFeatures: Bool,
-        retainEvidenceAfterSync: Bool,
         emitSyncedEvent: Bool
     ) async -> PurchaseSyncOutcome {
         let distinctId = request.distinctId
         // Whatever the answer, the outbox timer follows the entries it left.
         defer { rescheduleOutboxRetry() }
-        let response: PurchaseResponse
+        let answer: PurchaseAnswer
         do {
-            response = try await api.syncTransaction(request)
+            let response = try await api.syncTransaction(request)
+            if !response.success {
+                LogError(
+                    "TransactionObserver: Backend sync failed for transaction \(transactionId): \(response.error ?? "Unknown error")"
+                )
+                answer = .failed
+            } else if let responseCustomerId = response.customerId,
+                      responseCustomerId != distinctId,
+                      UUID(uuidString: responseCustomerId) == nil {
+                // The current service returns its internal UUID rather than
+                // echoing distinctId. That representation is not comparable
+                // here, so validate only customer IDs the service echoes in
+                // the initiating representation until the wire contract is
+                // corrected.
+                LogError(
+                    "TransactionObserver: Invalid sync customer for \(transactionId)"
+                )
+                answer = .failed
+            } else {
+                answer = .accepted(features: response.features)
+            }
         } catch let error as NuxieNetworkError where Self.refusesPurchase(error) {
             LogWarning(
                 "TransactionObserver: Server refused transaction \(transactionId) for this customer: \(error)"
             )
-            guard !isStopped,
-                  lifecycleGeneration == requestLifecycleGeneration else {
-                return .refused
-            }
-            // A refusal answers the send like an acceptance: the entry is done.
-            // Access is whatever the profile the server sends next says.
-            guard await retireAnsweredEntry(
-                transactionId: transactionId,
-                admissionId: admissionId,
-                retainEvidenceAfterSync: retainEvidenceAfterSync
-            ) else { return .failed }
-            await refreshProfileAfterAnswer(for: distinctId)
-            return .refused
+            answer = .refused
         } catch {
             LogError("TransactionObserver: Failed to sync transaction \(transactionId): \(error)")
-            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
-            return .failed
+            answer = .failed
         }
-
-        guard response.success else {
-            LogError(
-                "TransactionObserver: Backend sync failed for transaction \(transactionId): \(response.error ?? "Unknown error")"
-            )
-            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
-            return .failed
-        }
-        // The current service returns its internal UUID rather than
-        // echoing distinctId. That representation is not comparable
-        // here, so validate only customer IDs the service echoes in
-        // the initiating representation until the wire contract is
-        // corrected.
-        if let responseCustomerId = response.customerId,
-           responseCustomerId != distinctId,
-           UUID(uuidString: responseCustomerId) == nil {
-            LogError(
-                "TransactionObserver: Invalid sync customer for \(transactionId)"
-            )
-            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
-            return .failed
-        }
-        let acceptedEvidence = storedEvidence()[transactionId]
-        guard !evidenceStoreUnreadable else { return .failed }
-        guard !isStopped,
-              lifecycleGeneration == requestLifecycleGeneration else {
-            return .failed
-        }
-        // An answer to an admission its entry no longer holds (another
-        // customer's Restore took the entry, say) is superseded. It only asks
-        // for the customer's profile again: it publishes no Features, holds
-        // none, reports nothing and leaves the entry alone.
-        if let admissionId, acceptedEvidence?.admissionId != admissionId {
-            await refreshProfileAfterAnswer(for: distinctId)
-            return .accepted
-        }
-        // The 200's Features hold in memory only until the profile refresh
-        // below lands; the profile is where access comes from.
-        if updateLocalFeatures,
-           identityService.getDistinctId() == distinctId,
-           let features = response.features {
-            await featureService.updateFromPurchase(
-                features,
-                distinctId: distinctId
-            )
-        }
-        guard !isStopped,
-              lifecycleGeneration == requestLifecycleGeneration else {
-            return .failed
-        }
-        guard await retireAnsweredEntry(
+        return await applyPurchaseAnswer(answer, to: PurchaseAnswerTarget(
             transactionId: transactionId,
+            originalTransactionId: originalTransactionId,
+            productId: productId,
+            distinctId: distinctId,
             admissionId: admissionId,
-            retainEvidenceAfterSync: retainEvidenceAfterSync
-        ) else { return .failed }
+            dedupeKey: dedupeKey,
+            lifecycleGeneration: requestLifecycleGeneration,
+            publishesFeatures: updateLocalFeatures,
+            reportsPurchaseSync: emitSyncedEvent,
+            refreshesProfile: true
+        ))
+    }
 
-        let reportKey = [dedupeKey, admissionId?.uuidString ?? ""].joined(separator: "\u{1f}")
-        if emitSyncedEvent, identityService.getDistinctId() == distinctId,
-           reportedPurchaseSyncs.insert(reportKey).inserted {
+    /// What the server answered one `POST /purchase`.
+    private enum PurchaseAnswer {
+        /// 2xx, with the Features the server granted.
+        case accepted(features: [PurchaseFeature]?)
+        /// 2xx to a purchase-backed Feature command. The command applies its
+        /// own post-use result; the answer is captured as purchase synced
+        /// under the command's stable event id before it answers the entry.
+        case acceptedFeatureUse(syncedEventId: String, responseCustomerId: String)
+        /// 409 or 400.
+        case refused
+        /// No answer the SDK can act on.
+        case failed
+    }
+
+    /// The send an answer belongs to.
+    private struct PurchaseAnswerTarget {
+        let transactionId: String
+        let originalTransactionId: String?
+        let productId: String?
+        let distinctId: String
+        /// The admission the send carried; nil for a send made for no entry.
+        let admissionId: UUID?
+        let dedupeKey: String
+        /// The observer lifecycle the send began in, when the answer must
+        /// still belong to it.
+        let lifecycleGeneration: UInt64?
+        /// Whether a matching 200's Features are published and held.
+        let publishesFeatures: Bool
+        /// Whether a matching acceptance is reported as purchase synced.
+        let reportsPurchaseSync: Bool
+        /// Whether a matching answer asks for the profile again.
+        let refreshesProfile: Bool
+    }
+
+    /// Every `POST /purchase` answer lands here: a scan's send, the outbox
+    /// pass, a Restore or purchase claim, and a purchase-backed Feature
+    /// command. The admission check comes first. An answer to an admission
+    /// its entry no longer holds is superseded and only asks for the
+    /// customer's profile again. Only a matching answer may change its entry,
+    /// publish Features or hold a 200's Features.
+    private func applyPurchaseAnswer(
+        _ answer: PurchaseAnswer,
+        to target: PurchaseAnswerTarget
+    ) async -> PurchaseSyncOutcome {
+        let outcome: PurchaseSyncOutcome
+        switch answer {
+        case .accepted, .acceptedFeatureUse: outcome = .accepted
+        case .refused: outcome = .refused
+        case .failed: outcome = .failed
+        }
+        let entry = storedEvidence()[target.transactionId]
+        guard !evidenceStoreUnreadable else { return .failed }
+        if let admissionId = target.admissionId, entry?.admissionId != admissionId {
+            if outcome != .failed {
+                await refreshProfileAfterAnswer(for: target.distinctId)
+            }
+            return outcome
+        }
+        let inLifecycle = { [self] () -> Bool in
+            guard let generation = target.lifecycleGeneration else { return true }
+            return !isStopped && lifecycleGeneration == generation
+        }
+        switch answer {
+        case .failed:
+            await recordFailedSend(
+                transactionId: target.transactionId,
+                admissionId: target.admissionId
+            )
+            return .failed
+        case .refused:
+            guard inLifecycle() else { return .refused }
+            // A refusal answers the send like an acceptance. Access is
+            // whatever the profile the server sends next says.
+            guard await markAnswered(target) else { return .failed }
+            if target.refreshesProfile {
+                await refreshProfileAfterAnswer(for: target.distinctId)
+            }
+            return .refused
+        case .acceptedFeatureUse(let syncedEventId, let responseCustomerId):
             var properties: [String: Any] = [
-                "transaction_id": transactionId,
-                "original_transaction_id": originalTransactionId ?? "",
-                "product_id": productId ?? "",
-                "customer_id": distinctId
+                "transaction_id": target.transactionId,
+                "original_transaction_id": target.originalTransactionId ?? "",
+                "product_id": target.productId ?? "",
+                "customer_id": responseCustomerId
             ]
-            if let context = acceptedEvidence?.commercialContext {
+            if let context = entry?.commercialContext {
                 properties["experience_id"] = context.experienceId
                 properties["experience_version_id"] =
                     context.release.identity.experienceVersionId
                 properties["journey_id"] = context.journeyId
                 properties["placement_id"] = context.placementId
             }
-            eventSink.emit(
-                SystemEventNames.purchaseSynced,
-                properties: properties
-            )
+            guard await eventSink.capture(.init(
+                name: SystemEventNames.purchaseSynced,
+                properties: properties,
+                eventId: syncedEventId,
+                distinctId: target.distinctId
+            )) else { return .failed }
+            guard await markAnswered(target) else { return .failed }
+            return .accepted
+        case .accepted(let features):
+            guard inLifecycle() else { return .failed }
+            // The 200's Features hold in memory only until the profile
+            // refresh below lands; the profile is where access comes from.
+            if target.publishesFeatures,
+               identityService.getDistinctId() == target.distinctId,
+               let features {
+                await featureService.updateFromPurchase(
+                    features,
+                    distinctId: target.distinctId
+                )
+            }
+            guard inLifecycle() else { return .failed }
+            guard await markAnswered(target) else { return .failed }
+            let reportKey = [target.dedupeKey, target.admissionId?.uuidString ?? ""]
+                .joined(separator: "\u{1f}")
+            if target.reportsPurchaseSync,
+               identityService.getDistinctId() == target.distinctId,
+               reportedPurchaseSyncs.insert(reportKey).inserted {
+                var properties: [String: Any] = [
+                    "transaction_id": target.transactionId,
+                    "original_transaction_id": target.originalTransactionId ?? "",
+                    "product_id": target.productId ?? "",
+                    "customer_id": target.distinctId
+                ]
+                if let context = entry?.commercialContext {
+                    properties["experience_id"] = context.experienceId
+                    properties["experience_version_id"] =
+                        context.release.identity.experienceVersionId
+                    properties["journey_id"] = context.journeyId
+                    properties["placement_id"] = context.placementId
+                }
+                eventSink.emit(
+                    SystemEventNames.purchaseSynced,
+                    properties: properties
+                )
+            }
+            if target.refreshesProfile {
+                await refreshProfileAfterAnswer(for: target.distinctId)
+            }
+            return .accepted
         }
-        await refreshProfileAfterAnswer(for: distinctId)
-        return .accepted
     }
 
-    /// The server answered (accepted or refused) a send, so the entry whose
-    /// admission it carried is done. It stays only while its StoreKit finish
-    /// or completion delivery is outstanding. An entry admitted since the
-    /// send, or another customer's entry, is left to its own send.
-    private func retireAnsweredEntry(
-        transactionId: String,
-        admissionId: UUID?,
-        retainEvidenceAfterSync: Bool
-    ) async -> Bool {
-        let stored = storedEvidence()[transactionId]
-        if let stored, stored.admissionId != admissionId {
-            return true
-        }
-        if let stored,
-           retainEvidenceAfterSync
-            || stored.finishRequired
-            || (stored.commercialContext != nil
-                && stored.completionDeliveredAt == nil) {
-            return await persistEvidence(stored.replacing(
-                answeredAt: dateProvider.now()
-            ))
-        }
-        if !retainEvidenceAfterSync {
-            return await removeEvidence(transactionId: transactionId)
-        }
-        return true
+    /// A matching answer answers its entry: it is no longer sent. The entry
+    /// stays as the purchase's record (finished, completion delivered) until
+    /// it expires with the retention window, so a later delivery of the same
+    /// purchase reads its flags instead of sending or finishing again.
+    private func markAnswered(_ target: PurchaseAnswerTarget) async -> Bool {
+        guard let stored = storedEvidence()[target.transactionId],
+              stored.admissionId == target.admissionId,
+              stored.answeredAt == nil else { return true }
+        return await persistEvidence(stored.replacing(answeredAt: dateProvider.now()))
     }
 
     /// A send failed without an answer (transport, 5xx, auth): the entry
@@ -2431,9 +2443,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     allowsDurableCheckoutAuthority: false
                 )
                 guard purpose != nil else { continue }
-                // The commit's send answers this scan only when this very
-                // commit made it; another producer's commit never does.
-                let ownSend = result.isReplay ? nil : result.syncTask
+                // Every commit is this scan's own: no earlier commit stands in
+                // for it, so its send answers the scan.
+                let ownSend = result.syncTask
                 if reason.claimsOwnership {
                     guard claimable else { continue }
                     guard result.committed else {
@@ -2456,8 +2468,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         }
                     } else {
                         // The commit sent nothing for this customer (the entry
-                        // was answered, or the commit was another
-                        // producer's): the claim is admitted and sent itself.
+                        // was answered): the claim is admitted and sent
+                        // itself.
                         group.addTask {
                             PurchaseSyncOutcome?.some(await self.claimCurrentEntitlement(
                                 item, distinctId: distinctId, reason: reason
@@ -2584,12 +2596,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
         }
         guard let change else { return nil }
-        // The claim is a new send: an earlier commit of this purchase in this
-        // session no longer stands in for it.
-        completedPurchaseCommits.removeValue(forKey: .verified(
-            transactionId: update.transactionId,
-            revoked: false
-        ))
         if change.changed {
             await refreshOptimisticProjection()
         }
@@ -2786,56 +2792,34 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     throw NuxieNetworkError.invalidResponse
                 }
 
-                var purchaseSyncedProperties: [String: Any] = [
-                    "transaction_id": evidence.transactionId,
-                    "original_transaction_id": evidence.originalTransactionId,
-                    "product_id": evidence.productId,
-                    "customer_id": response.customerId
-                ]
-                if let context = evidence.commercialContext {
-                    purchaseSyncedProperties["experience_id"] = context.experienceId
-                    purchaseSyncedProperties["experience_version_id"] =
-                        context.release.identity.experienceVersionId
-                    purchaseSyncedProperties["journey_id"] = context.journeyId
-                    purchaseSyncedProperties["placement_id"] = context.placementId
-                }
-                let purchaseSynced = await eventSink.capture(.init(
-                    name: SystemEventNames.purchaseSynced,
-                    properties: purchaseSyncedProperties,
-                    eventId: purchaseSyncedEventId(evidence: evidence),
-                    distinctId: distinctId
-                ))
-                guard purchaseSynced else {
-                    releasePurchaseUsageClaim(transactionId: evidence.transactionId)
+                // The command's answer passes the same admission check as
+                // every purchase answer. A matching one is captured as
+                // purchase synced and answers the entry; a superseded one
+                // (a refund admitted meanwhile, say) only asks for the
+                // profile again. The command's own result is the caller's
+                // either way: the server consumed the Feature.
+                let answered = await applyPurchaseAnswer(
+                    .acceptedFeatureUse(
+                        syncedEventId: purchaseSyncedEventId(evidence: evidence),
+                        responseCustomerId: response.customerId
+                    ),
+                    to: PurchaseAnswerTarget(
+                        transactionId: evidence.transactionId,
+                        originalTransactionId: evidence.originalTransactionId,
+                        productId: evidence.productId,
+                        distinctId: distinctId,
+                        admissionId: evidence.admissionId,
+                        dedupeKey: receiptSyncKey,
+                        lifecycleGeneration: nil,
+                        publishesFeatures: false,
+                        reportsPurchaseSync: false,
+                        refreshesProfile: false
+                    )
+                )
+                releasePurchaseUsageClaim(transactionId: evidence.transactionId)
+                guard answered != .failed else {
                     throw NuxieNetworkError.invalidResponse
                 }
-
-                // A decoded 2xx response means the purchase and usage command
-                // committed, and the stable purchase event is now durably
-                // captured. `allowed` is the post-use access state, so it is
-                // false after consuming the final finite unit.
-                // The answer settles the entry only while it still holds the
-                // admission this command sent. An entry admitted since (a
-                // refund, say) waits for its own send. The command's result
-                // is the caller's either way: the server consumed the Feature.
-                let acceptedAt = dateProvider.now()
-                if let current = storedEvidence()[evidence.transactionId],
-                   current.admissionId == evidence.admissionId {
-                    guard await persistEvidence(current.replacing(
-                        answeredAt: acceptedAt
-                    )) else {
-                        releasePurchaseUsageClaim(
-                            transactionId: evidence.transactionId
-                        )
-                        throw NuxieNetworkError.invalidResponse
-                    }
-                    if !current.finishRequired
-                        && (current.commercialContext == nil
-                            || current.completionDeliveredAt != nil) {
-                        _ = await removeEvidence(transactionId: evidence.transactionId)
-                    }
-                }
-                releasePurchaseUsageClaim(transactionId: evidence.transactionId)
 
                 guard !isStopped,
                       lifecycleGeneration == requestGeneration,

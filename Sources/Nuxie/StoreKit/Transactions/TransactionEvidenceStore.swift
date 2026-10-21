@@ -217,6 +217,13 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         answeredAt == nil && !transactionJws.isEmpty
     }
 
+    /// Whether this entry is only the purchase's record: answered, its
+    /// StoreKit transaction finished and its checkout completion delivered.
+    var isSettled: Bool {
+        answeredAt != nil && !finishRequired
+            && (commercialContext == nil || completionDeliveredAt != nil)
+    }
+
     /// Whether this entry lets `distinctId` in before the server answers:
     /// their own unanswered, unrevoked purchase, by account token. A Restore
     /// claim waits for the server, as Restore itself does.

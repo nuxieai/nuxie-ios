@@ -432,12 +432,12 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         XCTAssertEqual(synced, true)
 
         for _ in 0..<300 {
-            if store.load().valueTreatingAbsentAsEmpty([:])?["overdue-transaction"] == nil { break }
+            if store.load().valueTreatingAbsentAsEmpty([:])?["overdue-transaction"]?.isUnsent != true { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        XCTAssertNil(
-            store.load().valueTreatingAbsentAsEmpty([:])?["overdue-transaction"],
-            "the overdue entry is sent"
+        XCTAssertNotNil(
+            store.load().valueTreatingAbsentAsEmpty([:])?["overdue-transaction"]?.answeredAt,
+            "the overdue entry is sent and answered"
         )
         XCTAssertEqual(api.recordedCustomers.count, 2)
     }
@@ -496,7 +496,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.retryDueOutboxEntries()
         XCTAssertEqual(api.recordedCustomers.count, 1, "only the due entry is sent")
         var stored = store.load().valueTreatingAbsentAsEmpty([:])
-        XCTAssertNil(stored?["due-transaction"], "the accepted entry clears")
+        XCTAssertNotNil(stored?["due-transaction"]?.answeredAt, "the accepted entry is answered")
         XCTAssertEqual(stored?["waiting-transaction"]?.sendAttempts, 6)
         var dueAt = await observer.outboxRetryDueAt
         XCTAssertEqual(dueAt, clock.now().addingTimeInterval(600))
@@ -505,7 +505,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.retryDueOutboxEntries()
         XCTAssertEqual(api.recordedCustomers.count, 2)
         stored = store.load().valueTreatingAbsentAsEmpty([:])
-        XCTAssertNil(stored?["waiting-transaction"])
+        XCTAssertNotNil(stored?["waiting-transaction"]?.answeredAt)
         dueAt = await observer.outboxRetryDueAt
         XCTAssertNil(dueAt)
         let scheduled = await observer.hasScheduledOutboxRetry
@@ -1229,7 +1229,7 @@ final class TransactionObserverEvidenceRaceTests: XCTestCase {
         await observer.retryStoredEvidence()
 
         XCTAssertFalse(eventSink.names.contains(SystemEventNames.purchaseSynced))
-        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
+        XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.values.allSatisfy(\.isSettled))
     }
 
     func testStoredRevocationAppliesServerStateButKeepsUnmatchedFinishOwnership() async {

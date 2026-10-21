@@ -1093,8 +1093,12 @@ final class PurchaseOutcomeCommitFixtureTests: XCTestCase {
 
         XCTAssertTrue(results.0.committed)
         XCTAssertTrue(results.1.committed)
-        XCTAssertEqual(checkoutSynced, true)
-        XCTAssertEqual(streamSynced, true)
+        // Commits of one purchase run one at a time, in either order. The
+        // later one joins the earlier one's send while it is still going
+        // out, or finds the entry answered and sends nothing.
+        XCTAssertTrue(checkoutSynced == true || streamSynced == true)
+        XCTAssertNotEqual(checkoutSynced, false)
+        XCTAssertNotEqual(streamSynced, false)
         XCTAssertEqual(harness.evidenceStore.uniquePersistedCount, 1)
         XCTAssertEqual(completed.count, 1)
         XCTAssertEqual(completed.filter(\.routed).count, 0)
