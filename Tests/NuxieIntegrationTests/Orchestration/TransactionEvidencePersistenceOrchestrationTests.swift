@@ -6,7 +6,7 @@ import Quick
 
 final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
     override class func spec() {
-        describe("unreadable transaction evidence persistence") {
+        describe("corrupt transaction evidence persistence") {
             var storageURLs: [URL] = []
             var stacks: [OrchestrationStack] = []
 
@@ -21,7 +21,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 storageURLs.removeAll()
             }
 
-            it("sends the purchase once and leaves all three unreadable stores untouched") {
+            it("sets all three corrupt stores aside and saves, sends and answers the purchase") {
                 let distinctId = "purchase-corruption-customer"
                 let storageURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent(
@@ -69,8 +69,8 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                     distinctId: distinctId
                 )
 
-                // An unreadable store turns the outbox off: the purchase is
-                // still sent once, and nothing is written.
+                // Each corrupt store is set aside and an empty one takes its
+                // place, so the outbox is on: the purchase is saved and sent.
                 let delivery = await stack.core.transactionObserver.commit(
                     .verified(
                         VerifiedPurchaseEvidence(
@@ -90,10 +90,17 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 let sends = await api.syncTransactionRequests.count
                 expect(sends) == 1
 
+                let saved = TransactionEvidenceStore(
+                    customStoragePath: storageURL,
+                    scope: scope
+                ).load().readableValue?["corrupt-transaction"]
+                expect(saved).toNot(beNil())
+                expect(saved?.answeredAt).toNot(beNil())
+
                 let pendingOwnership = await stack.core.transactionService
                     .pendingPurchaseOwnership(productId: "corrupt-product")
-                guard case .unavailable = pendingOwnership else {
-                    fail("Expected pending state to remain unavailable")
+                guard case .none = pendingOwnership else {
+                    fail("Expected an empty pending store in place of the corrupt one")
                     return
                 }
                 let token = scope.appAccountToken(distinctId: distinctId)
@@ -102,12 +109,26 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                         appAccountToken: token,
                         productId: "corrupt-product"
                     )
-                guard case .unreadable = accountAuthority else {
-                    fail("Expected account ownership to remain unreadable")
+                if case .unreadable = accountAuthority {
+                    fail("Expected an empty ownership store in place of the corrupt one")
                     return
                 }
-                for file in files.values {
-                    expect(try Data(contentsOf: file)) == corruptContents
+                let names = try FileManager.default.contentsOfDirectory(
+                    atPath: directory.path
+                )
+                for fileName in fileNames {
+                    let prefix = (fileName as NSString).deletingPathExtension
+                        + ".unreadable-"
+                    let quarantined = names.filter { $0.hasPrefix(prefix) }
+                    expect(quarantined.count) == 1
+                    if let name = quarantined.first {
+                        let aside = directory.appendingPathComponent(name)
+                        expect(try Data(contentsOf: aside)) == corruptContents
+                    }
+                    if let current = files[fileName],
+                       FileManager.default.fileExists(atPath: current.path) {
+                        expect(try Data(contentsOf: current)) != corruptContents
+                    }
                 }
             }
 

@@ -36,21 +36,28 @@ protocol PurchaseAccountOwnershipStoreProtocol: Sendable {
 
 /// Long-lived account ownership is deliberately separate from one-shot
 /// checkout attribution. Subscription renewals retain `appAccountToken` after
-/// their originating Experience and Placement context has been retired.
+/// their originating Experience and Placement context has been retired. A
+/// corrupt file is set aside and an empty store takes its place (see
+/// `PurchaseStoreFile`).
 final class PurchaseAccountOwnershipStore:
     PurchaseAccountOwnershipStoreProtocol,
     @unchecked Sendable
 {
-    private let fileURL: URL
+    private let file: PurchaseStoreFile
+    private var fileURL: URL { file.url }
     private let lock = NSLock()
-    private let readFailureLogger = StoreReadFailureLogger()
 
     init(
         customStoragePath: URL? = nil,
-        scope: PurchaseStorageScope = .testFixture
+        scope: PurchaseStorageScope = .testFixture,
+        logger: NuxieLogger = .shared
     ) {
         let base = scope.storageDirectory(customStoragePath: customStoragePath)
-        fileURL = base.appendingPathComponent("account-ownership.json")
+        file = PurchaseStoreFile(
+            url: base.appendingPathComponent("account-ownership.json"),
+            storeName: "PurchaseAccountOwnershipStore",
+            logger: logger
+        )
         try? FileManager.default.createDirectory(
             at: base,
             withIntermediateDirectories: true
@@ -101,24 +108,14 @@ final class PurchaseAccountOwnershipStore:
     private func loadResultUnlocked(
         absentValue: [String: StoredPurchaseAccountOwnership]? = nil
     ) -> StoreReadResult<[String: StoredPurchaseAccountOwnership]> {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            if let absentValue { return .value(absentValue) }
-            return .absent
-        }
-        do {
-            let data = try Data(contentsOf: fileURL)
-            return .value(try JSONDecoder().decode(
+        let result = file.read { data in
+            try JSONDecoder().decode(
                 [String: StoredPurchaseAccountOwnership].self,
                 from: data
-            ))
-        } catch {
-            if readFailureLogger.shouldLog() {
-                LogError(
-                    "PurchaseAccountOwnershipStore: ownership is unreadable: \(error)"
-                )
-            }
-            return .unreadable
+            )
         }
+        if case .absent = result, let absentValue { return .value(absentValue) }
+        return result
     }
 
     private func saveUnlocked(

@@ -248,7 +248,9 @@ final class TransactionServiceTests: AsyncSpec {
                 )
             }
 
-            func writeCorruptStore(fileName: String) throws -> (URL, Data) {
+            /// A store file that cannot be read right now: its permissions
+            /// deny reading, as data protection does before the first unlock.
+            func writeUnreadableStore(fileName: String) throws -> (URL, Data) {
                 let directory = purchaseStorageScope.storageDirectory(
                     customStoragePath: pendingStorageURL
                 )
@@ -257,9 +259,21 @@ final class TransactionServiceTests: AsyncSpec {
                     withIntermediateDirectories: true
                 )
                 let file = directory.appendingPathComponent(fileName)
-                let contents = Data("{ unreadable".utf8)
+                let contents = Data("{}".utf8)
                 try contents.write(to: file)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o000],
+                    ofItemAtPath: file.path
+                )
                 return (file, contents)
+            }
+
+            func contentsAllowingReading(_ file: URL) throws -> Data {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o644],
+                    ofItemAtPath: file.path
+                )
+                return try Data(contentsOf: file)
             }
 
             beforeEach {
@@ -346,7 +360,7 @@ final class TransactionServiceTests: AsyncSpec {
             }
 
             it("does not consume unreadable pending state as retired") {
-                let (file, contents) = try writeCorruptStore(
+                let (file, contents) = try writeUnreadableStore(
                     fileName: "pending-purchases.json"
                 )
                 transactionService = makeTransactionService()
@@ -367,11 +381,11 @@ final class TransactionServiceTests: AsyncSpec {
                         productId: mockProduct.storeProductId
                     )
                 }.to(beFalse())
-                expect(try Data(contentsOf: file)) == contents
+                expect(try contentsAllowingReading(file)) == contents
             }
 
             it("does not consume unreadable account ownership as absent") {
-                let (file, contents) = try writeCorruptStore(
+                let (file, contents) = try writeUnreadableStore(
                     fileName: "account-ownership.json"
                 )
                 let store = PurchaseAccountOwnershipStore(
@@ -393,7 +407,7 @@ final class TransactionServiceTests: AsyncSpec {
                     fail("Expected unreadable purchase authority")
                     return
                 }
-                expect(try Data(contentsOf: file)) == contents
+                expect(try contentsAllowingReading(file)) == contents
             }
             
             describe("purchase") {
