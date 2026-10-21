@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Quick
+import XCTest
 import Nimble
 @testable import Nuxie
 @testable import NuxieTestSupport
@@ -729,5 +730,47 @@ final class FeatureServiceTests: AsyncSpec {
 
     private static func makeProfileResponse(feature: Feature) -> ProfileResponse {
         TestJourneyProfile.response(features: [feature])
+    }
+}
+
+/// A purchase answer's Features hold until a profile requested after that
+/// answer lands. Each answer keeps the profile request revision it arrived
+/// at, so a profile requested between two answers ends only the first one's.
+final class PurchaseAnswerHoldTests: XCTestCase {
+    func testProfileRequestedAfterAnAnswerEndsOnlyThatAnswersHold() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let profile = MockProfileService()
+        let features = FeatureService(
+            api: MockFactory.shared.nuxieApi,
+            identity: identity,
+            profile: profile,
+            dateProvider: MockDateProvider(),
+            featureInfo: FeatureInfo(),
+            cacheTTL: 300
+        )
+
+        await features.updateFromPurchase([Self.grant("first")], distinctId: "customer")
+        // A profile is requested after the first answer; a second answer
+        // arrives before that profile lands.
+        _ = try await profile.refetchProfile(distinctId: "customer")
+        await features.updateFromPurchase([Self.grant("second")], distinctId: "customer")
+        await features.syncFeatureInfo()
+
+        let first = await features.getCached(featureId: "first", entityId: nil)
+        let second = await features.getCached(featureId: "second", entityId: nil)
+        XCTAssertNotEqual(first?.allowed, true, "the profile requested after the first answer decides it")
+        XCTAssertEqual(second?.allowed, true, "the second answer holds until a profile requested after it")
+    }
+
+    private static func grant(_ key: String) -> PurchaseFeature {
+        PurchaseFeature(
+            id: "feat_\(key)",
+            extId: key,
+            type: .boolean,
+            allowed: true,
+            balance: nil,
+            unlimited: false
+        )
     }
 }
