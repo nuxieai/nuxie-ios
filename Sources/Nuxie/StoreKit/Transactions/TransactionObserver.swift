@@ -388,9 +388,14 @@ protocol TransactionObserverProtocol: Actor {
         entityId: String?,
         metadata: [String: AnyCodable]?
     ) async throws -> FeatureUsageResult?
+    /// A checkout binding or catalog-mapping write failed: the purchase
+    /// outbox is off for the rest of the session.
+    func outboxCannotSave() async
 }
 
 extension TransactionObserverProtocol {
+    func outboxCannotSave() async {}
+
     func commit(_ outcome: PurchaseOutcome) async -> PurchaseCommitResult {
         switch outcome {
         case .verified, .external:
@@ -527,6 +532,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private var transactionSyncOperations: [String: TransactionSyncOperation] = [:]
     private var evidenceByTransactionId: [String: StoredTransactionEvidence]?
     private var evidenceStoreUnreadable = false
+    /// Whether the outbox is off for the rest of the session. It switches off
+    /// the first time the outbox cannot save: an evidence write fails, or the
+    /// store is unreadable. While off nothing unlocks early, the timer stays
+    /// off, and nothing is written or held in memory. Each purchase the store
+    /// delivers is still sent once, its answer only refreshes the profile, and
+    /// its transaction is left unfinished, so the next launch finds it
+    /// unfinished, saves its entry, sends it and finishes it as usual.
+    private var outboxIsOff = false
     /// Purchase-backed use and projection refresh share this actor-owned
     /// routing state. While any refresh is suspended resolving descriptor
     /// allowances, spends conservatively use the durable command journal.
@@ -776,9 +789,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// finishing, so this queue is the recovery source on relaunch. A pass of
     /// the outbox timer sends only the failed entries whose time has passed.
     private func processStoredEvidence(sendingEveryEntry: Bool) async {
+        guard !outboxIsOff else { return }
         let now = dateProvider.now()
         for read in storedEvidence().values {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !outboxIsOff else { return }
             // An entry answered while this pass ran is not sent again.
             guard let evidence = storedEvidence()[read.transactionId] else { continue }
             // A settled entry is only the purchase's record.
@@ -1368,7 +1382,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             await refreshOptimisticProjection()
             existing = storedEvidence()[verified.transactionId]
         }
-        guard !evidenceStoreUnreadable else { return .rejected }
         // The admission this commit is based on. Every write it makes checks
         // it against the current row in the same step: a write based on an
         // admission the entry no longer holds (a Restore took the entry while
@@ -1387,8 +1400,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 productId: verified.productId,
                 originalTransactionId: verified.originalTransactionId
             )
-            guard !(await transactionService.pendingPurchaseStoreIsUnreadable()) else {
-                return .rejected
+            // An unreadable binding store turns the outbox off: the
+            // purchase is still delivered, without a binding.
+            if await transactionService.pendingPurchaseStoreIsUnreadable() {
+                switchOutboxOff()
             }
         } else {
             checkoutRecovery = nil
@@ -1476,7 +1491,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     )
                     return .rejected
                 case .unavailable:
-                    return .rejected
+                    // The binding store is unreadable: the outbox is off.
+                    switchOutboxOff()
+                    pendingRecord = nil
                 }
             }
         } else {
@@ -1659,22 +1676,48 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         if superseded {
             return PurchaseCommitResult(committed: false, syncTask: nil, isTerminal: false)
         }
-        guard let initialChange else { return .rejected }
+        guard let initialChange else {
+            guard outboxIsOff else { return .rejected }
+            return await deliverWithOutboxOff(
+                makeCommittedEvidence(storedEvidence()[verified.transactionId]),
+                transactionService: transactionService,
+                checkoutRecovery: checkoutRecovery,
+                pendingRecord: pendingRecord,
+                routeCompletionToJourneys: routeCompletionToJourneys,
+                commitKey: commitKey,
+                source: source
+            )
+        }
         var committedEvidence = initialChange.evidence
         var evidenceChanged = initialChange.changed
 
+        var bindingRetired = true
         if let checkoutRecovery {
-            guard await retireCheckoutRecovery(
+            bindingRetired = await retireCheckoutRecovery(
                 appAccountToken: checkoutRecovery.appAccountToken,
                 productId: verified.productId,
                 checkoutRecoveryExists: true
-            ) else { return .rejected }
+            )
         } else if pendingRecord?.state == .pending {
             guard let transactionService else { return .rejected }
-            guard await transactionService.consumePendingPurchase(
+            bindingRetired = await transactionService.consumePendingPurchase(
                 productId: verified.productId,
                 distinctId: committedEvidence.distinctId
-            ) else { return .rejected }
+            )
+        }
+        if !bindingRetired {
+            // The binding could not be written: the outbox is off, and this
+            // purchase is delivered as one, unfinished.
+            switchOutboxOff()
+            return await deliverWithOutboxOff(
+                committedEvidence,
+                transactionService: transactionService,
+                checkoutRecovery: checkoutRecovery,
+                pendingRecord: pendingRecord,
+                routeCompletionToJourneys: routeCompletionToJourneys,
+                commitKey: commitKey,
+                source: source
+            )
         }
 
         if committedEvidence.finishRequired, let finish = verified.finish {
@@ -1790,6 +1833,78 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             syncTask: syncTask,
             isTerminal: commitComplete
         )
+    }
+
+    /// Delivers a purchase while the outbox is off for the session: nothing is
+    /// saved, the purchase is sent once, and its answer only refreshes the
+    /// profile. Its transaction is left unfinished, so the next launch finds
+    /// it unfinished, saves its entry, sends it and finishes it as usual. The
+    /// buyer's checkout still completes now, for the host and the Journey; its
+    /// binding is retired once the completion is captured, so the next
+    /// launch's recovery does not report it again. If that retirement fails,
+    /// the recovery reports it under the same stable event id, and the event
+    /// log drops that second report while the first is still stored.
+    private func deliverWithOutboxOff(
+        _ purchase: StoredTransactionEvidence,
+        transactionService: TransactionService?,
+        checkoutRecovery: PendingPurchaseRecord?,
+        pendingRecord: PendingPurchaseRecord?,
+        routeCompletionToJourneys: Bool,
+        commitKey: PurchaseCommitKey,
+        source: PurchaseOutcomeSource
+    ) async -> PurchaseCommitResult {
+        await refreshOptimisticProjection()
+        if !purchase.isRevoked,
+           purchase.completionDeliveredAt == nil,
+           purchase.distinctId == identityService.getDistinctId(),
+           let context = purchase.commercialContext {
+            let captured = await capturePurchaseCompletion(
+                properties: purchaseCompletionProperties(
+                    context: context,
+                    transactionId: purchase.transactionId,
+                    testStore: purchase.scope.storeEnvironment == .testStore,
+                    source: source
+                ),
+                eventId: purchase.checkoutCompletionEventId
+                    ?? purchaseCompletionEventId(transactionId: purchase.transactionId),
+                distinctId: purchase.distinctId,
+                routeToJourneys: routeCompletionToJourneys
+            )
+            if captured {
+                purchaseCommitJourneyRouting.remove(commitKey)
+                if let checkoutRecovery {
+                    _ = await retireCheckoutRecovery(
+                        appAccountToken: checkoutRecovery.appAccountToken,
+                        productId: purchase.productId,
+                        checkoutRecoveryExists: true
+                    )
+                } else if pendingRecord?.state == .pending, let transactionService {
+                    _ = await transactionService.consumePendingPurchase(
+                        productId: purchase.productId,
+                        distinctId: purchase.distinctId
+                    )
+                }
+            }
+        }
+        // Terminal for this session: there is no commit retry while off.
+        guard purchase.isUnsent else {
+            return PurchaseCommitResult(committed: true, syncTask: nil, isTerminal: true)
+        }
+        let syncTask = Task { [weak self] () -> Bool in
+            guard let self else { return false }
+            return await self.syncTransactionWithOptions(
+                transactionJws: purchase.transactionJws,
+                transactionId: purchase.transactionId,
+                productId: purchase.productId,
+                originalTransactionId: purchase.originalTransactionId,
+                distinctId: purchase.distinctId,
+                reason: purchase.reason,
+                customerKind: purchase.customerKind,
+                updateLocalFeatures: false,
+                isRevoked: purchase.isRevoked
+            ) == .accepted
+        }
+        return PurchaseCommitResult(committed: true, syncTask: syncTask, isTerminal: true)
     }
 
     private func scheduleSync(
@@ -2035,8 +2150,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     ) async -> PurchaseSyncOutcome {
         guard !isStopped else { return .failed }
         let requestLifecycleGeneration = lifecycleGeneration
-        let durableEvidence = storedEvidence()[transactionId]
-        guard !evidenceStoreUnreadable else { return .failed }
+        // While the outbox is off, a send is made for no entry.
+        let durableEvidence = outboxIsOff ? nil : storedEvidence()[transactionId]
         // A receipt goes to the customer its entry was admitted for unless an
         // explicit Restore or purchase sends it for its own customer.
         let distinctId = requestedDistinctId
@@ -2193,7 +2308,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             publishesFeatures: updateLocalFeatures,
             reportsPurchaseSync: emitSyncedEvent,
             refreshesProfile: true
-        ))
+        )).outcome
     }
 
     /// What the server answered one `POST /purchase`.
@@ -2244,15 +2359,27 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func applyPurchaseAnswer(
         _ answer: PurchaseAnswer,
         to target: PurchaseAnswerTarget
-    ) async -> PurchaseSyncOutcome {
+    ) async -> AppliedPurchaseAnswer {
         await waitForPurchaseChanges(transactionId: target.transactionId)
         purchasesApplyingAnswer.insert(target.transactionId)
-        let (outcome, refreshesProfile) = await applyPurchaseAnswerAlone(answer, to: target)
+        let applied = await applyPurchaseAnswerAlone(answer, to: target)
         finishPurchaseChange(transactionId: target.transactionId)
-        if refreshesProfile {
+        if applied.refreshesProfile {
             await refreshProfileAfterAnswer(for: target.distinctId)
         }
-        return outcome
+        return applied
+    }
+
+    /// What applying one purchase answer did.
+    private struct AppliedPurchaseAnswer {
+        let outcome: PurchaseSyncOutcome
+        /// Whether the answer asks for the requester's profile again.
+        let refreshesProfile: Bool
+        /// Whether the answer may change local state: Feature authority, the
+        /// cache, an entry or a 200 hold. A superseded answer, from any
+        /// producer, and an answer while the outbox is off may not; they
+        /// only ask for the profile again.
+        let changesLocalState: Bool
     }
 
     /// Waits while an answer for `transactionId` is being applied.
@@ -2275,17 +2402,38 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     private func applyPurchaseAnswerAlone(
         _ answer: PurchaseAnswer,
         to target: PurchaseAnswerTarget
-    ) async -> (PurchaseSyncOutcome, Bool) {
+    ) async -> AppliedPurchaseAnswer {
+        let (outcome, refreshesProfile, changesLocalState) = await applyPurchaseAnswerWithoutWaiting(
+            answer,
+            to: target
+        )
+        return AppliedPurchaseAnswer(
+            outcome: outcome,
+            refreshesProfile: refreshesProfile,
+            changesLocalState: changesLocalState
+        )
+    }
+
+    private func applyPurchaseAnswerWithoutWaiting(
+        _ answer: PurchaseAnswer,
+        to target: PurchaseAnswerTarget
+    ) async -> (PurchaseSyncOutcome, Bool, Bool) {
         let outcome: PurchaseSyncOutcome
         switch answer {
         case .accepted, .acceptedFeatureUse: outcome = .accepted
         case .refused: outcome = .refused
         case .failed: outcome = .failed
         }
-        let entry = storedEvidence()[target.transactionId]
-        guard !evidenceStoreUnreadable else { return (.failed, false) }
+        let entry = outboxIsOff ? nil : storedEvidence()[target.transactionId]
+        // While the outbox is off (reading it may have just switched it off),
+        // an answer changes nothing local: it only asks for the requester's
+        // profile again.
+        if outboxIsOff {
+            return (outcome, outcome != .failed, false)
+        }
+        // A superseded answer only asks for the profile again.
         if let admissionId = target.admissionId, entry?.admissionId != admissionId {
-            return (outcome, outcome != .failed)
+            return (outcome, outcome != .failed, false)
         }
         let inLifecycle = { [self] () -> Bool in
             guard let generation = target.lifecycleGeneration else { return true }
@@ -2297,13 +2445,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 transactionId: target.transactionId,
                 admissionId: target.admissionId
             )
-            return (.failed, false)
+            return (.failed, false, false)
         case .refused:
-            guard inLifecycle() else { return (.refused, false) }
+            guard inLifecycle() else { return (.refused, false, false) }
             // A refusal answers the send like an acceptance. Access is
             // whatever the profile the server sends next says.
-            guard await markAnswered(target) else { return (.failed, false) }
-            return (.refused, target.refreshesProfile)
+            guard await markAnswered(target) || outboxIsOff else { return (.failed, false, false) }
+            return (.refused, target.refreshesProfile, !outboxIsOff)
         case .acceptedFeatureUse(let syncedEventId, let responseCustomerId):
             var properties: [String: Any] = [
                 "transaction_id": target.transactionId,
@@ -2323,11 +2471,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 properties: properties,
                 eventId: syncedEventId,
                 distinctId: target.distinctId
-            )) else { return (.failed, false) }
-            guard await markAnswered(target) else { return (.failed, false) }
-            return (.accepted, false)
+            )) else { return (.failed, false, false) }
+            guard await markAnswered(target) || outboxIsOff else { return (.failed, false, false) }
+            // The save switched the outbox off: the answer only refreshes
+            // the profile.
+            guard !outboxIsOff else { return (.accepted, true, false) }
+            return (.accepted, false, true)
         case .accepted(let features):
-            guard inLifecycle() else { return (.failed, false) }
+            guard inLifecycle() else { return (.failed, false, false) }
             // The 200's Features hold in memory only until the profile
             // refresh below lands; the profile is where access comes from.
             if target.publishesFeatures,
@@ -2338,8 +2489,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     distinctId: target.distinctId
                 )
             }
-            guard inLifecycle() else { return (.failed, false) }
-            guard await markAnswered(target) else { return (.failed, false) }
+            guard inLifecycle() else { return (.failed, false, false) }
+            guard await markAnswered(target) || outboxIsOff else { return (.failed, false, false) }
+            // The save switched the outbox off: no $purchase_synced; the
+            // answer only refreshes the profile.
+            guard !outboxIsOff else { return (.accepted, true, false) }
             let reportKey = [target.dedupeKey, target.admissionId?.uuidString ?? ""]
                 .joined(separator: "\u{1f}")
             if target.reportsPurchaseSync,
@@ -2363,11 +2517,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     properties: properties
                 )
             }
-            return (.accepted, target.refreshesProfile)
+            return (.accepted, target.refreshesProfile, true)
         }
     }
 
-    /// A matching answer answers its entry: it is no longer sent. The entry
+    /// A matching answer answers its entry: it is no longer sent. When the
+    /// write fails the outbox switches off, and the answer still stands as
+    /// the server gave it: it only asks for the profile again. The entry
     /// stays as the purchase's record (finished, completion delivered) until
     /// it expires with the retention window, so a later delivery of the same
     /// purchase reads its flags instead of sending or finishing again.
@@ -2395,7 +2551,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// It is also sent at every launch, sign-in and profile load. Only the
     /// admission the send carried counts the failure.
     private func recordFailedSend(transactionId: String, admissionId: UUID?) async {
-        guard !isStopped else { return }
+        guard !isStopped, !outboxIsOff else { return }
         let failedAt = dateProvider.now()
         _ = reloadAndApplyEvidenceChange(transactionId: transactionId) { current in
             guard let current, current.admissionId == admissionId,
@@ -2424,6 +2580,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// and after every recovery pass, the first of which runs at launch.
     private func rescheduleOutboxRetry() {
         guard !isStopped else { return }
+        guard !outboxIsOff else {
+            cancelOutboxRetry()
+            return
+        }
         let now = dateProvider.now()
         let dueAt = storedEvidence().values
             .filter(\.isUnsent)
@@ -2445,6 +2605,24 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
     /// Whether a timed outbox retry is waiting.
     var hasScheduledOutboxRetry: Bool { outboxRetryTask != nil }
+
+    private func cancelOutboxRetry() {
+        outboxRetryTask?.cancel()
+        outboxRetryTask = nil
+        outboxRetryDueAt = nil
+    }
+
+    func outboxCannotSave() { switchOutboxOff() }
+
+    /// The outbox cannot save (an entry, binding or catalog write failed, or
+    /// the store is unreadable), so it is off for the rest of the session.
+    private func switchOutboxOff() {
+        guard !outboxIsOff else { return }
+        outboxIsOff = true
+        LogWarning("TransactionObserver: The purchase outbox cannot save; it is off for this session")
+        cancelOutboxRetry()
+        Task { [weak self] in await self?.refreshOptimisticProjection() }
+    }
 
     private func finishOutboxRetryWait() async {
         // A timer replaced while it woke leaves its successor alone.
@@ -2626,11 +2804,18 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         var customerKind: PurchaseCustomerKind?
         var admissionId: UUID?
         if reason.claimsOwnership {
-            guard let admitted = await admitClaim(
+            if let admitted = await admitClaim(
                 item, distinctId: distinctId, reason: reason
-            ) else { return .failed }
-            customerKind = admitted.customerKind
-            admissionId = admitted.admissionId
+            ) {
+                customerKind = admitted.customerKind
+                admissionId = admitted.admissionId
+            } else if outboxIsOff {
+                // The outbox is off: the claim is sent once, unsaved.
+                customerKind = identityService.purchaseCustomerKind(of: distinctId)
+                    ?? .identified
+            } else {
+                return .failed
+            }
         }
         let outcome = await syncTransactionWithOptions(
             transactionJws: item.jwsRepresentation,
@@ -2822,12 +3007,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 throw CancellationError()
             }
             let evidenceById = storedEvidence()
-            if evidenceStoreUnreadable {
-                // An unreadable evidence file must not demote a protected
-                // purchase to the ordinary usage command; the caller retries
-                // once the store is readable again (A12).
-                throw TransactionEvidenceError.unreadable
-            }
+            // While the outbox is off, no purchase backs a Feature use: the
+            // use takes the ordinary Feature command.
+            guard !outboxIsOff else { return nil }
             let candidates = evidenceById.values
                 .filter({ evidence in
                     evidence.distinctId == distinctId
@@ -2903,9 +3085,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 // every purchase answer. A matching one is captured as
                 // purchase synced and answers the entry; a superseded one
                 // (a refund admitted meanwhile, say) only asks for the
-                // profile again. The command's own result is the caller's
-                // either way: the server consumed the Feature.
-                let answered = await applyPurchaseAnswer(
+                // profile again and changes no Feature authority. The
+                // command's own result is the caller's either way: the
+                // server consumed the Feature.
+                let applied = await applyPurchaseAnswer(
                     .acceptedFeatureUse(
                         syncedEventId: purchaseSyncedEventId(evidence: evidence),
                         responseCustomerId: response.customerId
@@ -2924,7 +3107,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     )
                 )
                 releasePurchaseUsageClaim(transactionId: evidence.transactionId)
-                guard answered != .failed else {
+                guard applied.outcome != .failed else {
                     throw NuxieNetworkError.invalidResponse
                 }
 
@@ -2936,11 +3119,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 let check = response.featureCheckResult(
                     requiredBalance: amount
                 )
-                await featureService.invalidateAccess(featureId: featureId, entityId: entityId, distinctId: distinctId)
-                if response.featureId != featureId {
-                    await featureService.invalidateAccess(featureId: response.featureId, entityId: entityId, distinctId: distinctId)
+                // A superseded answer (or one while the outbox is off) never
+                // changes Feature authority or the cache: the caller still
+                // gets the server's result, and the profile was asked for
+                // again.
+                if applied.changesLocalState {
+                    await featureService.invalidateAccess(featureId: featureId, entityId: entityId, distinctId: distinctId)
+                    if response.featureId != featureId {
+                        await featureService.invalidateAccess(featureId: response.featureId, entityId: entityId, distinctId: distinctId)
+                    }
                 }
-                if response.idempotentReplay != true {
+                if applied.changesLocalState, response.idempotentReplay != true {
                     await featureService.applyAuthoritativeUse(
                         check,
                         requestedFeatureId: featureId,
@@ -3072,6 +3261,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             allEntries = entries
         case .unreadable:
             evidenceStoreUnreadable = true
+            switchOutboxOff()
             return [:]
         }
         evidenceStoreUnreadable = false
@@ -3099,8 +3289,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         if retained.count != loaded.count {
             guard evidenceStore.save(retained) else {
                 // Do not cache a pruned snapshot that was not durably written.
-                // Return it for this pass so expired evidence is never
-                // processed, then retry the durable prune on the next access.
+                // Return it so expired evidence is never processed.
+                switchOutboxOff()
                 return retained
             }
         }
@@ -3117,6 +3307,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         newAdmission: Bool = false,
         _ change: (StoredTransactionEvidence?) -> StoredTransactionEvidence?
     ) -> (evidence: StoredTransactionEvidence, changed: Bool)? {
+        guard !outboxIsOff else { return nil }
         var entries = storedEvidence()
         let current = entries[transactionId]
         guard !evidenceStoreUnreadable, let changed = change(current) else { return nil }
@@ -3131,7 +3322,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             return (proposed, false)
         }
         entries[transactionId] = proposed
-        guard evidenceStore.save(entries) else { return nil }
+        guard evidenceStore.save(entries) else {
+            switchOutboxOff()
+            return nil
+        }
         evidenceByTransactionId = entries
         return (proposed, true)
     }
@@ -3153,9 +3347,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     @discardableResult
     func removeEvidence(transactionId: String) async -> Bool {
         var entries = storedEvidence()
-        guard !evidenceStoreUnreadable else { return false }
+        guard !outboxIsOff, !evidenceStoreUnreadable else { return false }
         entries.removeValue(forKey: transactionId)
-        guard evidenceStore.save(entries) else { return false }
+        guard evidenceStore.save(entries) else {
+            switchOutboxOff()
+            return false
+        }
         evidenceByTransactionId = entries
         await refreshOptimisticProjection()
         return true
@@ -3168,7 +3365,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         defer { projectionRefreshesInFlight -= 1 }
 
         let entries = storedEvidence()
-        guard !evidenceStoreUnreadable else {
+        // While the outbox is off, access comes from the profile alone.
+        guard !outboxIsOff else {
             let distinctId = identityService.getDistinctId()
             guard refreshGeneration == projectionRefreshGeneration else { return }
             optimisticProjectionIsActive = false

@@ -49,6 +49,8 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     public private(set) var syncCurrentEntitlementsCalled = false
     public private(set) var syncCurrentEntitlementsDistinctIds: [String] = []
     public private(set) var profileReadyRecoveryCalls = 0
+    /// How many times a checkout reported that the outbox cannot save.
+    public private(set) var outboxCannotSaveCalls = 0
     /// Purchase outcomes received by ``commit(_:)``, in call order.
     public private(set) var committedOutcomes: [MockPurchaseOutcomeRecord] = []
     public private(set) var recordedPurchaseIds: [String] = []
@@ -258,6 +260,10 @@ public actor MockTransactionObserver: TransactionObserverProtocol {
     /// Configures what the next current-entitlement sync reports.
     public func setNextCurrentEntitlementSyncResult(_ result: CurrentEntitlementSyncResult) {
         nextCurrentEntitlementSyncResult = result
+    }
+
+    public func outboxCannotSave() {
+        outboxCannotSaveCalls += 1
     }
 
     @_spi(Testing) public func useFeatureWithPendingPurchase(

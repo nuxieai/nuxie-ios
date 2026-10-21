@@ -95,6 +95,44 @@ private actor PurchaseBackedUsageAPI: PurchaseSynchronizing, PurchaseBackedFeatu
     func recordedRequests() -> [PurchaseBackedFeatureUseRequest] { requests }
 }
 
+/// An evidence store whose writes the test can make fail, as a full disk
+/// would.
+private final class WriteRefusingEvidenceStore: TransactionEvidenceStoreProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: StoredTransactionEvidence]
+    private var refusesWritesStorage = false
+
+    init(entries: [String: StoredTransactionEvidence] = [:]) {
+        self.entries = entries
+    }
+
+    var refusesWrites: Bool {
+        get { lock.withLock { refusesWritesStorage } }
+        set { lock.withLock { refusesWritesStorage = newValue } }
+    }
+
+    func load() -> StoreReadResult<[String: StoredTransactionEvidence]> {
+        lock.withLock { .value(entries) }
+    }
+
+    @discardableResult
+    func save(_ entries: [String: StoredTransactionEvidence]) -> Bool {
+        lock.withLock {
+            guard !refusesWritesStorage else { return false }
+            self.entries = entries
+            return true
+        }
+    }
+}
+
+private final class ProfileRequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func record(_ distinctId: String) { lock.withLock { storage.append(distinctId) } }
+    var requests: [String] { lock.withLock { storage } }
+}
+
 private final class OrdinaryReceiptSyncAPI {
     private let responseCustomerId: String?
     private let lock = NSLock()
@@ -1303,8 +1341,9 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
 
     /// A purchase-backed Feature command whose entry is admitted again while
     /// it is in flight (here StoreKit reports a refund) still returns the
-    /// server's accepted result. The admission fence only keeps that answer
-    /// off the newer entry, whose own send waits on the outbox timer.
+    /// server's accepted result. Its answer is superseded, so it changes no
+    /// Feature authority or cache and only asks for the profile again; the
+    /// newer entry's own send waits on the outbox timer.
     func testAcceptedUseReturnsItsResultWhenTheEntryIsAdmittedAgainMidFlight() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
@@ -1317,11 +1356,14 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             ),
         ]))
         let api = ControlledPurchaseBackedUsageAPI()
+        let features = PurchaseBackedFeatureRecorder()
+        let profileRequests = ProfileRequestRecorder()
         let observer = makeControlledObserver(
             api: api,
-            features: PurchaseBackedFeatureRecorder(),
+            features: features,
             identity: identity,
-            store: store
+            store: store,
+            refreshProfile: { profileRequests.record($0) }
         )
         addTeardownBlock { await observer.stopListening() }
 
@@ -1355,6 +1397,11 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let used = try await use.value
         XCTAssertEqual(used?.success, true, "the server consumed the Feature; the caller gets its result")
         XCTAssertEqual(used?.amountUsed, 1)
+        let published = await features.recordedUpdates().count
+        XCTAssertEqual(published, 0, "a superseded answer publishes no balance")
+        let invalidations = await features.invalidationCount()
+        XCTAssertEqual(invalidations, 0, "and changes no Feature authority")
+        XCTAssertEqual(profileRequests.requests, ["customer-a"], "it asks for the profile again")
         let entry = try XCTUnwrap(store.load().valueTreatingAbsentAsEmpty([:])?["transaction-1"])
         XCTAssertTrue(entry.isRevoked)
         XCTAssertTrue(entry.isUnsent, "the refund waits for its own send")
@@ -1542,7 +1589,10 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         )
     }
 
-    func testUnreadableEvidenceThrowsFromPendingPurchaseUseInsteadOfFallingThrough() async throws {
+    /// An unreadable outbox turns the outbox off for the session, and while
+    /// it is off no purchase backs a Feature use: the use takes the ordinary
+    /// Feature command.
+    func testUnreadableEvidenceSendsTheUseThroughTheOrdinaryCommand() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "pending-use-corruption-\(UUID().uuidString)",
             isDirectory: true
@@ -1581,21 +1631,77 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             activeStoreOriginalTransactionIDs: { [] }
         )
 
-        do {
-            _ = try await observer.useFeatureWithPendingPurchase(
-                distinctId: "customer-a",
-                featureId: "feature-1",
-                amount: 1,
-                entityId: nil,
-                metadata: nil
-            )
-            XCTFail("Expected TransactionEvidenceError.unreadable")
-        } catch let error as TransactionEvidenceError {
-            XCTAssertEqual(error, .unreadable)
-        }
+        let result = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a",
+            featureId: "feature-1",
+            amount: 1,
+            entityId: nil,
+            metadata: nil
+        )
+        XCTAssertNil(result, "the use takes the ordinary Feature command")
+        let requests = await api.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
     }
 
-    func testOrdinaryReceiptSyncDoesNotConsumeUnreadableEvidenceAsAbsent() async throws {
+    /// A purchase-backed use whose answer cannot be saved turns the outbox
+    /// off. The use still returns the server's result, and the next use with
+    /// the same arguments takes the ordinary Feature command: it is never a
+    /// replay of the first that reports success without consuming a unit.
+    func testUseWhoseAnswerCannotBeSavedSendsTheNextUseThroughTheOrdinaryCommand() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = WriteRefusingEvidenceStore(entries: [
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"]
+            ),
+        ])
+        let response = PurchaseBackedFeatureUseResponse(
+            customerId: "customer-a",
+            featureId: "credits",
+            code: "entitled",
+            allowed: true,
+            unlimited: false,
+            balance: 3,
+            type: .creditSystem,
+            idempotentReplay: false
+        )
+        var replay = response
+        replay.idempotentReplay = true
+        let api = PurchaseBackedUsageAPI(results: [.success(response), .success(replay)])
+        let observer = makeObserver(
+            api: api,
+            features: PurchaseBackedFeatureRecorder(),
+            identity: identity,
+            store: store
+        )
+        // The disk is full.
+        store.refusesWrites = true
+
+        let first = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a",
+            featureId: "credits",
+            amount: 1,
+            entityId: nil,
+            metadata: nil
+        )
+        XCTAssertEqual(first?.success, true, "the server consumed the Feature")
+        let second = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a",
+            featureId: "credits",
+            amount: 1,
+            entityId: nil,
+            metadata: nil
+        )
+        XCTAssertNil(second, "the next use takes the ordinary Feature command")
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    /// An unreadable outbox is off for the session: the receipt is still
+    /// sent once, and its answer publishes no Features and reports nothing.
+    func testOrdinaryReceiptSyncWithAnUnreadableOutboxIsSentOnceAndChangesNothingLocal() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "ordinary-sync-corruption-\(UUID().uuidString)",
             isDirectory: true
@@ -1641,8 +1747,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             originalTransactionId: "original-transaction-1"
         )
 
-        XCTAssertFalse(accepted)
-        XCTAssertEqual(api.recordedRequestCount(), 0)
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(api.recordedRequestCount(), 1)
         let purchaseUpdateCount = await features.recordedPurchaseUpdateCount()
         XCTAssertEqual(purchaseUpdateCount, 0)
         XCTAssertTrue(events.events().isEmpty)
@@ -1948,7 +2054,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         api: PurchaseBackedUsageAPI,
         features: PurchaseBackedFeatureRecorder,
         identity: MockIdentityService,
-        store: InMemoryTransactionEvidenceStore,
+        store: any TransactionEvidenceStoreProtocol,
         observerScope: PurchaseStorageScope? = nil,
         configuration: NuxieConfiguration? = nil,
         eventSink: SystemEventSink = PurchaseBackedEventSink()
@@ -1978,7 +2084,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         features: PurchaseBackedFeatureRecorder,
         identity: MockIdentityService,
         store: InMemoryTransactionEvidenceStore,
-        eventSink: SystemEventSink = PurchaseBackedEventSink()
+        eventSink: SystemEventSink = PurchaseBackedEventSink(),
+        refreshProfile: @escaping @Sendable (String) async -> Void = { _ in }
     ) -> TransactionObserver {
         let settings = NuxieRuntimeSettings(
             configuration: NuxieConfiguration(apiKey: "purchase-use-test")
@@ -1995,7 +2102,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             dateProvider: MockDateProvider(
                 initialDate: Date(timeIntervalSince1970: 100)
             ),
-            activeStoreOriginalTransactionIDs: { [] }
+            activeStoreOriginalTransactionIDs: { [] },
+            refreshProfile: refreshProfile
         )
     }
 

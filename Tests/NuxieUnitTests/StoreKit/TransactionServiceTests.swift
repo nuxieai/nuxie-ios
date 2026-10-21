@@ -1690,7 +1690,7 @@ final class TransactionServiceTests: AsyncSpec {
                 }
 
                 context("when the purchase is deferred (Ask-to-Buy / SCA)") {
-                    it("fails closed when the pending transition is not durable") {
+                    it("stays pending and turns the outbox off when the pending transition is not durable") {
                         settings.setPurchaseDelegate(nil)
                         mockNativePurchaseAdapter.configurePending()
                         let store = PendingTransitionFailureStore()
@@ -1707,9 +1707,14 @@ final class TransactionServiceTests: AsyncSpec {
                             featureService: featureService
                         )
 
+                        // A failed write does not fail the checkout: it stays
+                        // pending, and the outbox is off for the session.
                         await expect {
                             try await transactionService.purchase(mockProduct)
-                        }.to(throwError(StoreKitError.purchaseFailed(nil)))
+                        }.to(throwError(StoreKitError.purchasePending))
+                        await expect {
+                            await mockTransactionObserver.outboxCannotSaveCalls
+                        }.toEventually(beGreaterThan(0), timeout: .seconds(2))
 
                         let retained = store.load().valueTreatingAbsentAsEmpty([:])!.values.first
                         expect(retained?.state) == .checkout

@@ -21,7 +21,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                 storageURLs.removeAll()
             }
 
-            it("keeps all three stores unknown until their files are readable") {
+            it("sends the purchase once and leaves all three unreadable stores untouched") {
                 let distinctId = "purchase-corruption-customer"
                 let storageURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent(
@@ -69,7 +69,9 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                     distinctId: distinctId
                 )
 
-                let receiptAccepted = await stack.core.transactionObserver.commit(
+                // An unreadable store turns the outbox off: the purchase is
+                // still sent once, and nothing is written.
+                let delivery = await stack.core.transactionObserver.commit(
                     .verified(
                         VerifiedPurchaseEvidence(
                             transactionJws: "signed-corrupt-transaction",
@@ -82,8 +84,11 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                         ),
                         source: .startupRecovery
                     )
-                ).committed
-                expect(receiptAccepted).to(beFalse())
+                )
+                expect(delivery.committed).to(beTrue())
+                _ = await delivery.syncTask?.value
+                let sends = await api.syncTransactionRequests.count
+                expect(sends) == 1
 
                 let pendingOwnership = await stack.core.transactionService
                     .pendingPurchaseOwnership(productId: "corrupt-product")
