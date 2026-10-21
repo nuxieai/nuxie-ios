@@ -215,8 +215,8 @@ Create with `NuxieConfiguration(apiKey:)` and optionally set:
   App Store transactions only with a `pk_live_` key. TestFlight purchases are
   Sandbox purchases, so build TestFlight uploads with the test key even though
   they use a Release configuration.
-- `testStoreEnabled`: the isolated, local-only purchase sheet (development +
-  `pk_test_` key only).
+- `testStoreEnabled`: the Nuxie Test Store purchase sheet (a `pk_test_` key in
+  a Debug build only).
 - Logging: `logLevel`, `enableConsoleLogging`, `redactSensitiveData`.
 - Locale: `localeIdentifier` for the initial locale; use
   `setLocaleIdentifier(_:)` for runtime changes.
@@ -237,33 +237,40 @@ config.beforeSend = { event in
 }
 ```
 
-### Nuxie Test Store (development only)
+### Nuxie Test Store (Debug builds)
 
 Use the Test Store when qualifying a signed Experience, paywall copy, purchase
-outcomes, restore branches, and Journey behavior without configuring App
-Store products or charging an account:
+outcomes, restore branches, Feature access and Journey behavior without
+configuring App Store products or charging an account:
 
 ```swift
 let config = NuxieConfiguration(apiKey: "pk_test_demo")
-config.environment = .development
+#if DEBUG
 config.testStoreEnabled = true
+#endif
 try NuxieSDK.shared.setup(with: config)
 ```
 
+It works on the default service with the test key, like RevenueCat's Test
+Store. Setup refuses it with a `pk_live_` key or in a Release build, which
+includes TestFlight and App Store builds.
+
 The sheet is deliberately branded `Nuxie Test Store` and says that it creates
 no StoreKit transaction. It offers explicit Purchased, Pending, Cancelled, and
-Failed outcomes, plus Restored, No Purchases, and Failed restore outcomes. A
-successful test purchase emits the normal Experience/Journey purchase events
-with `test_store: true`; it does not create verified StoreKit evidence and
-therefore does not optimistically project Feature Access. It also does not call
-StoreKit, a purchase delegate, the transaction listener, or a production
-purchase endpoint.
+Failed outcomes, plus Restored, No Purchases, and Failed restore outcomes.
+Purchased asks Nuxie to grant the Product's Features to the customer, so access
+unlocks at once and stays on the server like a real purchase; if Nuxie cannot
+grant it, the purchase fails. The grant records no transaction and never counts
+as revenue, and it has no end: test again with a new customer. A successful test
+purchase emits the normal Experience/Journey purchase events with
+`test_store: true`. It never calls StoreKit, a purchase delegate, or the
+transaction listener.
 
 This is different from an Xcode StoreKit Configuration file (which exercises
 real StoreKit APIs with local products) and from Apple Sandbox (which exercises
-Apple's purchase and receipt lifecycle). Test Store is for Nuxie Experience
-qualification; use StoreKit Configuration or Sandbox before shipping native
-purchase behavior.
+Apple's purchase, renewal and receipt lifecycle). Test Store is for Nuxie
+Experience qualification; use StoreKit Configuration or Sandbox before shipping
+native purchase behavior.
 
 SDK contributors can run the checked-in real StoreKitTest qualification suite
 with `make test-storekit`; see [Native StoreKit qualification](docs/storekit-test-qualification.md).

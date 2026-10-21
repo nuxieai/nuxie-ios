@@ -461,6 +461,15 @@ actor TransactionService {
                 product: product,
                 distinctId: initiatingDistinctId
             )
+            // The server granted this purchase's Features: unlock them now,
+            // before the purchase is announced, as a store purchase sync does.
+            if let features = response.features,
+               identityService?.getDistinctId() == initiatingDistinctId {
+                await featureService?.updateFromPurchase(
+                    features,
+                    distinctId: initiatingDistinctId
+                )
+            }
             outcome = response.result
             purchaseOutcome = makePurchaseOutcome(
                 response.result,

@@ -1,14 +1,21 @@
 import Foundation
 
 /// The small internal result returned by the isolated Test Store adapter.
-/// Test Store purchases intentionally carry no StoreKit transaction evidence.
+/// Test Store purchases intentionally carry no StoreKit transaction evidence;
+/// a purchase carries the Customer's access after the server's grant.
 struct NuxieTestStorePurchaseResponse: Sendable {
     let result: NativePurchaseResult
     let transactionId: String?
+    let features: [PurchaseFeature]?
 
-    init(result: NativePurchaseResult, transactionId: String? = nil) {
+    init(
+        result: NativePurchaseResult,
+        transactionId: String? = nil,
+        features: [PurchaseFeature]? = nil
+    ) {
         self.result = result
         self.transactionId = transactionId
+        self.features = features
     }
 }
 
@@ -36,24 +43,73 @@ protocol NuxieTestStorePurchasing: Sendable {
     func restorePurchases(distinctId: String) async -> NuxieTestStoreRestoreResponse
 }
 
-/// A deliberately unmistakable, local-only checkout surface for qualifying
-/// Experiences and Journey branches before App Store purchases are configured.
-/// It never creates a StoreKit transaction or calls a host purchase delegate.
+/// A deliberately unmistakable checkout surface for qualifying Experiences
+/// and Journey branches in a debug build before App Store purchases are
+/// configured. It never creates a StoreKit transaction or calls a host
+/// purchase delegate. A purchase asks the server to grant the Product's
+/// Features, as RevenueCat's Test Store does; without that grant it fails.
 actor NuxieTestStore: NuxieTestStorePurchasing {
+    private let granting: any TestStoreGranting
     private var purchasedProductsByDistinctId: [String: [String: StoreProduct]] = [:]
+
+    init(granting: any TestStoreGranting) {
+        self.granting = granting
+    }
 
     func purchase(
         product: StoreProduct,
         distinctId: String
     ) async -> NuxieTestStorePurchaseResponse {
         let choice = await Self.presentPurchaseSheet(for: product)
-        return purchaseResponse(for: choice, product: product, distinctId: distinctId)
+        return await complete(choice, product: product, distinctId: distinctId)
+    }
+
+    /// The outcome of the tester's choice. Purchased asks the server to grant
+    /// the Product's Features; without that grant the purchase fails.
+    func complete(
+        _ choice: TestStorePurchaseChoice,
+        product: StoreProduct,
+        distinctId: String
+    ) async -> NuxieTestStorePurchaseResponse {
+        guard case .purchased = choice else {
+            return purchaseResponse(for: choice, product: product, distinctId: distinctId)
+        }
+        let transactionId = "nuxie-test-\(UUID().uuidString)"
+        do {
+            guard let productId = product.purchaseContext?.productId else {
+                throw StoreKitError.apiMisuse(
+                    reason: "Test Store purchases need a published Product"
+                )
+            }
+            let response = try await granting.grantTestStorePurchase(
+                productId: productId,
+                transactionId: transactionId,
+                distinctId: distinctId
+            )
+            guard response.success else {
+                throw StoreKitError.purchaseFailed(nil)
+            }
+            return purchaseResponse(
+                for: .purchased,
+                product: product,
+                distinctId: distinctId,
+                transactionId: transactionId,
+                features: response.features
+            )
+        } catch {
+            LogWarning("NuxieTestStore: grant failed: \(error)")
+            return NuxieTestStorePurchaseResponse(
+                result: .failed(StoreKitError.purchaseFailed(error))
+            )
+        }
     }
 
     func purchaseResponse(
         for choice: TestStorePurchaseChoice,
         product: StoreProduct,
-        distinctId: String
+        distinctId: String,
+        transactionId: String? = nil,
+        features: [PurchaseFeature]? = nil
     ) -> NuxieTestStorePurchaseResponse {
         switch choice {
         case .purchased:
@@ -62,7 +118,8 @@ actor NuxieTestStore: NuxieTestStorePurchasing {
             purchasedProductsByDistinctId[distinctId] = products
             return NuxieTestStorePurchaseResponse(
                 result: .purchased(nil),
-                transactionId: "nuxie-test-\(UUID().uuidString)"
+                transactionId: transactionId ?? "nuxie-test-\(UUID().uuidString)",
+                features: features
             )
         case .pending:
             return NuxieTestStorePurchaseResponse(result: .pending)

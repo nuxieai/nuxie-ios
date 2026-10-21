@@ -28,7 +28,7 @@ final class TestStoreFixtureTests: XCTestCase {
             .appendingPathComponent("fixtures/purchases/test-store.json")
         let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
         for scenario in fixture.cases {
-            let store = NuxieTestStore()
+            let store = NuxieTestStore(granting: RecordingTestStoreGrants(answer: .failure(NuxieNetworkError.invalidResponse)))
             var transactions = Set<String>()
             for action in scenario.actions {
                 if action.operation == "purchase" {

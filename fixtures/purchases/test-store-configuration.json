@@ -3,10 +3,18 @@
   "version": 1,
   "platform": "android",
   "notes": [
-    "Development environment and pk_test_ key match iOS. Android additionally rejects enabled Test Store in a non-debuggable host at setup.",
+    "A pk_test_ key selects test content on any service, so admission needs a test key and a debuggable host; the service environment plays no part. iOS refuses a non-debug build the same way.",
     "This contract checks runtime setup admission, not a Gradle build-time detector."
   ],
   "cases": [
+    {
+      "name": "default-service-test-debug",
+      "enabled": true,
+      "environment": "PRODUCTION",
+      "apiKey": "pk_test_fixture",
+      "debuggable": true,
+      "allowed": true
+    },
     {
       "name": "development-test-debug",
       "enabled": true,
@@ -16,17 +24,9 @@
       "allowed": true
     },
     {
-      "name": "production-environment",
-      "enabled": true,
-      "environment": "PRODUCTION",
-      "apiKey": "pk_test_fixture",
-      "debuggable": true,
-      "allowed": false
-    },
-    {
       "name": "live-key",
       "enabled": true,
-      "environment": "DEVELOPMENT",
+      "environment": "PRODUCTION",
       "apiKey": "pk_live_fixture",
       "debuggable": true,
       "allowed": false
@@ -34,7 +34,7 @@
     {
       "name": "non-debuggable-host",
       "enabled": true,
-      "environment": "DEVELOPMENT",
+      "environment": "PRODUCTION",
       "apiKey": "pk_test_fixture",
       "debuggable": false,
       "allowed": false

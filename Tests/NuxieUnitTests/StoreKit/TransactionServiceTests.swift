@@ -120,6 +120,7 @@ private actor MockNuxieTestStore: NuxieTestStorePurchasing {
 
 private actor RecordingFeatureService: FeatureServiceProtocol {
     private(set) var purchaseUpdateCount = 0
+    private(set) var purchaseUpdates: [(featureIds: [String], distinctId: String)] = []
 
     func getCached(featureId: String, entityId: String?) async -> FeatureAccess? { nil }
     func getAllCached() async -> [String: FeatureAccess] { [:] }
@@ -146,6 +147,7 @@ private actor RecordingFeatureService: FeatureServiceProtocol {
         distinctId: String
     ) async {
         purchaseUpdateCount += 1
+        purchaseUpdates.append((features.map(\.id), distinctId))
     }
 }
 
@@ -515,6 +517,31 @@ final class TransactionServiceTests: AsyncSpec {
                     expect(outcomes.first?.storeProductId) == "com.test.product"
                     expect(outcomes.first?.testStore) == true
                     expect(outcomes.first?.outcomeEventId) == correlation.eventId
+                }
+
+                it("unlocks the Features the server granted for a Test Store purchase") {
+                    mockTestStore = MockNuxieTestStore()
+                    await mockTestStore.setPurchaseResponse(
+                        NuxieTestStorePurchaseResponse(
+                            result: .purchased(nil),
+                            transactionId: "test-transaction",
+                            features: [PurchaseFeature(
+                                id: "feature_pro", extId: "pro-training", type: .boolean,
+                                allowed: true, balance: nil, unlimited: false
+                            )]
+                        )
+                    )
+                    transactionService = makeTransactionService()
+
+                    await expect {
+                        try await transactionService.purchase(mockProduct)
+                    }.toNot(throwError())
+
+                    let updates = await featureService.purchaseUpdates
+                    expect(updates.map(\.featureIds)) == [["feature_pro"]]
+                    expect(updates.map(\.distinctId)) == ["test-user"]
+                    let outcomes = await mockTransactionObserver.committedOutcomes
+                    expect(outcomes.first?.testStore) == true
                 }
 
                 it("marks a failed Test Store outcome with its checkout environment") {
@@ -1919,7 +1946,7 @@ final class TransactionServiceTests: AsyncSpec {
 
             describe("restore") {
                 it("honors the Test Store restored outcome without prior purchases") {
-                    let store = NuxieTestStore()
+                    let store = NuxieTestStore(granting: RecordingTestStoreGrants(answer: .failure(NuxieNetworkError.invalidResponse)))
 
                     let response = await store.restoreResponse(
                         for: .restored,

@@ -129,7 +129,7 @@ Customer options are:
 - `logLevel`, `enableConsoleLogging`, and `redactSensitiveData`;
 - `localeIdentifier`;
 - `beforeSend` for transforming or dropping events before persistence;
-- `testStoreEnabled` for isolated development purchase qualification;
+- `testStoreEnabled` for Debug-build purchase qualification with a test key;
 - `purchaseDelegate`; and
 - `purchaseHandlingMode` (`.full` or `.observer`).
 

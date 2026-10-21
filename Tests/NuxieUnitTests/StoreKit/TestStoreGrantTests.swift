@@ -1,0 +1,134 @@
+import Foundation
+import XCTest
+@testable import Nuxie
+
+/// Records Test Store grants, answering with a fixed response or error.
+actor RecordingTestStoreGrants: TestStoreGranting {
+    struct Grant: Equatable {
+        let productId: String
+        let transactionId: String
+        let distinctId: String
+    }
+
+    private(set) var grants: [Grant] = []
+    private let answer: Result<PurchaseResponse, Error>
+
+    init(answer: Result<PurchaseResponse, Error>) {
+        self.answer = answer
+    }
+
+    func grantTestStorePurchase(
+        productId: String,
+        transactionId: String,
+        distinctId: String
+    ) async throws -> PurchaseResponse {
+        grants.append(Grant(productId: productId, transactionId: transactionId, distinctId: distinctId))
+        return try answer.get()
+    }
+}
+
+final class TestStoreGrantTests: XCTestCase {
+    private let pro = PurchaseFeature(
+        id: "feature_pro", extId: "pro-training", type: .boolean,
+        allowed: true, balance: nil, unlimited: false
+    )
+
+    private func annual(published: Bool = true) -> StoreProduct {
+        var product = StoreProduct(
+            productId: "annual", storeProductId: "cadence_pro:annual",
+            placementId: "paywall", name: "Annual", price: "$59.99", period: nil
+        )
+        guard published else { return product }
+        product.purchaseContext = PurchaseCommercialContext(
+            release: AuthenticatedJourneyReleaseID(
+                identity: JourneyReleaseIdentity(
+                    appId: "app-1", environment: "test", experienceId: "experience-1",
+                    experienceVersionId: "version-1", buildId: "build-1", versionNumber: 1,
+                    publishedAt: "2026-10-20T00:00:00Z", publishedAtSeq: 1
+                ),
+                descriptorSHA256: String(repeating: "a", count: 64)
+            ),
+            placementId: "paywall",
+            productId: "prd_annual",
+            storeProductId: "cadence_pro:annual",
+            displayPrice: "$59.99",
+            price: 59.99
+        )
+        return product
+    }
+
+    private func success(_ features: [PurchaseFeature]) -> PurchaseResponse {
+        PurchaseResponse(success: true, customerId: "customer-1", features: features, error: nil)
+    }
+
+    func testAPurchaseIsGrantedByTheServerAndCarriesTheGrantedAccess() async {
+        let grants = RecordingTestStoreGrants(answer: .success(success([pro])))
+        let store = NuxieTestStore(granting: grants)
+
+        let response = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+
+        guard case .purchased(let evidence) = response.result else {
+            return XCTFail("Expected a purchase, got \(response.result)")
+        }
+        XCTAssertNil(evidence)
+        let recorded = await grants.grants
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded.first?.productId, "prd_annual")
+        XCTAssertEqual(recorded.first?.distinctId, "rider-1")
+        XCTAssertEqual(recorded.first?.transactionId, response.transactionId)
+        XCTAssertTrue(response.transactionId?.hasPrefix("nuxie-test-") == true)
+        XCTAssertEqual(response.features?.map(\.id), ["feature_pro"])
+        let restored = await store.restoreResponse(for: .restored, distinctId: "rider-1")
+        XCTAssertEqual(restored.products.map(\.storeProductId), ["cadence_pro:annual"])
+    }
+
+    func testAPurchaseTheServerDoesNotGrantFailsAndLeavesNothingToRestore() async {
+        let answers: [Result<PurchaseResponse, Error>] = [
+            .failure(NuxieNetworkError.invalidResponse),
+            .success(PurchaseResponse(success: false, customerId: nil, features: nil, error: "refused")),
+        ]
+        for answer in answers {
+            let store = NuxieTestStore(granting: RecordingTestStoreGrants(answer: answer))
+
+            let response = await store.complete(.purchased, product: annual(), distinctId: "rider-1")
+
+            guard case .failed = response.result else {
+                return XCTFail("Expected a failed purchase, got \(response.result)")
+            }
+            XCTAssertNil(response.transactionId)
+            XCTAssertNil(response.features)
+            let restored = await store.restoreResponse(for: .restored, distinctId: "rider-1")
+            XCTAssertTrue(restored.products.isEmpty)
+        }
+    }
+
+    func testTheGrantRequestNamesTheCatalogProductTransactionAndCustomer() throws {
+        let body = try JSONEncoder().encode(TestStorePurchaseRequest(
+            productId: "prd_annual", transactionId: "nuxie-test-1", distinctId: "rider-1"
+        ))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json, [
+            "type": "test_store",
+            "catalog_product_id": "prd_annual",
+            "transaction_id": "nuxie-test-1",
+            "distinct_id": "rider-1",
+        ])
+    }
+
+    func testOnlyAPublishedProductPurchaseReachesTheServer() async {
+        let grants = RecordingTestStoreGrants(answer: .success(success([pro])))
+        let store = NuxieTestStore(granting: grants)
+
+        let unpublished = await store.complete(.purchased, product: annual(published: false), distinctId: "rider-1")
+        let cancelled = await store.complete(.cancelled, product: annual(), distinctId: "rider-1")
+
+        guard case .failed = unpublished.result else {
+            return XCTFail("Expected a failed purchase, got \(unpublished.result)")
+        }
+        guard case .cancelled = cancelled.result else {
+            return XCTFail("Expected a cancelled purchase, got \(cancelled.result)")
+        }
+        let recorded = await grants.grants
+        XCTAssertTrue(recorded.isEmpty)
+    }
+}
