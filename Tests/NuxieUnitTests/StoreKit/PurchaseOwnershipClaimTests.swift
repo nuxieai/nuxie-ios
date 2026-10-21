@@ -165,6 +165,87 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertEqual(harness.api.requests.map(\.customerKind), [.identified, .identified])
     }
 
+    /// A passive scan's customer is only the last fallback for who a
+    /// purchase is sent for. Customer A's checkout binding is waiting when
+    /// customer B becomes current, and B's launch scan finds A's purchase
+    /// first: it is saved and sent for A, the binding's completion goes with
+    /// A's entry, and nothing completes under B. Once A is back, A's
+    /// completion is reported, once.
+    func testScanForAnotherCustomerNeverOutranksTheCheckoutBinding() async throws {
+        let harness = await makeHarness(customer: "customer-b")
+        let context = try XCTUnwrap(product().purchaseContext)
+        let binding = PendingPurchaseRecord(
+            scope: scope,
+            distinctId: "customer-a",
+            appAccountToken: token("customer-a"),
+            commercialContext: context,
+            recordedAt: MockFactory.shared.dateProvider.now(),
+            localEntitlementGrants: [],
+            state: .checkout,
+            checkoutCompletionEventId: "customer-a-checkout"
+        )
+        XCTAssertTrue(harness.pending.save(["customer-a-checkout": binding]))
+        harness.entitlements.set([
+            entitlement("bound", productId: storeProductId, token: token("customer-a")),
+        ])
+
+        await harness.observer.retryAfterProfileReady()
+
+        XCTAssertEqual(harness.api.requests.map(\.distinctId), ["customer-a"], "the purchase is sent for the binding's customer")
+        let entry = try XCTUnwrap(harness.store.load().valueTreatingAbsentAsEmpty([:])?["bound-transaction"])
+        XCTAssertEqual(entry.distinctId, "customer-a")
+        XCTAssertEqual(entry.checkoutCompletionEventId, "customer-a-checkout", "the binding's completion goes with A's entry")
+        XCTAssertNil(entry.completionDeliveredAt)
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseCompleted), 0, "nothing completes under B")
+        XCTAssertNil(
+            harness.pending.load().valueTreatingAbsentAsEmpty([:])?["customer-a-checkout"],
+            "A's saved entry holds the completion, so the binding is retired"
+        )
+
+        harness.identity.setDistinctId("customer-a")
+        await harness.observer.retryStoredEvidence()
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseCompleted), 1, "A's completion is reported once A is back")
+        XCTAssertNotNil(harness.store.load().valueTreatingAbsentAsEmpty([:])?["bound-transaction"]?.completionDeliveredAt)
+    }
+
+    /// The same scan with the outbox off. Nothing is saved, so the checkout
+    /// binding is the only record of A's completion: the purchase is sent
+    /// once for A, nothing completes under B, and the binding stays until A's
+    /// completion is captured once A is current.
+    func testScanForAnotherCustomerWithTheOutboxOffLeavesTheBindingForTheBuyer() async throws {
+        let harness = await makeHarness(customer: "customer-b")
+        let context = try XCTUnwrap(product().purchaseContext)
+        let binding = PendingPurchaseRecord(
+            scope: scope,
+            distinctId: "customer-a",
+            appAccountToken: token("customer-a"),
+            commercialContext: context,
+            recordedAt: MockFactory.shared.dateProvider.now(),
+            localEntitlementGrants: [],
+            state: .checkout,
+            checkoutCompletionEventId: "customer-a-checkout"
+        )
+        XCTAssertTrue(harness.pending.save(["customer-a-checkout": binding]))
+        harness.entitlements.set([
+            entitlement("bound", productId: storeProductId, token: token("customer-a")),
+        ])
+        harness.store.refusesWrites = true
+
+        await harness.observer.retryAfterProfileReady()
+        for _ in 0..<250 where harness.api.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+
+        XCTAssertEqual(harness.api.requests.map(\.distinctId), ["customer-a"], "the purchase is sent once, for A")
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseCompleted), 0, "nothing completes under B")
+        XCTAssertNotNil(
+            harness.pending.load().valueTreatingAbsentAsEmpty([:])?["customer-a-checkout"],
+            "the binding stays until A's completion is captured"
+        )
+        XCTAssertEqual(harness.store.load().valueTreatingAbsentAsEmpty([:])?.isEmpty, true, "nothing is saved while off")
+    }
+
+
     func testRetriedPurchaseKeepsItsReasonAndItsCustomersKindAfterReset() async throws {
         let harness = await makeHarness(customer: "buyer")
         harness.api.answer(.fail)

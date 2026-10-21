@@ -200,7 +200,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                             appAccountToken: scope.appAccountToken(
                                 distinctId: distinctId
                             ),
-                            attributedDistinctId: distinctId,
+                            requester: .named(distinctId),
                             finishRequired: false,
                             resolvesPendingPurchase: false,
                             allowsDurableCheckoutAuthority: false,

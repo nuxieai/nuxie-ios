@@ -10,13 +10,43 @@ enum PurchaseOutcomeSource: String, Equatable, Sendable {
     case externalDelegate = "external_delegate"
 }
 
+/// Who a producer knows a purchase is sent for. The requester rule is: the
+/// customer an explicit producer names, else the customer of the checkout
+/// binding the delivery matches, else the current customer.
+enum PurchaseRequester: Equatable, Sendable {
+    /// An explicit producer names its customer: a checkout, a Restore, an
+    /// already-owned claim, or an outbox entry's own recorded requester. It
+    /// outranks a checkout binding.
+    case named(String)
+    /// A passive producer (a scan with no purpose) knows only the customer
+    /// current when it ran. That is the last fallback: a checkout binding the
+    /// delivery matches outranks it.
+    case currentCustomer(String)
+
+    /// The customer an explicit producer names; nil for a passive one.
+    var namedDistinctId: String? {
+        if case .named(let distinctId) = self { return distinctId }
+        return nil
+    }
+
+    /// The customer this producer stands for, named or current.
+    var distinctId: String {
+        switch self {
+        case .named(let distinctId), .currentCustomer(let distinctId):
+            return distinctId
+        }
+    }
+}
+
 struct VerifiedPurchaseEvidence: Sendable {
     let transactionJws: String
     let transactionId: String
     let originalTransactionId: String
     let productId: String
     let appAccountToken: UUID?
-    let attributedDistinctId: String?
+    /// Who the producer knows the purchase is for, if anyone. Only a named
+    /// requester outranks a checkout binding.
+    let requester: PurchaseRequester?
     let recordedAt: Date?
     let productFeatureIds: [String]
     let commercialContext: PurchaseCommercialContext?
@@ -54,7 +84,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         originalTransactionId: String,
         productId: String,
         appAccountToken: UUID? = nil,
-        attributedDistinctId: String? = nil,
+        requester: PurchaseRequester? = nil,
         recordedAt: Date? = nil,
         productFeatureIds: [String] = [],
         commercialContext: PurchaseCommercialContext? = nil,
@@ -79,7 +109,7 @@ struct VerifiedPurchaseEvidence: Sendable {
         self.originalTransactionId = originalTransactionId
         self.productId = productId
         self.appAccountToken = appAccountToken
-        self.attributedDistinctId = attributedDistinctId
+        self.requester = requester
         self.recordedAt = recordedAt
         self.productFeatureIds = productFeatureIds
         self.commercialContext = commercialContext
@@ -808,7 +838,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     originalTransactionId: evidence.originalTransactionId,
                     productId: evidence.productId,
                     appAccountToken: evidence.appAccountToken,
-                    attributedDistinctId: evidence.distinctId,
+                    requester: .named(evidence.distinctId),
                     recordedAt: evidence.recordedAt,
                     productFeatureIds: evidence.productFeatureIds,
                     commercialContext: evidence.commercialContext,
@@ -1016,7 +1046,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         _ transaction: VerifiedStoreTransactionUpdate,
         jwsRepresentation transactionJwt: String,
         source: PurchaseOutcomeSource,
-        attributedDistinctId: String? = nil,
+        requester: PurchaseRequester? = nil,
         syncReason: PurchaseSyncReason = .sync,
         explicitClaim: Bool = false,
         resolvesPendingPurchase: Bool = true,
@@ -1039,7 +1069,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 originalTransactionId: transaction.originalTransactionId,
                 productId: transaction.productId,
                 appAccountToken: transaction.appAccountToken,
-                attributedDistinctId: attributedDistinctId,
+                requester: requester,
                 resolvesPendingPurchase: resolvesPendingPurchase,
                 allowsDurableCheckoutAuthority: allowsDurableCheckoutAuthority,
                 isRevoked: transaction.isRevoked,
@@ -1247,7 +1277,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 return false
             }
             let distinctId = storedEvidence()[evidence.transactionId]?.distinctId
-                ?? evidence.attributedDistinctId
+                ?? evidence.requester?.distinctId
             return distinctId == nil
                 || distinctId == identityService.getDistinctId()
         case .cancelled, .pending, .failed:
@@ -1368,7 +1398,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
         var existing = storedEvidence()[verified.transactionId]
         if let current = existing,
-           Self.givesWay(current, to: verified.attributedDistinctId) {
+           Self.givesWay(current, to: verified.requester?.distinctId) {
             existing = nil
         }
         if verified.isRevoked, let current = existing, !current.isRevoked {
@@ -1462,9 +1492,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
 
         let activeDistinctId = identityService.getDistinctId()
+        // Only a producer that names its customer can be refused here. A
+        // passive one commits against the entry, for the customer it holds.
         if let existing,
-           let attributedDistinctId = verified.attributedDistinctId,
-           existing.distinctId != attributedDistinctId {
+           let namedDistinctId = verified.requester?.namedDistinctId,
+           existing.distinctId != namedDistinctId {
             LogWarning(
                 "TransactionObserver: Refusing to move a purchase between customers"
             )
@@ -1520,11 +1552,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         // An explicit producer names its customer; a delivery bound to a
         // checkout goes to that checkout's customer; any other StoreKit
-        // delivery is sent for the current customer.
+        // delivery is sent for the current customer. A passive scan's
+        // customer is only that last fallback, so it never outranks a
+        // binding.
         let newRecordOwner = verified.requiresCheckoutBinding
             ? boundRequester ?? activeDistinctId
-            : verified.attributedDistinctId
+            : verified.requester?.namedDistinctId
                 ?? boundRequester
+                ?? verified.requester?.distinctId
                 ?? activeDistinctId
         let routeCompletionToJourneys: Bool
         // StoreKit can deliver a checkout's transaction through its update
@@ -1557,7 +1592,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         let makeCommittedEvidence = {
             [self] (current: StoredTransactionEvidence?) -> EvidenceWrite in
             let existing = current.flatMap {
-                Self.givesWay($0, to: verified.attributedDistinctId) ? nil : $0
+                Self.givesWay($0, to: verified.requester?.distinctId) ? nil : $0
             }
             let owner = existing?.distinctId ?? newRecordOwner
             let incomingReason = deliversLiveCheckout
@@ -2070,7 +2105,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 originalTransactionId: evidence.originalTransactionId,
                 productId: evidence.productId,
                 appAccountToken: appAccountToken,
-                attributedDistinctId: evidence.distinctId,
+                requester: .named(evidence.distinctId),
                 recordedAt: evidence.recordedAt,
                 productFeatureIds: evidence.productFeatureIds,
                 commercialContext: evidence.commercialContext,
@@ -2800,7 +2835,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     update,
                     jwsRepresentation: item.jwsRepresentation,
                     source: .startupRecovery,
-                    attributedDistinctId: distinctId,
+                    // A Restore or already-owned claim names its customer;
+                    // any other entitlement of the scan knows only the
+                    // current customer, which a checkout binding outranks.
+                    requester: purpose != nil && reason.claimsOwnership
+                        ? .named(distinctId)
+                        : .currentCustomer(distinctId),
                     syncReason: reason,
                     explicitClaim: purpose != nil && reason.claimsOwnership,
                     // A current-entitlement scan can race unfinished/updates for
@@ -3086,7 +3126,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 originalTransactionId: evidence.originalTransactionId,
                 productId: evidence.productId,
                 appAccountToken: product.nativeCheckoutAppAccountToken,
-                attributedDistinctId: distinctId,
+                requester: .named(distinctId),
                 productFeatureIds: storeProductFeatureIds(
                     product.localEntitlementGrants
                 ),
@@ -3348,7 +3388,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 originalTransactionId: evidence.originalTransactionId,
                 productId: evidence.productId,
                 appAccountToken: appAccountToken,
-                attributedDistinctId: attributedDistinctId,
+                requester: attributedDistinctId.map(PurchaseRequester.named),
                 finishRequired: finishRequired,
                 resolvesPendingPurchase: true,
                 allowsDurableCheckoutAuthority: true,

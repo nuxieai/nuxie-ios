@@ -41,12 +41,21 @@ Recorded when the send is admitted, and sent unchanged by every retry:
 | --- | --- |
 | signed transaction | The StoreKit JWS (Play: purchase JSON and signature). A refund replaces it with the signed revocation, sent as a sync. |
 | `reason` | `purchase` for the customer's own checkout (including a store delivery of a checkout still running, and the product the store says they already own, for that product only); `restore` for Restore; `sync` for everything else (store updates, launch recovery, deferred approvals, the scans after identify or reset). |
-| requester distinct id | The customer the send is for: the one an explicit producer names (checkout, Restore, already owned), else the customer of the checkout binding the delivery matches, else the current customer. |
+| requester distinct id | The customer the send is for: the one an explicit producer names (checkout, Restore, already owned), else the customer of the checkout binding the delivery matches, else the current customer. A scan with no purpose names no one: its current customer is only that last fallback, so it never outranks a binding. |
 | `customer_kind` | `identified` if the requester signed in with `identify`, `anonymous` if not. When the SDK cannot tell (an entry admitted for a customer no longer on the device) it is `identified`: the server merges only owners declared anonymous, so such a customer can be moved but never merged away. |
 
 Alongside it the entry keeps local bookkeeping that is not purchase
 authority: whether the StoreKit transaction still has to be finished, and the
 checkout's completion event while it has not been delivered.
+
+A checkout's `$purchase_completed` is captured only while its buyer is the
+current customer. The event log stamps the current customer's identity on
+every event it records (`$user_id`, `$is_identified`) and routes it to the
+current customer's Journeys, so an event captured for another customer would
+carry the wrong identity. Until the buyer is current again the completion
+waits: on the buyer's saved entry, which then retires the checkout binding
+because the entry holds the completion, or, while the outbox is off, in the
+binding itself, which is retired only when the completion is captured.
 
 Entries in a previous SDK's format, recognised by having no admission id, are
 dropped when the outbox is read. They are pre-GA local state, with no

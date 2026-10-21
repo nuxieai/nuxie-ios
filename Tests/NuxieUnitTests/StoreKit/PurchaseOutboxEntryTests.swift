@@ -160,7 +160,7 @@ final class PurchaseOutboxEntryTests: XCTestCase {
                 transactionId: "new-transaction",
                 originalTransactionId: "new-original",
                 productId: "product",
-                attributedDistinctId: "customer",
+                requester: .named("customer"),
                 resolvesPendingPurchase: false,
                 allowsDurableCheckoutAuthority: false,
                 requiresAuthorityResolution: false
