@@ -1360,6 +1360,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         context: context,
                         transactionId: transactionId,
                         testStore: testStore,
+                        // A host's own purchase gives the SDK no signed
+                        // transaction to read its environment from.
+                        storeEnvironment: nil,
                         source: source
                     ),
                     eventId: eventId,
@@ -1700,6 +1703,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? verified.customerKind
                     ?? identityService.purchaseCustomerKind(of: owner)
                     ?? .identified,
+                storeKitEnvironment: existing?.storeKitEnvironment
+                    ?? storeKitEnvironment(ofSignedTransaction: transactionJws),
                 // A refund's revocation and an explicit claim are new sends.
                 sendAttempts: sendsRevocation || admitsClaim
                     ? 0 : existing?.sendAttempts ?? 0,
@@ -1822,6 +1827,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     context: context,
                     transactionId: committedEvidence.transactionId,
                     testStore: committedEvidence.scope.storeEnvironment == .testStore,
+                    storeEnvironment: purchaseCompletionStoreEnvironment(
+                        storeKitEnvironment: committedEvidence.storeKitEnvironment,
+                        scope: committedEvidence.scope
+                    ),
                     source: source
                 ),
                 eventId: committedEvidence.checkoutCompletionEventId
@@ -1954,6 +1963,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     context: context,
                     transactionId: purchase.transactionId,
                     testStore: purchase.scope.storeEnvironment == .testStore,
+                    storeEnvironment: purchaseCompletionStoreEnvironment(
+                        storeKitEnvironment: purchase.storeKitEnvironment,
+                        scope: purchase.scope
+                    ),
                     source: source
                 ),
                 eventId: purchase.checkoutCompletionEventId
@@ -2074,6 +2087,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             appAccountToken: evidence.appAccountToken,
             reason: evidence.reason,
             customerKind: evidence.customerKind,
+            storeKitEnvironment: evidence.storeKitEnvironment,
             sendAttempts: evidence.sendAttempts,
             retryDueAt: evidence.retryDueAt,
             admissionId: evidence.admissionId
@@ -2104,6 +2118,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             appAccountToken: evidence.appAccountToken,
             reason: .sync,
             customerKind: evidence.customerKind,
+            storeKitEnvironment: evidence.storeKitEnvironment
+                ?? storeKitEnvironment(ofSignedTransaction: revokedJws),
             sendAttempts: 0
         )
     }
@@ -3121,6 +3137,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 appAccountToken: update.appAccountToken,
                 reason: reason,
                 customerKind: customerKind,
+                storeKitEnvironment: storeKitEnvironment(
+                    ofSignedTransaction: item.jwsRepresentation
+                ),
                 sendAttempts: 0
             )
         }

@@ -632,6 +632,116 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
     }
 
+    /// App Review buys with a Sandbox account against the release build, so
+    /// a live key's purchase can be a StoreKit Sandbox one. The server admits
+    /// it but keeps it out of revenue, fees and conversions; the checkout's
+    /// $purchase_completed says so with store_environment "sandbox", and only
+    /// in that case.
+    func testLiveKeySandboxCheckoutCompletionCarriesSandboxStoreEnvironment() async throws {
+        let completion = try await checkoutCompletion(keyMode: "production", storeKitEnvironment: "Sandbox")
+        XCTAssertEqual(completion["store_environment"] as? String, "sandbox")
+    }
+
+    func testLiveKeyProductionCheckoutCompletionCarriesNoStoreEnvironment() async throws {
+        let completion = try await checkoutCompletion(keyMode: "production", storeKitEnvironment: "Production")
+        XCTAssertNil(completion["store_environment"])
+    }
+
+    func testTestKeySandboxCheckoutCompletionCarriesNoStoreEnvironment() async throws {
+        let completion = try await checkoutCompletion(keyMode: "development", storeKitEnvironment: "Sandbox")
+        XCTAssertNil(completion["store_environment"])
+    }
+
+    /// A checkout whose outbox cannot save still completes in the session,
+    /// and its completion still says it was a Sandbox purchase.
+    func testLiveKeySandboxCheckoutCompletionWithTheOutboxOffCarriesSandboxStoreEnvironment() async throws {
+        let completion = try await checkoutCompletion(
+            keyMode: "production",
+            storeKitEnvironment: "Sandbox",
+            evidenceStore: ControlledTransactionEvidenceStore(entries: [:], saveSucceeds: false)
+        )
+        XCTAssertEqual(completion["store_environment"] as? String, "sandbox")
+    }
+
+    /// The properties of the one $purchase_completed a checkout reports, for
+    /// a key of `keyMode` and a signed transaction StoreKit dates in
+    /// `storeKitEnvironment`.
+    private func checkoutCompletion(
+        keyMode: String,
+        storeKitEnvironment: String,
+        evidenceStore: TransactionEvidenceStoreProtocol = InMemoryTransactionEvidenceStore()
+    ) async throws -> [String: Any] {
+        let mocks = MockFactory.shared
+        let identity = MockIdentityService()
+        identity.setDistinctId("buyer")
+        let scope = PurchaseStorageScope(
+            appIdentifierHash: "store-environment-app",
+            environment: keyMode,
+            storeEnvironment: .appStore
+        )
+        let settings = NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "store-environment-test"))
+        let sink = RecoveryEventSink()
+        let adapter = MockNativeStoreKitPurchaseAdapter()
+        let payload = Data(#"{"environment":"\#(storeKitEnvironment)"}"#.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+        adapter.configureVerifiedPurchase(
+            transactionJws: "eyJhbGciOiJFUzI1NiJ9.\(payload).signature",
+            transactionId: "environment-transaction",
+            originalTransactionId: "environment-original",
+            productId: "store-product-1"
+        )
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(
+            api: RecoverySyncAPI(succeeds: true),
+            features: FeatureService(
+                api: mocks.nuxieApi,
+                identity: identity,
+                profile: mocks.profileService,
+                dateProvider: mocks.dateProvider,
+                featureInfo: FeatureInfo(),
+                cacheTTL: 300
+            ),
+            identity: identity,
+            settings: settings,
+            eventSink: sink,
+            transactionServiceProvider: { box.get() },
+            evidenceStore: evidenceStore,
+            purchaseStorageScope: scope,
+            dateProvider: mocks.dateProvider,
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: { [] }
+        )
+        let service = TransactionService(
+            productService: mocks.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: mocks.dateProvider,
+            settings: settings,
+            eventSink: sink,
+            purchaseStorageScope: scope,
+            identityService: identity,
+            nativePurchaseAdapter: adapter
+        )
+        box.set(service)
+        addTeardownBlock { await observer.stopListening() }
+
+        let native = MockStoreProduct(id: "store-product-1", displayName: "Subscription",
+            description: "Subscription", price: 9.99, displayPrice: "$9.99")
+        var product = StoreProduct(productId: "product-1", storeProductId: native.id,
+            placementId: "placement-1", name: native.displayName, description: native.description,
+            price: native.displayPrice, period: nil, productType: native.productType, appStoreProduct: native)
+        product.purchaseContext = commercialContext()
+        let result = try await service.purchase(product)
+        _ = await result.syncTask?.value
+
+        let completions = sink.events.filter { $0.name == SystemEventNames.purchaseCompleted }
+        XCTAssertEqual(completions.count, 1)
+        return try XCTUnwrap(completions.first?.properties)
+    }
+
     /// The checkout records what the store already holds for its product, so
     /// a renewal of a subscription the customer already had, dated after the
     /// checkout began, never takes the checkout's binding: a renewal shares
@@ -990,12 +1100,14 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             context: context,
             transactionId: "transaction-1",
             testStore: false,
+            storeEnvironment: nil,
             source: .checkout
         )
         let storeUpdateRecovery = purchaseCompletionProperties(
             context: recoveredContext,
             transactionId: "transaction-1",
             testStore: false,
+            storeEnvironment: nil,
             source: .transactionStream
         )
 

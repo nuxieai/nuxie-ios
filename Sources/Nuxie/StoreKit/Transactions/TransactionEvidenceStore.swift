@@ -63,6 +63,10 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     /// Whether the requester had signed in, recorded at admission
     /// ("identified" when the SDK could not tell).
     let customerKind: PurchaseCustomerKind
+    /// The StoreKit environment the signed transaction names ("Production",
+    /// "Sandbox" or "Xcode"), read when the entry is written. It outlives the
+    /// signed transaction, which is dropped once the send is answered.
+    let storeKitEnvironment: String?
     /// Sends that failed without an answer; the retry backoff grows with it.
     let sendAttempts: Int
     /// When a failed send is due again: the time it failed plus the backoff
@@ -94,6 +98,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         appAccountToken: UUID? = nil,
         reason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind = .identified,
+        storeKitEnvironment: String? = nil,
         sendAttempts: Int = 0,
         retryDueAt: Date? = nil,
         admissionId: UUID = UUID()
@@ -115,6 +120,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.appAccountToken = appAccountToken
         self.reason = reason
         self.customerKind = customerKind
+        self.storeKitEnvironment = storeKitEnvironment
         self.sendAttempts = sendAttempts
         self.retryDueAt = retryDueAt
         self.admissionId = admissionId
@@ -201,6 +207,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
+            storeKitEnvironment: storeKitEnvironment,
             sendAttempts: answeredAt == nil ? sendAttempts : 0,
             retryDueAt: answeredAt == nil ? retryDueAt : nil,
             admissionId: admissionId
@@ -228,6 +235,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
+            storeKitEnvironment: storeKitEnvironment,
             sendAttempts: sendAttempts + 1,
             retryDueAt: failedAt.addingTimeInterval(
                 TransactionObserver.outboxRetryDelay(afterAttempts: sendAttempts + 1)

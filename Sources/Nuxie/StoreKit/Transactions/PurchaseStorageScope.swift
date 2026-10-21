@@ -13,10 +13,10 @@ enum PurchaseStoreEnvironment: String, Codable, Sendable {
 /// its mode (live or test) takes part, so rotating a key keeps the namespace.
 ///
 /// The environment component is the key's mode, never the SDK's service
-/// environment. Nuxie admits App Store (Production) transactions only with a
-/// live key and Sandbox or Xcode transactions only with a test key, and the
-/// server derives the expected account token from that pairing. Shared vectors
-/// in `fixtures/purchases/app-account-token.json` pin both sides.
+/// environment or the transaction's StoreKit environment. The server derives
+/// the expected account token from the key's mode too, so App Review's
+/// Sandbox purchase on a live key carries the live token. Shared vectors in
+/// `fixtures/purchases/app-account-token.json` pin both sides.
 struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
     let appIdentifierHash: String
     let environment: String
@@ -39,6 +39,9 @@ struct PurchaseStorageScope: Codable, Equatable, Hashable, Sendable {
     static func environment(forPublishableKey apiKey: String) -> String {
         apiKey.hasPrefix("pk_live_") ? "production" : "development"
     }
+
+    /// Whether this namespace belongs to a live key.
+    var isLiveKey: Bool { environment == "production" }
 
     init(
         appIdentifierHash: String,
@@ -125,6 +128,38 @@ struct PurchaseCommercialContext: Codable, Equatable, Sendable {
     var experienceId: String { release.identity.experienceId }
 }
 
+/// The `environment` a signed StoreKit transaction names: "Production",
+/// "Sandbox" or "Xcode". The SDK commits only transactions StoreKit verified,
+/// so this is Apple's signed value. Nil when the payload cannot be read.
+func storeKitEnvironment(ofSignedTransaction jws: String) -> String? {
+    let parts = jws.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count == 3 else { return nil }
+    var base64 = parts[1]
+        .replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+    guard let data = Data(base64Encoded: base64),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    return payload["environment"] as? String
+}
+
+/// `$purchase_completed`'s `store_environment`. App Review buys with a
+/// Sandbox account against the release build, so a live key's purchase can be
+/// a StoreKit Sandbox one; the server admits it but keeps it out of revenue,
+/// fees and conversions, and experiment metrics skip goal events marked
+/// "sandbox". Only that purchase carries the property: a live key's
+/// Production purchase, every test key's purchase and Test Store carry none.
+func purchaseCompletionStoreEnvironment(
+    storeKitEnvironment: String?,
+    scope: PurchaseStorageScope
+) -> String? {
+    guard scope.storeEnvironment == .appStore,
+          scope.isLiveKey,
+          storeKitEnvironment == "Sandbox" else { return nil }
+    return "sandbox"
+}
+
 /// The stable commercial success payload. Both the direct checkout callback
 /// and StoreKit update/recovery paths capture this exact shape under the same
 /// transaction event id, so scheduling cannot change analytics or Journey
@@ -133,6 +168,7 @@ func purchaseCompletionProperties(
     context: PurchaseCommercialContext,
     transactionId: String?,
     testStore: Bool,
+    storeEnvironment: String?,
     source: PurchaseOutcomeSource
 ) -> [String: Any] {
     var properties: [String: Any] = [
@@ -155,6 +191,9 @@ func purchaseCompletionProperties(
     }
     if let price = context.price {
         properties["price"] = price
+    }
+    if let storeEnvironment {
+        properties["store_environment"] = storeEnvironment
     }
     return properties
 }
