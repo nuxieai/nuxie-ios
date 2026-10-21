@@ -6,8 +6,8 @@ let localRuntimePath = ".artifacts/NuxieRuntime.xcframework"
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let localRuntimeURL = packageRoot.appendingPathComponent(localRuntimePath)
 let releasedRuntimeBaseURL = "https://github.com/nuxieai/nuxie-runtime/releases/download"
-let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.10.16/NuxieRuntime.xcframework.zip"
-let releasedRuntimeChecksum = "91ce67fb9bc699dc7022385bdf64f7988ff8a01a5b0c85cf29a02c290b68975d"
+let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v0.10.17/NuxieRuntime.xcframework.zip"
+let releasedRuntimeChecksum = "5ff04dc568aa67192e879f296f07585d945b69fe94d81de2171006ccbc09d943"
 
 func makeNuxieRuntimeBinaryTarget() -> Target {
     let localRuntimeSelection = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_LOCAL"]

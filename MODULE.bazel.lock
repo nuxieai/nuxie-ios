@@ -281,7 +281,7 @@
     "//scripts/bazel:runtime.bzl%runtime": {
       "general": {
         "bzlTransitiveDigest": "yulOV5ULSWPzEyn0d38SZF1HS5alnoleHpPJgy33vqw=",
-        "usagesDigest": "92bm0ppqkL9mZkY2Y1FmP/7Sw/XeyCkDxb52y13jUZo=",
+        "usagesDigest": "9YooCQsPstq9lgU6VT/OfhZUYaJ6ifK3I1+fUZbG8B4=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "nuxie_runtime_release": {
@@ -564,7 +564,7 @@
     "@@rules_swift_package_manager+//:extensions.bzl%swift_deps": {
       "general": {
         "bzlTransitiveDigest": "rGypP5nrTI9oaJIH2p4vvfzarcXFntsjmKbWV4stK2I=",
-        "usagesDigest": "WWfEfVBN5Q2pZQrTjmUtplmO7ieCB+PUyZfH9musQ6w=",
+        "usagesDigest": "X+N6oN2ypWuYid1J2+KUwymcXFZm4p04/aFdwiuj6fc=",
         "recordedInputs": [
           "REPO_MAPPING:rules_swift_package_manager+,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:rules_swift_package_manager+,bazel_tools bazel_tools",
