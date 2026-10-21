@@ -1,4 +1,4 @@
-module(name = "nuxie_ios", version = "0.1.1")
+module(name = "nuxie_ios", version = "1.0.0")
 
 # These releases support Bazel 9; the selected Xcode supplies Apple's SDKs.
 bazel_dep(name = "apple_support", version = "2.8.0")
