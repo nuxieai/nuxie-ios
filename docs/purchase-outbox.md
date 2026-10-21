@@ -184,7 +184,10 @@ or held in memory. Each purchase the store delivers (the checkout's result,
 a store update, a scan, Restore) is still sent once, and its answer only
 refreshes the profile: no `$purchase_synced` and no 200 Features. Its
 transaction is never finished, so the next launch finds it unfinished, saves
-its entry, sends it and finishes it as normal. A store delivery of a
+its entry, sends it and finishes it as normal. This holds whichever write of a
+commit fails, also one after its entry was first saved, such as recording the
+StoreKit finish or the delivered completion: the purchase is still sent once
+and its completion captured in the session. A store delivery of a
 purchase whose entry on disk is already answered is not sent again, because
 that entry is still its record; a Restore's or an already-owned claim is
 always sent once. Stored entries the store does not deliver wait for the
