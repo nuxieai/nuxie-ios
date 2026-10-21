@@ -62,6 +62,11 @@ waiting for its own. A send that finds the purchase already accepted for the
 same customer in this session, sent or in flight, takes that acceptance as its
 answer; a refusal or failure answers only a send of the same admission.
 
+A purchase-backed Feature command carries the admission of the entry it uses.
+Its accepted answer always returns the command's result and consumption
+receipt to the caller, since the server has consumed the Feature; the fence
+decides only whether that answer clears or answers the entry.
+
 ### Retry rule
 
 A kept entry records when it is due again: the time its send failed plus

@@ -1301,6 +1301,68 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(used?.success, true)
     }
 
+    /// A purchase-backed Feature command whose entry is admitted again while
+    /// it is in flight (here StoreKit reports a refund) still returns the
+    /// server's accepted result. The admission fence only keeps that answer
+    /// off the newer entry, whose own send waits on the outbox timer.
+    func testAcceptedUseReturnsItsResultWhenTheEntryIsAdmittedAgainMidFlight() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"]
+            ),
+        ]))
+        let api = ControlledPurchaseBackedUsageAPI()
+        let observer = makeControlledObserver(
+            api: api,
+            features: PurchaseBackedFeatureRecorder(),
+            identity: identity,
+            store: store
+        )
+        addTeardownBlock { await observer.stopListening() }
+
+        let use = Task {
+            try await observer.useFeatureWithPendingPurchase(
+                distinctId: "customer-a",
+                featureId: "credits",
+                amount: 1,
+                entityId: nil,
+                metadata: nil
+            )
+        }
+        await api.waitUntilStarted()
+        let refund = await observer.commit(.verified(
+            VerifiedPurchaseEvidence(
+                transactionJws: "revoked-transaction-1",
+                transactionId: "transaction-1",
+                originalTransactionId: "original-transaction-1",
+                productId: "product-transaction-1",
+                attributedDistinctId: "customer-a",
+                resolvesPendingPurchase: false,
+                allowsDurableCheckoutAuthority: false,
+                requiresAuthorityResolution: false,
+                isRevoked: true
+            ),
+            source: .transactionStream
+        ))
+        _ = await refund.syncTask?.value
+        await api.release()
+
+        let used = try await use.value
+        XCTAssertEqual(used?.success, true, "the server consumed the Feature; the caller gets its result")
+        XCTAssertEqual(used?.amountUsed, 1)
+        let entry = try XCTUnwrap(store.load().valueTreatingAbsentAsEmpty([:])?["transaction-1"])
+        XCTAssertTrue(entry.isRevoked)
+        XCTAssertTrue(entry.isUnsent, "the refund waits for its own send")
+        XCTAssertEqual(entry.sendAttempts, 1, "the send the command held back counts a failed attempt")
+        let scheduled = await observer.hasScheduledOutboxRetry
+        XCTAssertTrue(scheduled)
+    }
+
     /// A due outbox entry the timer's pass cannot send, because a
     /// purchase-backed Feature command holds the purchase, counts a failed
     /// attempt: its time moves on, and the timer waits for that time instead

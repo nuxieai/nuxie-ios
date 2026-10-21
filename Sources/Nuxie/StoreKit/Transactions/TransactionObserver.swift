@@ -2776,23 +2776,28 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 // committed, and the stable purchase event is now durably
                 // captured. `allowed` is the post-use access state, so it is
                 // false after consuming the final finite unit.
+                // The answer settles the entry only while it still holds the
+                // admission this command sent. An entry admitted since (a
+                // refund, say) waits for its own send. The command's result
+                // is the caller's either way: the server consumed the Feature.
                 let acceptedAt = dateProvider.now()
-                guard let current = storedEvidence()[evidence.transactionId],
-                      current.admissionId == evidence.admissionId,
-                      await persistEvidence(current.replacing(
-                          answeredAt: acceptedAt
-                      )) else {
-                    releasePurchaseUsageClaim(
-                        transactionId: evidence.transactionId
-                    )
-                    throw NuxieNetworkError.invalidResponse
+                if let current = storedEvidence()[evidence.transactionId],
+                   current.admissionId == evidence.admissionId {
+                    guard await persistEvidence(current.replacing(
+                        answeredAt: acceptedAt
+                    )) else {
+                        releasePurchaseUsageClaim(
+                            transactionId: evidence.transactionId
+                        )
+                        throw NuxieNetworkError.invalidResponse
+                    }
+                    if !current.finishRequired
+                        && (current.commercialContext == nil
+                            || current.completionDeliveredAt != nil) {
+                        _ = await removeEvidence(transactionId: evidence.transactionId)
+                    }
                 }
                 syncedTransactionIds.insert(receiptSyncKey)
-                if !current.finishRequired
-                    && (current.commercialContext == nil
-                        || current.completionDeliveredAt != nil) {
-                    _ = await removeEvidence(transactionId: evidence.transactionId)
-                }
                 releasePurchaseUsageClaim(transactionId: evidence.transactionId)
 
                 guard !isStopped,
