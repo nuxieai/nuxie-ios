@@ -379,8 +379,9 @@ final class ExperienceArtifactTelemetryTests: XCTestCase {
         )
 
         viewModel.loadExperience()
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        let acquisitionFailed = await waitUntil { viewModel.currentState == .error }
 
+        XCTAssertTrue(acquisitionFailed)
         XCTAssertEqual(viewModel.currentState, .error)
         let wasCancelled = await cancellationProbe.wasCancelled()
         let didComplete = await cancellationProbe.didComplete()
