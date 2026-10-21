@@ -461,3 +461,12 @@ subscription state, quotas, and credits.
 ## License
 
 Licensed under the terms in `LICENSE`.
+
+### Reuse native products in wrapper CI
+
+Set `NUXIE_SDK_PREPARE_PRODUCTS=1` on a policy-v2 Buildkite build to export the
+existing native artifact contract after the SDK checks pass. Download the
+`output/pipeline/native-products/ios-products.tar.gz` artifact for wrapper builds.
+The archive preserves the original `sdk-artifacts.json`, file hashes and symlinks;
+wrapper native pins must match its source revision.
+The archive contains both Debug and Release products for iOS devices and simulators.
