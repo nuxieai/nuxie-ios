@@ -1943,7 +1943,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         refreshProviderState: Bool = false
     ) async -> PurchaseSyncOutcome {
         guard !isStopped else { return .failed }
-        guard !purchaseUsageClaims.contains(transactionId) else { return .failed }
         let requestLifecycleGeneration = lifecycleGeneration
         let durableEvidence = storedEvidence()[transactionId]
         guard !evidenceStoreUnreadable else { return .failed }
@@ -1958,6 +1957,13 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             ?? (durableEvidence?.distinctId == distinctId
                 ? durableEvidence?.admissionId
                 : nil)
+        // A purchase-backed Feature command holding this purchase sends it
+        // itself. This send counts a failed attempt, so the outbox timer
+        // sends the entry again if the command's answer does not settle it.
+        guard !purchaseUsageClaims.contains(transactionId) else {
+            await recordFailedSend(transactionId: transactionId, admissionId: admissionId)
+            return .failed
+        }
         let dedupeKey = syncKey(
             transactionId: transactionId,
             originalTransactionId: originalTransactionId,
@@ -2239,6 +2245,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                   current.isUnsent else { return current }
             return current.replacingAfterFailedSend(at: failedAt)
         }
+        rescheduleOutboxRetry()
     }
 
     /// The delay before the outbox is sent again after `attempts` failures.
@@ -2337,6 +2344,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? .sync
                 let claimable = !update.isRevoked && !update.isUpgraded
                     && !item.jwsRepresentation.isEmpty
+                if reason.claimsOwnership {
+                    // A Restore or purchase claim writes the purchase's entry
+                    // only after a purchase-backed Feature command holding it
+                    // is done, so their answers never cross on the entry.
+                    await waitForPurchaseUsage(transactionId: update.transactionId)
+                }
                 let retained = storedEvidence()[update.transactionId]
                 if reason.claimsOwnership, let retained,
                    retained.distinctId != distinctId {
@@ -2442,9 +2455,14 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         distinctId: String,
         reason: PurchaseSyncReason
     ) async -> PurchaseSyncOutcome {
+        // A purchase-backed Feature command holding this purchase answers
+        // first; a Restore or purchase claim is admitted and sent after it.
+        if reason.claimsOwnership {
+            await waitForPurchaseUsage(transactionId: item.update.transactionId)
+        }
         // A child can start after an identity change. Check the initiating owner
         // on this actor immediately before creating the sync operation.
-        guard identityService.getDistinctId() == distinctId else { return .failed }
+        guard !isStopped, identityService.getDistinctId() == distinctId else { return .failed }
         // A Restore or purchase claim is queued like any other send before it
         // goes out, so a claim the server never answers is retried, also
         // after a relaunch.
@@ -2852,6 +2870,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         return "purchase-synced:" + digest.map {
             String(format: "%02x", $0)
         }.joined()
+    }
+
+    /// Waits while a purchase-backed Feature command holds `transactionId`.
+    private func waitForPurchaseUsage(transactionId: String) async {
+        while !isStopped, purchaseUsageClaims.contains(transactionId) {
+            await withCheckedContinuation { continuation in
+                purchaseUsageWaiters[transactionId, default: []].append(continuation)
+            }
+        }
     }
 
     private func releasePurchaseUsageClaim(transactionId: String) {

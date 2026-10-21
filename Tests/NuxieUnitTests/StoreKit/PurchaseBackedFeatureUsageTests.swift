@@ -282,6 +282,24 @@ private actor ControlledPurchaseBackedUsageAPI:
     func recordedSyncRequestCount() -> Int { syncRequestCount }
 }
 
+/// Signals once a Restore's scan has read the store's current entitlements.
+private actor ScanArrival {
+    private var arrived = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func arrive() {
+        arrived = true
+        let held = waiters
+        waiters.removeAll()
+        held.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        guard !arrived else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
 private actor ControlledReceiptSyncAPI:
     PurchaseSynchronizing,
     PurchaseBackedFeatureUsing
@@ -1194,6 +1212,93 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(count, 1)
         let syncCount = await api.recordedSyncRequestCount()
         XCTAssertEqual(syncCount, 0)
+    }
+
+    /// A Restore of a purchase that a purchase-backed Feature command holds
+    /// waits for the command, then admits and sends its claim. The claim
+    /// gets the server's answer, and the command's own answer still lands.
+    func testRestoreWaitsForTheFeatureCommandHoldingThePurchase() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"]
+            ),
+        ]))
+        let item = StoreTransactionRecoveryItem(
+            update: VerifiedStoreTransactionUpdate(
+                transactionId: "transaction-1",
+                originalTransactionId: "original-transaction-1",
+                productId: "product-transaction-1",
+                appAccountToken: scope.appAccountToken(distinctId: "customer-a"),
+                isRevoked: false,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "signed-transaction-1"
+        )
+        let arrival = ScanArrival()
+        let api = ControlledPurchaseBackedUsageAPI()
+        let settings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+        )
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 100))
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(
+            api: api,
+            features: PurchaseBackedFeatureRecorder(),
+            identity: identity,
+            settings: settings,
+            eventSink: PurchaseBackedEventSink(),
+            transactionServiceProvider: { box.get() },
+            evidenceStore: store,
+            purchaseStorageScope: scope,
+            dateProvider: clock,
+            activeStoreOriginalTransactionIDs: { [] },
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: {
+                await arrival.arrive()
+                return [item]
+            }
+        )
+        box.set(TransactionService(
+            productService: MockFactory.shared.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: clock,
+            settings: settings,
+            eventSink: PurchaseBackedEventSink(),
+            purchaseStorageScope: scope,
+            identityService: identity
+        ))
+        addTeardownBlock { await observer.stopListening() }
+
+        let use = Task {
+            try await observer.useFeatureWithPendingPurchase(
+                distinctId: "customer-a",
+                featureId: "credits",
+                amount: 1,
+                entityId: nil,
+                metadata: nil
+            )
+        }
+        await api.waitUntilStarted()
+        let restore = Task {
+            await observer.syncCurrentEntitlements(distinctId: "customer-a", purpose: .restore)
+        }
+        await arrival.wait()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await api.release()
+
+        let claims = await restore.value
+        XCTAssertEqual(claims.granted, 1, "the claim is sent after the command and answered")
+        let syncCount = await api.recordedSyncRequestCount()
+        XCTAssertEqual(syncCount, 1)
+        let used = try await use.value
+        XCTAssertEqual(used?.success, true)
     }
 
     /// A due outbox entry the timer's pass cannot send, because a
