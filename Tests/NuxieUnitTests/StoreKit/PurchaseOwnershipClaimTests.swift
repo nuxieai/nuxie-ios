@@ -882,6 +882,29 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertTrue(entry()?.isUnsent ?? false)
     }
 
+    /// A Restore reports owned by another account only when every claim was
+    /// refused. With one claim refused and another unanswered, the
+    /// unanswered one may be the customer's, so the Restore is unconfirmed
+    /// (try again), not a reason to switch accounts.
+    func testRestoreWithARefusalAndAnUnansweredClaimIsUnconfirmed() async throws {
+        let harness = await makeHarness(customer: "restorer")
+        let refused = entitlement("refused", productId: "store-product-refused", token: nil)
+        let unanswered = entitlement("unanswered", productId: "store-product-unanswered", token: nil)
+        harness.api.answer(.refuse(409), forJwt: refused.jwsRepresentation)
+        harness.api.answer(.fail, forJwt: unanswered.jwsRepresentation)
+        harness.entitlements.set([refused, unanswered])
+        harness.adapter.restoreResult = .restored
+
+        do {
+            _ = try await harness.service.restore()
+            XCTFail("No claim was accepted")
+        } catch StoreKitError.restoreFailed(let underlying) {
+            XCTAssertEqual(underlying as? RestoreClaimError, .unconfirmed)
+        }
+        let queued = harness.store.load().valueTreatingAbsentAsEmpty([:])?["unanswered-transaction"]
+        XCTAssertTrue(queued?.isUnsent ?? false, "the unanswered claim waits for its own answer")
+    }
+
     /// A Restore never takes an acceptance from earlier in the session as
     /// its answer, least of all another customer's. After the first
     /// customer's purchase was accepted and its entry cleared, the restoring

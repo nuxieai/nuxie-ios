@@ -187,10 +187,12 @@ purchase-backed Feature command holds waits for the command to finish, then
 admits its claim and sends it. The result:
 
 - `.restored` once the server accepted at least one;
-- `.failed(restoreFailed(RestoreClaimError.ownedByAnotherAccount))` when it
-  refused every claim;
-- `.failed(restoreFailed(RestoreClaimError.unconfirmed))` when no claim got
-  an answer;
+- `.failed(restoreFailed(RestoreClaimError.ownedByAnotherAccount))` only when
+  it refused every claim;
+- `.failed(restoreFailed(RestoreClaimError.unconfirmed))` when it accepted
+  none and at least one claim got no answer, even if others were refused: the
+  unanswered one may be the customer's, so the Restore is worth trying again
+  rather than switching accounts;
 - `.noPurchases` when there was nothing to send.
 
 ## What changes for an integrated app
