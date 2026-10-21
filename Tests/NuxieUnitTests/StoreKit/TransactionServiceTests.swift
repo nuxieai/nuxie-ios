@@ -268,6 +268,25 @@ final class TransactionServiceTests: AsyncSpec {
                 return (file, contents)
             }
 
+            /// The deferred binding a later delivery of the product would
+            /// match, if any.
+            func pendingBinding(_ service: TransactionService) async -> PendingPurchaseRecord? {
+                guard case .unique(let record) = await service.pendingPurchaseOwnership(
+                    productId: mockProduct.storeProductId
+                ) else { return nil }
+                return record
+            }
+
+            /// Resolves the deferred purchase the way the delivery that
+            /// matched its binding does: by the binding's own identity. False
+            /// when no deferred binding is left to match.
+            func resolveDeferred(_ service: TransactionService) async -> Bool {
+                guard let record = await pendingBinding(service) else { return false }
+                return await service.retireCheckoutBinding(
+                    named: record.checkoutCompletionEventId
+                )
+            }
+
             func contentsAllowingReading(_ file: URL) throws -> Data {
                 try FileManager.default.setAttributes(
                     [.posixPermissions: 0o644],
@@ -364,9 +383,6 @@ final class TransactionServiceTests: AsyncSpec {
                     fileName: "pending-purchases.json"
                 )
                 transactionService = makeTransactionService()
-                let token = purchaseStorageScope.appAccountToken(
-                    distinctId: "test-user"
-                )
 
                 let ownership = await transactionService.pendingPurchaseOwnership(
                     productId: mockProduct.storeProductId
@@ -376,9 +392,8 @@ final class TransactionServiceTests: AsyncSpec {
                     return
                 }
                 await expect {
-                    await transactionService.retireCheckoutRecovery(
-                        appAccountToken: token,
-                        productId: mockProduct.storeProductId
+                    await transactionService.retireCheckoutBinding(
+                        named: "unreadable-checkout"
                     )
                 }.to(beFalse())
                 expect(try contentsAllowingReading(file)) == contents
@@ -958,21 +973,8 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(outcomes).to(haveCount(1))
                         expect(outcomes.first?.kind) == .pending
                         expect(outcomes.first?.source) == "external_delegate"
-                        await expect {
-                            await transactionService.pendingPurchaseDistinctId(
-                                productId: mockProduct.storeProductId
-                            )
-                        }.to(beNil())
-                        let pendingRecord = await transactionService.pendingPurchaseRecord(
-                            productId: mockProduct.storeProductId,
-                            distinctId: "test-user"
-                        )
+                        let pendingRecord = await pendingBinding(transactionService)
                         expect(pendingRecord).to(beNil())
-                        await expect {
-                            await transactionService.pendingPurchaseGrants(
-                                productId: mockProduct.storeProductId
-                            )?.map(\.featureId)
-                        }.to(beNil())
                     }
 
                     it("does not persist pending grants for an external delegate") {
@@ -990,11 +992,8 @@ final class TransactionServiceTests: AsyncSpec {
                             try await transactionService.purchase(mockProduct)
                         }.to(throwError(StoreKitError.purchasePending))
 
-                        await expect {
-                            await transactionService.pendingPurchaseGrants(
-                                productId: mockProduct.storeProductId
-                            )?.map(\.featureId)
-                        }.to(beNil())
+                        let pendingRecord = await pendingBinding(transactionService)
+                        expect(pendingRecord?.localEntitlementGrants).to(beNil())
                     }
 
                     it("should not emit purchase_failed from native purchase when purchase is pending") {
@@ -1804,10 +1803,8 @@ final class TransactionServiceTests: AsyncSpec {
                             reason: "A purchase is already unresolved for this customer and product"
                         )))
 
-                        let record = await transactionService.pendingPurchaseRecord(
-                            productId: mockProduct.storeProductId,
-                            distinctId: "test-user"
-                        )
+                        let record = await pendingBinding(transactionService)
+                        expect(record?.distinctId) == "test-user"
                         expect(record?.commercialContext.placementId) == "placement"
                     }
 
@@ -1823,10 +1820,10 @@ final class TransactionServiceTests: AsyncSpec {
                         // Transaction.updates; the observer consumes the entry
                         // (exactly once) and emits $purchase_completed.
                         await expect {
-                            await transactionService.consumePendingPurchase(productId: mockProduct.storeProductId)
+                            await resolveDeferred(transactionService)
                         }.to(beTrue())
                         await expect {
-                            await transactionService.consumePendingPurchase(productId: mockProduct.storeProductId)
+                            await resolveDeferred(transactionService)
                         }.to(beFalse())
                     }
 
@@ -1842,17 +1839,17 @@ final class TransactionServiceTests: AsyncSpec {
                         // still resolves the deferred purchase, exactly once.
                         let relaunched = makeTransactionService()
                         await expect {
-                            await relaunched.consumePendingPurchase(productId: mockProduct.storeProductId)
+                            await resolveDeferred(relaunched)
                         }.to(beTrue())
                         await expect {
-                            await relaunched.consumePendingPurchase(productId: mockProduct.storeProductId)
+                            await resolveDeferred(relaunched)
                         }.to(beFalse())
 
                         // Consumption is durable too: yet another relaunch
                         // must not see the already-consumed marker.
                         let relaunchedAgain = makeTransactionService()
                         await expect {
-                            await relaunchedAgain.consumePendingPurchase(productId: mockProduct.storeProductId)
+                            await resolveDeferred(relaunchedAgain)
                         }.to(beFalse())
                     }
 
@@ -1868,7 +1865,7 @@ final class TransactionServiceTests: AsyncSpec {
                         dateProvider.advance(by: TransactionService.pendingPurchaseTTL - 1)
                         let insideTTL = makeTransactionService()
                         await expect {
-                            await insideTTL.consumePendingPurchase(productId: mockProduct.storeProductId)
+                            await resolveDeferred(insideTTL)
                         }.to(beTrue())
 
                         // Re-record, then jump past the TTL: the stale marker
@@ -1880,7 +1877,7 @@ final class TransactionServiceTests: AsyncSpec {
                         dateProvider.advance(by: TransactionService.pendingPurchaseTTL + 1)
                         let afterTTL = makeTransactionService()
                         await expect {
-                            await afterTTL.consumePendingPurchase(productId: mockProduct.storeProductId)
+                            await resolveDeferred(afterTTL)
                         }.to(beFalse())
                     }
 
@@ -1892,28 +1889,26 @@ final class TransactionServiceTests: AsyncSpec {
                             try await transactionService.purchase(mockProduct)
                         }.to(throwError(StoreKitError.purchasePending))
 
+                        // The binding keeps its own customer after the
+                        // active customer changes, and only its own identity
+                        // resolves it.
                         identityService.setDistinctId("different-customer")
+                        let orphaned = await pendingBinding(transactionService)
+                        expect(orphaned?.distinctId) == "test-user"
                         await expect {
-                            await transactionService.pendingPurchaseDistinctId(
-                                productId: mockProduct.storeProductId
-                            )
-                        }.to(beNil())
-                        await expect {
-                            await transactionService.pendingPurchaseGrants(
-                                productId: mockProduct.storeProductId
-                            )
-                        }.to(beNil())
-                        await expect {
-                            await transactionService.consumePendingPurchase(
-                                productId: mockProduct.storeProductId
-                            )
-                        }.to(beFalse())
-                        await expect {
-                            await transactionService.consumePendingPurchase(
-                                productId: mockProduct.storeProductId,
-                                distinctId: "test-user"
+                            await transactionService.retireCheckoutBinding(
+                                named: "another-checkout"
                             )
                         }.to(beTrue())
+                        await expect {
+                            await pendingBinding(transactionService)?.distinctId
+                        }.to(equal("test-user"))
+                        await expect {
+                            await resolveDeferred(transactionService)
+                        }.to(beTrue())
+                        await expect {
+                            await pendingBinding(transactionService)
+                        }.to(beNil())
                     }
 
                     it("resolves a unique deferred owner after the active customer changes") {

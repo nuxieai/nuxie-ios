@@ -61,9 +61,6 @@ struct VerifiedPurchaseEvidence: Sendable {
     let resolvesPendingPurchase: Bool
     let allowsDurableCheckoutAuthority: Bool
     let requiresAuthorityResolution: Bool
-    /// Checkout recovery claims a transaction only for the checkout binding
-    /// that started it; a transaction no checkout is waiting for is left.
-    let requiresCheckoutBinding: Bool
     let isRevoked: Bool
     let isUpgraded: Bool
     /// Why the producer sends this receipt. Checkout says purchase, an
@@ -100,7 +97,6 @@ struct VerifiedPurchaseEvidence: Sendable {
         resolvesPendingPurchase: Bool,
         allowsDurableCheckoutAuthority: Bool,
         requiresAuthorityResolution: Bool = true,
-        requiresCheckoutBinding: Bool = false,
         isRevoked: Bool = false,
         isUpgraded: Bool = false,
         syncReason: PurchaseSyncReason = .sync,
@@ -126,7 +122,6 @@ struct VerifiedPurchaseEvidence: Sendable {
         self.resolvesPendingPurchase = resolvesPendingPurchase
         self.allowsDurableCheckoutAuthority = allowsDurableCheckoutAuthority
         self.requiresAuthorityResolution = requiresAuthorityResolution
-        self.requiresCheckoutBinding = requiresCheckoutBinding
         self.isRevoked = isRevoked
         self.isUpgraded = isUpgraded
         self.syncReason = syncReason
@@ -460,11 +455,6 @@ extension TransactionObserverProtocol {
 /// By observing Transaction.updates directly, we catch all purchases regardless of how they
 /// were initiated (via SDK, app's own StoreKit code, or even the App Store directly).
 internal actor TransactionObserver: TransactionObserverProtocol {
-
-    enum CheckoutRecoveryResult: Equatable {
-        case noMatch
-        case recovered
-    }
 
     // MARK: - Dependencies
 
@@ -1570,30 +1560,16 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // that started it, so its customer is the one the purchase is sent
         // for.
         let boundRequester = checkoutRecovery?.distinctId ?? pendingRecord?.distinctId
-        if verified.requiresCheckoutBinding, existing == nil, boundRequester == nil {
-            LogDebug(
-                "TransactionObserver: Leaving a transaction no checkout is waiting for"
-            )
-            // A binding may still arrive from a checkout on another path; do
-            // not cache the decision.
-            return PurchaseCommitResult(
-                committed: false,
-                syncTask: nil,
-                isTerminal: false
-            )
-        }
 
         // An explicit producer names its customer; a delivery bound to a
         // checkout goes to that checkout's customer; any other StoreKit
         // delivery is sent for the current customer. A passive scan's
         // customer is only that last fallback, so it never outranks a
         // binding.
-        let newRecordOwner = verified.requiresCheckoutBinding
-            ? boundRequester ?? activeDistinctId
-            : verified.requester?.namedDistinctId
-                ?? boundRequester
-                ?? verified.requester?.distinctId
-                ?? activeDistinctId
+        let newRecordOwner = verified.requester?.namedDistinctId
+            ?? boundRequester
+            ?? verified.requester?.distinctId
+            ?? activeDistinctId
         let routeCompletionToJourneys: Bool
         // StoreKit can deliver a checkout's transaction through its update
         // stream before the checkout callback commits it. A delivery that
@@ -1921,9 +1897,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             { $0 }
         )?.evidence
         let syncTask: Task<Bool, Never>?
-        if verified.requiresCheckoutBinding && !evidenceChanged {
-            syncTask = nil
-        } else if currentEvidence?.answeredAt != nil {
+        if currentEvidence?.answeredAt != nil {
             syncTask = nil
         } else if currentEvidence?.isRevoked == true && !verified.isRevoked {
             // A revocation announced while this active producer was suspended
@@ -2131,78 +2105,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             reason: .sync,
             customerKind: evidence.customerKind,
             sendAttempts: 0
-        )
-    }
-
-    /// Completes the crash-recovery boundary in durable order: retire exact
-    /// checkout attribution before finishing the transaction. If persistence
-    /// fails, StoreKit redelivers and the observer retries without reusing a
-    /// stale marker after a successful finish.
-    func finishRecoveredTransaction(
-        appAccountToken: UUID?,
-        productId: String,
-        checkoutRecoveryExists: Bool,
-        finish: @escaping @Sendable () async -> Void
-    ) async -> Bool {
-        guard await retireCheckoutRecovery(
-            appAccountToken: appAccountToken,
-            productId: productId,
-            checkoutRecoveryExists: checkoutRecoveryExists
-        ) else { return false }
-        // `finishRequired` is set only when Nuxie's native transaction path
-        // accepted lifecycle ownership.
-        await finish()
-        return true
-    }
-
-    /// Compatibility entry point for recovery tests and callers that already
-    /// hold durable evidence. Recovery still enters the single committer.
-    func completeStoredTransactionRecovery(
-        _ evidence: StoredTransactionEvidence,
-        appAccountToken: UUID?,
-        checkoutRecoveryExists: Bool,
-        finish: @escaping @Sendable () async -> Void
-    ) async -> Bool {
-        _ = checkoutRecoveryExists
-        let result = await commit(.verified(
-            VerifiedPurchaseEvidence(
-                transactionJws: evidence.transactionJws,
-                transactionId: evidence.transactionId,
-                originalTransactionId: evidence.originalTransactionId,
-                productId: evidence.productId,
-                appAccountToken: appAccountToken,
-                requester: .named(evidence.distinctId),
-                recordedAt: evidence.recordedAt,
-                productFeatureIds: evidence.productFeatureIds,
-                commercialContext: evidence.commercialContext,
-                checkoutCompletionEventId: evidence.checkoutCompletionEventId,
-                completionDeliveredAt: evidence.completionDeliveredAt,
-                answeredAt: evidence.answeredAt,
-                finishRequired: true,
-                resolvesPendingPurchase: true,
-                allowsDurableCheckoutAuthority: true,
-                requiresAuthorityResolution: false,
-                isRevoked: evidence.isRevoked,
-                syncReason: evidence.reason,
-                customerKind: evidence.customerKind,
-                finish: finish
-            ),
-            source: .startupRecovery
-        ))
-        _ = await result.syncTask?.value
-        return result.committed
-    }
-
-    private func retireCheckoutRecovery(
-        appAccountToken: UUID?,
-        productId: String,
-        checkoutRecoveryExists: Bool
-    ) async -> Bool {
-        guard checkoutRecoveryExists else { return true }
-        guard let appAccountToken else { return false }
-        return await transactionServiceProvider().retireCheckoutRecovery(
-            appAccountToken: appAccountToken,
-            productId: productId
         )
     }
 
@@ -3552,43 +3454,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             purchaseUsageDrainWaiters.removeAll()
             drainWaiters.forEach { $0.resume() }
         }
-    }
-
-    /// Relaunch recovery path shared by StoreKit's unfinished/update streams
-    /// and integration tests. Only a durable checkout binding names the
-    /// customer a recovered transaction is sent for.
-    func recoverCheckoutTransaction(
-        evidence: StoreTransactionEvidence,
-        appAccountToken: UUID?,
-        finishRequired: Bool,
-        attributedDistinctId: String? = nil
-    ) async -> CheckoutRecoveryResult {
-        guard let appAccountToken else { return .noMatch }
-        let result = await commit(.verified(
-            VerifiedPurchaseEvidence(
-                transactionJws: evidence.transactionJws,
-                transactionId: evidence.transactionId,
-                originalTransactionId: evidence.originalTransactionId,
-                productId: evidence.productId,
-                appAccountToken: appAccountToken,
-                requester: attributedDistinctId.map(PurchaseRequester.named),
-                finishRequired: finishRequired,
-                resolvesPendingPurchase: true,
-                allowsDurableCheckoutAuthority: true,
-                requiresCheckoutBinding: true,
-                finish: evidence.finish
-            ),
-            source: .startupRecovery
-        ))
-        // Checkout recovery completes its backend submission before
-        // reporting: callers (and the crash-recovery boundary) treat a
-        // recovered transaction as durably attributed and synced.
-        if let syncTask = result.syncTask {
-            _ = await syncTask.value
-        }
-        let matched = result.committed
-            || storedEvidence()[evidence.transactionId] != nil
-        return matched ? .recovered : .noMatch
     }
 
     private func storedEvidence() -> [String: StoredTransactionEvidence] {

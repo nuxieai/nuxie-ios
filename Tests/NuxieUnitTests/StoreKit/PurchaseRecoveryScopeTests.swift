@@ -1114,6 +1114,32 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
     /// The phone no longer works out an owner from the account token: once
     /// the checkout binding retires, recovery leaves the renewal to the
     /// ordinary StoreKit update path, which sends it for the current customer.
+    /// StoreKit delivers `evidence` (its unfinished transactions at launch,
+    /// as the production recovery scan does), and the send it starts is
+    /// awaited.
+    @discardableResult
+    private func redeliver(
+        _ evidence: StoreTransactionEvidence,
+        appAccountToken: UUID?,
+        to observer: TransactionObserver
+    ) async -> PurchaseCommitResult {
+        let result = await observer.handleVerifiedTransaction(
+            VerifiedStoreTransactionUpdate(
+                transactionId: evidence.transactionId,
+                originalTransactionId: evidence.originalTransactionId,
+                productId: evidence.productId,
+                appAccountToken: appAccountToken,
+                isRevoked: false,
+                isUpgraded: false,
+                finish: evidence.finish
+            ),
+            jwsRepresentation: evidence.transactionJws,
+            source: .startupRecovery
+        )
+        _ = await result.syncTask?.value
+        return result
+    }
+
     func testRenewalWithoutACheckoutBindingIsNotClaimedForItsTokenOwner() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-b")
@@ -1184,16 +1210,12 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             finish: { await finishes.increment() }
         )
 
-        let result = await observer.recoverCheckoutTransaction(
-            evidence: renewal,
-            appAccountToken: token,
-            finishRequired: true
-        )
+        // StoreKit delivers the renewal at launch. No checkout binding names
+        // its token owner, so it is sent for the current customer.
+        let result = await redeliver(renewal, appAccountToken: token, to: observer)
 
-        XCTAssertEqual(result, .noMatch)
-        XCTAssertEqual(api.recordedCustomers, [])
-        let finishCount = await finishes.count()
-        XCTAssertEqual(finishCount, 0)
+        XCTAssertTrue(result.committed)
+        XCTAssertEqual(api.recordedCustomers, ["customer-b"], "never for its token owner")
     }
 
     func testProviderOwnershipOverridesPersistedNuxieTokenForRenewal() async {
@@ -1258,13 +1280,9 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             finish: { await finishes.increment() }
         )
 
-        let result = await observer.recoverCheckoutTransaction(
-            evidence: renewal,
-            appAccountToken: token,
-            finishRequired: true
-        )
+        let result = await redeliver(renewal, appAccountToken: token, to: observer)
 
-        XCTAssertEqual(result, .noMatch)
+        XCTAssertFalse(result.committed)
         XCTAssertTrue(api.recordedCustomers.isEmpty)
         XCTAssertTrue(evidenceStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         let finishCount = await finishes.count()
@@ -1373,9 +1391,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
-        let retainedPending = await service.pendingPurchaseRecord(
-            productId: "store-product-1",
-            distinctId: "customer-b"
+        let retainedPending = await service.checkoutBinding(
+            named: pending.checkoutCompletionEventId
         )
         XCTAssertEqual(retainedPending, pending)
     }
@@ -1720,7 +1737,10 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
 
     /// Without a checkout binding, recovery claims neither a Nuxie-token nor a
     /// host-token transaction; both are left to the StoreKit update path.
-    func testReinstallRecoveryClaimsNoTransactionWithoutACheckoutBinding() async {
+    /// StoreKit's deliveries after a reinstall, with no checkout binding,
+    /// complete no checkout: each is sent for the current customer as a
+    /// sync, and no checkout completion is reported.
+    func testReinstallRecoveryCompletesNoCheckoutWithoutABinding() async {
         let mocks = MockFactory.shared
         mocks.identityService.setDistinctId("customer-a")
         let scope = PurchaseStorageScope(
@@ -1751,12 +1771,13 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             cacheTTL: 300
         )
         let api = RecoverySyncAPI(succeeds: true)
+        let events = RecoveryEventSink()
         let observer = TransactionObserver(
             api: api,
             features: features,
             identity: mocks.identityService,
             settings: settings,
-            eventSink: RecoveryEventSink(),
+            eventSink: events,
             transactionServiceProvider: { service },
             evidenceStore: InMemoryTransactionEvidenceStore(),
             purchaseStorageScope: scope,
@@ -1780,26 +1801,22 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             finish: { await hostFinishes.increment() }
         )
 
-        let restored = await observer.recoverCheckoutTransaction(
-            evidence: nuxieEvidence,
+        await redeliver(
+            nuxieEvidence,
             appAccountToken: scope.appAccountToken(distinctId: "customer-a"),
-            finishRequired: true,
-            attributedDistinctId: "customer-a"
+            to: observer
         )
-        let hostOwned = await observer.recoverCheckoutTransaction(
-            evidence: hostEvidence,
-            appAccountToken: UUID(),
-            finishRequired: true,
-            attributedDistinctId: "customer-a"
-        )
+        await redeliver(hostEvidence, appAccountToken: UUID(), to: observer)
 
-        XCTAssertEqual(restored, .noMatch)
-        XCTAssertEqual(hostOwned, .noMatch)
-        XCTAssertEqual(api.recordedCustomers, [])
+        XCTAssertEqual(api.recordedCustomers, ["customer-a", "customer-a"])
+        XCTAssertTrue(
+            events.events.filter { $0.name == SystemEventNames.purchaseCompleted }.isEmpty,
+            "no checkout completes without its binding"
+        )
         let nuxieFinishCount = await nuxieFinishes.count()
         let hostFinishCount = await hostFinishes.count()
-        XCTAssertEqual(nuxieFinishCount, 0)
-        XCTAssertEqual(hostFinishCount, 0)
+        XCTAssertEqual(nuxieFinishCount, 1)
+        XCTAssertEqual(hostFinishCount, 1)
     }
 
     func testFailedDurableMarkerConsumptionReturnsFalse() async {
@@ -1836,9 +1853,8 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             identityService: mocks.identityService
         )
 
-        let consumed = await service.consumePendingPurchase(
-            productId: "store-product-1",
-            distinctId: "customer"
+        let consumed = await service.retireCheckoutBinding(
+            named: record.checkoutCompletionEventId
         )
 
         XCTAssertFalse(consumed)
@@ -2005,22 +2021,16 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             finish: { await finishes.increment() }
         )
 
-        let first = await observer.recoverCheckoutTransaction(
-            evidence: evidence,
-            appAccountToken: token,
-            finishRequired: true
-        )
-        let duplicate = await observer.recoverCheckoutTransaction(
-            evidence: evidence,
-            appAccountToken: token,
-            finishRequired: true
-        )
+        // StoreKit delivers the checkout's transaction twice at launch.
+        let first = await redeliver(evidence, appAccountToken: token, to: observer)
+        let duplicate = await redeliver(evidence, appAccountToken: token, to: observer)
 
-        XCTAssertEqual(first, .recovered)
-        XCTAssertEqual(duplicate, .recovered)
+        XCTAssertTrue(first.committed)
+        XCTAssertTrue(duplicate.committed)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
-        XCTAssertEqual(api.recordedCustomers, ["customer-a"])
+        XCTAssertFalse(api.recordedCustomers.isEmpty)
+        XCTAssertEqual(Set(api.recordedCustomers), ["customer-a"], "always for the checkout's customer")
         XCTAssertTrue(
             recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty
         )
@@ -2099,13 +2109,9 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             finish: { await finishes.increment() }
         )
 
-        let result = await observer.recoverCheckoutTransaction(
-            evidence: evidence,
-            appAccountToken: token,
-            finishRequired: true
-        )
+        let result = await redeliver(evidence, appAccountToken: token, to: observer)
 
-        XCTAssertEqual(result, .recovered)
+        XCTAssertTrue(result.committed)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
         XCTAssertEqual(
@@ -2168,18 +2174,28 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             activeStoreOriginalTransactionIDs: { [] }
         )
         let finishes = FinishCounter()
-
-        let didFinish = await observer.finishRecoveredTransaction(
-            appAccountToken: token,
+        let retiredFirst = FinishCounter()
+        let evidence = StoreTransactionEvidence(
+            transactionJws: "retire-first-jws",
+            transactionId: "retire-first",
+            originalTransactionId: "retire-first-original",
             productId: "store-product-1",
-            checkoutRecoveryExists: true,
-            finish: { await finishes.increment() }
+            finish: {
+                await finishes.increment()
+                if store.load().valueTreatingAbsentAsEmpty([:])?.isEmpty == true {
+                    await retiredFirst.increment()
+                }
+            }
         )
 
-        XCTAssertTrue(didFinish)
+        let result = await redeliver(evidence, appAccountToken: token, to: observer)
+
+        XCTAssertTrue(result.committed)
         XCTAssertTrue(store.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
+        let retiredBeforeFinish = await retiredFirst.count()
+        XCTAssertEqual(retiredBeforeFinish, 1, "the binding is retired before the finish")
     }
 
     func testStoredEvidenceRecoveryDoesNotFinishWhenRecoveryDeletionFails() async {
@@ -2236,15 +2252,16 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             activeStoreOriginalTransactionIDs: { [] }
         )
         let finishes = FinishCounter()
-
-        let didFinish = await observer.finishRecoveredTransaction(
-            appAccountToken: token,
+        let evidence = StoreTransactionEvidence(
+            transactionJws: "unretired-jws",
+            transactionId: "unretired",
+            originalTransactionId: "unretired-original",
             productId: "store-product-1",
-            checkoutRecoveryExists: true,
             finish: { await finishes.increment() }
         )
 
-        XCTAssertFalse(didFinish)
+        _ = await redeliver(evidence, appAccountToken: token, to: observer)
+
         XCTAssertEqual(store.load().valueTreatingAbsentAsEmpty([:])!["customer-a::store-product-1"], recovery)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 0)
@@ -2321,21 +2338,33 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         )
         let finishes = FinishCounter()
 
-        let first = await observer.completeStoredTransactionRecovery(
-            evidence,
+        // StoreKit delivers the unfinished transaction whose entry was saved
+        // before the process died, then delivers it again.
+        let first = await redeliver(
+            StoreTransactionEvidence(
+                transactionJws: evidence.transactionJws,
+                transactionId: evidence.transactionId,
+                originalTransactionId: evidence.originalTransactionId,
+                productId: evidence.productId,
+                finish: { await finishes.increment() }
+            ),
             appAccountToken: token,
-            checkoutRecoveryExists: true,
-            finish: { await finishes.increment() }
+            to: observer
         )
-        let duplicate = await observer.completeStoredTransactionRecovery(
-            evidence,
+        let duplicate = await redeliver(
+            StoreTransactionEvidence(
+                transactionJws: evidence.transactionJws,
+                transactionId: evidence.transactionId,
+                originalTransactionId: evidence.originalTransactionId,
+                productId: evidence.productId,
+                finish: {}
+            ),
             appAccountToken: token,
-            checkoutRecoveryExists: false,
-            finish: {}
+            to: observer
         )
 
-        XCTAssertTrue(first)
-        XCTAssertTrue(duplicate)
+        XCTAssertTrue(first.committed)
+        XCTAssertTrue(duplicate.committed)
         let finishCount = await finishes.count()
         XCTAssertEqual(finishCount, 1)
         XCTAssertTrue(recoveryStore.load().valueTreatingAbsentAsEmpty([:])!.isEmpty)

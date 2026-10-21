@@ -157,70 +157,6 @@ actor TransactionService {
         "\(distinctId)::\(productId)"
     }
 
-    private func pendingKey(productId: String) -> String {
-        pendingKey(
-            productId: productId,
-            distinctId: identityService?.getDistinctId() ?? "anonymous"
-        )
-    }
-
-    /// Called by TransactionObserver when a transaction lands for a product
-    /// that had a pending (deferred) purchase. Returns true exactly once.
-    func consumePendingPurchase(productId: String, distinctId: String? = nil) -> Bool {
-        var entries = pendingPurchases()
-        let key: String?
-        if let distinctId {
-            key = "\(distinctId)::\(productId)"
-        } else {
-            key = pendingEntry(productId: productId)?.key
-        }
-        guard let key, entries[key] != nil else {
-            return false
-        }
-        entries.removeValue(forKey: key)
-        return setPendingPurchases(entries)
-    }
-
-    /// Returns the signed allowance mapping captured for a pending native purchase.
-    /// The marker is consumed only after the verified transaction has
-    /// been durably recorded and synced.
-    func pendingPurchaseGrants(productId: String) -> [StoredLocalEntitlementGrant]? {
-        pendingPurchaseRecord(productId: productId)?.localEntitlementGrants
-    }
-
-    func pendingPurchaseGrants(
-        productId: String,
-        distinctId: String
-    ) -> [StoredLocalEntitlementGrant]? {
-        pendingPurchaseRecord(productId: productId, distinctId: distinctId)?.localEntitlementGrants
-    }
-
-    func pendingPurchaseDistinctId(productId: String) -> String? {
-        pendingPurchaseRecord(productId: productId)?.distinctId
-    }
-
-    /// Resolve a deferred marker only for the active customer. A product ID is
-    /// not customer identity, so an orphaned marker must never be attached to
-    /// a later account after logout or identify.
-    func pendingPurchaseRecord(productId: String) -> PendingPurchaseRecord? {
-        let entries = pendingPurchases()
-        guard let record = entries[pendingKey(productId: productId)],
-              record.state == .pending else { return nil }
-        return record
-    }
-
-    /// Returns the deferred marker only when it belongs to the requested
-    /// customer. Transaction updates use this form after a customer switch so
-    /// a pending purchase cannot resolve another customer's paywall.
-    func pendingPurchaseRecord(
-        productId: String,
-        distinctId: String
-    ) -> PendingPurchaseRecord? {
-        guard let record = pendingPurchases()["\(distinctId)::\(productId)"],
-              record.state == .pending else { return nil }
-        return record
-    }
-
     /// Resolve a StoreKit transaction to a deferred customer only when the
     /// durable marker set has one unambiguous owner for this store product.
     /// With multiple customers pending the same product, StoreKit's product ID
@@ -247,18 +183,6 @@ actor TransactionService {
         default:
             return .ambiguous
         }
-    }
-
-    private func pendingEntry(productId: String) -> (key: String, record: PendingPurchaseRecord)? {
-        let entries = pendingPurchases()
-        let currentKey = pendingKey(productId: productId)
-        if let record = entries[currentKey], record.state == .pending {
-            return (currentKey, record)
-        }
-        // A product identifier is not customer identity. Never attach a
-        // deferred purchase marker recorded for another customer merely
-        // because both customers bought the same product.
-        return nil
     }
 
     /// The current (TTL-pruned) marker set, loading from disk on first use.
@@ -393,22 +317,6 @@ actor TransactionService {
         return .value(authority)
     }
 
-    @discardableResult
-    func consumeCheckoutRecovery(
-        appAccountToken: UUID,
-        productId: String
-    ) -> PendingPurchaseRecord? {
-        var entries = pendingPurchases()
-        guard let match = entries.first(where: {
-            $0.value.scope == purchaseStorageScope
-                && $0.value.appAccountToken == appAccountToken
-                && $0.value.commercialContext.storeProductId == productId
-        }) else { return nil }
-        entries.removeValue(forKey: match.key)
-        guard setPendingPurchases(entries) else { return nil }
-        return match.value
-    }
-
     /// One checkout's binding, found by its own identity.
     func checkoutBinding(named checkoutId: String) -> PendingPurchaseRecord? {
         pendingPurchases().values.first {
@@ -430,25 +338,6 @@ actor TransactionService {
         })?.key else { return true }
         entries.removeValue(forKey: key)
         return setPendingPurchases(entries)
-    }
-
-    /// Succeeds when the exact marker is durably absent. Another StoreKit
-    /// delivery may win the race and retire it first; a failed persistence
-    /// attempt leaves the marker cached and therefore fails closed here.
-    func retireCheckoutRecovery(
-        appAccountToken: UUID,
-        productId: String
-    ) -> Bool {
-        let recovery = checkoutRecoveryRecord(
-            appAccountToken: appAccountToken,
-            productId: productId
-        )
-        guard !pendingPurchaseStateUnreadable else { return false }
-        guard recovery != nil else { return true }
-        return consumeCheckoutRecovery(
-            appAccountToken: appAccountToken,
-            productId: productId
-        ) != nil
     }
 
     init(
