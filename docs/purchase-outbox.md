@@ -46,9 +46,13 @@ Alongside it the entry keeps local bookkeeping that is not purchase
 authority: whether the StoreKit transaction still has to be finished, and the
 checkout's completion event while it has not been delivered.
 
-Entries in a previous SDK's format are dropped when the outbox is read. They
-are pre-GA local state, with no compatibility handling: StoreKit redelivers
-unfinished transactions, which then go through the outbox normally.
+Entries in a previous SDK's format, recognised by having no admission id, are
+dropped when the outbox is read. They are pre-GA local state, with no
+compatibility handling: StoreKit redelivers unfinished transactions, which
+then go through the outbox normally. A current-format entry that cannot be
+read makes the whole outbox unreadable, as a malformed file does: nothing is
+dropped or written over it, and the log names the entry and the field that
+failed, never their values.
 
 ### When an entry is answered
 
