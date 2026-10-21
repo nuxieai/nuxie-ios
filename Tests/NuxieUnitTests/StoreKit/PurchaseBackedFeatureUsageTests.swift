@@ -320,6 +320,121 @@ private actor ControlledPurchaseBackedUsageAPI:
     func recordedSyncRequestCount() -> Int { syncRequestCount }
 }
 
+/// A server whose purchase-backed Feature use waits until the test releases
+/// it and leaves 4 credits, and whose `POST /purchase` grants 9.
+private actor RestoreAfterUseAPI: PurchaseSynchronizing, PurchaseBackedFeatureUsing {
+    private var useStarted = false
+    private var useReleased = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var responseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
+        PurchaseResponse(
+            success: true,
+            customerId: request.distinctId,
+            features: [PurchaseFeature(
+                id: "feature-credits", extId: "credits", type: .creditSystem,
+                allowed: true, balance: 9, unlimited: false
+            )],
+            error: nil
+        )
+    }
+
+    func useFeatureWithPurchase(
+        _ request: PurchaseBackedFeatureUseRequest
+    ) async throws -> PurchaseBackedFeatureUseResponse {
+        useStarted = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        if !useReleased {
+            await withCheckedContinuation { responseWaiters.append($0) }
+        }
+        return PurchaseBackedFeatureUseResponse(
+            customerId: request.customerId,
+            featureId: request.featureId,
+            code: "entitled",
+            allowed: true,
+            unlimited: false,
+            balance: 4,
+            type: .creditSystem
+        )
+    }
+
+    func waitUntilUseStarted() async {
+        guard !useStarted else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func releaseUse() {
+        useReleased = true
+        responseWaiters.forEach { $0.resume() }
+        responseWaiters.removeAll()
+    }
+}
+
+/// Records every Feature write in order, and holds the first cache
+/// invalidation until the test lets it go.
+private actor OrderedFeatureWrites: FeatureServiceProtocol {
+    private var writes: [String] = []
+    private var holdsNextInvalidation = true
+    private var invalidationHeld = false
+    private var heldWaiters: [CheckedContinuation<Void, Never>] = []
+    private var held: [CheckedContinuation<Void, Never>] = []
+
+    func invalidateAccess(featureId: String, entityId: String?, distinctId: String) async {
+        if holdsNextInvalidation {
+            holdsNextInvalidation = false
+            invalidationHeld = true
+            heldWaiters.forEach { $0.resume() }
+            heldWaiters.removeAll()
+            await withCheckedContinuation { held.append($0) }
+        }
+        writes.append("invalidate \(featureId)")
+    }
+
+    func updateFromPurchase(_ features: [PurchaseFeature], distinctId: String) async {
+        writes.append(contentsOf: features.map { "purchase \($0.featureKey) \($0.balance ?? 0)" })
+    }
+
+    func applyAuthoritativeUse(
+        _ result: FeatureCheckResult,
+        requestedFeatureId: String,
+        distinctId: String,
+        entityId: String?
+    ) async {
+        writes.append("use \(requestedFeatureId) \(result.balance ?? 0)")
+    }
+
+    func waitUntilInvalidationHeld() async {
+        guard !invalidationHeld else { return }
+        await withCheckedContinuation { heldWaiters.append($0) }
+    }
+
+    func releaseInvalidation() {
+        held.forEach { $0.resume() }
+        held.removeAll()
+    }
+
+    func recordedWrites() -> [String] { writes }
+
+    func getCached(featureId: String, entityId: String?) async -> FeatureAccess? { nil }
+    func getAllCached() async -> [String: FeatureAccess] { [:] }
+    func check(
+        featureId: String,
+        requiredBalance: Double?,
+        entityId: String?
+    ) async throws -> FeatureCheckResult { throw NuxieNetworkError.invalidResponse }
+    func checkWithCache(
+        featureId: String,
+        requiredBalance: Double?,
+        entityId: String?,
+        forceRefresh: Bool
+    ) async throws -> FeatureAccess { .notFound }
+    func clearCache() async {}
+    func handleUserChange(from oldDistinctId: String, to newDistinctId: String) async {}
+    func syncFeatureInfo() async {}
+}
+
 /// Signals once a Restore's scan has read the store's current entitlements.
 private actor ScanArrival {
     private var arrived = false
@@ -1337,6 +1452,108 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(syncCount, 1)
         let used = try await use.value
         XCTAssertEqual(used?.success, true)
+    }
+
+    /// A purchase-backed Feature command writes its post-use result in the
+    /// same step as its answer, and lets go of the purchase only after that.
+    /// A Restore waiting on the purchase admits its claim afterwards, so the
+    /// Restore's newer Features are written last, even while the command's
+    /// own writes are slow.
+    func testFeatureCommandWritesItsResultBeforeAWaitingRestoreAdmits() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = InMemoryTransactionEvidenceStore()
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1",
+                distinctId: "customer-a",
+                featureIds: ["credits"]
+            ),
+        ]))
+        let item = StoreTransactionRecoveryItem(
+            update: VerifiedStoreTransactionUpdate(
+                transactionId: "transaction-1",
+                originalTransactionId: "original-transaction-1",
+                productId: "product-transaction-1",
+                appAccountToken: scope.appAccountToken(distinctId: "customer-a"),
+                isRevoked: false,
+                isUpgraded: false,
+                finish: {}
+            ),
+            jwsRepresentation: "signed-transaction-1"
+        )
+        let arrival = ScanArrival()
+        let api = RestoreAfterUseAPI()
+        let features = OrderedFeatureWrites()
+        let settings = NuxieRuntimeSettings(
+            configuration: NuxieConfiguration(apiKey: "purchase-use-test")
+        )
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 100))
+        let box = LateBound<TransactionService>()
+        let observer = TransactionObserver(
+            api: api,
+            features: features,
+            identity: identity,
+            settings: settings,
+            eventSink: PurchaseBackedEventSink(),
+            transactionServiceProvider: { box.get() },
+            evidenceStore: store,
+            purchaseStorageScope: scope,
+            dateProvider: clock,
+            activeStoreOriginalTransactionIDs: { [] },
+            unfinishedRecoveryTransactions: { [] },
+            currentEntitlementRecoveryTransactions: {
+                await arrival.arrive()
+                return [item]
+            }
+        )
+        box.set(TransactionService(
+            productService: MockFactory.shared.productService,
+            transactionObserver: observer,
+            pendingPurchaseStore: InMemoryPendingPurchaseStore(),
+            dateProvider: clock,
+            settings: settings,
+            eventSink: PurchaseBackedEventSink(),
+            purchaseStorageScope: scope,
+            identityService: identity
+        ))
+        addTeardownBlock { await observer.stopListening() }
+
+        let use = Task {
+            try await observer.useFeatureWithPendingPurchase(
+                distinctId: "customer-a",
+                featureId: "credits",
+                amount: 1,
+                entityId: nil,
+                metadata: nil
+            )
+        }
+        await api.waitUntilUseStarted()
+        let restore = Task {
+            await observer.syncCurrentEntitlements(distinctId: "customer-a", purpose: .restore)
+        }
+        await arrival.wait()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // The server answers the command; its first Feature write is slow.
+        await api.releaseUse()
+        await features.waitUntilInvalidationHeld()
+        for _ in 0..<150 {
+            if await features.recordedWrites().contains(where: { $0.hasPrefix("purchase") }) { break }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        await features.releaseInvalidation()
+
+        let used = try await use.value
+        XCTAssertEqual(used?.success, true)
+        let claims = await restore.value
+        XCTAssertEqual(claims.granted, 1)
+        let writes = await features.recordedWrites()
+        XCTAssertEqual(
+            writes,
+            ["invalidate credits", "use credits 4.0", "purchase credits 9.0"],
+            "the Restore's Features are written after the command's result"
+        )
     }
 
     /// A purchase-backed Feature command whose entry is admitted again while

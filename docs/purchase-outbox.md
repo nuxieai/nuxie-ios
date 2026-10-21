@@ -91,13 +91,15 @@ Everything that changes one purchase runs one at a time. While an answer is
 applied (its admission check, the entry change, the Feature publication and
 the 200 hold, together), a new admission for that purchase (a Restore or
 purchase claim, a commit's write, a refund) waits until it has finished, so a
-Restore can never split the check from the publication. The profile refresh
-the answer asks for runs after it. Every write to an entry checks, in the same
-step, the admission it was based on: a commit that read one admission and
-waited while a Restore admitted another is dropped, never merged into the
-newer entry. Two facts are recorded on whichever entry holds the transaction,
-since they are about the purchase itself: the StoreKit finish and the captured
-checkout completion.
+Restore can never split the check from the publication. Nothing an answer
+gives is published before the answer is saved on its entry, so an answer that
+cannot be saved publishes nothing: the outbox is then off, and the answer only
+refreshes the profile. The profile refresh the answer asks for runs after it.
+Every write to an entry checks, in the same step, the admission it was based
+on: a commit that read one admission and waited while a Restore admitted
+another is dropped, never merged into the newer entry. Two facts are recorded
+on whichever entry holds the transaction, since they are about the purchase
+itself: the StoreKit finish and the captured checkout completion.
 
 Retiring a 200's Features is itself a change to each Feature, so a Feature
 check that began before a newer profile retired the hold cannot publish its
@@ -127,10 +129,12 @@ again meanwhile is left to its own send, never written back.
 A purchase-backed Feature command carries the admission of the entry it uses.
 Its accepted answer always returns the command's result and consumption
 receipt to the caller, since the server has consumed the Feature. A matching
-answer is captured as purchase synced, answers the entry, and the command
-applies its own post-use Feature result. A superseded one only refreshes the
-profile: like every superseded answer, from any producer, it changes no
-Feature authority, cache, entry or hold.
+answer is captured as purchase synced, answers the entry and writes the
+command's own post-use Feature result, all in the answer's step. The command
+lets go of the purchase only after that, so a Restore waiting on it admits its
+claim afterwards and the claim's Features land last. A superseded one only
+refreshes the profile: like every superseded answer, from any producer, it
+changes no Feature authority, cache, entry or hold.
 
 ### Retry rule
 

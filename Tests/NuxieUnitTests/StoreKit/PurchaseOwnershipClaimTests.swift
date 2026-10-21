@@ -415,6 +415,43 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         XCTAssertFalse(timerSet)
     }
 
+    /// A 200's Features are published only after its answer is saved. Here
+    /// the disk fills while the checkout's send waits for its answer: saving
+    /// the answer fails and the outbox is off, so the answer publishes and
+    /// holds nothing. Access is what the profile says, even when the profile
+    /// fetch after the answer fails too.
+    func testAnAnswerThatCannotBeSavedPublishesNoFeatures() async throws {
+        let profile = MockProfileService()
+        profile.shouldThrow = true
+        let harness = await makeHarness(customer: "buyer", profile: profile)
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.adapter.configureVerifiedPurchase(
+            transactionJws: "unsaved-answer-jws",
+            transactionId: "unsaved-answer-transaction",
+            originalTransactionId: "unsaved-answer-original",
+            productId: storeProductId
+        )
+
+        let result = try await harness.service.purchase(product())
+        await gate.waitForArrival()
+        harness.store.refusesWrites = true
+        await gate.open()
+        let synced = await result.syncTask?.value
+
+        XCTAssertEqual(synced, true, "the server accepted the purchase")
+        XCTAssertEqual(harness.profileRefreshes.requests, ["buyer"], "the answer asks for the profile again")
+        let cached = await harness.features.getCached(featureId: "premium", entityId: nil)
+        XCTAssertNotEqual(cached?.allowed, true, "an answer that cannot be saved holds no Features")
+        var visible = await harness.visiblePremium()
+        for _ in 0..<250 where visible?.allowed == true {
+            try await Task.sleep(nanoseconds: 2_000_000)
+            visible = await harness.visiblePremium()
+        }
+        XCTAssertNotEqual(visible?.allowed, true, "and publishes none")
+        XCTAssertEqual(harness.events(named: SystemEventNames.purchaseSynced), 0)
+    }
+
     /// While the outbox is off, no timer pass sends anything.
     func testNoTimerPassSendsWhileTheOutboxIsOff() async throws {
         let harness = await makeHarness(customer: "buyer")
@@ -937,9 +974,9 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
     }
 
     /// Everything that changes one purchase runs one at a time. While a 200
-    /// is being applied (its admission checked and its Features published),
-    /// a Restore's new admission for the same purchase waits, so the check
-    /// and the publication are never split by it.
+    /// is being applied (its admission checked, the answer saved and its
+    /// Features published), a Restore's new admission for the same purchase
+    /// waits, so the check and the publication are never split by it.
     func testRestoreWaitsWhileAnAnswerForThePurchaseIsApplied() async throws {
         let revisions = ClaimGate()
         let harness = await makeHarness(customer: "restorer", revisionGate: revisions)
@@ -970,7 +1007,7 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         let restore = Task { try await harness.service.restore() }
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(entry()?.reason, .sync, "no new admission while the answer is applied")
-        XCTAssertNil(entry()?.answeredAt)
+        XCTAssertNotNil(entry()?.answeredAt, "the answer is saved before its Features are published")
 
         await revisions.open()
         let synced = await streamed.syncTask?.value
