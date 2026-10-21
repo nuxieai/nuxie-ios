@@ -93,6 +93,10 @@ newer entry. Two facts are recorded on whichever entry holds the transaction,
 since they are about the purchase itself: the StoreKit finish and the captured
 checkout completion.
 
+Retiring a 200's Features is itself a change to each Feature, so a Feature
+check that began before a newer profile retired the hold cannot publish its
+answer over that profile.
+
 Every answer passes one admission check before it may change its entry,
 publish Features or hold a 200's Features: a scan's send, the outbox pass, a
 Restore or purchase claim, and a purchase-backed Feature command alike. No

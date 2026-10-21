@@ -598,6 +598,9 @@ internal actor FeatureService: FeatureServiceProtocol {
             for key in superseded {
                 realTimeCache.removeValue(forKey: key)
                 purchaseGrantProfileRevisions.removeValue(forKey: key)
+                // Retiring the hold is a change to the Feature: a check that
+                // began before it cannot publish over the profile.
+                featureMutationRevisions[key.featureId, default: 0] &+= 1
             }
         }
         let allFeatures = await getAllCached()
