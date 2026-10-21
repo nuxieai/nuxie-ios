@@ -49,10 +49,19 @@ stays answered (never sent again) until that bookkeeping is done.
 
 ### Retry rule
 
-A kept entry is sent again after `30 s × 2^(attempts − 1)`, capped at one
-hour, and also at every launch, at identify or reset, and when a newly
-loaded profile changes the product catalog. Entries survive restarts; the
-attempt count does too.
+A kept entry records when it is due again: the time its send failed plus
+`30 s × 2^(attempts − 1)`, capped at one hour. Entries survive restarts, and
+so do their attempt count and due time.
+
+The SDK keeps one timer for the whole outbox, set to the earliest time a
+failed entry is due. It is set again after every send result (accepted,
+refused or failed) and at launch, so a purchase that fails for the first time
+is retried after 30 s even while another entry waits out the hour; with no
+failed entry waiting it is cancelled. When it fires, the entries that are due
+are sent; the others keep their own time.
+
+Every entry still to be sent is also sent at every launch, at identify or
+reset, and when a newly loaded profile changes the product catalog.
 
 ## Request
 

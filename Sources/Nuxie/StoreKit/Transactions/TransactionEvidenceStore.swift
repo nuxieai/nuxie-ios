@@ -63,6 +63,9 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let customerKind: PurchaseCustomerKind
     /// Sends that failed without an answer; the retry backoff grows with it.
     let sendAttempts: Int
+    /// When a failed send is due again: the time it failed plus the backoff
+    /// for its attempt count. Nil until a send fails, and once answered.
+    let retryDueAt: Date?
 
     init(
         scope: PurchaseStorageScope = .testFixture,
@@ -82,7 +85,8 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         appAccountToken: UUID? = nil,
         reason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind = .identified,
-        sendAttempts: Int = 0
+        sendAttempts: Int = 0,
+        retryDueAt: Date? = nil
     ) {
         self.scope = scope
         self.transactionJws = transactionJws
@@ -102,6 +106,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.reason = reason
         self.customerKind = customerKind
         self.sendAttempts = sendAttempts
+        self.retryDueAt = retryDueAt
     }
 
     /// The previous SDK's name for `answeredAt`.
@@ -143,7 +148,8 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             customerKind: try container.decodeIfPresent(
                 PurchaseCustomerKind.self, forKey: .customerKind
             ) ?? .identified,
-            sendAttempts: try container.decodeIfPresent(Int.self, forKey: .sendAttempts) ?? 0
+            sendAttempts: try container.decodeIfPresent(Int.self, forKey: .sendAttempts) ?? 0,
+            retryDueAt: try container.decodeIfPresent(Date.self, forKey: .retryDueAt)
         )
     }
 
@@ -183,12 +189,14 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
-            sendAttempts: answeredAt == nil ? sendAttempts : 0
+            sendAttempts: answeredAt == nil ? sendAttempts : 0,
+            retryDueAt: answeredAt == nil ? retryDueAt : nil
         )
     }
 
-    /// The same entry after one more send failed without an answer.
-    func replacingAfterFailedSend() -> Self {
+    /// The same entry after one more send failed without an answer at
+    /// `failedAt`: it is due again after the backoff for its attempt count.
+    func replacingAfterFailedSend(at failedAt: Date) -> Self {
         Self(
             scope: scope,
             transactionJws: transactionJws,
@@ -207,7 +215,10 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
-            sendAttempts: sendAttempts + 1
+            sendAttempts: sendAttempts + 1,
+            retryDueAt: failedAt.addingTimeInterval(
+                TransactionObserver.outboxRetryDelay(afterAttempts: sendAttempts + 1)
+            )
         )
     }
 }
