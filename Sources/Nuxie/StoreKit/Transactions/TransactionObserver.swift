@@ -510,9 +510,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// routed-capture failure, but never across observer teardown/relaunch.
     private var purchaseCommitJourneyRouting: Set<PurchaseCommitKey> = []
 
-    /// Receipts the server accepted this session, keyed by transaction and
-    /// the customer they were sent for (to avoid duplicates within session)
-    private var syncedTransactionIds: Set<String> = []
+    /// Accepted sends already reported as `$purchase_synced`, by transaction,
+    /// customer and admission. Telemetry only: it never decides whether a
+    /// purchase is sent or an entry cleared.
+    private var reportedPurchaseSyncs: Set<String> = []
     private struct TransactionSyncOperation: Sendable {
         let id: UUID
         /// Why this send was made; a sync's refusal does not answer a send
@@ -1037,9 +1038,17 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         }
 
         let customer = commitCustomer(for: outcome)
+        // The outbox pass sends its entry's admission; an earlier commit of
+        // the purchase never stands in for that send.
+        let resendsOutboxEntry: Bool
+        if case .verified(let evidence, _) = outcome {
+            resendsOutboxEntry = evidence.outboxAdmissionId != nil
+        } else {
+            resendsOutboxEntry = false
+        }
         while true {
             if let completed = completedPurchaseCommits[key],
-               completed.customer == customer {
+               completed.customer == customer, !resendsOutboxEntry {
                 // Keep one exact sync task for every accepted commit attempt. A
                 // failed receipt submission invalidates only the in-memory
                 // marker; durable evidence and completion state make the next
@@ -2017,15 +2026,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             isRevoked: isRevoked
         )
 
-        if syncedTransactionIds.contains(dedupeKey), !refreshProviderState {
-            LogDebug("TransactionObserver: Transaction already synced, finishing fast path")
-            return await reconcileEvidenceAfterDeduplicatedSync(
-                transactionId: transactionId,
-                admissionId: admissionId,
-                retainEvidenceAfterSync: retainEvidenceAfterSync
-            ) ? .accepted : .failed
-        }
-
         var joinedOperationId: UUID?
         while let operation = transactionSyncOperations[dedupeKey],
               operation.id != joinedOperationId {
@@ -2035,18 +2035,12 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                   lifecycleGeneration == requestLifecycleGeneration else {
                 return .failed
             }
-            // A Restore claim counts only its own send: one of the same
-            // admission. Otherwise an acceptance for this customer answers any
-            // send of the purchase; a refusal or failure answers only a send
-            // of the same admission, and never a refresh or a send that
-            // claims the purchase when the earlier send did not.
-            let answersThisSend = reason == .restore
-                ? operation.admissionId == admissionId
-                : outcome == .accepted
-                    || (operation.admissionId == admissionId
-                        && !refreshProviderState
-                        && (operation.reason.claimsOwnership || !reason.claimsOwnership))
-            guard answersThisSend else { continue }
+            // Only a send of this send's own admission answers it; a send of
+            // another admission is waited out, then this one goes itself.
+            guard operation.admissionId == admissionId,
+                  operation.reason.claimsOwnership || !reason.claimsOwnership else {
+                continue
+            }
             guard outcome == .accepted else { return outcome }
             return await reconcileEvidenceAfterDeduplicatedSync(
                 transactionId: transactionId,
@@ -2223,14 +2217,15 @@ internal actor TransactionObserver: TransactionObserverProtocol {
               lifecycleGeneration == requestLifecycleGeneration else {
             return .failed
         }
-        syncedTransactionIds.insert(dedupeKey)
         guard await retireAnsweredEntry(
             transactionId: transactionId,
             admissionId: admissionId,
             retainEvidenceAfterSync: retainEvidenceAfterSync
         ) else { return .failed }
 
-        if emitSyncedEvent, identityService.getDistinctId() == distinctId {
+        let reportKey = [dedupeKey, admissionId?.uuidString ?? ""].joined(separator: "\u{1f}")
+        if emitSyncedEvent, identityService.getDistinctId() == distinctId,
+           reportedPurchaseSyncs.insert(reportKey).inserted {
             var properties: [String: Any] = [
                 "transaction_id": transactionId,
                 "original_transaction_id": originalTransactionId ?? "",
@@ -2413,18 +2408,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     }
                     continue
                 }
-                let previouslySynced = syncedTransactionIds.contains(syncKey(
-                    transactionId: update.transactionId,
-                    distinctId: distinctId
-                )) || retained?.answeredAt != nil
-                let ownsRefresh: Bool
-                if purpose != nil, !reason.claimsOwnership, previouslySynced {
-                    ownsRefresh = currentEntitlementBelongsToCustomer(
-                        update, distinctId: distinctId
-                    )
-                } else {
-                    ownsRefresh = false
-                }
                 let result = await handleVerifiedTransaction(
                     update,
                     jwsRepresentation: item.jwsRepresentation,
@@ -2440,6 +2423,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     allowsDurableCheckoutAuthority: false
                 )
                 guard purpose != nil else { continue }
+                // The commit's send answers this scan only when this very
+                // commit made it; another producer's commit never does.
+                let ownSend = result.isReplay ? nil : result.syncTask
                 if reason.claimsOwnership {
                     guard claimable else { continue }
                     guard result.committed else {
@@ -2448,11 +2434,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         group.addTask { PurchaseSyncOutcome.failed }
                         continue
                     }
-                    if !previouslySynced, !result.isReplay,
-                       let syncTask = result.syncTask {
+                    if let syncTask = ownSend {
                         // This commit admitted the claim and is sending it for
                         // this customer with this reason; its answer is the
-                        // claim's. Another producer's commit is never counted.
+                        // claim's.
                         group.addTask {
                             guard await syncTask.value else {
                                 return await self.claimAfterUnacceptedSync(
@@ -2462,29 +2447,31 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                             return PurchaseSyncOutcome.accepted
                         }
                     } else {
-                        // Nothing new to send for this record (it was synced
-                        // or refused before): ask again with this reason.
+                        // The commit sent nothing for this customer (the entry
+                        // was answered, or the commit was another
+                        // producer's): the claim is admitted and sent itself.
                         group.addTask {
                             PurchaseSyncOutcome?.some(await self.claimCurrentEntitlement(
                                 item, distinctId: distinctId, reason: reason
                             ))
                         }
                     }
-                } else if result.committed, ownsRefresh,
+                } else if let syncTask = ownSend {
+                    group.addTask {
+                        _ = await syncTask.value
+                        return nil
+                    }
+                } else if result.committed,
                           identityService.getDistinctId() == distinctId,
-                          claimable {
-                    // Explicit Restore refreshes provider authority while the
-                    // commit above retains the original purchase's delivery and
-                    // ownership decisions.
+                          claimable,
+                          currentEntitlementBelongsToCustomer(update, distinctId: distinctId) {
+                    // The commit sent nothing for the customer's own purchase:
+                    // an explicit scan asks the server again, while the
+                    // commit keeps the purchase's delivery decisions.
                     group.addTask {
                         _ = await self.claimCurrentEntitlement(
                             item, distinctId: distinctId, reason: .sync
                         )
-                        return nil
-                    }
-                } else if let syncTask = result.syncTask {
-                    group.addTask {
-                        _ = await syncTask.value
                         return nil
                     }
                 }
@@ -2589,18 +2576,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             )
         }
         guard let change else { return nil }
-        // The claim is a new send: an earlier commit or acceptance of this
-        // purchase in this session no longer answers it, so recovery commits
-        // and sends it afresh.
+        // The claim is a new send: an earlier commit of this purchase in this
+        // session no longer stands in for it.
         completedPurchaseCommits.removeValue(forKey: .verified(
             transactionId: update.transactionId,
             revoked: false
-        ))
-        syncedTransactionIds.remove(syncKey(
-            transactionId: update.transactionId,
-            originalTransactionId: update.originalTransactionId,
-            transactionJws: item.jwsRepresentation,
-            distinctId: distinctId
         ))
         if change.changed {
             await refreshOptimisticProjection()
@@ -2847,7 +2827,6 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                         _ = await removeEvidence(transactionId: evidence.transactionId)
                     }
                 }
-                syncedTransactionIds.insert(receiptSyncKey)
                 releasePurchaseUsageClaim(transactionId: evidence.transactionId)
 
                 guard !isStopped,

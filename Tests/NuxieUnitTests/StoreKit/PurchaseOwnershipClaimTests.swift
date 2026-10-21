@@ -648,6 +648,63 @@ final class PurchaseOwnershipClaimTests: XCTestCase {
         try assertRestoreClaimQueued("own-transaction", jws: "own-jws", in: harness)
     }
 
+    /// The A to B to A case once more, with the first customer's earlier send
+    /// accepted while their Restore claim waits. The claim's own send fails,
+    /// and its retry sends the claim: an acceptance earlier in the session
+    /// never clears an entry; only the answer to a send of its own
+    /// admission does.
+    func testRetryOfARestoreClaimSendsItAfterAnEarlierSendWasAccepted() async throws {
+        let harness = await makeHarness(customer: "restorer")
+        let gate = ClaimGate()
+        harness.api.hold(gate)
+        harness.api.answer(.accept, for: .sync)
+        harness.api.answer(.fail, for: .restore)
+        let item = entitlement("own", productId: storeProductId, token: token("restorer"))
+        harness.entitlements.set([item])
+        harness.adapter.restoreResult = .restored
+        func entry() -> StoredTransactionEvidence? {
+            harness.store.load().valueTreatingAbsentAsEmpty([:])?["own-transaction"]
+        }
+
+        // The store update's send for the restorer waits at the server.
+        let streamed = await harness.observer.handleVerifiedTransaction(
+            item.update,
+            jwsRepresentation: item.jwsRepresentation,
+            source: .transactionStream
+        )
+        await gate.waitForArrival()
+
+        // Another customer restores and takes the entry, then the restorer
+        // restores and takes it back while their first send still waits.
+        harness.identity.setDistinctId("other")
+        let otherRestore = Task { try await harness.service.restore() }
+        await gate.waitForArrival(count: 2)
+        harness.identity.setDistinctId("restorer")
+        let restore = Task { try await harness.service.restore() }
+        for _ in 0..<500 {
+            if entry()?.distinctId == "restorer" { break }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTAssertEqual(entry()?.reason, .restore)
+
+        // The first send is accepted; the Restore claim's own send fails.
+        await gate.open()
+        let synced = await streamed.syncTask?.value
+        XCTAssertEqual(synced, true)
+        _ = try? await otherRestore.value
+        _ = try? await restore.value
+        try assertRestoreClaimQueued("own-transaction", jws: "own-jws", in: harness)
+
+        // The retry sends the claim and only its answer clears the entry.
+        let sent = harness.api.requests.count
+        harness.api.answer(.accept, for: .restore)
+        await harness.observer.retryStoredEvidence()
+        XCTAssertEqual(harness.api.requests.count, sent + 1, "the retry sends the claim")
+        XCTAssertEqual(harness.api.requests.last?.reason, .restore)
+        XCTAssertEqual(harness.api.requests.last?.distinctId, "restorer")
+        XCTAssertNil(entry())
+    }
+
     /// A Restore never takes an acceptance from earlier in the session as
     /// its answer, least of all another customer's. After the first
     /// customer's purchase was accepted and its entry cleared, the restoring

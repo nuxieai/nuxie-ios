@@ -587,7 +587,10 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
         XCTAssertEqual(api.calls, 1)
         let refreshed = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(refreshed?.allowed, true)
-        // Another ordinary restore also refreshes after the in-memory sync marker exists.
+        // Another ordinary restore sends again: an acceptance earlier in the
+        // session never stands in for a send. The first answer cleared the
+        // entry, so this Restore admits a new one, and its accepted send is
+        // reported once as purchase synced.
         await features.clearCache()
         _ = try await service.restore()
         XCTAssertEqual(api.calls, 2)
@@ -595,7 +598,7 @@ final class PurchaseRecoveryScopeTests: XCTestCase {
             .init(jwt: "current-verified-jws", distinctId: "restore-owner"),
             .init(jwt: "current-verified-jws", distinctId: "restore-owner")
         ])
-        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 0)
+        XCTAssertEqual(sink.events.filter { $0.name == SystemEventNames.purchaseSynced }.count, 1)
         XCTAssertEqual(sink.routedCaptureCount, 0)
         let refreshedAgain = await features.getCached(featureId: "pro", entityId: nil)
         XCTAssertEqual(refreshedAgain?.allowed, true)
