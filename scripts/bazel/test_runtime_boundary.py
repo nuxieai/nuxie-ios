@@ -17,6 +17,12 @@ class RuntimeOwnershipTests(unittest.TestCase):
                 return subprocess.run(["bash", str(script)], cwd=root, text=True, capture_output=True)
             result = check()
             self.assertEqual(result.returncode, 0, result.stderr)
+            # This is documentation copied into the compiler checkout, not SDK runtime source.
+            example = root / "fixtures/runtime/nested-values/generate.rs"
+            example.parent.mkdir(parents=True)
+            example.write_text("fn compiler_fixture_example() {}")
+            result = check()
+            self.assertEqual(result.returncode, 0, result.stderr)
             for name in ("Sources/NuxieRuntime/native.rs", "Sources/Cargo.toml", "fixtures/new/generate.rs"):
                 with self.subTest(name=name):
                     source = root / name
