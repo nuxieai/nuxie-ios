@@ -86,7 +86,12 @@ applied (its admission check, the entry change, the Feature publication and
 the 200 hold, together), a new admission for that purchase (a Restore or
 purchase claim, a commit's write, a refund) waits until it has finished, so a
 Restore can never split the check from the publication. The profile refresh
-the answer asks for runs after it.
+the answer asks for runs after it. Every write to an entry checks, in the same
+step, the admission it was based on: a commit that read one admission and
+waited while a Restore admitted another is dropped, never merged into the
+newer entry. Two facts are recorded on whichever entry holds the transaction,
+since they are about the purchase itself: the StoreKit finish and the captured
+checkout completion.
 
 Every answer passes one admission check before it may change its entry,
 publish Features or hold a 200's Features: a scan's send, the outbox pass, a

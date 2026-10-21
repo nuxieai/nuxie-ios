@@ -1358,6 +1358,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             existing = storedEvidence()[verified.transactionId]
         }
         guard !evidenceStoreUnreadable else { return .rejected }
+        // The admission this commit is based on. Every write it makes checks
+        // it against the current row in the same step: a write based on an
+        // admission the entry no longer holds (a Restore took the entry while
+        // this commit waited) is dropped, never merged into the newer one.
+        let basedOnAdmission = storedEvidence()[verified.transactionId]?.admissionId
 
         let needsTransactionService = verified.resolvesPendingPurchase
             || (existing == nil && verified.requiresAuthorityResolution)
@@ -1622,10 +1627,21 @@ internal actor TransactionObserver: TransactionObserverProtocol {
         // the unchanged row carries everything the capture needs.
         // A new admission waits while an answer for the purchase is applied.
         await waitForPurchaseChanges(transactionId: verified.transactionId)
-        guard let initialChange = reloadAndApplyEvidenceChange(
+        var superseded = false
+        let initialChange = reloadAndApplyEvidenceChange(
             transactionId: verified.transactionId,
-            makeCommittedEvidence
-        ) else { return .rejected }
+            { current in
+                guard current?.admissionId == basedOnAdmission else {
+                    superseded = true
+                    return current
+                }
+                return makeCommittedEvidence(current)
+            }
+        )
+        if superseded {
+            return PurchaseCommitResult(committed: false, syncTask: nil, isTerminal: false)
+        }
+        guard let initialChange else { return .rejected }
         var committedEvidence = initialChange.evidence
         var evidenceChanged = initialChange.changed
 
@@ -1645,6 +1661,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
 
         if committedEvidence.finishRequired, let finish = verified.finish {
             await finish()
+            // Finishing is a fact about the StoreKit transaction, so it is
+            // recorded on whichever entry holds the transaction now.
             guard let finishChange = reloadAndApplyEvidenceChange(
                 transactionId: verified.transactionId,
                 { current in
@@ -1694,6 +1712,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             if captured {
                 purchaseCommitJourneyRouting.remove(commitKey)
                 let deliveredAt = dateProvider.now()
+                // The captured completion is a fact about the purchase's
+                // stable event, so it is recorded on whichever entry holds
+                // the transaction now (a refund may have landed meanwhile).
                 if let completionChange = reloadAndApplyEvidenceChange(
                     transactionId: verified.transactionId,
                     { current in
@@ -2333,10 +2354,22 @@ internal actor TransactionObserver: TransactionObserverProtocol {
     /// it expires with the retention window, so a later delivery of the same
     /// purchase reads its flags instead of sending or finishing again.
     private func markAnswered(_ target: PurchaseAnswerTarget) async -> Bool {
-        guard let stored = storedEvidence()[target.transactionId],
-              stored.admissionId == target.admissionId,
-              stored.answeredAt == nil else { return true }
-        return await persistEvidence(stored.replacing(answeredAt: dateProvider.now()))
+        let answeredAt = dateProvider.now()
+        guard let change = reloadAndApplyEvidenceChange(
+            transactionId: target.transactionId,
+            { current in
+                guard let current, current.admissionId == target.admissionId,
+                      current.answeredAt == nil else { return current }
+                return current.replacing(answeredAt: answeredAt)
+            }
+        ) else {
+            // No entry for the send, or the store could not be written.
+            return storedEvidence()[target.transactionId] == nil && !evidenceStoreUnreadable
+        }
+        if change.changed {
+            await refreshOptimisticProjection()
+        }
+        return true
     }
 
     /// A send failed without an answer (transport, 5xx, auth): the entry
