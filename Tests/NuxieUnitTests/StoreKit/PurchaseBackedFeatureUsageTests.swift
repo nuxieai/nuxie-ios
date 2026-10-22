@@ -647,7 +647,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let firstRequests = await api.recordedRequests()
         let operationId = try XCTUnwrap(firstRequests.first?.purchase.eventId)
         XCTAssertEqual(
-            reopenedStore.load().readableValue?["transaction-1"]?.featureUseCustomerKinds?[operationId],
+            reopenedStore.load().readableValue?["transaction-1"]?.featureUseCustomerKinds(for: "customer-a")?[operationId],
             .anonymous
         )
         let relaunched = makeObserver(
@@ -685,10 +685,10 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             .appendingPathComponent("transaction-evidence.json")
         var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         var legacy = try XCTUnwrap(rows["transaction-1"] as? [String: Any])
-        legacy.removeValue(forKey: "featureUseCustomerKinds")
+        legacy.removeValue(forKey: "featureUseDeclarations")
         rows["transaction-1"] = legacy
         try JSONSerialization.data(withJSONObject: rows).write(to: file)
-        XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds)
+        XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds(for: "customer-a"))
         identity.setDistinctId("customer-a")
 
         let api = PurchaseBackedUsageAPI(results: [
@@ -716,7 +716,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 XCTAssertEqual(error.code, .timedOut)
             }
             await observer.stopListening()
-            XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds)
+            XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds(for: "customer-a"))
         }
         let requests = await api.recordedRequests()
         XCTAssertEqual(requests.count, 2)
@@ -754,7 +754,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
                 .appendingPathComponent("transaction-evidence.json")
             var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
             var row = try XCTUnwrap(rows["transaction-1"] as? [String: Any])
-            row.removeValue(forKey: "featureUseCustomerKinds")
+            row.removeValue(forKey: "featureUseDeclarations")
             rows["transaction-1"] = row
             try JSONSerialization.data(withJSONObject: rows).write(to: file)
         }
@@ -786,7 +786,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let firstRequests = await api.recordedRequests()
         let operationId = try XCTUnwrap(firstRequests.first?.purchase.eventId)
         let expectedKinds: [String: PurchaseCustomerKind]? = legacy ? nil : [operationId: .anonymous]
-        XCTAssertEqual(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds, expectedKinds)
+        XCTAssertEqual(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds(for: "customer-a"), expectedKinds)
 
         // Another customer's explicit Restore replaces A's retained entry
         // through admitClaim. The server answers it, settling B's entry.
@@ -820,7 +820,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         let claimed = try XCTUnwrap(returningStore.load().readableValue?["transaction-1"])
         XCTAssertEqual(claimed.distinctId, "customer-b")
         XCTAssertTrue(claimed.isSettled)
-        XCTAssertEqual(claimed.featureUseCustomerKinds, expectedKinds)
+        XCTAssertEqual(claimed.featureUseCustomerKinds(for: "customer-a"), expectedKinds)
+        XCTAssertEqual(claimed.featureUseCustomerKinds(for: "customer-b"), [:])
 
         // A signs in with the same id. A verified producer now replaces B's
         // settled entry through performVerifiedCommit, restoring selection
@@ -853,7 +854,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             let retained = try XCTUnwrap(reopenedStore.load().readableValue?["transaction-1"])
             XCTAssertEqual(retained.distinctId, "customer-a")
             XCTAssertEqual(retained.customerKind, .identified)
-            XCTAssertEqual(retained.featureUseCustomerKinds, expectedKinds)
+            XCTAssertEqual(retained.featureUseCustomerKinds(for: "customer-a"), expectedKinds)
             let observer = makeObserver(
                 api: api, features: PurchaseBackedFeatureRecorder(), identity: identity, store: reopenedStore
             )
@@ -877,6 +878,121 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertEqual(Set(requests.map(\.purchase.transactionJwt)), ["signed-transaction-1"])
     }
 
+    func testNewCustomerAdmitsOwnKindAfterOwnershipMoveAndFailedPurchaseSync() async throws {
+        for legacy in [false, true] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("purchase-use-customer-kind-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let identity = MockIdentityService()
+            identity.reset(keepAnonymousId: true)
+            identity.setAnonymousId("customer-a")
+            let store = TransactionEvidenceStore(customStoragePath: root, scope: scope)
+            XCTAssertTrue(store.save([
+                "transaction-1": evidence(
+                    transactionId: "transaction-1", distinctId: "customer-a",
+                    featureIds: ["credits"], customerKind: .anonymous
+                ),
+            ]))
+            if legacy {
+                let file = scope.storageDirectory(customStoragePath: root)
+                    .appendingPathComponent("transaction-evidence.json")
+                var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+                var row = try XCTUnwrap(rows["transaction-1"] as? [String: Any])
+                row.removeValue(forKey: "featureUseDeclarations")
+                rows["transaction-1"] = row
+                try JSONSerialization.data(withJSONObject: rows).write(to: file)
+            }
+            let api = PurchaseBackedUsageAPI(
+                results: [
+                    // A's request need not have reached the server.
+                    .failure(URLError(.timedOut)),
+                    .failure(URLError(.timedOut)),
+                    .success(.init(
+                        customerId: "customer-b", featureId: "credits", code: "consumed",
+                        allowed: true, unlimited: false, balance: 4, type: .metered
+                    )),
+                ],
+                syncFailureCustomerIds: ["customer-b"]
+            )
+            let original = makeObserver(
+                api: api, features: PurchaseBackedFeatureRecorder(), identity: identity, store: store
+            )
+            do {
+                _ = try await original.useFeatureWithPendingPurchase(
+                    distinctId: "customer-a", featureId: "credits", amount: 1,
+                    entityId: "entity", metadata: nil
+                )
+                XCTFail("Expected A's reply to be lost")
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .timedOut)
+            }
+            // Settle A's /purchase independently of the unanswered consume,
+            // making the row eligible for a verified producer to move to B.
+            let settled = await original.syncTransaction(
+                transactionJws: "signed-transaction-1", transactionId: "transaction-1",
+                productId: "product-transaction-1", originalTransactionId: "original-transaction-1"
+            )
+            XCTAssertTrue(settled)
+            XCTAssertEqual(store.load().readableValue?["transaction-1"]?.isSettled, true)
+            await original.stopListening()
+
+            identity.setDistinctId("customer-b")
+            let moving = makeObserver(
+                api: api, features: PurchaseBackedFeatureRecorder(), identity: identity,
+                store: TransactionEvidenceStore(customStoragePath: root, scope: scope)
+            )
+            let moved = await moving.commit(.verified(
+                VerifiedPurchaseEvidence(
+                    transactionJws: "signed-transaction-1", transactionId: "transaction-1",
+                    originalTransactionId: "original-transaction-1", productId: "product-transaction-1",
+                    appAccountToken: scope.appAccountToken(distinctId: "customer-b"),
+                    requester: .named("customer-b"), productFeatureIds: ["credits"],
+                    finishRequired: false, resolvesPendingPurchase: false,
+                    allowsDurableCheckoutAuthority: false, requiresAuthorityResolution: false,
+                    syncReason: .purchase
+                ),
+                source: .checkout
+            ))
+            XCTAssertTrue(moved.committed)
+            let synced = await moved.syncTask?.value
+            XCTAssertEqual(synced, false)
+            await moving.stopListening()
+
+            // Reopen before B's first use and retry. Identical inputs have
+            // A's operation id, but B must admit and retain its own kind.
+            for attempt in 0..<2 {
+                let reopened = TransactionEvidenceStore(customStoragePath: root, scope: scope)
+                let retained = try XCTUnwrap(reopened.load().readableValue?["transaction-1"])
+                XCTAssertEqual(retained.distinctId, "customer-b")
+                XCTAssertEqual(retained.customerKind, .identified)
+                XCTAssertTrue(retained.isUnsent)
+                let observer = makeObserver(
+                    api: api, features: PurchaseBackedFeatureRecorder(), identity: identity, store: reopened
+                )
+                do {
+                    let result = try await observer.useFeatureWithPendingPurchase(
+                        distinctId: "customer-b", featureId: "credits", amount: 1,
+                        entityId: "entity", metadata: nil
+                    )
+                    XCTAssertEqual(attempt, 1, "B's first consume should time out")
+                    XCTAssertEqual(result?.success, true)
+                } catch let error as URLError {
+                    XCTAssertEqual(attempt, 0)
+                    XCTAssertEqual(error.code, .timedOut)
+                }
+                await observer.stopListening()
+            }
+            let requests = await api.recordedRequests()
+            XCTAssertEqual(requests.map(\.customerId), ["customer-a", "customer-b", "customer-b"])
+            XCTAssertEqual(requests.map(\.customerKind), [legacy ? nil : .anonymous, .identified, .identified])
+            let operationId = try XCTUnwrap(requests.first?.purchase.eventId)
+            XCTAssertEqual(Set(requests.map(\.purchase.eventId)), [operationId])
+            let retained = try XCTUnwrap(store.load().readableValue?["transaction-1"])
+            XCTAssertEqual(retained.featureUseCustomerKinds(for: "customer-a"), legacy ? nil : [operationId: .anonymous])
+            XCTAssertEqual(retained.featureUseCustomerKinds(for: "customer-b"), [operationId: .identified])
+        }
+    }
+
     func testUnsavedConsumeAdmissionFallsBackWithoutSendingPurchaseEvidence() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
@@ -896,7 +1012,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertNil(result)
         let requests = await api.recordedRequests()
         XCTAssertTrue(requests.isEmpty)
-        XCTAssertEqual(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds, [:])
+        XCTAssertEqual(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds(for: "customer-a"), [:])
         await observer.stopListening()
     }
 

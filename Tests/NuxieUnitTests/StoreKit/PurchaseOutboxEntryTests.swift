@@ -7,7 +7,7 @@ import XCTest
 
 /// The outbox reads only entries in its own format.
 final class PurchaseOutboxEntryTests: XCTestCase {
-    func testFeatureUseDeclarationSurvivesBookkeepingAndOlderEvidenceStillDecodes() throws {
+    func testFeatureUseDeclarationSurvivesBookkeepingAndReload() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("consume-kind-format-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -17,32 +17,45 @@ final class PurchaseOutboxEntryTests: XCTestCase {
             productId: "product", distinctId: "customer", recordedAt: Date(timeIntervalSince1970: 100),
             isRevoked: false, customerKind: .identified
         )
-        XCTAssertEqual(admitted.featureUseCustomerKinds, [:], "Fresh evidence permits consume admissions")
+        XCTAssertEqual(admitted.featureUseDeclarations, [:], "Fresh evidence permits consume admissions")
         var consumed = admitted
-        consumed.featureUseCustomerKinds = ["purchase-use": .anonymous]
+        consumed.admitFeatureUse(customerId: "customer", operationId: "purchase-use", customerKind: .anonymous)
         let written = consumed.admitted(over: admitted)
         XCTAssertEqual(written.admissionId, admitted.admissionId, "Consume admission must not readmit /purchase")
         XCTAssertEqual(written.customerKind, .identified)
         XCTAssertTrue(store.save(["transaction": written.replacingAfterFailedSend(at: Date())]))
         let loaded = try XCTUnwrap(store.load().readableValue?["transaction"])
-        XCTAssertEqual(loaded.featureUseCustomerKinds, ["purchase-use": .anonymous])
-        XCTAssertEqual(loaded.replacing(answeredAt: Date()).featureUseCustomerKinds, loaded.featureUseCustomerKinds)
+        XCTAssertEqual(loaded.featureUseCustomerKinds(for: "customer"), ["purchase-use": .anonymous])
+        XCTAssertEqual(loaded.replacing(answeredAt: Date()).featureUseDeclarations, loaded.featureUseDeclarations)
+    }
 
-        // The current purchase outbox format predates consume declarations.
-        // Its existing rows must still load with no per-consume declarations.
-        let file = PurchaseStorageScope.testFixture.storageDirectory(customStoragePath: root)
-            .appendingPathComponent("transaction-evidence.json")
-        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-        var legacy = try XCTUnwrap(object["transaction"] as? [String: Any])
-        legacy.removeValue(forKey: "featureUseCustomerKinds")
-        object["transaction"] = legacy
-        try JSONSerialization.data(withJSONObject: object).write(to: file)
-        let old = try XCTUnwrap(store.load().readableValue?["transaction"])
-        XCTAssertNil(old.featureUseCustomerKinds)
-        XCTAssertNil(old.replacingAfterFailedSend(at: Date()).featureUseCustomerKinds)
-        XCTAssertNil(old.replacing(answeredAt: Date()).featureUseCustomerKinds)
-        XCTAssertEqual(old.customerKind, .identified)
-        XCTAssertEqual(old.admissionId, admitted.admissionId)
+    func testMissingDeclarationsStayUndeclaredOnlyForRecordedCustomer() throws {
+        for hasIgnoredFlatKey in [false, true] {
+            let original = StoredTransactionEvidence(
+                transactionJws: "signed-jws", transactionId: "transaction", originalTransactionId: "original",
+                productId: "product", distinctId: "customer-a", recordedAt: Date(),
+                isRevoked: false
+            )
+            var row = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+            row.removeValue(forKey: "featureUseDeclarations")
+            // The unreleased flat key is unknown and must not supply a kind.
+            if hasIgnoredFlatKey { row["featureUseCustomerKinds"] = ["purchase-use": "anonymous"] }
+            let encoded = try JSONSerialization.data(withJSONObject: row)
+            var loaded = try JSONDecoder().decode(StoredTransactionEvidence.self, from: encoded)
+            XCTAssertNil(loaded.featureUseDeclarations)
+            XCTAssertNil(loaded.replacingAfterFailedSend(at: Date()).featureUseDeclarations)
+            XCTAssertNil(loaded.replacing(answeredAt: Date()).featureUseDeclarations)
+            XCTAssertNil(loaded.featureUseCustomerKinds(for: "customer-a"))
+            XCTAssertEqual(loaded.featureUseCustomerKinds(for: "customer-b"), [:])
+            loaded.admitFeatureUse(customerId: "customer-a", operationId: "purchase-use", customerKind: .identified)
+            loaded.admitFeatureUse(customerId: "customer-b", operationId: "purchase-use", customerKind: .identified)
+            let rewritten = loaded.replacingAfterFailedSend(at: Date()).replacing(answeredAt: Date())
+            let reopened = try JSONDecoder().decode(StoredTransactionEvidence.self, from: JSONEncoder().encode(rewritten))
+            XCTAssertNil(reopened.featureUseCustomerKinds(for: "customer-a"))
+            XCTAssertEqual(reopened.featureUseCustomerKinds(for: "customer-b"), ["purchase-use": .identified])
+            XCTAssertEqual(Set(reopened.retainedFeatureUseDeclarations.keys), ["customer-a", "customer-b"])
+            XCTAssertEqual(reopened.admissionId, original.admissionId)
+        }
     }
 
     /// An entry in the previous SDK's format (its answer under

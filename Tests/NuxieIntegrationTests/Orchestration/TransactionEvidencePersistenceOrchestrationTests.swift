@@ -51,7 +51,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                             .appendingPathComponent("transaction-evidence.json")
                         var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
                         var retained = try XCTUnwrap(rows["transaction"] as? [String: Any])
-                        retained.removeValue(forKey: "featureUseCustomerKinds")
+                        retained.removeValue(forKey: "featureUseDeclarations")
                         rows["transaction"] = retained
                         try JSONSerialization.data(withJSONObject: rows).write(to: file)
                     }
@@ -87,12 +87,12 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                     } catch NuxieNetworkError.timeout {}
                     await first.stopListening()
                     let admitted = try XCTUnwrap(store.load().readableValue?["transaction"])
-                    let operationId = admitted.featureUseCustomerKinds?.keys.first
+                    let operationId = admitted.featureUseCustomerKinds(for: customerId)?.keys.first
                     if legacy {
-                        XCTAssertNil(admitted.featureUseCustomerKinds)
+                        XCTAssertNil(admitted.featureUseCustomerKinds(for: customerId))
                     } else {
                         XCTAssertNotNil(operationId)
-                        XCTAssertEqual(admitted.featureUseCustomerKinds?.values.first, .anonymous)
+                        XCTAssertEqual(admitted.featureUseCustomerKinds(for: customerId)?.values.first, .anonymous)
                     }
                     XCTAssertEqual(admitted.customerKind, .identified, "/purchase keeps its own admission")
                     stack.core.identity.setDistinctId(customerId)
@@ -121,7 +121,7 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                     XCTAssertEqual(result?.success, true)
                     await reopened.stopListening()
                     if legacy {
-                        XCTAssertNil(store.load().readableValue?["transaction"]?.featureUseCustomerKinds)
+                        XCTAssertNil(store.load().readableValue?["transaction"]?.featureUseCustomerKinds(for: customerId))
                     }
                 }
             }
