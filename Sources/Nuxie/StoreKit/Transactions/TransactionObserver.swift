@@ -1703,8 +1703,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? verified.customerKind
                     ?? identityService.purchaseCustomerKind(of: owner)
                     ?? .identified,
-                featureUseCustomerKinds: existing?.distinctId == owner
-                    ? existing?.featureUseCustomerKinds : [:],
+                // Consume operation ids survive ownership moves, including
+                // the missing declaration map on legacy evidence.
+                featureUseCustomerKinds: current == nil ? [:] : current?.featureUseCustomerKinds,
                 storeKitEnvironment: existing?.storeKitEnvironment
                     ?? storeKitEnvironment(ofSignedTransaction: transactionJws),
                 // A refund's revocation and an explicit claim are new sends.
@@ -3141,7 +3142,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 appAccountToken: update.appAccountToken,
                 reason: reason,
                 customerKind: customerKind,
-                featureUseCustomerKinds: own == nil ? [:] : own?.featureUseCustomerKinds,
+                // A claim changes /purchase admission, not earlier uses.
+                featureUseCustomerKinds: current == nil ? [:] : current?.featureUseCustomerKinds,
                 storeKitEnvironment: storeKitEnvironment(
                     ofSignedTransaction: item.jwsRepresentation
                 ),
