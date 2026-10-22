@@ -24,6 +24,13 @@ listener emits response, Journey, custom, and deliberately malformed product
 commands in a fixed authored order. Its declared purchase event has a real
 navigation handler used by the Journey presentation runtime.
 
+## `env-entry/`
+
+SDK-authored environment regression, written by `generate.py` from pinned runtime
+wire keys. Entry chooses a one-way motion state from `env.reduceMotion`. The
+environment also declares numeric `fontScale` with default 1. An unrelated root
+`fontScale` defaults to 7, so tests can detect writes to the wrong instance.
+
 ## `theme-entry/`
 
 SDK-authored dark mode regression, written by `generate-theme.py` from the runtime's

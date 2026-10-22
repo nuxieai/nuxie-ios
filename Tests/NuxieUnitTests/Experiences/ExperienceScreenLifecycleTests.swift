@@ -16,9 +16,8 @@ final class ExperienceScreenLifecycleTests: XCTestCase {
         let scale = ExperienceScreenViewController.fontScale(for: accessible)
         XCTAssertGreaterThan(scale, 3)
         XCTAssertEqual(
-            scale * 17,
-            53,
-            accuracy: 0.0001
+            scale,
+            Double(UIFont.preferredFont(forTextStyle: .body, compatibleWith: accessible).pointSize / 17)
         )
         XCTAssertEqual(ExperienceScreenViewController.fontScale(for: standard), 1, accuracy: 0.0001)
     }

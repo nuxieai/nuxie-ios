@@ -285,7 +285,92 @@ final class ExperienceSharedValuesTests: XCTestCase {
         try await screen.close()
     }
 
+    func testFontScaleIsInitializedInTheEnvironmentAndDefaultsWhenOmitted() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/env-entry")
+        let payload = try SharedValuesFixture.payload(directory: directory, screens: ["entry"])
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        for scale in [nil, Double(53) / 17] {
+            let screen = try await preparation.openScreen(pixelWidth: 393, pixelHeight: 852,
+                initialFontScale: scale)
+            addTeardownBlock { try await screen.close() }
+            let env = try await screen.environmentSnapshot()
+            XCTAssertEqual(env?.values.first { $0.name == "fontScale" }?.value,
+                           .number(Float(scale ?? 1)), "The environment is initialized before the first frame")
+            let root = try await screen.snapshot()
+            XCTAssertEqual(root.values.first {
+                $0.ownerInstanceID == root.rootInstanceID && $0.name == "fontScale"
+            }?.value, .number(7))
+        }
+    }
+
     #if os(iOS)
+    @MainActor
+    func testContentSizeChangesRewriteOnlyTheEnvironmentFontScale() async throws {
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/env-entry")
+        let payload = try SharedValuesFixture.payload(directory: directory, screens: ["entry"])
+        let experience = Experience(id: "env-entry", versionId: "entry-version", buildId: "entry-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+            behaviorPresentationScreens: [:], assetBaseURL: directory, journey: payload.journey, definition: nil)
+        let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+            sceneURL: directory.appendingPathComponent("screen.riv"), sceneBytes: payload.sceneBytes,
+            assetURLsByUniqueName: [:], source: .cache, payload: payload,
+            interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(),
+                provenance: UUID().uuidString, payload: payload), products: [], resourceMetrics: .zero)
+        let run = ExperienceRunValues()
+        let controller = ExperienceScreenViewController(experience: experience, artifact: .init(acquired: acquired),
+            screen: try XCTUnwrap(payload.renderPlan.screens.first), runValues: run, reduceMotion: false,
+            usesSystemDisplayLink: false, delegate: nil)
+        let parent = UIViewController()
+        parent.addChild(controller)
+        parent.setOverrideTraitCollection(UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge),
+            forChild: controller)
+        controller.didMove(toParent: parent)
+        defer {
+            parent.setOverrideTraitCollection(nil, forChild: controller)
+            controller.willMove(toParent: nil)
+            controller.removeFromParent()
+        }
+        controller.loadViewIfNeeded()
+        controller.view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        controller.view.layoutIfNeeded()
+        addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
+        try await controller.mountInteractiveScreen()
+        let mirror = Mirror(reflecting: controller)
+        let screen = try XCTUnwrap(mirror.children.first { $0.label == "interactiveScreen" }?.value
+            as? ExperienceInteractiveScreen)
+        let loop = try XCTUnwrap(mirror.children.first { $0.label == "presentationLoop" }?.value
+            as? ExperienceRuntimePresentationLoop)
+        func drain() async throws {
+            try await loop.advanceZeroDelta(after: ExperienceRuntimePresentationQueuedWork { .work(requestsFrame: false) })
+        }
+        func assertScale(_ category: UIContentSizeCategory) async throws {
+            XCTAssertEqual(controller.traitCollection.preferredContentSizeCategory, category)
+            let traits = UITraitCollection(preferredContentSizeCategory: category)
+            let expected = Float(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize / 17)
+            let env = try await controller.runtimeEnvironmentSnapshot()
+            XCTAssertEqual(env?.values.first { $0.name == "fontScale" }?.value, .number(expected))
+            let root = try await controller.runtimeSnapshot()
+            XCTAssertEqual(root.values.first {
+                $0.ownerInstanceID == root.rootInstanceID && $0.name == "fontScale"
+            }?.value, .number(7), "Device text size must never overwrite a product's root property")
+        }
+        try await drain()
+        try await assertScale(.accessibilityExtraExtraExtraLarge)
+        let previous = controller.traitCollection
+        parent.setOverrideTraitCollection(UITraitCollection(preferredContentSizeCategory: .extraSmall), forChild: controller)
+        controller.traitCollectionDidChange(previous)
+        try await drain()
+        try await assertScale(.extraSmall)
+        // Make a fresh write observable even though the category itself has not changed again.
+        try await screen.updateEnvironment(fontScale: 1)
+        NotificationCenter.default.post(name: UIContentSizeCategory.didChangeNotification, object: nil,
+            userInfo: [UIContentSizeCategory.newValueUserInfoKey: UIContentSizeCategory.extraSmall])
+        try await drain()
+        try await assertScale(.extraSmall)
+    }
+
     @MainActor
     func testFirstEntryChoiceUsesHostReduceMotionBeforeAnyAdvance() async throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

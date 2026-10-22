@@ -82,11 +82,13 @@ def obj(class_name, **properties):
 obj("Backboard")
 obj("ViewModel", name="Runtime entry scr_screens_sentry")
 obj("ViewModelPropertyViewModel", name="experience", viewModelReferenceId=1)
+obj("ViewModelPropertyNumber", name="fontScale")
 obj("ViewModel", name="Experience")
 obj("ViewModelPropertyNumber", name="answer")
 obj("ViewModel", name="env", viewModelType=2)
 obj("ViewModelPropertyBoolean", name="reduceMotion")
 obj("ViewModelPropertyViewModel", name="safeArea", viewModelReferenceId=3)
+obj("ViewModelPropertyNumber", name="fontScale")
 obj("ViewModel", name="env.safeArea")
 for edge in ["top", "bottom", "left", "right"]:
     obj("ViewModelPropertyNumber", name=edge)
@@ -99,8 +101,10 @@ for index in range(4):
 obj("ViewModelInstance", name="env", viewModelId=2)
 obj("ViewModelInstanceBoolean", viewModelPropertyId=0, propertyValue=False)
 obj("ViewModelInstanceViewModel", viewModelPropertyId=1, propertyValue=0)
+obj("ViewModelInstanceNumber", viewModelPropertyId=2, propertyValue=1.0)
 obj("ViewModelInstance", name="entry-root", viewModelId=0)
 obj("ViewModelInstanceViewModel", viewModelPropertyId=0, propertyValue=0)
+obj("ViewModelInstanceNumber", viewModelPropertyId=1, propertyValue=7.0)
 obj("Artboard", name="entry", width=393.0, height=852.0, viewModelId=0, defaultStateMachineId=0)
 obj("Shape", name="state marker", parentId=0, x=20.0, y=40.0)
 obj("Rectangle", parentId=1, width=20.0, height=20.0)
@@ -134,5 +138,6 @@ root = Path(__file__).parent
     "sha256": hashlib.sha256(scene).hexdigest(),
     "expected": {"reduceMotionFalse": "motion: black marker at (20,40)",
                  "reduceMotionTrue": "still: black marker at (80,40)",
-                 "laterChanges": "no return to entry"}
+                 "laterChanges": "no return to entry",
+                 "fontScale": "env defaults to 1; the unrelated root property stays at 7"}
 }, indent=2) + "\n")

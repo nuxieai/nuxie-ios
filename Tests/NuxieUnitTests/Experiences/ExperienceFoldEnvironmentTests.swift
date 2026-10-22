@@ -43,6 +43,26 @@ final class ExperienceFoldEnvironmentTests: XCTestCase {
     }
 
     #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    func testFontScaleWritesOnlyTheDeclaredNumericEnvironmentSlot() throws {
+        let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: 42))
+        let scale = Double(53) / 17
+        for kind in [nil, NuxieNativeViewModelPropertyKind.number, .string] {
+            let properties: [NuxieNativeViewModelCatalog.Property] = kind.map {
+                [.init(schemaIndex: 0, index: 0, name: "fontScale", kind: $0,
+                       referencedSchemaIndex: nil, enumLabels: [])]
+            } ?? []
+            let catalog = NuxieNativeViewModelCatalog(
+                schemas: [.init(index: 0, name: "env", propertyRange: 0..<properties.count,
+                                authoredInstanceRange: 0..<0, defaultAuthoredInstance: nil, isGlobal: true)],
+                properties: properties, authoredInstances: [])
+            let bindings = ExperienceEnvironmentBindings(catalog: catalog)
+            XCTAssertEqual(bindings.mutations(reference: reference, fontScale: scale),
+                kind == .number ? [.setNumber(instance: reference, path: "fontScale", value: Float(scale))] : [])
+            XCTAssertTrue(bindings.mutations(reference: reference).isEmpty,
+                          "Hosts without a text-size setting preserve the artifact's default")
+        }
+    }
+
     func testOlderEnvironmentArtifactsReceiveOnlyTheirDeclaredSlots() throws {
         let catalog = NuxieNativeViewModelCatalog(
             schemas: [.init(index: 0, name: "env", propertyRange: 0..<1,
@@ -51,7 +71,7 @@ final class ExperienceFoldEnvironmentTests: XCTestCase {
                                referencedSchemaIndex: nil, enumLabels: [])], authoredInstances: [])
         let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: 1))
         let writes = ExperienceEnvironmentBindings(catalog: catalog).mutations(
-            reference: reference, reduceMotion: true,
+            reference: reference, reduceMotion: true, fontScale: Double(53) / 17,
             viewport: .init(width: 466, height: 678),
             fold: .init(angleRadians: .pi / 2, state: .partiallyOpen))
         XCTAssertEqual(writes, [.setBool(instance: reference, path: "reduceMotion", value: true)])

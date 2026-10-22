@@ -959,7 +959,6 @@ struct ExperienceInteractiveReservedChangeFilter: Sendable {
         "safeArea",
         "screen",
         "nuxieTextInputs",
-        "fontScale",
     ]
 
     private let reservedPropertyIndexesByOwner: [UInt64: Set<Int>]
@@ -1577,6 +1576,7 @@ actor ExperienceInteractivePreparation {
         pixelWidth: UInt32,
         pixelHeight: UInt32,
         initialReduceMotion: Bool? = nil,
+        initialFontScale: Double? = nil,
         initialSafeArea: ExperienceSafeAreaInsets? = nil,
         initialColorScheme: ExperienceColorScheme? = nil,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
@@ -1610,6 +1610,7 @@ actor ExperienceInteractivePreparation {
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
                 initialReduceMotion: initialReduceMotion,
+                initialFontScale: initialFontScale,
                 initialSafeArea: initialSafeArea,
                 initialColorScheme: initialColorScheme,
                 videoDecoderPool: videoDecoderPool
@@ -1807,6 +1808,7 @@ actor ExperienceInteractiveScreen {
         pixelWidth: UInt32,
         pixelHeight: UInt32,
         initialReduceMotion: Bool?,
+        initialFontScale: Double?,
         initialSafeArea: ExperienceSafeAreaInsets?,
         initialColorScheme: ExperienceColorScheme?,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
@@ -1873,7 +1875,8 @@ actor ExperienceInteractiveScreen {
             if let environmentReference {
                 // Entry transitions must see host values during the initialization advance.
                 let mutations = environmentBindings.mutations(reference: environmentReference,
-                    reduceMotion: initialReduceMotion, safeArea: initialSafeArea, colorScheme: initialColorScheme)
+                    reduceMotion: initialReduceMotion, fontScale: initialFontScale,
+                    safeArea: initialSafeArea, colorScheme: initialColorScheme)
                 if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
             }
             // The first frame draws themed colours from the instance for the device's appearance.
@@ -1990,12 +1993,13 @@ actor ExperienceInteractiveScreen {
 
     /// Writes the declared env slots. A colour scheme also binds the matching `Theme` instance,
     /// in the same serialized operation, so the next step draws both together.
-    func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil,
+    func updateEnvironment(reduceMotion: Bool? = nil, fontScale: Double? = nil,
+                           safeArea: ExperienceSafeAreaInsets? = nil,
                            viewport: ExperienceViewportEnvironment? = nil, fold: ExperienceFoldEnvironment? = nil,
                            colorScheme: ExperienceColorScheme? = nil) async throws {
         let runtime = runtime
         let batch = environmentReference.map {
-            environmentBindings.mutations(reference: $0, reduceMotion: reduceMotion, safeArea: safeArea,
+            environmentBindings.mutations(reference: $0, reduceMotion: reduceMotion, fontScale: fontScale, safeArea: safeArea,
                 viewport: viewport, fold: fold, colorScheme: colorScheme)
         } ?? []
         let theme = colorScheme.flatMap { environmentBindings.themeSelection(for: $0) == nil ? nil : $0 }
