@@ -158,8 +158,8 @@ User opens app
 
 #### 4. RevenueCat Adapter
 ```swift
-// RevenueCat owns checkout and finishing. Delegate success advances the
-// purchase Journey; Connector-synchronized server state supplies Feature Access.
+// RevenueCat owns checkout and finishing. Nuxie records only the checkout
+// outcome; Features do not change until the planned UNIV-5244 support lands.
 config.purchaseHandlingMode = .observer
 config.purchaseDelegate = NuxieRevenueCatPurchaseDelegate()
 ```
