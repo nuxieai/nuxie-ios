@@ -292,6 +292,18 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
             Set(products.map(\.placementId)),
             ["golden:monthly", "golden:yearly"]
         )
+
+        // Eligibility fallback must not make a partially resolved paywall available.
+        productService.mockProducts = Array(productService.mockProducts.prefix(1))
+        do {
+            _ = try await loader.productsForJourneyPresentation(
+                release: release,
+                screenID: "screen_welcome"
+            )
+            XCTFail("Expected missing products to block presentation")
+        } catch ExperienceError.productsUnavailable {
+            // The paywall remains unavailable until every required product resolves.
+        }
     }
 
     func testCanonicalProfileRegistersJourneyProductsForRecovery() async throws {

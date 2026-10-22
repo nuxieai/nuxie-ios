@@ -1,0 +1,51 @@
+{
+  "suite": "purchases/app-store-intro-eligibility",
+  "version": 1,
+  "owner": "ios",
+  "platform": "apple_app_store",
+  "description": "Forced introductory eligibility without a usable signing token resolves automatic terms once. Checkout retains those terms without an eligibility override. An active subscription anywhere in the product's subscription group blocks automatic introductory eligibility.",
+  "cases": [
+    {
+      "name": "forced eligibility without presentation authorization uses automatic group eligibility for display and checkout",
+      "introEligibility": "alwaysEligible",
+      "authorizationAvailable": false,
+      "eligibleForIntroOffer": true,
+      "actions": [
+        {
+          "subscriptionGroupStates": [],
+          "expect": {
+            "hasIntroductoryOffer": true,
+            "hasFreeTrial": true,
+            "trialLabel": "1 week",
+            "purchaseEligibilityOverride": false,
+            "tokenRequests": 0
+          }
+        },
+        {
+          "subscriptionGroupStates": [
+            "subscribed"
+          ],
+          "expect": {
+            "hasIntroductoryOffer": false,
+            "hasFreeTrial": false,
+            "trialLabel": "",
+            "purchaseEligibilityOverride": false,
+            "tokenRequests": 0
+          }
+        },
+        {
+          "subscriptionGroupStates": [
+            "expired"
+          ],
+          "expect": {
+            "hasIntroductoryOffer": true,
+            "hasFreeTrial": true,
+            "trialLabel": "1 week",
+            "purchaseEligibilityOverride": false,
+            "tokenRequests": 0
+          }
+        }
+      ]
+    }
+  ]
+}
