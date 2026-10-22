@@ -200,8 +200,8 @@ final class StoreKitManager: ObservableObject, NuxiePurchaseDelegate {
                         }
                     }
 
-                    // Nuxie's StoreKit observer synchronizes and finishes the
-                    // transaction. This listener only updates app-owned UI.
+                    // Nuxie skips transaction sync and finishing with this
+                    // delegate. This listener only updates app-owned UI.
 
                     print("[StoreKitManager] Transaction updated: \(transaction.productID)")
                 } catch {

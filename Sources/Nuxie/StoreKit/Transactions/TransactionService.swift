@@ -422,8 +422,8 @@ actor TransactionService {
         let purchaseOutcome: PurchaseOutcome
         let usesTestStore = testStore != nil
         // The delegate is checkout identity. Capture it before any suspension
-        // so a concurrent configuration change cannot change which provider
-        // is authorized to persist optimistic access for this attempt.
+        // so a concurrent configuration change cannot change who owns
+        // checkout and receipt processing for this attempt.
         let checkoutDelegate = purchaseDelegate
         let usesNativeStoreKit = checkoutDelegate == nil && !usesTestStore
         if let testStore {

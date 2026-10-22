@@ -116,9 +116,9 @@ User opens app
 #### 4. StoreKit Integration
 The included `StoreKitManager` purchases `product.rawProduct` with the exact
 checkout options and reports only `.purchased`, `.pending`, `.cancelled`, or
-`.failed`. Restore reports `.restored`, `.noPurchases`, or `.failed`. Nuxie's
-StoreKit listener records, syncs, and finishes verified native transactions;
-the delegate never transports receipts or finish closures.
+`.failed`. Restore reports `.restored`, `.noPurchases`, or `.failed`. With this
+delegate, Nuxie records only checkout outcomes and skips transaction sync and
+finishing. Features do not change until the planned UNIV-5244 support lands.
 
 ```swift
 config.purchaseDelegate = StoreKitManager.shared

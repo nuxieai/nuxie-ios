@@ -341,8 +341,9 @@ transaction identifiers, or finish closures. Each `.purchased` callback is an
 external declaration: Nuxie immediately advances the purchase Journey and
 durably reports one `$purchase_completed` event with `source:
 "external_delegate"` plus the authenticated Product and Placement mapping.
-That event is the server carrier, not receipt evidence. It creates no evidence
-row or optimistic Feature overlay and never asks StoreKit to finish anything.
+That event carries no transaction and grants no Feature or goal conversion.
+It creates no evidence row or optimistic Feature overlay and never asks
+StoreKit to finish anything.
 A delegate `.restored` is handled the same way as an external declaration and
 does not invoke Nuxie's native entitlement scanner. The host app or provider
 continues to own checkout, restore, receipt submission, transaction finishing,
@@ -409,29 +410,28 @@ failure retains the bounded receipt evidence for an idempotent retry. The SDK
 does not fall back to an ordinary usage request after attempting the atomic
 command, and ambiguous receipts or unrelated Product mappings fail closed.
 
-### Connected provider Feature Access
+### Provider checkout and planned Feature Access
 
 RevenueCat, Superwall, and custom billing delegates own checkout, their provider
-reporting, transaction finishing, and durable subscription state. Importing a
-provider entitlement into the Nuxie dashboard is initially evidence only. An
-app builder must review the provider-to-Product mapping and explicitly enable
-Nuxie Feature Access before the published Product contains signed allowance
-metadata.
+reporting, transaction finishing, and durable subscription state. Today, the
+RevenueCat and Superwall webhook Connectors feed only Automations and
+server-side Journeys. They grant no Feature access.
 
-#### Before Connector cutover
+#### Current behavior
 
 The app keeps using its RevenueCat, Superwall, or custom-provider access checks.
 A delegate success immediately completes the purchase Journey and reports its
 external `$purchase_completed` declaration, but is not purchase evidence.
 Nuxie does not scan, sync, finish, or optimistically project StoreKit
-transactions while an external purchase delegate owns billing.
+transactions while an external purchase delegate owns billing. Features do
+not change and no goal converts from that purchase.
 
-#### After Connector cutover
+#### Planned support (UNIV-5244)
 
-A successful delegate purchase advances the purchase Journey, but it does not
-create an optimistic Feature overlay. The configured provider Connector's
-server snapshot is the first Nuxie Feature authority for Boolean, fixed-quota,
-and credit access.
+After the Basis TestFlight build, the planned work will capture the signed
+store transaction on the device after a delegate reports purchased and send
+it to the purchase authority without finishing it. The Connectors will also
+be rebuilt to keep access current. This support is not available today.
 
 Add the matching maintained adapter source from `Examples/Adapters` to the app
 target that already depends on RevenueCat or Superwall, then configure checkout:
@@ -447,8 +447,8 @@ configuration.purchaseDelegate = NuxieSuperwallPurchaseDelegate()
 
 A hand-written `NuxiePurchaseDelegate` can provide the same checkout result for
 a custom billing stack. The delegate does not choose or immediately project
-Feature Access. Provider- or Nuxie-synchronized server state supplies durable
-subscription state, quotas, and credits.
+Feature Access. Keep using the provider's access checks until the planned
+purchase-authority and Connector support is available.
 
 ## Need Help?
 
