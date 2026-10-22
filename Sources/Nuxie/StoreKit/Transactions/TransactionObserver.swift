@@ -1703,9 +1703,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? verified.customerKind
                     ?? identityService.purchaseCustomerKind(of: owner)
                     ?? .identified,
-                // Consume operation ids survive ownership moves, including
-                // the missing declaration map on legacy evidence.
-                featureUseCustomerKinds: current == nil ? [:] : current?.featureUseCustomerKinds,
+                // Keep consume history attached to its customers, including
+                // undeclared legacy uses, when the purchase changes hands.
+                featureUseDeclarations: current?.retainedFeatureUseDeclarations ?? [:],
                 storeKitEnvironment: existing?.storeKitEnvironment
                     ?? storeKitEnvironment(ofSignedTransaction: transactionJws),
                 // A refund's revocation and an explicit claim are new sends.
@@ -2090,7 +2090,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             appAccountToken: evidence.appAccountToken,
             reason: evidence.reason,
             customerKind: evidence.customerKind,
-            featureUseCustomerKinds: evidence.featureUseCustomerKinds,
+            featureUseDeclarations: evidence.featureUseDeclarations,
             storeKitEnvironment: evidence.storeKitEnvironment,
             sendAttempts: evidence.sendAttempts,
             retryDueAt: evidence.retryDueAt,
@@ -2122,7 +2122,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             appAccountToken: evidence.appAccountToken,
             reason: .sync,
             customerKind: evidence.customerKind,
-            featureUseCustomerKinds: evidence.featureUseCustomerKinds,
+            featureUseDeclarations: evidence.featureUseDeclarations,
             storeKitEnvironment: evidence.storeKitEnvironment
                 ?? storeKitEnvironment(ofSignedTransaction: revokedJws),
             sendAttempts: 0
@@ -3143,7 +3143,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 reason: reason,
                 customerKind: customerKind,
                 // A claim changes /purchase admission, not earlier uses.
-                featureUseCustomerKinds: current == nil ? [:] : current?.featureUseCustomerKinds,
+                featureUseDeclarations: current?.retainedFeatureUseDeclarations ?? [:],
                 storeKitEnvironment: storeKitEnvironment(
                     ofSignedTransaction: item.jwsRepresentation
                 ),
@@ -3341,13 +3341,11 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             let admission = identityService.performIfCurrentDistinctIdMatches(distinctId) { snapshot in
                 reloadAndApplyEvidenceChange(transactionId: evidence.transactionId) { current in
                     guard var current, current.admissionId == evidence.admissionId else { return nil }
-                    // A missing map belongs to legacy evidence. Its stable
-                    // operation may have been sent before the upgrade, with
-                    // no declaration; preserve that absence on every retry.
-                    if var kinds = current.featureUseCustomerKinds, kinds[operationId] == nil {
-                        kinds[operationId] = snapshot.isIdentified ? .identified : .anonymous
-                        current.featureUseCustomerKinds = kinds
-                    }
+                    current.admitFeatureUse(
+                        customerId: distinctId,
+                        operationId: operationId,
+                        customerKind: snapshot.isIdentified ? .identified : .anonymous
+                    )
                     return current
                 }
             }
@@ -3367,7 +3365,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     transactionJwt: evidence.transactionJws,
                     eventId: operationId
                 ),
-                customerKind: admitted.evidence.featureUseCustomerKinds?[operationId]
+                customerKind: admitted.evidence.featureUseCustomerKinds(for: distinctId)?[operationId]
             )
 
             do {

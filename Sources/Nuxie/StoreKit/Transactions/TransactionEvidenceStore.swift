@@ -7,6 +7,12 @@ struct StoredLocalEntitlementGrant: Codable, Equatable, Sendable {
     let allowance: Double?
 }
 
+/// One customer's consume admissions. Nil kinds retain the undeclared
+/// operations reconstructed from that customer's legacy evidence.
+struct StoredFeatureUseDeclarations: Codable, Equatable, Sendable {
+    var customerKinds: [String: PurchaseCustomerKind]?
+}
+
 /// One purchase's durable outbox entry, keyed by its StoreKit transaction id.
 ///
 /// The entry holds what the SDK sends to `POST /purchase`: the signed
@@ -63,12 +69,11 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     /// Whether the requester had signed in, recorded at admission
     /// ("identified" when the SDK could not tell).
     let customerKind: PurchaseCustomerKind
-    /// Feature-use declarations keyed by their stable operation id. A consume
-    /// has its own admission, which can happen after the purchase admission.
-    /// An empty map permits fresh consume admissions to record their kind.
-    /// Missing on legacy evidence: its reconstructed operations may already
-    /// have been sent undeclared, so retries must never backfill their kind.
-    var featureUseCustomerKinds: [String: PurchaseCustomerKind]?
+    /// Customer id, then stable operation id. Claims retain all customers'
+    /// histories; a customer's first use never borrows another's admission.
+    /// New rows start empty. Missing on legacy evidence: reconstructed uses
+    /// remain undeclared for the row's recorded customer only.
+    var featureUseDeclarations: [String: StoredFeatureUseDeclarations]?
     /// The StoreKit environment the signed transaction names ("Production",
     /// "Sandbox" or "Xcode"), read when the entry is written. It outlives the
     /// signed transaction, which is dropped once the send is answered.
@@ -104,7 +109,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         appAccountToken: UUID? = nil,
         reason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind = .identified,
-        featureUseCustomerKinds: [String: PurchaseCustomerKind]? = [:],
+        featureUseDeclarations: [String: StoredFeatureUseDeclarations]? = [:],
         storeKitEnvironment: String? = nil,
         sendAttempts: Int = 0,
         retryDueAt: Date? = nil,
@@ -127,11 +132,39 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.appAccountToken = appAccountToken
         self.reason = reason
         self.customerKind = customerKind
-        self.featureUseCustomerKinds = featureUseCustomerKinds
+        self.featureUseDeclarations = featureUseDeclarations
         self.storeKitEnvironment = storeKitEnvironment
         self.sendAttempts = sendAttempts
         self.retryDueAt = retryDueAt
         self.admissionId = admissionId
+    }
+
+    /// Attach legacy absence to its original customer before an ownership
+    /// move. Other customers can admit their own declared uses.
+    var retainedFeatureUseDeclarations: [String: StoredFeatureUseDeclarations] {
+        featureUseDeclarations ?? [
+            distinctId: StoredFeatureUseDeclarations(customerKinds: nil),
+        ]
+    }
+
+    func featureUseCustomerKinds(for customerId: String) -> [String: PurchaseCustomerKind]? {
+        guard let declarations = retainedFeatureUseDeclarations[customerId] else { return [:] }
+        return declarations.customerKinds
+    }
+
+    mutating func admitFeatureUse(
+        customerId: String,
+        operationId: String,
+        customerKind: PurchaseCustomerKind
+    ) {
+        var history = retainedFeatureUseDeclarations
+        var declarations = history[customerId] ?? StoredFeatureUseDeclarations(customerKinds: [:])
+        if var kinds = declarations.customerKinds, kinds[operationId] == nil {
+            kinds[operationId] = customerKind
+            declarations.customerKinds = kinds
+        }
+        history[customerId] = declarations
+        featureUseDeclarations = history
     }
 
     /// This entry as a new admission, whatever it sends: an explicit
@@ -215,7 +248,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
-            featureUseCustomerKinds: featureUseCustomerKinds,
+            featureUseDeclarations: featureUseDeclarations,
             storeKitEnvironment: storeKitEnvironment,
             sendAttempts: answeredAt == nil ? sendAttempts : 0,
             retryDueAt: answeredAt == nil ? retryDueAt : nil,
@@ -244,7 +277,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
-            featureUseCustomerKinds: featureUseCustomerKinds,
+            featureUseDeclarations: featureUseDeclarations,
             storeKitEnvironment: storeKitEnvironment,
             sendAttempts: sendAttempts + 1,
             retryDueAt: failedAt.addingTimeInterval(
