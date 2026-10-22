@@ -63,6 +63,10 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     /// Whether the requester had signed in, recorded at admission
     /// ("identified" when the SDK could not tell).
     let customerKind: PurchaseCustomerKind
+    /// Feature-use declarations keyed by their stable operation id. A consume
+    /// has its own admission, which can happen after the purchase admission.
+    /// Missing on older evidence, which did not persist Feature-use commands.
+    var featureUseCustomerKinds: [String: PurchaseCustomerKind]?
     /// The StoreKit environment the signed transaction names ("Production",
     /// "Sandbox" or "Xcode"), read when the entry is written. It outlives the
     /// signed transaction, which is dropped once the send is answered.
@@ -98,6 +102,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         appAccountToken: UUID? = nil,
         reason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind = .identified,
+        featureUseCustomerKinds: [String: PurchaseCustomerKind]? = nil,
         storeKitEnvironment: String? = nil,
         sendAttempts: Int = 0,
         retryDueAt: Date? = nil,
@@ -120,6 +125,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         self.appAccountToken = appAccountToken
         self.reason = reason
         self.customerKind = customerKind
+        self.featureUseCustomerKinds = featureUseCustomerKinds
         self.storeKitEnvironment = storeKitEnvironment
         self.sendAttempts = sendAttempts
         self.retryDueAt = retryDueAt
@@ -207,6 +213,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
+            featureUseCustomerKinds: featureUseCustomerKinds,
             storeKitEnvironment: storeKitEnvironment,
             sendAttempts: answeredAt == nil ? sendAttempts : 0,
             retryDueAt: answeredAt == nil ? retryDueAt : nil,
@@ -235,6 +242,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
             appAccountToken: appAccountToken,
             reason: reason,
             customerKind: customerKind,
+            featureUseCustomerKinds: featureUseCustomerKinds,
             storeKitEnvironment: storeKitEnvironment,
             sendAttempts: sendAttempts + 1,
             retryDueAt: failedAt.addingTimeInterval(

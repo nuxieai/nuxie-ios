@@ -69,9 +69,14 @@ private struct AtomicPurchaseSyncFixture: Decodable {
 private actor PurchaseBackedUsageAPI: PurchaseSynchronizing, PurchaseBackedFeatureUsing {
     private var requests: [PurchaseBackedFeatureUseRequest] = []
     private var results: [Result<PurchaseBackedFeatureUseResponse, Error>]
+    private let onUse: @Sendable () -> Void
 
-    init(results: [Result<PurchaseBackedFeatureUseResponse, Error>]) {
+    init(
+        results: [Result<PurchaseBackedFeatureUseResponse, Error>],
+        onUse: @escaping @Sendable () -> Void = {}
+    ) {
         self.results = results
+        self.onUse = onUse
     }
 
     func syncTransaction(_ request: PurchaseRequest) async throws -> PurchaseResponse {
@@ -88,6 +93,7 @@ private actor PurchaseBackedUsageAPI: PurchaseSynchronizing, PurchaseBackedFeatu
         _ request: PurchaseBackedFeatureUseRequest
     ) async throws -> PurchaseBackedFeatureUseResponse {
         requests.append(request)
+        onUse()
         guard !results.isEmpty else { throw NuxieNetworkError.invalidResponse }
         return try results.removeFirst().get()
     }
@@ -553,6 +559,130 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         environment: "production",
         storeEnvironment: .appStore
     )
+
+    func testPurchaseBackedUseCarriesTheAdmittedCustomerKind() async throws {
+        for kind in [PurchaseCustomerKind.anonymous, .identified] {
+            let identity = MockIdentityService()
+            identity.reset(keepAnonymousId: true)
+            identity.setAnonymousId("customer-a")
+            if kind == .identified { identity.setDistinctId("customer-a") }
+            let admittedKind = try XCTUnwrap(identity.purchaseCustomerKind(of: "customer-a"))
+            XCTAssertEqual(admittedKind, kind)
+            let store = InMemoryTransactionEvidenceStore()
+            XCTAssertTrue(store.save([
+                "transaction-1": evidence(
+                    transactionId: "transaction-1", distinctId: "customer-a",
+                    // Deliberately differ from the earlier purchase admission.
+                    featureIds: ["credits"], customerKind: kind == .anonymous ? .identified : .anonymous
+                ),
+            ]))
+            let api = PurchaseBackedUsageAPI(results: [.success(.init(
+                customerId: "customer-a", featureId: "credits", code: "consumed",
+                allowed: true, unlimited: false, balance: 4, type: .metered
+            ))])
+            let observer = makeObserver(
+                api: api, features: PurchaseBackedFeatureRecorder(), identity: identity, store: store
+            )
+
+            _ = try await observer.useFeatureWithPendingPurchase(
+                distinctId: "customer-a", featureId: "credits", amount: 1,
+                entityId: nil, metadata: nil
+            )
+
+            let requests = await api.recordedRequests()
+            XCTAssertEqual(requests.count, 1)
+            XCTAssertEqual(requests.first?.customerKind, kind)
+            await observer.stopListening()
+        }
+    }
+
+    func testRetryAndRelaunchKeepAnonymousKindAfterCustomerSignsIn() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("purchase-use-kind-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identity = MockIdentityService()
+        identity.reset(keepAnonymousId: true)
+        identity.setAnonymousId("customer-a")
+        let store = TransactionEvidenceStore(customStoragePath: root, scope: scope)
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1", distinctId: "customer-a", featureIds: ["credits"],
+                customerKind: try XCTUnwrap(identity.purchaseCustomerKind(of: "customer-a"))
+            ),
+        ]))
+        let response = PurchaseBackedFeatureUseResponse(
+            customerId: "customer-a", featureId: "credits", code: "consumed",
+            allowed: true, unlimited: false, balance: 4, type: .metered
+        )
+        let api = PurchaseBackedUsageAPI(results: [
+            .failure(URLError(.timedOut)), .failure(URLError(.timedOut)), .success(response),
+        ])
+        let observer = makeObserver(
+            api: api, features: PurchaseBackedFeatureRecorder(), identity: identity, store: store
+        )
+
+        // The same distinct id can change kind through identify. Keeping the
+        // id isolates the declaration from the queue's customer fence.
+        for attempt in 0..<2 {
+            if attempt == 1 { identity.setDistinctId("customer-a") }
+            do {
+                _ = try await observer.useFeatureWithPendingPurchase(
+                    distinctId: "customer-a", featureId: "credits", amount: 1,
+                    entityId: nil, metadata: nil
+                )
+                XCTFail("Expected a timeout")
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .timedOut)
+            }
+        }
+        await observer.stopListening()
+        XCTAssertEqual(identity.purchaseCustomerKind(of: "customer-a"), .identified)
+
+        let reopenedStore = TransactionEvidenceStore(customStoragePath: root, scope: scope)
+        XCTAssertEqual(reopenedStore.load().readableValue?["transaction-1"]?.customerKind, .anonymous)
+        let firstRequests = await api.recordedRequests()
+        let operationId = try XCTUnwrap(firstRequests.first?.purchase.eventId)
+        XCTAssertEqual(
+            reopenedStore.load().readableValue?["transaction-1"]?.featureUseCustomerKinds?[operationId],
+            .anonymous
+        )
+        let relaunched = makeObserver(
+            api: api, features: PurchaseBackedFeatureRecorder(), identity: identity, store: reopenedStore
+        )
+        _ = try await relaunched.useFeatureWithPendingPurchase(
+            distinctId: "customer-a", featureId: "credits", amount: 1,
+            entityId: nil, metadata: nil
+        )
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests.map(\.customerKind), [.anonymous, .anonymous, .anonymous])
+        XCTAssertEqual(Set(requests.map(\.purchase.eventId)).count, 1)
+        XCTAssertEqual(Set(requests.map(\.purchase.transactionJwt)), ["signed-transaction-1"])
+        await relaunched.stopListening()
+    }
+
+    func testUnsavedConsumeAdmissionFallsBackWithoutSendingPurchaseEvidence() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = WriteRefusingEvidenceStore(entries: [
+            "transaction-1": evidence(
+                transactionId: "transaction-1", distinctId: "customer-a", featureIds: ["credits"]
+            ),
+        ])
+        store.refusesWrites = true
+        let api = PurchaseBackedUsageAPI(results: [])
+        let observer = makeObserver(
+            api: api, features: PurchaseBackedFeatureRecorder(), identity: identity, store: store
+        )
+        let result = try await observer.useFeatureWithPendingPurchase(
+            distinctId: "customer-a", featureId: "credits", amount: 1, entityId: nil, metadata: nil
+        )
+        XCTAssertNil(result)
+        let requests = await api.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+        XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds)
+        await observer.stopListening()
+    }
 
     func testAtomicRequestEncodesTheServerContract() throws {
         let request = PurchaseBackedFeatureUseRequest(
@@ -1613,13 +1743,14 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         )
         let events = PurchaseBackedEventSink()
         let observer = makeObserver(
-            api: PurchaseBackedUsageAPI(results: [.success(response)]),
+            api: PurchaseBackedUsageAPI(
+                results: [.success(response)], onUse: { store.refusesWrites = true }
+            ),
             features: PurchaseBackedFeatureRecorder(),
             identity: identity,
             store: store,
             eventSink: events
         )
-        store.refusesWrites = true
 
         let used = try await observer.useFeatureWithPendingPurchase(
             distinctId: "customer-a",
@@ -1968,15 +2099,17 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         )
         var replay = response
         replay.idempotentReplay = true
-        let api = PurchaseBackedUsageAPI(results: [.success(response), .success(replay)])
+        let api = PurchaseBackedUsageAPI(
+            results: [.success(response), .success(replay)],
+            onUse: { store.refusesWrites = true }
+        )
         let observer = makeObserver(
             api: api,
             features: PurchaseBackedFeatureRecorder(),
             identity: identity,
             store: store
         )
-        // The disk is full.
-        store.refusesWrites = true
+        // The API makes the disk full after admission, before the answer.
 
         let first = try await observer.useFeatureWithPendingPurchase(
             distinctId: "customer-a",
@@ -2308,7 +2441,8 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         answeredAt: Date? = nil,
         scope: PurchaseStorageScope? = nil,
         sendAttempts: Int = 0,
-        retryDueAt: Date? = nil
+        retryDueAt: Date? = nil,
+        customerKind: PurchaseCustomerKind = .identified
     ) -> StoredTransactionEvidence {
         let scope = scope ?? self.scope
         return StoredTransactionEvidence(
@@ -2327,6 +2461,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
             // The customer's own checkout: its account token names them.
             appAccountToken: scope.appAccountToken(distinctId: distinctId),
             reason: .purchase,
+            customerKind: customerKind,
             sendAttempts: sendAttempts,
             retryDueAt: retryDueAt
         )

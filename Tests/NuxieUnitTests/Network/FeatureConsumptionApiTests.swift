@@ -12,7 +12,8 @@ final class FeatureConsumptionApiTests: XCTestCase {
             .appendingPathComponent("fixtures/encodings/feature-consumption.json")
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         for vector in try XCTUnwrap(root["vectors"] as? [[String: Any]]) {
-            let requestData = try JSONSerialization.data(withJSONObject: XCTUnwrap(vector["request"]))
+            let requestBody = try XCTUnwrap(vector["request"] as? [String: Any])
+            let requestData = try JSONSerialization.data(withJSONObject: requestBody)
             let responseData = try JSONSerialization.data(withJSONObject: XCTUnwrap(vector["response"]))
             let command = try JSONDecoder().decode(FeatureConsumeRequest.self, from: requestData)
             let expected = try JSONDecoder().decode(FeatureConsumeResponse.self, from: responseData)
@@ -27,7 +28,26 @@ final class FeatureConsumptionApiTests: XCTestCase {
             })
             let session = TestURLSessionProvider.createNuxieTestSession()
             let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
-            let result = try await api.consumeFeature(command)
+            let result: EventResponse
+            if let purchase = requestBody["purchase"] as? [String: Any] {
+                let request = PurchaseBackedFeatureUseRequest(
+                    customerId: command.customerId,
+                    featureId: command.featureId,
+                    requiredBalance: command.quantity,
+                    eventData: .init(value: command.quantity, properties: nil),
+                    entityId: command.entityId,
+                    purchase: .init(
+                        transactionJwt: try XCTUnwrap(purchase["signedTransaction"] as? String),
+                        eventId: command.operationId
+                    ),
+                    customerKind: (requestBody["customerKind"] as? String)
+                        .flatMap(PurchaseCustomerKind.init(rawValue:))
+                )
+                let response = try await api.useFeatureWithPurchase(request)
+                result = try XCTUnwrap(response.consumptionReceipt).journalResponse
+            } else {
+                result = try await api.consumeFeature(command)
+            }
             XCTAssertNil(result.usage, "A command quantity is not a cumulative usage counter")
             let publicReceipt = FeatureConsumptionResult(try XCTUnwrap(result.consumption))
             XCTAssertEqual(publicReceipt.customerId, expected.customerId)
@@ -39,6 +59,29 @@ final class FeatureConsumptionApiTests: XCTestCase {
             XCTAssertEqual(result.consumption?.idempotentReplay, expected.idempotentReplay)
             session.invalidateAndCancel()
         }
+    }
+
+    func testOlderEncodedPurchaseCommandKeepsOmittingCustomerKind() async throws {
+        let data = Data(#"{"customerId":"customer","featureId":"credits","requiredBalance":1,"eventData":{"value":1},"idempotencyKey":"purchase-use","purchase":{"transaction_jwt":"signed-jws","event_id":"purchase-use"}}"#.utf8)
+        let command = try JSONDecoder().decode(PurchaseBackedFeatureUseRequest.self, from: data)
+        XCTAssertNil(command.customerKind)
+        let encoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(command)) as? [String: Any]
+        )
+        XCTAssertNil(encoded["customerKind"])
+        StubURLProtocol.reset()
+        StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+            XCTAssertNil(body["customerKind"])
+            XCTAssertNil(body["customer_kind"])
+            XCTAssertEqual((body["purchase"] as? [String: String])?["signedTransaction"], "signed-jws")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"customerId":"customer","featureId":"credits","operationId":"purchase-use","quantity":1,"accepted":true,"code":"consumed","balance":0,"unlimited":false,"active":false,"type":"metered","idempotentReplay":true}"#.utf8))
+        })
+        let session = TestURLSessionProvider.createNuxieTestSession()
+        defer { session.invalidateAndCancel() }
+        let api = NuxieApi(apiKey: "test-key", baseURL: URL(string: "https://test.nuxie.ai")!, urlSession: session)
+        _ = try await api.useFeatureWithPurchase(command)
     }
     func testPurchaseReceiptPreservesReplayStatus() async throws {
         StubURLProtocol.reset()

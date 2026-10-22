@@ -249,6 +249,9 @@ struct PurchaseBackedFeatureUseRequest: Codable, Sendable {
     let idempotencyKey: String
     let entityId: String?
     let purchase: Purchase
+    /// The customer's kind recorded at consume admission. Older encoded
+    /// requests have no declaration and must keep omitting it on retry.
+    let customerKind: PurchaseCustomerKind?
 
     init(
         customerId: String,
@@ -256,7 +259,8 @@ struct PurchaseBackedFeatureUseRequest: Codable, Sendable {
         requiredBalance: Double,
         eventData: EventData,
         entityId: String?,
-        purchase: Purchase
+        purchase: Purchase,
+        customerKind: PurchaseCustomerKind? = nil
     ) {
         self.customerId = customerId
         self.featureId = featureId
@@ -265,6 +269,7 @@ struct PurchaseBackedFeatureUseRequest: Codable, Sendable {
         self.idempotencyKey = purchase.eventId
         self.entityId = entityId
         self.purchase = purchase
+        self.customerKind = customerKind
     }
 }
 

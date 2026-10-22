@@ -1,6 +1,7 @@
 import Foundation
 import Nimble
 import Quick
+import XCTest
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieTestSupport
 
@@ -19,6 +20,89 @@ final class TransactionEvidencePersistenceOrchestrationTests: AsyncSpec {
                     try? FileManager.default.removeItem(at: storageURL)
                 }
                 storageURLs.removeAll()
+            }
+
+            it("keeps the consume admission kind on the wire after identify and a store reload") {
+                let storageURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("consume-kind-orchestration-\(UUID().uuidString)")
+                storageURLs.append(storageURL)
+                let stack = try await OrchestrationStack.boot(
+                    storageURL: storageURL, api: MockNuxieApi(), dateProvider: MockDateProvider(),
+                    sleepProvider: MockSleepProvider(), distinctId: "initial-customer"
+                )
+                stacks.append(stack)
+                stack.core.identity.reset(keepAnonymousId: true)
+                let customerId = stack.core.identity.getDistinctId()
+                let scope = PurchaseStorageScope(
+                    appIdentifier: Bundle.main.bundleIdentifier ?? "nuxie.unidentified-host-app",
+                    apiKey: "orchestration-suite-key", testStoreEnabled: false
+                )
+                let store = TransactionEvidenceStore(customStoragePath: storageURL, scope: scope)
+                expect(store.save(["transaction": StoredTransactionEvidence(
+                    scope: scope, transactionJws: "signed-jws", transactionId: "transaction",
+                    originalTransactionId: "original", productId: "product", distinctId: customerId,
+                    recordedAt: Date(), productFeatureIds: ["credits"], isRevoked: false,
+                    appAccountToken: scope.appAccountToken(distinctId: customerId),
+                    reason: .purchase, customerKind: .identified
+                )])).to(beTrue())
+                StubURLProtocol.reset()
+                defer { StubURLProtocol.reset() }
+                let session = TestURLSessionProvider.createNuxieTestSession()
+                defer { session.invalidateAndCancel() }
+                let api = NuxieApi(
+                    apiKey: "orchestration-suite-key", baseURL: URL(string: "https://consume.test")!,
+                    urlSession: session
+                )
+                func observer(store: TransactionEvidenceStore) -> TransactionObserver {
+                    TransactionObserver(
+                        api: api, features: stack.core.features, identity: stack.core.identity,
+                        settings: NuxieRuntimeSettings(configuration: NuxieConfiguration(apiKey: "orchestration-suite-key")),
+                        eventSink: stack.core.systemEvents, transactionServiceProvider: { fatalError("unused") },
+                        evidenceStore: store, purchaseStorageScope: scope,
+                        activeStoreOriginalTransactionIDs: { [] }
+                    )
+                }
+                StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+                    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+                    XCTAssertEqual(body["customerKind"] as? String, "anonymous")
+                    throw URLError(.timedOut)
+                })
+                let first = observer(store: store)
+                do {
+                    _ = try await first.useFeatureWithPendingPurchase(
+                        distinctId: customerId, featureId: "credits", amount: 1, entityId: nil, metadata: nil
+                    )
+                    XCTFail("Expected a timeout")
+                } catch NuxieNetworkError.timeout {}
+                await first.stopListening()
+                let admitted = try XCTUnwrap(store.load().readableValue?["transaction"])
+                let operationId = try XCTUnwrap(admitted.featureUseCustomerKinds?.keys.first)
+                XCTAssertEqual(admitted.featureUseCustomerKinds?[operationId], .anonymous)
+                XCTAssertEqual(admitted.customerKind, .identified, "/purchase keeps its own admission")
+                stack.core.identity.setDistinctId(customerId)
+                XCTAssertTrue(stack.core.identity.isIdentified)
+
+                StubURLProtocol.reset()
+                StubURLProtocol.register(matcher: RequestMatchers.post("/feature/consume"), handler: { request in
+                    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+                    XCTAssertEqual(body["customerKind"] as? String, "anonymous")
+                    XCTAssertNil(body["customer_kind"])
+                    XCTAssertEqual(body["operationId"] as? String, operationId)
+                    XCTAssertEqual((body["purchase"] as? [String: String])?["signedTransaction"], "signed-jws")
+                    let response: [String: Any] = [
+                        "customerId": customerId, "featureId": "credits", "operationId": operationId,
+                        "quantity": 1, "accepted": true, "code": "consumed", "balance": 0,
+                        "unlimited": false, "active": false, "type": "metered", "idempotentReplay": true,
+                    ]
+                    return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        try JSONSerialization.data(withJSONObject: response))
+                })
+                let reopened = observer(store: TransactionEvidenceStore(customStoragePath: storageURL, scope: scope))
+                let result = try await reopened.useFeatureWithPendingPurchase(
+                    distinctId: customerId, featureId: "credits", amount: 1, entityId: nil, metadata: nil
+                )
+                XCTAssertEqual(result?.success, true)
+                await reopened.stopListening()
             }
 
             it("sets all three corrupt stores aside and saves, sends and answers the purchase") {
