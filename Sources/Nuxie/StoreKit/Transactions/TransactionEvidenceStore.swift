@@ -65,7 +65,9 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
     let customerKind: PurchaseCustomerKind
     /// Feature-use declarations keyed by their stable operation id. A consume
     /// has its own admission, which can happen after the purchase admission.
-    /// Missing on older evidence, which did not persist Feature-use commands.
+    /// An empty map permits fresh consume admissions to record their kind.
+    /// Missing on legacy evidence: its reconstructed operations may already
+    /// have been sent undeclared, so retries must never backfill their kind.
     var featureUseCustomerKinds: [String: PurchaseCustomerKind]?
     /// The StoreKit environment the signed transaction names ("Production",
     /// "Sandbox" or "Xcode"), read when the entry is written. It outlives the
@@ -102,7 +104,7 @@ struct StoredTransactionEvidence: Codable, Equatable, Sendable {
         appAccountToken: UUID? = nil,
         reason: PurchaseSyncReason = .sync,
         customerKind: PurchaseCustomerKind = .identified,
-        featureUseCustomerKinds: [String: PurchaseCustomerKind]? = nil,
+        featureUseCustomerKinds: [String: PurchaseCustomerKind]? = [:],
         storeKitEnvironment: String? = nil,
         sendAttempts: Int = 0,
         retryDueAt: Date? = nil,
