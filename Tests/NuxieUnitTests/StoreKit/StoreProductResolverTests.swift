@@ -1,4 +1,5 @@
 import XCTest
+import StoreKit
 @testable import Nuxie
 import NuxieTestSupport
 
@@ -131,75 +132,113 @@ final class StoreProductResolverTests: XCTestCase {
         ])
     }
 
-    func testMissingOverrideTokenMakesExplicitPlacementUnavailable() async throws {
-        let product = MockStoreProduct(
-            id: "premium.annual",
-            displayName: "Premium Annual",
-            price: 59.99,
-            displayPrice: "$59.99",
-            productType: .autoRenewable,
-            subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .year),
-            introductoryTerms: StoreProduct.IntroductoryTerms(
-                price: "$0.00",
-                period: .week,
-                periodCount: 1,
-                cycles: 1,
-                paymentMode: .freeTrial,
-                trialPeriodText: "1 week"
-            )
-        )
-
-        await XCTAssertThrowsErrorAsync(
-            try await StoreProductResolver(
-                tokenProvider: StubIntroEligibilityTokenProvider(token: nil)
-            ).resolve(
-                experienceVersionId: "version_123",
-                authorization: authorization,
-                productId: "product_premium",
-                placementId: "paywall:0",
-                productType: .autoRenewable,
-                appStoreProduct: product,
-                options: .init(introEligibility: .alwaysEligible, billingPlan: .monthly)
-            )
-        ) { error in
-            XCTAssertEqual(error as? StoreKitError, .noProductsAvailable)
+    func testUnusableForcedEligibilityFallsBackToAutomatic() async throws {
+        for mode in [AppStorePlacementOptions.IntroEligibility.alwaysEligible, .alwaysIneligible] {
+            for unavailable in ["noAuthorization", "failure", "empty", "malformed", "suppressed"] {
+                for automaticEligible in [true, false] {
+                    let provider = StubIntroEligibilityTokenProvider(
+                        token: unavailable == "empty" ? nil
+                            : unavailable == "malformed" ? "not-a-jws" : "e30.e30.c2ln",
+                        fails: unavailable == "failure"
+                    )
+                    let health = IntroEligibilityOverrideHealth()
+                    let request = IntroEligibilityTokenRequest(
+                        experienceVersionId: "version_123",
+                        placementId: "paywall:0",
+                        authorization: authorization
+                    )
+                    if unavailable == "suppressed" { await health.suppress(request) }
+                    let resolved = try await StoreProductResolver(
+                        tokenProvider: provider,
+                        overrideHealth: health
+                    ).resolve(
+                        experienceVersionId: request.experienceVersionId,
+                        authorization: unavailable == "noAuthorization" ? nil : authorization,
+                        productId: "product_premium",
+                        placementId: request.placementId,
+                        productType: .autoRenewable,
+                        appStoreProduct: introProduct(eligible: automaticEligible),
+                        options: .init(introEligibility: mode, billingPlan: .default)
+                    )
+                    let scenario = "\(mode): \(unavailable), automatic=\(automaticEligible)"
+                    XCTAssertEqual(resolved.hasIntroductoryOffer, automaticEligible, scenario)
+                    XCTAssertEqual(resolved.hasFreeTrial, automaticEligible, scenario)
+                    XCTAssertEqual(resolved.trialLabel, automaticEligible ? "1 week" : "", scenario)
+                    XCTAssertEqual(resolved.trialPeriodText, automaticEligible ? "1 week" : "", scenario)
+                    XCTAssertNil(resolved.introEligibilityTokenRequest, scenario)
+                    let requests = await provider.requests()
+                    XCTAssertEqual(
+                        requests.count,
+                        ["noAuthorization", "suppressed"].contains(unavailable) ? 0 : 1,
+                        scenario
+                    )
+                }
+            }
         }
     }
 
-    func testMalformedOverrideTokenMakesExplicitPlacementUnavailable() async throws {
-        let product = MockStoreProduct(
+    func testAutomaticEligibilityChecksEverySubscriptionInTheGroup() async throws {
+        let cases: [(String, [Product.SubscriptionInfo.RenewalState], Bool)] = [
+            ("no subscription", [], true),
+            ("subscribed", [.subscribed], false),
+            ("grace period", [.inGracePeriod], false),
+            ("billing retry", [.inBillingRetryPeriod], false),
+            ("expired", [.expired], true),
+            ("revoked", [.revoked], true),
+            ("another active subscription", [.expired, .subscribed], false),
+        ]
+        for (name, states, expected) in cases {
+            for mode in [AppStorePlacementOptions.IntroEligibility.automatic, .alwaysEligible, .alwaysIneligible] {
+                let resolved = try await StoreProductResolver().resolve(
+                    experienceVersionId: "version_123",
+                    authorization: nil,
+                    productId: "product_premium",
+                    placementId: "paywall:0",
+                    productType: .autoRenewable,
+                    appStoreProduct: introProduct(eligible: true, states: states),
+                    options: .init(introEligibility: mode, billingPlan: .default)
+                )
+                XCTAssertEqual(resolved.hasIntroductoryOffer, expected, "\(mode): \(name)")
+                XCTAssertEqual(resolved.hasFreeTrial, expected, "\(mode): \(name)")
+                XCTAssertEqual(resolved.trialLabel, expected ? "1 week" : "", name)
+                XCTAssertEqual(resolved.trialPeriodText, expected ? "1 week" : "", name)
+                XCTAssertNil(resolved.introEligibilityTokenRequest, name)
+            }
+        }
+    }
+
+    func testAutomaticIneligibilityStillBlocksAnExpiredSubscription() async throws {
+        let resolved = try await StoreProductResolver().resolve(
+            experienceVersionId: "version_123",
+            authorization: authorization,
+            productId: "product_premium",
+            placementId: "paywall:0",
+            productType: .autoRenewable,
+            appStoreProduct: introProduct(eligible: false, states: [.expired]),
+            options: .default
+        )
+        XCTAssertFalse(resolved.hasIntroductoryOffer)
+        XCTAssertEqual(resolved.trialLabel, "")
+    }
+
+    private func introProduct(
+        eligible: Bool,
+        states: [Product.SubscriptionInfo.RenewalState] = []
+    ) -> MockStoreProduct {
+        MockStoreProduct(
             id: "premium.annual",
             displayName: "Premium Annual",
             price: 59.99,
             displayPrice: "$59.99",
             productType: .autoRenewable,
-            subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .year),
-            introductoryTerms: StoreProduct.IntroductoryTerms(
-                price: "$0.00",
-                period: .week,
-                periodCount: 1,
-                cycles: 1,
-                paymentMode: .freeTrial,
-                trialPeriodText: "1 week"
+            subscriptionPeriod: .init(value: 1, unit: .year),
+            introductoryTerms: .init(
+                price: "$0.00", period: .week, periodCount: 1, cycles: 1,
+                paymentMode: .freeTrial, trialPeriodText: "1 week"
             ),
-            eligibleForIntroOffer: true
+            eligibleForIntroOffer: eligible,
+            subscriptionGroupRenewalStates: states
         )
-
-        await XCTAssertThrowsErrorAsync(
-            try await StoreProductResolver(
-                tokenProvider: StubIntroEligibilityTokenProvider(token: "not-a-jws")
-            ).resolve(
-                experienceVersionId: "version_123",
-                authorization: authorization,
-                productId: "product_premium",
-                placementId: "paywall:0",
-                productType: .autoRenewable,
-                appStoreProduct: product,
-                options: .init(introEligibility: .alwaysIneligible, billingPlan: .default)
-            )
-        ) { error in
-            XCTAssertEqual(error as? StoreKitError, .noProductsAvailable)
-        }
     }
 
     func testAlwaysIneligibleSignsFalseAndSuppressesAutomaticEligibility() async throws {
@@ -284,139 +323,23 @@ final class StoreProductResolverTests: XCTestCase {
         let requests = await tokenProvider.requests()
         XCTAssertEqual(requests, [])
     }
-
-    func testOverrideWithoutServerJourneyAuthorityIsUnavailable() async throws {
-        let tokenProvider = StubIntroEligibilityTokenProvider(token: "e30.e30.c2ln")
-        let product = MockStoreProduct(
-            id: "premium.annual",
-            displayName: "Premium Annual",
-            price: 59.99,
-            displayPrice: "$59.99",
-            productType: .autoRenewable,
-            subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .year),
-            introductoryTerms: StoreProduct.IntroductoryTerms(
-                price: "$0.00",
-                period: .week,
-                periodCount: 1,
-                cycles: 1,
-                paymentMode: .freeTrial,
-                trialPeriodText: "1 week"
-            ),
-            eligibleForIntroOffer: true
-        )
-
-        await XCTAssertThrowsErrorAsync(
-            try await StoreProductResolver(
-                tokenProvider: tokenProvider
-            ).resolve(
-                experienceVersionId: "version_123",
-                authorization: nil,
-                productId: "product_premium",
-                placementId: "paywall:0",
-                productType: .autoRenewable,
-                appStoreProduct: product,
-                options: .init(
-                    introEligibility: .alwaysIneligible,
-                    billingPlan: .default
-                )
-            )
-        ) { error in
-            XCTAssertEqual(error as? StoreKitError, .noProductsAvailable)
-        }
-        let requests = await tokenProvider.requests()
-        XCTAssertEqual(requests, [])
-    }
-
-    func testRejectedOverrideMakesTheNextPresentationUnavailable() async throws {
-        let request = IntroEligibilityTokenRequest(
-            experienceVersionId: "version_123",
-            placementId: "paywall:0",
-            authorization: authorization
-        )
-        let health = IntroEligibilityOverrideHealth()
-        let product = MockStoreProduct(
-            id: "premium.annual",
-            displayName: "Premium Annual",
-            price: 59.99,
-            displayPrice: "$59.99",
-            productType: .autoRenewable,
-            subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .year),
-            introductoryTerms: StoreProduct.IntroductoryTerms(
-                price: "$0.00",
-                period: .week,
-                periodCount: 1,
-                cycles: 1,
-                paymentMode: .freeTrial,
-                trialPeriodText: "1 week"
-            ),
-            eligibleForIntroOffer: true
-        )
-        let resolver = StoreProductResolver(
-            tokenProvider: StubIntroEligibilityTokenProvider(
-                token: "e30.e30.ZGVueQ"
-            ),
-            overrideHealth: health
-        )
-
-        let overridden = try await resolver.resolve(
-            experienceVersionId: request.experienceVersionId,
-            authorization: authorization,
-            productId: "product_premium",
-            placementId: request.placementId,
-            productType: .autoRenewable,
-            appStoreProduct: product,
-            options: .init(
-                introEligibility: .alwaysIneligible,
-                billingPlan: .default
-            )
-        )
-        XCTAssertFalse(overridden.hasIntroductoryOffer)
-        XCTAssertEqual(overridden.introEligibilityTokenRequest, request)
-
-        await health.suppress(request)
-        await XCTAssertThrowsErrorAsync(
-            try await resolver.resolve(
-                experienceVersionId: request.experienceVersionId,
-                authorization: authorization,
-                productId: "product_premium",
-                placementId: request.placementId,
-                productType: .autoRenewable,
-                appStoreProduct: product,
-                options: .init(
-                    introEligibility: .alwaysIneligible,
-                    billingPlan: .default
-                )
-            )
-        ) { error in
-            XCTAssertEqual(error as? StoreKitError, .noProductsAvailable)
-        }
-    }
 }
 
 private actor StubIntroEligibilityTokenProvider: IntroEligibilityTokenProviding {
     private let token: String?
+    private let fails: Bool
     private var recorded: [IntroEligibilityTokenRequest] = []
 
-    init(token: String?) { self.token = token }
+    init(token: String?, fails: Bool = false) {
+        self.token = token
+        self.fails = fails
+    }
 
     func token(for request: IntroEligibilityTokenRequest) async throws -> String? {
         recorded.append(request)
+        if fails { throw StoreKitError.networkUnavailable }
         return token
     }
 
     func requests() -> [IntroEligibilityTokenRequest] { recorded }
-}
-
-private func XCTAssertThrowsErrorAsync<T>(
-    _ expression: @autoclosure () async throws -> T,
-    file: StaticString = #filePath,
-    line: UInt = #line,
-    _ errorHandler: (Error) -> Void = { _ in }
-) async {
-    do {
-        _ = try await expression()
-        XCTFail("Expected expression to throw", file: file, line: line)
-    } catch {
-        errorHandler(error)
-    }
 }

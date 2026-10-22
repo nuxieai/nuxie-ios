@@ -43,6 +43,7 @@ public struct MockStoreProduct {
     private let mockIntroductoryTerms: StoreProduct.IntroductoryTerms?
     private let mockBillingTerms: [BillingTerms]
     private let eligibleForIntroOffer: Bool
+    private let mockSubscriptionGroupRenewalStates: [Product.SubscriptionInfo.RenewalState]
 
     public init(
         id: String,
@@ -56,7 +57,8 @@ public struct MockStoreProduct {
         subscriptionPeriod: Nuxie.SubscriptionPeriod? = nil,
         introductoryTerms: StoreProduct.IntroductoryTerms? = nil,
         billingTerms: [BillingTerms] = [],
-        eligibleForIntroOffer: Bool = false
+        eligibleForIntroOffer: Bool = false,
+        subscriptionGroupRenewalStates: [Product.SubscriptionInfo.RenewalState] = []
     ) {
         self.id = id
         self.displayName = displayName
@@ -70,6 +72,7 @@ public struct MockStoreProduct {
         self.mockIntroductoryTerms = introductoryTerms
         self.mockBillingTerms = billingTerms
         self.eligibleForIntroOffer = eligibleForIntroOffer
+        self.mockSubscriptionGroupRenewalStates = subscriptionGroupRenewalStates
     }
 
     public func introductoryTerms(
@@ -105,6 +108,10 @@ public struct MockStoreProduct {
     }
 
     public func isEligibleForIntroOffer() async -> Bool { eligibleForIntroOffer }
+
+    public func subscriptionGroupRenewalStates() async throws -> [Product.SubscriptionInfo.RenewalState] {
+        mockSubscriptionGroupRenewalStates
+    }
 }
 
 extension MockStoreProduct: AppStoreProduct {}
@@ -113,6 +120,12 @@ extension MockStoreProduct: AppStoreProduct {}
 /// native object survives presentation through checkout.
 final class ReferenceMockStoreProduct: AppStoreProduct, @unchecked Sendable {
     private let wrapped: MockStoreProduct
+    private let lock = NSLock()
+    private var eligibilityChecks = 0
+    private var groupStatusChecks = 0
+
+    var eligibilityCheckCount: Int { lock.withLock { eligibilityChecks } }
+    var groupStatusCheckCount: Int { lock.withLock { groupStatusChecks } }
 
     init(_ wrapped: MockStoreProduct) {
         self.wrapped = wrapped
@@ -159,6 +172,12 @@ final class ReferenceMockStoreProduct: AppStoreProduct, @unchecked Sendable {
     }
 
     func isEligibleForIntroOffer() async -> Bool {
-        await wrapped.isEligibleForIntroOffer()
+        lock.withLock { eligibilityChecks += 1 }
+        return await wrapped.isEligibleForIntroOffer()
+    }
+
+    func subscriptionGroupRenewalStates() async throws -> [Product.SubscriptionInfo.RenewalState] {
+        lock.withLock { groupStatusChecks += 1 }
+        return try await wrapped.subscriptionGroupRenewalStates()
     }
 }

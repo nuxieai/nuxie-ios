@@ -69,18 +69,47 @@ private actor RecordingIntroEligibilityTokenProvider:
     IntroEligibilityTokenProviding
 {
     private var token: String?
+    private var fails = false
     private var recorded: [IntroEligibilityTokenRequest] = []
 
     init(token: String? = nil) { self.token = token }
 
     func setToken(_ token: String?) { self.token = token }
+    func setFailure(_ fails: Bool) { self.fails = fails }
 
     func token(for request: IntroEligibilityTokenRequest) async throws -> String? {
         recorded.append(request)
+        if fails { throw StoreKitError.networkUnavailable }
         return token
     }
 
     func requests() -> [IntroEligibilityTokenRequest] { recorded }
+}
+
+private struct AppStoreIntroEligibilityFixture: Decodable {
+    struct Case: Decodable {
+        struct Action: Decodable {
+            struct Expectation: Decodable {
+                let hasIntroductoryOffer: Bool
+                let hasFreeTrial: Bool
+                let trialLabel: String
+                let purchaseEligibilityOverride: Bool
+                let tokenRequests: Int
+            }
+            let subscriptionGroupStates: [String]
+            let expect: Expectation
+        }
+        let name: String
+        let introEligibility: AppStorePlacementOptions.IntroEligibility
+        let authorizationAvailable: Bool
+        let eligibleForIntroOffer: Bool
+        let actions: [Action]
+    }
+    let suite: String
+    let version: Int
+    let owner: String
+    let platform: String
+    let cases: [Case]
 }
 
 private actor MockNuxieTestStore: NuxieTestStorePurchasing {
@@ -1314,69 +1343,262 @@ final class TransactionServiceTests: AsyncSpec {
                         expect(purchasedNative === shownNative) == true
                     }
 
-                    it("uses one fresh eligibility token without re-resolving the product") {
-                        let token = "e30.e30.Y2hlY2tvdXQ"
-                        await introTokenProvider.setToken(token)
-                        mockPurchaseDelegate.configureForSuccess()
-                        let native = MockStoreProduct(
-                            id: "com.test.single-token",
-                            displayName: "Trial",
-                            price: 9.99,
-                            displayPrice: "$9.99",
-                            productType: .autoRenewable,
-                            subscriptionPeriod: .init(value: 1, unit: .month),
-                            introductoryTerms: .init(
-                                price: "$0.00",
-                                period: .week,
-                                periodCount: 1,
-                                cycles: 1,
-                                paymentMode: .freeTrial,
-                                trialPeriodText: "1 week"
-                            )
+                    it("runs the iOS-owned App Store intro eligibility fixture for display and purchase") {
+                        let url = URL(fileURLWithPath: #filePath)
+                            .deletingLastPathComponent().deletingLastPathComponent()
+                            .deletingLastPathComponent().deletingLastPathComponent()
+                            .appendingPathComponent("fixtures/purchases/app-store-intro-eligibility.json")
+                        let fixture = try JSONDecoder().decode(
+                            AppStoreIntroEligibilityFixture.self,
+                            from: Data(contentsOf: url)
                         )
-                        let resolver = StoreProductResolver(
-                            tokenProvider: introTokenProvider,
-                            overrideHealth: introOverrideHealth
-                        )
-                        var shown = try await resolver.resolve(
-                            experienceVersionId: "version-single-token",
-                            authorization: .init(
-                                distinctId: "test-user",
-                                journeyId: "journey-1",
-                                legId: String(repeating: "a", count: 64),
-                                descriptorSha256: String(repeating: "b", count: 64)
-                            ),
-                            productId: "trial",
-                            placementId: "paywall:trial",
-                            productType: .autoRenewable,
-                            appStoreProduct: native,
-                            options: .init(
-                                introEligibility: .alwaysEligible,
-                                billingPlan: .default
-                            )
-                        )
-                        shown.purchaseContext = PurchaseCommercialContext(
-                            release: mockProduct.purchaseContext!.release,
-                            placementId: shown.placementId,
-                            productId: shown.productId,
-                            storeProductId: shown.storeProductId
-                        )
-                        mocks.productService.mockProducts = [native]
+                        expect(fixture.suite) == "purchases/app-store-intro-eligibility"
+                        expect(fixture.version) == 1
+                        expect(fixture.owner) == "ios"
+                        expect(fixture.platform) == "apple_app_store"
+                        expect(fixture.cases).toNot(beEmpty())
+                        settings.setPurchaseDelegate(nil)
+                        let statesByName: [String: Product.SubscriptionInfo.RenewalState] = [
+                            "subscribed": .subscribed, "inGracePeriod": .inGracePeriod,
+                            "inBillingRetryPeriod": .inBillingRetryPeriod,
+                            "expired": .expired, "revoked": .revoked,
+                        ]
+                        for vector in fixture.cases {
+                            expect(vector.actions).toNot(beEmpty())
+                            for (index, action) in vector.actions.enumerated() {
+                                let states = action.subscriptionGroupStates.compactMap { statesByName[$0] }
+                                expect(states.count) == action.subscriptionGroupStates.count
+                                let native = ReferenceMockStoreProduct(MockStoreProduct(
+                                    id: "com.test.fixture-intro.\(index)",
+                                    displayName: "Trial",
+                                    price: 9.99,
+                                    displayPrice: "$9.99",
+                                    productType: .autoRenewable,
+                                    subscriptionPeriod: .init(value: 1, unit: .month),
+                                    introductoryTerms: .init(
+                                        price: "$0.00", period: .week, periodCount: 1,
+                                        cycles: 1, paymentMode: .freeTrial, trialPeriodText: "1 week"
+                                    ),
+                                    eligibleForIntroOffer: vector.eligibleForIntroOffer,
+                                    subscriptionGroupRenewalStates: states
+                                ))
+                                let authorization = IntroEligibilityAuthorizationContext(
+                                    distinctId: "test-user", journeyId: "journey-1",
+                                    legId: String(repeating: "a", count: 64),
+                                    descriptorSha256: String(repeating: "b", count: 64)
+                                )
+                                var shown = try await StoreProductResolver(
+                                    tokenProvider: introTokenProvider,
+                                    overrideHealth: introOverrideHealth
+                                ).resolve(
+                                    experienceVersionId: "version-fixture-intro",
+                                    authorization: vector.authorizationAvailable ? authorization : nil,
+                                    productId: "trial",
+                                    placementId: "paywall:trial",
+                                    productType: .autoRenewable,
+                                    appStoreProduct: native,
+                                    options: .init(introEligibility: vector.introEligibility, billingPlan: .default)
+                                )
+                                shown.purchaseContext = PurchaseCommercialContext(
+                                    release: mockProduct.purchaseContext!.release,
+                                    placementId: shown.placementId,
+                                    productId: shown.productId,
+                                    storeProductId: shown.storeProductId
+                                )
+                                mockNativePurchaseAdapter.configureVerifiedPurchase(
+                                    transactionId: "fixture-intro-\(index)",
+                                    originalTransactionId: "fixture-intro-\(index)",
+                                    productId: native.id
+                                )
+                                expect(shown.hasIntroductoryOffer) == action.expect.hasIntroductoryOffer
+                                expect(shown.hasFreeTrial) == action.expect.hasFreeTrial
+                                expect(shown.trialLabel) == action.expect.trialLabel
+                                expect(shown.introEligibilityTokenRequest != nil) == action.expect.purchaseEligibilityOverride
+                                _ = try await transactionService.purchase(shown)
+                                guard let purchased = mockNativePurchaseAdapter.purchasedProducts.last else {
+                                    fail("Expected native checkout for \(vector.name)")
+                                    return
+                                }
+                                expect(purchased.introductoryTerms == shown.introductoryTerms) == true
+                                expect(purchased.introductoryOfferEligibilityJWS != nil) == action.expect.purchaseEligibilityOverride
+                                var expected = Set<Product.PurchaseOption>()
+                                if let accountToken = purchased.nativeCheckoutAppAccountToken {
+                                    expected.insert(.appAccountToken(accountToken))
+                                }
+                                expect(purchased.storeKitPurchaseOptions) == expected
+                                let requests = await introTokenProvider.requests()
+                                expect(requests.count) == action.expect.tokenRequests
+                                expect(native.eligibilityCheckCount) == 1
+                                expect(native.groupStatusCheckCount) == 1
+                            }
+                        }
+                    }
 
-                        await expect {
-                            try await transactionService.purchase(shown)
-                        }.toNot(throwError())
+                    for mode in [AppStorePlacementOptions.IntroEligibility.alwaysEligible, .alwaysIneligible] {
+                        for unavailable in ["no authorization", "failing token", "empty token", "malformed token", "suppressed health"] {
+                            for automaticEligible in [true, false] {
+                                for nativeCheckout in [true, false] {
+                                    it("purchases \(mode) with \(unavailable), automatic=\(automaticEligible), native=\(nativeCheckout) without an override") {
+                                        if nativeCheckout { settings.setPurchaseDelegate(nil) }
+                                        mockPurchaseDelegate.configureForSuccess()
+                                        mockPurchaseDelegate.simulatedDelay = 0
+                                        await introTokenProvider.setToken(
+                                            unavailable == "empty token" ? nil
+                                                : unavailable == "malformed token" ? "invalid" : "e30.e30.c2ln"
+                                        )
+                                        await introTokenProvider.setFailure(unavailable == "failing token")
+                                        let authorization = IntroEligibilityAuthorizationContext(
+                                            distinctId: "test-user",
+                                            journeyId: "journey-1",
+                                            legId: String(repeating: "a", count: 64),
+                                            descriptorSha256: String(repeating: "b", count: 64)
+                                        )
+                                        let request = IntroEligibilityTokenRequest(
+                                            experienceVersionId: "version-fallback",
+                                            placementId: "paywall:trial",
+                                            authorization: authorization
+                                        )
+                                        if unavailable == "suppressed health" {
+                                            await introOverrideHealth.suppress(request)
+                                        }
+                                        let native = ReferenceMockStoreProduct(MockStoreProduct(
+                                            id: "com.test.fallback",
+                                            displayName: "Trial",
+                                            price: 9.99,
+                                            displayPrice: "$9.99",
+                                            productType: .autoRenewable,
+                                            subscriptionPeriod: .init(value: 1, unit: .month),
+                                            introductoryTerms: .init(
+                                                price: "$0.00", period: .week, periodCount: 1,
+                                                cycles: 1, paymentMode: .freeTrial, trialPeriodText: "1 week"
+                                            ),
+                                            eligibleForIntroOffer: automaticEligible
+                                        ))
+                                        var shown = try await StoreProductResolver(
+                                            tokenProvider: introTokenProvider,
+                                            overrideHealth: introOverrideHealth
+                                        ).resolve(
+                                            experienceVersionId: request.experienceVersionId,
+                                            authorization: unavailable == "no authorization" ? nil : authorization,
+                                            productId: "trial",
+                                            placementId: request.placementId,
+                                            productType: .autoRenewable,
+                                            appStoreProduct: native,
+                                            options: .init(introEligibility: mode, billingPlan: .default)
+                                        )
+                                        shown.purchaseContext = PurchaseCommercialContext(
+                                            release: mockProduct.purchaseContext!.release,
+                                            placementId: shown.placementId,
+                                            productId: shown.productId,
+                                            storeProductId: shown.storeProductId
+                                        )
+                                        mockNativePurchaseAdapter.configureVerifiedPurchase(productId: native.id)
+                                        expect(shown.hasFreeTrial) == automaticEligible
+                                        expect(shown.trialLabel) == (automaticEligible ? "1 week" : "")
+                                        expect(shown.introEligibilityTokenRequest).to(beNil())
+                                        let beforeCheckout = await introTokenProvider.requests()
+                                        // Signing recovering before checkout must not change the shown terms.
+                                        await introTokenProvider.setFailure(false)
+                                        await introTokenProvider.setToken("e30.e30.cmVjb3ZlcmVk")
 
-                        // One probe allowed the offer to be shown. Checkout
-                        // mints exactly one more JWS and installs it on the
-                        // retained product passed to the delegate.
-                        let tokenRequests = await introTokenProvider.requests()
-                        expect(tokenRequests.count) == 2
-                        expect(mocks.productService.fetchProductsCalled) == false
-                        expect(
-                            mockPurchaseDelegate.lastPurchasedProduct?
-                                .introductoryOfferEligibilityJWS
-                        ) == token
+                                        _ = try await transactionService.purchase(shown)
+
+                                        let purchased = nativeCheckout
+                                            ? mockNativePurchaseAdapter.purchasedProducts.first
+                                            : mockPurchaseDelegate.lastPurchasedProduct
+                                        expect(purchased).toNot(beNil())
+                                        expect(purchased?.introductoryTerms == shown.introductoryTerms) == true
+                                        expect(purchased?.introEligibilityTokenRequest).to(beNil())
+                                        expect(purchased?.introductoryOfferEligibilityJWS).to(beNil())
+                                        // Native checkout may add account correlation, but no eligibility option.
+                                        var expected = Set<Product.PurchaseOption>()
+                                        if let accountToken = purchased?.nativeCheckoutAppAccountToken {
+                                            expected.insert(.appAccountToken(accountToken))
+                                        }
+                                        expect(purchased?.storeKitPurchaseOptions) == expected
+                                        let afterCheckout = await introTokenProvider.requests()
+                                        expect(afterCheckout) == beforeCheckout
+                                        expect(mocks.productService.fetchProductsCalled) == false
+                                        expect(native.eligibilityCheckCount) == 1
+                                        expect(native.groupStatusCheckCount) == (automaticEligible ? 1 : 0)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    for mode in [AppStorePlacementOptions.IntroEligibility.alwaysEligible, .alwaysIneligible] {
+                        it("applies working \(mode) with one fresh checkout token without re-resolving") {
+                            let token = "e30.e30.Y2hlY2tvdXQ"
+                            await introTokenProvider.setToken(token)
+                            mockPurchaseDelegate.configureForSuccess()
+                            mockPurchaseDelegate.simulatedDelay = 0
+                            let native = ReferenceMockStoreProduct(MockStoreProduct(
+                                id: "com.test.single-token",
+                                displayName: "Trial",
+                                price: 9.99,
+                                displayPrice: "$9.99",
+                                productType: .autoRenewable,
+                                subscriptionPeriod: .init(value: 1, unit: .month),
+                                introductoryTerms: .init(
+                                    price: "$0.00",
+                                    period: .week,
+                                    periodCount: 1,
+                                    cycles: 1,
+                                    paymentMode: .freeTrial,
+                                    trialPeriodText: "1 week"
+                                ),
+                                eligibleForIntroOffer: mode == .alwaysIneligible,
+                                subscriptionGroupRenewalStates: mode == .alwaysEligible ? [.subscribed] : []
+                            ))
+                            let resolver = StoreProductResolver(
+                                tokenProvider: introTokenProvider,
+                                overrideHealth: introOverrideHealth
+                            )
+                            var shown = try await resolver.resolve(
+                                experienceVersionId: "version-single-token",
+                                authorization: .init(
+                                    distinctId: "test-user",
+                                    journeyId: "journey-1",
+                                    legId: String(repeating: "a", count: 64),
+                                    descriptorSha256: String(repeating: "b", count: 64)
+                                ),
+                                productId: "trial",
+                                placementId: "paywall:trial",
+                                productType: .autoRenewable,
+                                appStoreProduct: native,
+                                options: .init(
+                                    introEligibility: mode,
+                                    billingPlan: .default
+                                )
+                            )
+                            expect(shown.hasFreeTrial) == (mode == .alwaysEligible)
+                            shown.purchaseContext = PurchaseCommercialContext(
+                                release: mockProduct.purchaseContext!.release,
+                                placementId: shown.placementId,
+                                productId: shown.productId,
+                                storeProductId: shown.storeProductId
+                            )
+                            mocks.productService.mockProducts = [native]
+
+                            await expect {
+                                try await transactionService.purchase(shown)
+                            }.toNot(throwError())
+
+                            // One probe resolved the shown eligibility. Checkout
+                            // mints exactly one more JWS and installs it on the
+                            // retained product passed to the delegate.
+                            let tokenRequests = await introTokenProvider.requests()
+                            expect(tokenRequests.count) == 2
+                            expect(mocks.productService.fetchProductsCalled) == false
+                            expect(
+                                mockPurchaseDelegate.lastPurchasedProduct?
+                                    .introductoryOfferEligibilityJWS
+                            ) == token
+                            expect(mockPurchaseDelegate.lastPurchasedProduct?.introductoryTerms == shown.introductoryTerms) == true
+                            expect(native.eligibilityCheckCount) == 0
+                            expect(native.groupStatusCheckCount) == 0
+                        }
                     }
 
                     it(
@@ -1627,17 +1849,26 @@ final class TransactionServiceTests: AsyncSpec {
                         let tokenRequests = await introTokenProvider.requests()
                         expect(tokenRequests.count) == 2
                         expect(mockNativePurchaseAdapter.purchasedProducts.count) == 1
-                        await expect {
-                            try await resolver.resolve(
-                                experienceVersionId: "version-invalid-trial",
-                                authorization: authorization,
-                                productId: "trial",
-                                placementId: "paywall:invalid-trial",
-                                productType: .autoRenewable,
-                                appStoreProduct: native,
-                                options: options
-                            )
-                        }.to(throwError(StoreKitError.noProductsAvailable))
+                        var fallback = try await resolver.resolve(
+                            experienceVersionId: "version-invalid-trial",
+                            authorization: authorization,
+                            productId: "trial",
+                            placementId: "paywall:invalid-trial",
+                            productType: .autoRenewable,
+                            appStoreProduct: native,
+                            options: options
+                        )
+                        fallback.purchaseContext = mockProduct.purchaseContext
+                        expect(fallback.hasFreeTrial) == false
+                        expect(fallback.trialLabel) == ""
+                        expect(fallback.introEligibilityTokenRequest).to(beNil())
+                        mockNativePurchaseAdapter.configureVerifiedPurchase(productId: native.id)
+                        _ = try await transactionService.purchase(fallback)
+                        expect(mockNativePurchaseAdapter.purchasedProducts.count) == 2
+                        expect(mockNativePurchaseAdapter.purchasedProducts.last?
+                            .introductoryOfferEligibilityJWS).to(beNil())
+                        let afterFallback = await introTokenProvider.requests()
+                        expect(afterFallback.count) == 2
                     }
 
                     it("reconciles an already-owned product without completing purchase") {

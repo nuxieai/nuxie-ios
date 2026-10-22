@@ -144,14 +144,6 @@ struct StoreProductResolver: Sendable {
         )
 
         let availableIntroductoryTerms = appStoreProduct.introductoryTerms(for: appliedPlan)
-        if options.introEligibility != .automatic,
-           authorization == nil {
-            // Explicit eligibility is a Nuxie targeting decision, not a
-            // client-selectable StoreKit mode. Reject it before inspecting
-            // offer availability so a direct presentation cannot reveal a
-            // product that would later require an unauthorized override.
-            throw StoreKitError.noProductsAvailable
-        }
         let configuredOverrideRequest: IntroEligibilityTokenRequest?
         if options.introEligibility != .automatic,
            availableIntroductoryTerms != nil,
@@ -211,30 +203,40 @@ struct StoreProductResolver: Sendable {
         mode: AppStorePlacementOptions.IntroEligibility,
         overrideRequest: IntroEligibilityTokenRequest?
     ) async throws -> (eligible: Bool, overrideReady: Bool) {
-        switch mode {
-        case .automatic:
-            return (await product.isEligibleForIntroOffer(), false)
-        case .alwaysEligible, .alwaysIneligible:
-            guard let overrideRequest,
-                  await !overrideHealth.isSuppressed(overrideRequest) else {
-                throw StoreKitError.noProductsAvailable
-            }
-            let allow = mode == .alwaysEligible
-            do {
-                let token = normalizedCompactJWS(try await tokenProvider.token(
-                    for: overrideRequest
-                ))
-                guard token != nil else {
-                    throw StoreKitError.noProductsAvailable
+        if mode != .automatic {
+            if let overrideRequest,
+               await !overrideHealth.isSuppressed(overrideRequest) {
+                do {
+                    if normalizedCompactJWS(try await tokenProvider.token(for: overrideRequest)) != nil {
+                        return (mode == .alwaysEligible, true)
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Resolve automatic terms below when signing is unavailable.
                 }
-                return (allow, true)
-            } catch {
-                LogWarning(
-                    "App Store introductory eligibility override unavailable"
-                )
-                throw StoreKitError.noProductsAvailable
             }
+            LogWarning(
+                "App Store introductory eligibility override unavailable; falling back to automatic eligibility"
+            )
         }
+
+        guard await product.isEligibleForIntroOffer() else { return (false, false) }
+        // StoreKit's redemption check does not exclude a current subscriber
+        // switching products within this subscription group.
+        let states: [Product.SubscriptionInfo.RenewalState]
+        do {
+            states = try await product.subscriptionGroupRenewalStates()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Unknown group status cannot establish introductory eligibility.
+            return (false, false)
+        }
+        let hasActiveSubscription = states.contains {
+            $0 == .subscribed || $0 == .inGracePeriod || $0 == .inBillingRetryPeriod
+        }
+        return (!hasActiveSubscription, false)
     }
 
     private func mapPeriod(_ period: SubscriptionPeriod?) -> ProductPeriod? {

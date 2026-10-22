@@ -476,6 +476,7 @@ protocol AppStoreProduct: Sendable {
     func commitmentPeriod(for plan: StoreProduct.BillingPlan) -> SubscriptionPeriod?
     func supportsBillingPlan(_ plan: StoreProduct.BillingPlan) -> Bool
     func isEligibleForIntroOffer() async -> Bool
+    func subscriptionGroupRenewalStates() async throws -> [Product.SubscriptionInfo.RenewalState]
 }
 
 extension AppStoreProduct {
@@ -490,6 +491,7 @@ extension AppStoreProduct {
     func commitmentPeriod(for plan: StoreProduct.BillingPlan) -> SubscriptionPeriod? { nil }
     func supportsBillingPlan(_ plan: StoreProduct.BillingPlan) -> Bool { plan == .default }
     func isEligibleForIntroOffer() async -> Bool { false }
+    func subscriptionGroupRenewalStates() async throws -> [Product.SubscriptionInfo.RenewalState] { [] }
 }
 
 // MARK: - StoreKit.Product Extension
@@ -610,6 +612,13 @@ extension Product: AppStoreProduct {
 
     func isEligibleForIntroOffer() async -> Bool {
         await subscription?.isEligibleForIntroOffer == true
+    }
+
+    func subscriptionGroupRenewalStates() async throws -> [Product.SubscriptionInfo.RenewalState] {
+        guard let subscription else { return [] }
+        // SubscriptionInfo.status queries the whole group, including other products.
+        let statuses = try await subscription.status
+        return statuses.map(\.state)
     }
 
     private func mapIntroductoryTerms(
