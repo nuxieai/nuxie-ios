@@ -7,6 +7,41 @@ import XCTest
 
 /// The outbox reads only entries in its own format.
 final class PurchaseOutboxEntryTests: XCTestCase {
+    func testFeatureUseDeclarationSurvivesBookkeepingAndOlderEvidenceStillDecodes() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("consume-kind-format-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TransactionEvidenceStore(customStoragePath: root, scope: .testFixture)
+        let admitted = StoredTransactionEvidence(
+            transactionJws: "signed-jws", transactionId: "transaction", originalTransactionId: "original",
+            productId: "product", distinctId: "customer", recordedAt: Date(timeIntervalSince1970: 100),
+            isRevoked: false, customerKind: .identified
+        )
+        var consumed = admitted
+        consumed.featureUseCustomerKinds = ["purchase-use": .anonymous]
+        let written = consumed.admitted(over: admitted)
+        XCTAssertEqual(written.admissionId, admitted.admissionId, "Consume admission must not readmit /purchase")
+        XCTAssertEqual(written.customerKind, .identified)
+        XCTAssertTrue(store.save(["transaction": written.replacingAfterFailedSend(at: Date())]))
+        let loaded = try XCTUnwrap(store.load().readableValue?["transaction"])
+        XCTAssertEqual(loaded.featureUseCustomerKinds, ["purchase-use": .anonymous])
+        XCTAssertEqual(loaded.replacing(answeredAt: Date()).featureUseCustomerKinds, loaded.featureUseCustomerKinds)
+
+        // The current purchase outbox format predates consume declarations.
+        // Its existing rows must still load with no per-consume declarations.
+        let file = PurchaseStorageScope.testFixture.storageDirectory(customStoragePath: root)
+            .appendingPathComponent("transaction-evidence.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacy = try XCTUnwrap(object["transaction"] as? [String: Any])
+        legacy.removeValue(forKey: "featureUseCustomerKinds")
+        object["transaction"] = legacy
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+        let old = try XCTUnwrap(store.load().readableValue?["transaction"])
+        XCTAssertNil(old.featureUseCustomerKinds)
+        XCTAssertEqual(old.customerKind, .identified)
+        XCTAssertEqual(old.admissionId, admitted.admissionId)
+    }
+
     /// An entry in the previous SDK's format (its answer under
     /// `backendSyncedAt`, with no reason, customer kind, attempt count or
     /// admission) is dropped when the outbox is read: pre-GA local state,

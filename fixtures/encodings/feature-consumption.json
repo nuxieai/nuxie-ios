@@ -1,7 +1,7 @@
 {
   "suite": "encodings/feature-consumption",
   "version": 1,
-  "description": "Dedicated authoritative Feature consumption command and receipt. Acceptance is independent of remaining access.",
+  "description": "Dedicated authoritative Feature consumption command and receipt. Acceptance is independent of remaining access. Purchase evidence carries the customerKind recorded at consume admission; ordinary consumes and older undeclared purchase commands omit it.",
   "vectors": [
     {
       "name": "last unit",
@@ -98,6 +98,95 @@
         "balance": null,
         "unlimited": true,
         "active": true,
+        "type": "metered",
+        "occurredAtMs": 1789285000000,
+        "idempotentReplay": false
+      }
+    },
+    {
+      "name": "purchase evidence identified",
+      "request": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "purchase-use-identified",
+        "quantity": 1,
+        "entityId": "project-a",
+        "purchase": {
+          "type": "appstore",
+          "signedTransaction": "signed-jws"
+        },
+        "customerKind": "identified"
+      },
+      "response": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "purchase-use-identified",
+        "quantity": 1,
+        "entityId": "project-a",
+        "accepted": true,
+        "code": "consumed",
+        "balance": 0,
+        "unlimited": false,
+        "active": false,
+        "type": "metered",
+        "occurredAtMs": 1789285000000,
+        "idempotentReplay": false
+      }
+    },
+    {
+      "name": "purchase evidence anonymous",
+      "request": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "purchase-use-anonymous",
+        "quantity": 1,
+        "entityId": "project-a",
+        "purchase": {
+          "type": "appstore",
+          "signedTransaction": "signed-jws"
+        },
+        "customerKind": "anonymous"
+      },
+      "response": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "purchase-use-anonymous",
+        "quantity": 1,
+        "entityId": "project-a",
+        "accepted": true,
+        "code": "consumed",
+        "balance": 0,
+        "unlimited": false,
+        "active": false,
+        "type": "metered",
+        "occurredAtMs": 1789285000000,
+        "idempotentReplay": false
+      }
+    },
+    {
+      "name": "purchase evidence without a recorded kind",
+      "request": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "purchase-use-undeclared",
+        "quantity": 1,
+        "entityId": "project-a",
+        "purchase": {
+          "type": "appstore",
+          "signedTransaction": "signed-jws"
+        }
+      },
+      "response": {
+        "customerId": "customer",
+        "featureId": "credits",
+        "operationId": "purchase-use-undeclared",
+        "quantity": 1,
+        "entityId": "project-a",
+        "accepted": true,
+        "code": "consumed",
+        "balance": 0,
+        "unlimited": false,
+        "active": false,
         "type": "metered",
         "occurredAtMs": 1789285000000,
         "idempotentReplay": false

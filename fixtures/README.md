@@ -51,6 +51,7 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 ## Public values and adjacent subsystems
 
 - `encodings/app-action.json`, `encodings/feature-usage.json`, and `encodings/forwarded-activity.json`: public Codable and forwarding contracts.
+- `encodings/feature-consumption.json`: `/feature/consume` commands and receipts, including App Store evidence with camelCase `customerKind` (`identified` or `anonymous`) frozen at consume admission. Ordinary consumes and older purchase commands with no recorded kind omit it. iOS consumes it in `FeatureConsumptionApiTests`.
 - `features/optimistic-entitlement-projection.json`: authoritative feature state combined with retained purchase evidence.
 - `features/command-recovery.json`: persisted server cooldowns and active-session retry eligibility for durable Feature commands.
 - `purchases/outcome-commit.json`: one purchase outcome committer across StoreKit and host-delegate sources.

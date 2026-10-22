@@ -1703,6 +1703,8 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? verified.customerKind
                     ?? identityService.purchaseCustomerKind(of: owner)
                     ?? .identified,
+                featureUseCustomerKinds: existing?.distinctId == owner
+                    ? existing?.featureUseCustomerKinds : nil,
                 storeKitEnvironment: existing?.storeKitEnvironment
                     ?? storeKitEnvironment(ofSignedTransaction: transactionJws),
                 // A refund's revocation and an explicit claim are new sends.
@@ -2087,6 +2089,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             appAccountToken: evidence.appAccountToken,
             reason: evidence.reason,
             customerKind: evidence.customerKind,
+            featureUseCustomerKinds: evidence.featureUseCustomerKinds,
             storeKitEnvironment: evidence.storeKitEnvironment,
             sendAttempts: evidence.sendAttempts,
             retryDueAt: evidence.retryDueAt,
@@ -2118,6 +2121,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             appAccountToken: evidence.appAccountToken,
             reason: .sync,
             customerKind: evidence.customerKind,
+            featureUseCustomerKinds: evidence.featureUseCustomerKinds,
             storeKitEnvironment: evidence.storeKitEnvironment
                 ?? storeKitEnvironment(ofSignedTransaction: revokedJws),
             sendAttempts: 0
@@ -3137,6 +3141,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 appAccountToken: update.appAccountToken,
                 reason: reason,
                 customerKind: customerKind,
+                featureUseCustomerKinds: own?.featureUseCustomerKinds,
                 storeKitEnvironment: storeKitEnvironment(
                     ofSignedTransaction: item.jwsRepresentation
                 ),
@@ -3325,6 +3330,27 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 continue
             }
 
+            let operationId = purchaseUsageEventId(
+                evidence: evidence, featureId: featureId, amount: amount, entityId: entityId
+            )
+            // Freeze the consume's declaration in the same identity fence as
+            // admission. It can differ from the earlier purchase admission.
+            // Only the local command state changes; /purchase keeps its facts.
+            let admission = identityService.performIfCurrentDistinctIdMatches(distinctId) { snapshot in
+                reloadAndApplyEvidenceChange(transactionId: evidence.transactionId) { current in
+                    guard var current, current.admissionId == evidence.admissionId else { return nil }
+                    if current.featureUseCustomerKinds?[operationId] == nil {
+                        var kinds = current.featureUseCustomerKinds ?? [:]
+                        kinds[operationId] = snapshot.isIdentified ? .identified : .anonymous
+                        current.featureUseCustomerKinds = kinds
+                    }
+                    return current
+                }
+            }
+            guard let admission else { throw CancellationError() }
+            // A failed durable admission switches the outbox off. No evidence
+            // was sent, so the caller can use the ordinary command path.
+            guard let admitted = admission else { return nil }
             purchaseUsageClaims.insert(evidence.transactionId)
             let requestGeneration = lifecycleGeneration
             let request = PurchaseBackedFeatureUseRequest(
@@ -3335,13 +3361,9 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 entityId: entityId,
                 purchase: .init(
                     transactionJwt: evidence.transactionJws,
-                    eventId: purchaseUsageEventId(
-                        evidence: evidence,
-                        featureId: featureId,
-                        amount: amount,
-                        entityId: entityId
-                    )
-                )
+                    eventId: operationId
+                ),
+                customerKind: admitted.evidence.featureUseCustomerKinds?[operationId]
             )
 
             do {

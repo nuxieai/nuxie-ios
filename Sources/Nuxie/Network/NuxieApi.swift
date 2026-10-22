@@ -642,10 +642,12 @@ extension NuxieApi {
             let quantity: Double
             let entityId: String?
             let purchase: Evidence
+            let customerKind: PurchaseCustomerKind?
         }
         let input = Command(customerId: request.customerId, featureId: request.featureId,
             operationId: request.purchase.eventId, quantity: request.eventData.value, entityId: request.entityId,
-            purchase: Evidence(signedTransaction: request.purchase.transactionJwt))
+            purchase: Evidence(signedTransaction: request.purchase.transactionJwt),
+            customerKind: request.customerKind)
         let response: FeatureConsumeResponse = try await self.request(endpoint: .consumeFeature,
             body: input, responseType: FeatureConsumeResponse.self)
         guard response.accepted, response.operationId == input.operationId,
