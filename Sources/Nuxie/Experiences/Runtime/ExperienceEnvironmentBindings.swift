@@ -35,6 +35,7 @@ struct ExperienceEnvironmentBindings: Sendable {
     }
 
     func mutations(reference: NuxieNativeViewModelReference, reduceMotion: Bool? = nil,
+                   fontScale: Double? = nil,
                    safeArea: ExperienceSafeAreaInsets? = nil,
                    viewport: ExperienceViewportEnvironment? = nil,
                    fold: ExperienceFoldEnvironment? = nil,
@@ -58,6 +59,7 @@ struct ExperienceEnvironmentBindings: Sendable {
             }
         }
         if let reduceMotion { boolean("reduceMotion", reduceMotion) }
+        if let fontScale { number("fontScale", Float(fontScale)) }
         if let safeArea {
             for (edge, value) in [("top", safeArea.top), ("right", safeArea.right),
                                   ("bottom", safeArea.bottom), ("left", safeArea.left)] {

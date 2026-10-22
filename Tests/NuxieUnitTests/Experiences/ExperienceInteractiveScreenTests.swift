@@ -2393,7 +2393,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         )
     }
 
-    func testReservedFontScaleSuppressesOnlyRootChanges() {
+    func testFontScaleIsAnOrdinaryProductPropertyOutsideTheEnvironment() {
         let snapshot = NuxieNativeViewModelSnapshot(
             rootInstanceID: 1,
             instances: [
@@ -2409,7 +2409,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             snapshot: snapshot,
             catalog: Self.reservedChangeCatalog
         )
-        XCTAssertTrue(filter.shouldSuppress(Self.change(owner: 1, property: 5, value: .number(3.12))))
+        XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 1, property: 5, value: .number(3.12))))
         XCTAssertFalse(filter.shouldSuppress(Self.change(owner: 2, property: 5, value: .number(3.12))))
     }
 

@@ -164,7 +164,6 @@ final class ExperienceScreenViewController: UIViewController {
     private var controllerIsVisible = false
     private var pressedHardwareKeys: Set<Int> = []
     private(set) var riveFocusState = NuxieNativeFocusState(hasFocus: false, expectsKeyboardInput: false)
-    private var lastPushedFontScale: Double?
     private var lastPushedSafeAreaInsets: ExperienceSafeAreaInsets?
     private var lastPushedViewport: ExperienceViewportEnvironment?
     private var lastPushedFold: ExperienceFoldEnvironment?
@@ -445,7 +444,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        syncFontScale()
+        syncSafeAreaInsets(force: true)
         syncColorScheme()
     }
 
@@ -465,30 +464,11 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     @objc private func contentSizeCategoryDidChange() {
-        syncFontScale()
+        syncSafeAreaInsets(force: true)
     }
 
     static func fontScale(for traits: UITraitCollection) -> Double {
         Double(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize / 17)
-    }
-
-    private func syncFontScale(force: Bool = false) {
-        guard isViewLoaded,
-              let viewModelName = journeyScreen?.defaultViewModelName else { return }
-        let scale = Self.fontScale(for: traitCollection)
-        guard force || scale != lastPushedFontScale else { return }
-        let command = ExperienceInteractiveStateCommand.snapshot([
-            .init(
-                viewModelName: viewModelName,
-                instanceID: journeyScreen?.defaultInstanceId,
-                instanceName: nil,
-                path: "fontScale",
-                value: .number(scale)
-            ),
-        ])
-        if enqueueStateCommand(command, logFailure: false) {
-            lastPushedFontScale = scale
-        }
     }
 
     /// Mounts the screen. A screen mounts before it joins the host's hierarchy, so
@@ -515,6 +495,7 @@ final class ExperienceScreenViewController: UIViewController {
             pixelWidth: initialWidth,
             pixelHeight: initialHeight,
             initialReduceMotion: lifecycleState.snapshot.reduceMotion,
+            initialFontScale: Self.fontScale(for: traitCollection),
             initialSafeArea: experienceSafeAreaInsets(for: view),
             initialColorScheme: initialColorScheme,
             videoDecoderPool: videoDecoderPool
@@ -593,7 +574,6 @@ final class ExperienceScreenViewController: UIViewController {
             }
         )
         presentationLoop = loop
-        syncFontScale(force: true)
         loop.setPresentationVisible((controllerIsVisible || coveredByLayer) && !contentHidden)
 
         do {
@@ -601,7 +581,8 @@ final class ExperienceScreenViewController: UIViewController {
             let viewport = viewportEnvironment()
             let fold = surfaceView.foldEnvironment
             try await interactive.updateEnvironment(
-                reduceMotion: lifecycleState.snapshot.reduceMotion, safeArea: insets,
+                reduceMotion: lifecycleState.snapshot.reduceMotion,
+                fontScale: Self.fontScale(for: traitCollection), safeArea: insets,
                 viewport: viewport, fold: fold)
             lastPushedSafeAreaInsets = insets
             lastPushedViewport = viewport
@@ -874,7 +855,8 @@ final class ExperienceScreenViewController: UIViewController {
         environmentWriteQueued = true
         if !presentationLoop.enqueue(ExperienceRuntimePresentationQueuedWork { [weak self] in
             guard let values = await self?.takeLatestEnvironment() else { return .work(requestsFrame: false) }
-            try await interactiveScreen.updateEnvironment(safeArea: values.0, viewport: values.1, fold: values.2)
+            try await interactiveScreen.updateEnvironment(fontScale: values.3,
+                safeArea: values.0, viewport: values.1, fold: values.2)
             return .work(requestsFrame: true)
         }, completion: { [weak self] result in
             guard let self else { return }
@@ -927,9 +909,10 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     /// Reads at execution time so rapid hinge callbacks cannot grow the queue.
-    private func takeLatestEnvironment() -> (ExperienceSafeAreaInsets, ExperienceViewportEnvironment, ExperienceFoldEnvironment)? {
+    private func takeLatestEnvironment() -> (ExperienceSafeAreaInsets, ExperienceViewportEnvironment, ExperienceFoldEnvironment, Double)? {
         guard !isShuttingDown, runtimeFailure == nil else { return nil }
-        let values = (experienceSafeAreaInsets(for: view), viewportEnvironment(), surfaceView.foldEnvironment)
+        let values = (experienceSafeAreaInsets(for: view), viewportEnvironment(), surfaceView.foldEnvironment,
+                      Self.fontScale(for: traitCollection))
         lastPushedSafeAreaInsets = values.0
         lastPushedViewport = values.1
         lastPushedFold = values.2
@@ -1437,7 +1420,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func updatePresentationVisibility() {
-        if controllerIsVisible && !contentHidden { syncFontScale() }
+        if controllerIsVisible && !contentHidden { syncSafeAreaInsets(force: true) }
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
