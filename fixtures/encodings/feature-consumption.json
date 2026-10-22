@@ -1,7 +1,7 @@
 {
   "suite": "encodings/feature-consumption",
   "version": 1,
-  "description": "Dedicated authoritative Feature consumption command and receipt. Acceptance is independent of remaining access. Purchase evidence carries the customerKind recorded at consume admission; ordinary consumes and older undeclared purchase commands omit it.",
+  "description": "Dedicated authoritative Feature consumption command and receipt. Acceptance is independent of remaining access. Fresh purchase-backed consumes record customerKind at admission. Retries reuse the recorded declaration; retries reconstructed from legacy evidence without a recorded kind omit it even after sign-in. Ordinary consumes omit it.",
   "vectors": [
     {
       "name": "last unit",

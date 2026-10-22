@@ -661,6 +661,66 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         await relaunched.stopListening()
     }
 
+    func testLegacyEvidenceRetryAfterSignInKeepsCustomerKindUndeclared() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("legacy-consume-kind-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identity = MockIdentityService()
+        identity.reset(keepAnonymousId: true)
+        identity.setAnonymousId("customer-a")
+        let store = TransactionEvidenceStore(customStoragePath: root, scope: scope)
+        XCTAssertTrue(store.save([
+            "transaction-1": evidence(
+                transactionId: "transaction-1", distinctId: "customer-a", featureIds: ["credits"],
+                customerKind: .anonymous
+            ),
+        ]))
+        // The pre-upgrade SDK retained only the purchase evidence after the
+        // consume timed out. It did not persist a consume declaration.
+        let file = scope.storageDirectory(customStoragePath: root)
+            .appendingPathComponent("transaction-evidence.json")
+        var rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacy = try XCTUnwrap(rows["transaction-1"] as? [String: Any])
+        legacy.removeValue(forKey: "featureUseCustomerKinds")
+        rows["transaction-1"] = legacy
+        try JSONSerialization.data(withJSONObject: rows).write(to: file)
+        XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds)
+        identity.setDistinctId("customer-a")
+
+        let api = PurchaseBackedUsageAPI(results: [
+            .failure(URLError(.timedOut)), .success(.init(
+                customerId: "customer-a", featureId: "credits", code: "consumed",
+                allowed: true, unlimited: false, balance: 4, type: .metered
+            )),
+        ])
+        // Relaunch once more after another timeout to catch accidental
+        // backfilling of the declaration during the upgraded retry.
+        for attempt in 0..<2 {
+            let observer = makeObserver(
+                api: api, features: PurchaseBackedFeatureRecorder(), identity: identity,
+                store: TransactionEvidenceStore(customStoragePath: root, scope: scope)
+            )
+            do {
+                let result = try await observer.useFeatureWithPendingPurchase(
+                    distinctId: "customer-a", featureId: "credits", amount: 1,
+                    entityId: nil, metadata: nil
+                )
+                XCTAssertEqual(attempt, 1, "The first upgraded retry should time out")
+                XCTAssertEqual(result?.success, true)
+            } catch let error as URLError {
+                XCTAssertEqual(attempt, 0)
+                XCTAssertEqual(error.code, .timedOut)
+            }
+            await observer.stopListening()
+            XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds)
+        }
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertTrue(requests.allSatisfy { $0.customerKind == nil })
+        XCTAssertEqual(Set(requests.map(\.purchase.eventId)).count, 1)
+        XCTAssertEqual(Set(requests.map(\.purchase.transactionJwt)), ["signed-transaction-1"])
+    }
+
     func testUnsavedConsumeAdmissionFallsBackWithoutSendingPurchaseEvidence() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
@@ -680,7 +740,7 @@ final class PurchaseBackedFeatureUsageTests: XCTestCase {
         XCTAssertNil(result)
         let requests = await api.recordedRequests()
         XCTAssertTrue(requests.isEmpty)
-        XCTAssertNil(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds)
+        XCTAssertEqual(store.load().readableValue?["transaction-1"]?.featureUseCustomerKinds, [:])
         await observer.stopListening()
     }
 

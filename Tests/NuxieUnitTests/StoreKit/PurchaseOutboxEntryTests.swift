@@ -17,6 +17,7 @@ final class PurchaseOutboxEntryTests: XCTestCase {
             productId: "product", distinctId: "customer", recordedAt: Date(timeIntervalSince1970: 100),
             isRevoked: false, customerKind: .identified
         )
+        XCTAssertEqual(admitted.featureUseCustomerKinds, [:], "Fresh evidence permits consume admissions")
         var consumed = admitted
         consumed.featureUseCustomerKinds = ["purchase-use": .anonymous]
         let written = consumed.admitted(over: admitted)
@@ -38,6 +39,8 @@ final class PurchaseOutboxEntryTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: object).write(to: file)
         let old = try XCTUnwrap(store.load().readableValue?["transaction"])
         XCTAssertNil(old.featureUseCustomerKinds)
+        XCTAssertNil(old.replacingAfterFailedSend(at: Date()).featureUseCustomerKinds)
+        XCTAssertNil(old.replacing(answeredAt: Date()).featureUseCustomerKinds)
         XCTAssertEqual(old.customerKind, .identified)
         XCTAssertEqual(old.admissionId, admitted.admissionId)
     }

@@ -1704,7 +1704,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                     ?? identityService.purchaseCustomerKind(of: owner)
                     ?? .identified,
                 featureUseCustomerKinds: existing?.distinctId == owner
-                    ? existing?.featureUseCustomerKinds : nil,
+                    ? existing?.featureUseCustomerKinds : [:],
                 storeKitEnvironment: existing?.storeKitEnvironment
                     ?? storeKitEnvironment(ofSignedTransaction: transactionJws),
                 // A refund's revocation and an explicit claim are new sends.
@@ -3141,7 +3141,7 @@ internal actor TransactionObserver: TransactionObserverProtocol {
                 appAccountToken: update.appAccountToken,
                 reason: reason,
                 customerKind: customerKind,
-                featureUseCustomerKinds: own?.featureUseCustomerKinds,
+                featureUseCustomerKinds: own == nil ? [:] : own?.featureUseCustomerKinds,
                 storeKitEnvironment: storeKitEnvironment(
                     ofSignedTransaction: item.jwsRepresentation
                 ),
@@ -3339,8 +3339,10 @@ internal actor TransactionObserver: TransactionObserverProtocol {
             let admission = identityService.performIfCurrentDistinctIdMatches(distinctId) { snapshot in
                 reloadAndApplyEvidenceChange(transactionId: evidence.transactionId) { current in
                     guard var current, current.admissionId == evidence.admissionId else { return nil }
-                    if current.featureUseCustomerKinds?[operationId] == nil {
-                        var kinds = current.featureUseCustomerKinds ?? [:]
+                    // A missing map belongs to legacy evidence. Its stable
+                    // operation may have been sent before the upgrade, with
+                    // no declaration; preserve that absence on every retry.
+                    if var kinds = current.featureUseCustomerKinds, kinds[operationId] == nil {
                         kinds[operationId] = snapshot.isIdentified ? .identified : .anonymous
                         current.featureUseCustomerKinds = kinds
                     }
