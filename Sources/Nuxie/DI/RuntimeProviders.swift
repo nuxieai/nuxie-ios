@@ -134,7 +134,7 @@ private actor StableSystemEventCaptureRetryQueue {
             key: .init(distinctId: request.distinctId, id: "stable-capture:\(request.eventId)"),
             runId: journeyId ?? "stable-capture:\(request.eventId)", afterFailure: false, cancelsWithJourney: false,
             operation: { [weak self] in
-                guard let self else { return .complete }
+                guard let self else { return .done }
                 return await self.attempt(eventId: request.eventId)
             }))
         guard captured, let localPending = pending.localRoutePending else { return false }
@@ -143,10 +143,10 @@ private actor StableSystemEventCaptureRetryQueue {
     }
 
     private func attempt(eventId: String) async -> JourneyQueueResult {
-        guard let pending = pendingByEventId[eventId] else { return .complete }
+        guard let pending = pendingByEventId[eventId] else { return .done }
         let request = pending.request
         await events.reserveJourneyCapturePosition(eventId: eventId, distinctId: request.distinctId)
-        guard let captured = await events.captureAndRouteSystemEvent(request) else { return .retry }
+        guard let captured = await events.captureAndRouteSystemEvent(request) else { return .failed }
         pending.localRoutePending = captured.localRoutePending
         if captured.localRoutePending {
             // Ensure the event joins at the reserved position when routing is
@@ -156,7 +156,7 @@ private actor StableSystemEventCaptureRetryQueue {
             await events.releaseJourneyCapturePosition(eventId: eventId, distinctId: request.distinctId)
         }
         pendingByEventId.removeValue(forKey: eventId)
-        return .complete
+        return .done
     }
 }
 

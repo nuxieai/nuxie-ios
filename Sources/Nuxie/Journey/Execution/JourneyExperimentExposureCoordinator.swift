@@ -84,7 +84,7 @@ actor JourneyExperimentExposureCoordinator {
         let generation = generation
         await events.enqueueJourneyWork(.init(key: .init(distinctId: journal.distinctId, id: "exposure-publication"),
             operation: { [weak self] in
-                guard let self else { return .complete }
+                guard let self else { return .done }
                 return await self.retryOnce(in: journal, generation: generation)
             }))
     }
@@ -92,7 +92,7 @@ actor JourneyExperimentExposureCoordinator {
     private func retryOnce(
         in journal: JourneyRunJournal, generation: UInt64
     ) async -> JourneyQueueResult {
-        guard generation == self.generation else { return .complete }
+        guard generation == self.generation else { return .done }
         var markFailed = false
         let journalKey = journal.distinctId
         let marks = pendingMarks[journalKey].map { Array($0.values) } ?? []
@@ -125,14 +125,14 @@ actor JourneyExperimentExposureCoordinator {
             if settled && !markFailed && !reportsPending
                     && pendingMarks[journalKey]?.isEmpty != false {
                 _ = try await journal.finalizeRevocation()
-                return .complete
+                return .done
             }
         } catch {
             LogWarning(
                 "JourneyExperimentExposureCoordinator: exposure retry remains pending: \(error)"
             )
         }
-        return .retry
+        return .failed
     }
 
     private func retainPendingMark(

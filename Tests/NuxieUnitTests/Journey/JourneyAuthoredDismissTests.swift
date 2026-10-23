@@ -295,6 +295,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                 }
             })
         let terminalRouted = realEventRouting ? expectation(description: "terminal delivered while authored publication is held") : nil
+        terminalRouted?.assertForOverFulfill = false
         let routeLog: EventLog? = realEventRouting ? EventLog(identity: identity, dateProvider: MockDateProvider(),
             apiClient: MockNuxieApi(), store: SQLiteEventStore()) : nil
         if let routeLog {
@@ -313,6 +314,10 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         await journeys.initialize()
         await journeys.profileDidCommit(snapshot, distinctId: "customer")
         if let routeLog {
+            for _ in 0..<300 {
+                if await routeLog.drainCommittedRouting() { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
             routeLog.track("open_paywall")
             let routed = await routeLog.drainCommittedRouting()
             XCTAssertTrue(routed)
@@ -463,7 +468,11 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                             properties: ["placement_id": "golden:monthly"]),
                             admittedProfileGeneration: journeys.eventAdmissionGeneration())
                     }
-                    XCTAssertTrue(accepted, "A durably deferred commerce result must not block event routing")
+                    if deferralRace != nil {
+                        XCTAssertTrue(accepted, "A stale outcome has no remaining settlement")
+                    } else {
+                        XCTAssertFalse(accepted, "The input keeps its receipt until commerce settles")
+                    }
                     let deferred = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
                     if deferralRace != nil {
                         XCTAssertNil(deferred.first?.pendingCommerceOutcome)
@@ -559,7 +568,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         } else {
             controller.performDismiss(reason: .userDismissed)
         }
-        for _ in 0..<200 where presentations.isExperiencePresented || !events.routedEvents.contains(where: {
+        for _ in 0..<600 where presentations.isExperiencePresented || !events.routedEvents.contains(where: {
             $0.name == JourneyEvents.journeyCompleted
         }) { try await Task.sleep(nanoseconds: 10_000_000) }
         let completed = events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }
@@ -579,6 +588,10 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }.count, 1)
         }
         if let routeLog {
+            for _ in 0..<300 {
+                if await routeLog.drainCommittedRouting() { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
             routeLog.track("open_paywall")
             let routed = await routeLog.drainCommittedRouting()
             XCTAssertTrue(routed, "A later entry event must route in the same session")

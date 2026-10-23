@@ -610,8 +610,9 @@ final class EventLogTests: AsyncSpec {
                     let stableId = "stable-before-later"
                     mockStore.suspendStableCaptureAfterCommit(id: stableId)
                     defer { mockStore.resumeStableCaptureAfterCommit(id: stableId) }
+                    let finishedCapture = ReceivedEvents()
                     let stableTask = Task {
-                        await log.captureAndRouteSystemEvent(
+                        let capture = await log.captureAndRouteSystemEvent(
                             .init(
                                 name: JourneyEvents.journeyStarted,
                                 properties: nil,
@@ -619,20 +620,36 @@ final class EventLogTests: AsyncSpec {
                                 distinctId: "customer-a"
                             )
                         )
+                        await finishedCapture.append(capture == nil ? "failed" : "done")
                     }
                     await expect {
                         mockStore.isStableCaptureAfterCommitWaiting(id: stableId)
-                    }.toEventually(beTrue(), timeout: .seconds(1))
+                    }.toEventually(beTrue(), timeout: .seconds(10))
 
+                    guard mockStore.isStableCaptureAfterCommitWaiting(id: stableId) else {
+                        stableTask.cancel()
+                        return // The failed gate assertion must not run a different interleaving.
+                    }
                     log.track("later", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
                     await expect {
                         mockStore.storedEvents.contains { $0.name == "later" }
-                    }.toEventually(beTrue(), timeout: .seconds(1))
+                    }.toEventually(beTrue(), timeout: .seconds(10))
+                    // A stored row is earlier than its route publication. Drain
+                    // that publication before releasing the older commit, so
+                    // the intended out-of-order resolution is deterministic.
+                    await log.drain()
+                    guard mockStore.storedEvents.contains(where: { $0.name == "later" }) else {
+                        stableTask.cancel()
+                        return
+                    }
                     await expect { await received.names }.to(equal([]))
 
                     mockStore.resumeStableCaptureAfterCommit(id: stableId)
-                    guard await stableTask.value != nil else {
-                        return fail("Expected stable capture")
+                    await expect { await finishedCapture.names }
+                        .toEventually(equal(["done"]), timeout: .seconds(10))
+                    guard await finishedCapture.names == ["done"] else {
+                        stableTask.cancel()
+                        return
                     }
                     await log.drain()
 

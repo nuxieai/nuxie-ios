@@ -7,6 +7,220 @@ import XCTest
 /// dropped: it starts from the copy it is handled under, once (UNIV-4589).
 final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
+    func testEveryMatchNativeFailureResumesTheAdmittedCursorWithoutRepeatingItsEffect() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let reads = SelectedNativeFailures(failures: [1])
+        let rejected = expectation(description: "Native preparation refused the admitted start")
+        let gate = JourneyNthRoutedCaptureGate(eventName: "refused", suspendedCall: 1)
+        addTeardownBlock { await gate.release() }
+        let steps = try JSONDecoder().decode([Journey.Step].self, from: Data(#"""
+        [
+          {"kind":"action","id":"effect","action":{"type":"send_event","eventName":"before_native"},"outlets":{"next":"branch"}},
+          {"kind":"action","id":"branch","action":{"type":"condition","branches":[{"id":"yes","condition":{"type":"Compare","op":"==","left":{"type":"Response.Field","key":"answer"},"right":{"type":"Number","value":1}}}]},"outlets":{"yes":"wait","default":"wait"}},
+          {"kind":"action","id":"wait","action":{"type":"delay","durationMs":60000},"outlets":{"next":"satisfied"}},
+          {"kind":"complete","id":"satisfied","outcome":"satisfied"}
+        ]
+        """#.utf8))
+        let live = try await liveTimedWait(directory: directory, steps: steps,
+            prepareNativeValues: { _, _, _, _ in try await reads.attempt() },
+            afterJourney: { event, accepted in
+                if event.name == "start_waiting", !accepted {
+                    rejected.fulfill()
+                    await gate.intercept(event: "refused")
+                }
+            })
+        live.events.track("start_waiting")
+        await fulfillment(of: [rejected], timeout: 5)
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let failedRuns = try await journal.runs()
+        let admitted = try XCTUnwrap(failedRuns.first)
+        XCTAssertEqual(admitted.stepId, "branch")
+        XCTAssertNil(admitted.park)
+        XCTAssertEqual(starts(in: live.store), 1)
+        XCTAssertTrue(live.store.pendingCommittedRoutes.contains { $0.event.name == "start_waiting" })
+        await gate.release()
+        for _ in 0..<600 {
+            if try await journal.runs().first?.park != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await live.events.drain()
+        let resumedRuns = try await journal.runs()
+        XCTAssertEqual(resumedRuns.map(\.id), [admitted.id])
+        XCTAssertEqual(resumedRuns.first?.stepId, "wait")
+        XCTAssertNotNil(resumedRuns.first?.park)
+        XCTAssertEqual(starts(in: live.store), 1)
+        XCTAssertEqual(live.store.storedEvents.filter { $0.name == "before_native" }.count, 1)
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    func testPurchaseInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() async throws {
+        try await assertCommerceInputKeepsSettlement(type: "purchase", eventName: SystemEventNames.purchaseCompleted,
+            outlet: "completed")
+    }
+
+    func testRestoreInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() async throws {
+        try await assertCommerceInputKeepsSettlement(type: "restore", eventName: SystemEventNames.restoreCompleted,
+            outlet: "restored")
+    }
+
+    private func assertCommerceInputKeepsSettlement(type: String, eventName: String, outlet: String) async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let reads = SelectedNativeFailures(failures: [])
+        let rejected = expectation(description: "Restoration refused the terminal input")
+        let gate = JourneyNthRoutedCaptureGate(eventName: "refused", suspendedCall: 1)
+        addTeardownBlock { await gate.release() }
+        let steps = try JSONDecoder().decode([Journey.Step].self, from: Data("""
+        [
+          {"kind":"action","id":"wait","action":{"type":"wait_until","trigger":{"kind":"event","eventName":"\(eventName)"},"maxTimeMs":60000},"outlets":{"satisfied":"branch","timeout":"timeout"}},
+          {"kind":"action","id":"branch","action":{"type":"condition","branches":[{"id":"yes","condition":{"type":"Compare","op":"==","left":{"type":"Response.Field","key":"answer"},"right":{"type":"Number","value":1}}}]},"outlets":{"yes":"after","default":"after"}},
+          {"kind":"action","id":"after","action":{"type":"delay","durationMs":60000},"outlets":{"next":"timeout"}},
+          {"kind":"action","id":"commerce","action":{"type":"\(type)","placementId":"placement"},"outlets":{"\(outlet)":"satisfied"}},
+          {"kind":"complete","id":"satisfied","outcome":"satisfied"},
+          {"kind":"complete","id":"timeout","outcome":"timeout"}
+        ]
+        """.utf8))
+        let live = try await liveTimedWait(directory: directory, steps: steps,
+            prepareNativeValues: { _, _, _, _ in try await reads.attempt() },
+            afterJourney: { event, accepted in
+                if event.name == eventName, !accepted {
+                    rejected.fulfill()
+                    await gate.intercept(event: "refused")
+                }
+            })
+        live.events.track("start_waiting")
+        await live.events.drain()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let initialRuns = try await journal.runs()
+        let run = try XCTUnwrap(initialRuns.first)
+        let park = try XCTUnwrap(run.park)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        try await journal.transition(run.id, stepId: "commerce", context: run.context)
+        let effectId = try await journal.claimEffect(run.id, stepId: "commerce")
+        let retained = try await journal.retainPresentationCommerce(run.id, stepId: "commerce", effectId: effectId,
+            placementId: "placement", admission: admission)
+        XCTAssertNotNil(retained)
+        try await journal.transition(run.id, stepId: "wait", context: run.context,
+            checkpoint: .init(anchorAtMillis: try XCTUnwrap(park.anchorAt.flatMap(JourneyTime.milliseconds)),
+                wakeAtMillis: try XCTUnwrap(park.wakeAt.flatMap(JourneyTime.milliseconds))))
+        // Fail restoration first, then execution after that checkpoint has
+        // resumed. Both failures belong to this same terminal input.
+        await reads.reset(failures: [1, 3])
+        let captured = await live.events.captureAndRouteSystemEvent(.init(name: eventName,
+            properties: ["placement_id": "placement"], eventId: effectId, distinctId: "customer"))
+        XCTAssertNotNil(captured)
+        await fulfillment(of: [rejected], timeout: 5)
+        XCTAssertEqual(completions(in: live.store), [])
+        XCTAssertTrue(live.store.pendingCommittedRoutes.contains { $0.event.id == effectId })
+        await gate.release()
+        for _ in 0..<600 {
+            if !completions(in: live.store).isEmpty { break }
+            if !live.store.pendingCommittedRoutes.contains(where: { $0.event.id == effectId }) {
+                XCTAssertEqual(completions(in: live.store), ["satisfied"],
+                    "The terminal route cannot be acknowledged while settlement is unfinished")
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        for _ in 0..<300 {
+            if !live.store.pendingCommittedRoutes.contains(where: { $0.event.id == effectId }) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(completions(in: live.store), ["satisfied"])
+        XCTAssertFalse(live.store.pendingCommittedRoutes.contains { $0.event.id == effectId })
+        XCTAssertEqual(starts(in: live.store), 1)
+        let remaining = try await journal.runs()
+        XCTAssertTrue(remaining.isEmpty)
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    func testPendingScreenPublicationKeepsTheDeadlineEntryWithBackoff() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let live = try await liveTimedWait(directory: directory,
+            step: Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)[0])
+        live.events.track("start_waiting")
+        await live.events.drain()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await journal.runs()
+        let run = try XCTUnwrap(runs.first)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        let staged = try await journal.stagePresentationPublication(run.id, expectedStepId: run.stepId,
+            expectedCheckpoint: .init(anchorAtMillis: 1_000_000, wakeAtMillis: 1_060_000),
+            publication: .init(invocationId: "held-publication",
+                source: .init(screenId: "screen", actionId: "tap", componentId: nil, instanceId: nil),
+                context: run.context, items: []), admission: admission)
+        XCTAssertTrue(staged)
+        let attempts = DeadlineAttempts()
+        await live.events.setJourneyDeadlineHandler { [service = live.service] deadline in
+            await attempts.record()
+            let outcome = await service.handleJourneyDeadline(deadline)
+            if case .notYet = outcome {} else { await attempts.unexpected() }
+            return outcome
+        }
+        for _ in 0..<300 {
+            if live.sleeper.pendingSleepCount > 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertGreaterThan(live.sleeper.pendingSleepCount, 0)
+        live.clock.advance(by: 61)
+        live.sleeper.completeAllSleeps()
+        for _ in 0..<200 {
+            if await attempts.times.count > 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        let blockedAttempts = await attempts.times
+        XCTAssertFalse(blockedAttempts.isEmpty)
+        for (first, second) in zip(blockedAttempts, blockedAttempts.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(second - first, 0.99)
+        }
+        XCTAssertEqual(completions(in: live.store), [])
+        let blockedRuns = try await journal.runs()
+        XCTAssertEqual(blockedRuns.first?.park, run.park, "Publication must settle before consuming the timed checkpoint")
+        XCTAssertEqual(blockedRuns.first?.pendingPresentationPublication?.invocationId, "held-publication")
+        let unexpected = await attempts.unexpectedCount
+        XCTAssertEqual(unexpected, 0, "A pending publication is explicitly notYet")
+        let keys = await live.events.queuedJourneyRetryKeys()
+        XCTAssertEqual(keys.filter { $0.id.hasPrefix("deadline:") }.count, 1)
+        let cleared = try await journal.clearPresentationPublication(run.id, invocationId: "held-publication", admission: admission)
+        XCTAssertTrue(cleared)
+        await live.events.setJourneyDeadlineHandler { [service = live.service] deadline in
+            await service.handleJourneyDeadline(deadline)
+        }
+        for _ in 0..<400 where completions(in: live.store).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(completions(in: live.store), ["timeout"])
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    private actor SelectedNativeFailures {
+        private var count = 0
+        private var failures: Set<Int>
+        init(failures: Set<Int>) { self.failures = failures }
+        func reset(failures: Set<Int>) { count = 0; self.failures = failures }
+        func attempt() throws {
+            count += 1
+            if failures.contains(count) { throw JourneyJournalError.invalidState }
+        }
+    }
+
+    private actor DeadlineAttempts {
+        private(set) var times: [TimeInterval] = []
+        private(set) var unexpectedCount = 0
+        func record() { times.append(ProcessInfo.processInfo.systemUptime) }
+        func unexpected() { unexpectedCount += 1 }
+    }
+
     func testFailedEventRestorationUsesTheQueueAndGatesOnlyRenderedBackgroundRetries() async throws {
         for hasScreens in [false, true] {
             let directory = temporaryDirectory()
@@ -143,7 +357,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         await events.drain()
         await events.setJourneyDeadlineHandler { [weak service] deadline in
             await observed.append(deadline.wakeAt == launch.addingTimeInterval(10) ? "deadline10" : "deadline20")
-            return await service?.handleJourneyDeadline(deadline) ?? .complete
+            return await service?.handleJourneyDeadline(deadline) ?? .done
         }
         let hold = await events.deferCommittedRouting()
         for _ in 0..<200 where !sleeper.pendingSleepDurations.contains(10) {
@@ -561,7 +775,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let service = live.service
         await live.events.setJourneyDeadlineHandler { [weak service] deadline in
             await deadlines.append(deadline)
-            return await service?.handleJourneyDeadline(deadline) ?? .complete
+            return await service?.handleJourneyDeadline(deadline) ?? .done
         }
         // Foreground first confirms the saved pendingEvent, then resumeParked
         // writes its selected outlet and consumes the park. Fail that second
@@ -797,8 +1011,8 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             let deadline = try XCTUnwrap(Self.deadline(run))
             let service = live.service
             await live.events.setJourneyDeadlineHandler { [weak service] deadline in
-                let accepted = await service?.handleJourneyDeadline(deadline) ?? .complete
-                if case .complete = accepted { await deadlineDeliveries.record(true) }
+                let accepted = await service?.handleJourneyDeadline(deadline) ?? .done
+                if case .done = accepted { await deadlineDeliveries.record(true) }
                 else { await deadlineDeliveries.record(false) }
                 return accepted
             }
@@ -904,7 +1118,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock)
         let routing: any EventLogProtocol = events
         events.replayPendingRoutesHandler = {
-            await routing.setJourneyDeadlineHandler { deadline in await queued.append(deadline); return .complete }
+            await routing.setJourneyDeadlineHandler { deadline in await queued.append(deadline); return .done }
             await service.handleEvent(Self.event("start_waiting", at: clock.now().addingTimeInterval(-1)))
             // Let the deadline inspection queued by the park run under this journal.
             await events.drain()
@@ -960,7 +1174,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         await service.handleEvent(Self.event("go", at: clock.now()))
         clock.advance(by: 0.5)
         let handled = await service.handleJourneyDeadline(stale)
-        if case .complete = handled {} else { XCTFail("A stale deadline is already complete") }
+        if case .done = handled {} else { XCTFail("A stale deadline is already complete") }
         let current = try await journal.runs().first
         XCTAssertEqual(current?.stepId, "second_wait")
         XCTAssertNotNil(current?.park)
@@ -968,7 +1182,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         clock.advance(by: 2)
         let next = try XCTUnwrap(current.flatMap(Self.deadline))
         let timedOut = await service.handleJourneyDeadline(next)
-        if case .complete = timedOut {} else { XCTFail("The next deadline completes normally") }
+        if case .done = timedOut {} else { XCTFail("The next deadline completes normally") }
         XCTAssertEqual(completions(in: events), ["timeout"])
         await service.shutdown()
     }

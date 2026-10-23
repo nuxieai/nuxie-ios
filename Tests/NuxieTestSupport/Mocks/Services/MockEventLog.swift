@@ -74,8 +74,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         let handler = lock.withLock { deadlineHandler }
         let key = JourneyQueueKey(distinctId: deadline.distinctId,
             id: "deadline:\(deadline.runId):\(deadline.stepId):\(deadline.anchorAt?.timeIntervalSince1970 ?? -1):\(deadline.wakeAt.timeIntervalSince1970)")
-        _ = await journeyQueue.submit(key: key, kind: .deadline, lane: "run:\(deadline.runId)", waitForAttempt: false) {
-            await handler?(deadline) ?? .complete
+        _ = await journeyQueue.submit(key: key, kind: .deadline(deadline.wakeAt), lane: "run:\(deadline.runId)", waitForAttempt: false) {
+            await handler?(deadline) ?? .done
         }
     }
     private var boundConversionScope: JourneyStorageScope?

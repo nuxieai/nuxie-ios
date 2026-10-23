@@ -210,10 +210,50 @@ actor JourneyService {
     }
     private enum DeferredJourneyWork: Error { case background, unavailable }
     private struct JourneyContinuation: Error, CustomStringConvertible {
-        let runId: String
-        let resume: @Sendable () async throws -> Void
-        var description: String { "Deferred Journey continuation" }
+        let execution: SavedExecution
+        var blocked = false
+        var runId: String { execution.runId }
+        var description: String { "Deferred Journey execution" }
     }
+    /// Inputs to execution, never an executable continuation. Each attempt reads
+    /// the journal's current cursor; dispatched effects stay behind that cursor.
+    private struct SavedExecution: Sendable {
+        let runId: String
+        let release: AuthenticatedJourneyRelease
+        let token: JourneyProfileFenceToken
+        var signal = JourneyControlExecutor.Signal()
+        var initialStepId: String? = nil
+        var checkpoint: JourneyControlExecutor.Checkpoint? = nil
+        var startingEventAt: Date? = nil
+        var startingLag: TimeInterval? = nil
+        var presentationSource: ScreenEmissionSource? = nil
+        var eventSource: ExperienceResolvedEventSource? = nil
+        var dismissPresentation = true
+        var admission: JourneyCommitAdmission? = nil
+    }
+    private enum JourneyWork: Sendable {
+        case admit(ArmedJourney, ProfileState, NuxieEvent?, ExperiencePresentationAttempt?)
+        case input(String, NuxieEvent?, JourneyDeadline?, ParkCheckpoint?, Bool)
+        case execution(SavedExecution)
+        case commerce(RunExecutionKey)
+        var runId: String? {
+            switch self {
+            case .admit: return nil
+            case .input(let id, _, _, _, _): return id
+            case .execution(let input): return input.runId
+            case .commerce(let id): return id.runID
+            }
+        }
+    }
+    private struct SavedWork {
+        var work: JourneyWork
+        var park: ParkCommitFailure? = nil
+        var execution: SavedExecution? = nil
+        var inputApplied = false
+        /// Settlement belongs to the input even if its execution is deferred.
+        var settlement: NuxieEvent? = nil
+    }
+    private var savedJourneyWork: [JourneyQueueKey: SavedWork] = [:]
     private struct ExecutionRetryTiming: Error {
         let startingLag: TimeInterval?
     }
@@ -241,6 +281,8 @@ actor JourneyService {
     private var journal: JourneyRunJournal? {
         didSet {
             journalGeneration &+= 1
+            savedJourneyWork.removeAll()
+            commerceInputOwners.removeAll()
             enqueuedDeadlines.removeAll()
             cancelWake()
         }
@@ -270,13 +312,14 @@ actor JourneyService {
     /// profile/identity transition retries it successfully.
     private var revokingCustomers: Set<String> = []
     private var inFlightAttempts: Set<AttemptKey> = []
-    private struct RunExecutionKey: Hashable {
+    private struct RunExecutionKey: Hashable, Sendable {
         let runID: String
         let owner: String
         let generation: UInt64
     }
     private var activeRunExecutions: [RunExecutionKey: Int] = [:]
     private var deferredCommerceOutcomes: [RunExecutionKey: NuxieEvent] = [:]
+    private var commerceInputOwners: [RunExecutionKey: JourneyQueueKey] = [:]
     private var pendingPresentationDismissalContinuations: [
         String: PendingPresentationDismissalContinuation
     ] = [:]
@@ -363,7 +406,7 @@ extension JourneyService {
     func prepareForEvents() async {
         guard !initialized else { return }
         await events.setJourneyDeadlineHandler { [weak self] deadline in
-            await self?.handleJourneyDeadline(deadline) ?? .complete
+            await self?.handleJourneyDeadline(deadline) ?? .done
         }
 
         startupRoutingDeferral = await events.deferCommittedRouting()
@@ -723,9 +766,11 @@ extension JourneyService {
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
+        savedJourneyWork.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
+        commerceInputOwners.removeAll()
         let retiredValues = takeNativeValues(owner: distinctId)
         if journalToAbandon != nil { revokingCustomers.insert(distinctId) }
         await events.cancelJourneyWork(distinctId: distinctId)
@@ -765,9 +810,11 @@ extension JourneyService {
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
         inFlightAttempts.removeAll()
+        savedJourneyWork.removeAll()
         pendingPresentationDismissalContinuations.removeAll()
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
+        commerceInputOwners.removeAll()
         let retiredValues = nativeValuesByRun.values.map(\.values)
         nativeValuesByRun.removeAll()
         enqueuedDeadlines.removeAll()
@@ -836,10 +883,8 @@ extension JourneyService {
                 && arm.entryCondition.eventName == event.name {
                 let key = armWorkID(arm, state: state, event: event)
                 let done = await events.performJourneyWork(workRequest(id: key,
-                    runId: arm.binding.journeyId ?? "admission:\(arm.reference.descriptorSha256)", eventPlan: true) { [weak self] in
-                    try await self?.attemptStart(arm, state: state, event: event,
-                        presentationAttempt: presentationAttempt)
-                })
+                    runId: arm.binding.journeyId ?? "admission:\(arm.reference.descriptorSha256)", eventPlan: true,
+                    work: .admit(arm, state, event, presentationAttempt)))
                 complete = done && complete
             }
         }
@@ -853,56 +898,135 @@ extension JourneyService {
 
     private func workRequest(id: String, runId: String? = nil, afterFailure: Bool = false,
         generation: UInt64? = nil, bypassesHold: Bool = false, eventPlan: Bool = false,
-        operation: @escaping @Sendable () async throws -> Void) -> JourneyWorkRequest {
+        work: JourneyWork) -> JourneyWorkRequest {
         let owner = journal?.distinctId ?? identity.getDistinctId()
-        return .init(key: .init(distinctId: owner, id: id), runId: runId,
+        let key = JourneyQueueKey(distinctId: owner, id: id)
+        return .init(key: key, runId: runId,
             afterFailure: afterFailure, bypassesHold: bypassesHold, eventPlan: eventPlan, operation: { [weak self] in
-                guard let self else { return .complete }
-                return await self.attemptQueuedJourney(owner: owner, generation: generation, operation: operation)
+                guard let self else { return .done }
+                return await self.attemptQueuedJourney(key: key, generation: generation, work: work)
             })
     }
 
-    private func attemptQueuedJourney(owner: String, generation: UInt64?,
-        operation: @escaping @Sendable () async throws -> Void) async -> JourneyQueueResult {
-        guard initialized, identity.getDistinctId() == owner,
-              generation == nil || generation == journalGeneration else { return .complete }
-        guard !revokingCustomers.contains(owner) else { return .retry }
+    private func attemptQueuedJourney(key: JourneyQueueKey, generation: UInt64?,
+        work: JourneyWork) async -> JourneyQueueResult {
+        guard initialized, identity.getDistinctId() == key.distinctId,
+              generation == nil || generation == journalGeneration else {
+            savedJourneyWork.removeValue(forKey: key)
+            return .done
+        }
+        guard !revokingCustomers.contains(key.distinctId), let journal else { return .notYet }
+        var saved = savedJourneyWork[key] ?? SavedWork(work: work)
         do {
-            try await operation()
-            await scheduleNextWake()
-            return .complete
-        } catch let failure as ParkCommitFailure {
-            return .continueWith { [weak self] in
-                guard let self else { return .complete }
-                return await self.attemptQueuedJourney(owner: owner, generation: failure.journalGeneration) {
-                    try await self.retryParkCommit(failure)
-                    if failure.presentationWakeAt != nil {
-                        try await self.resumeQueuedRun(runId: failure.run.id, event: nil,
-                            journal: failure.journal, generation: failure.journalGeneration)
+            if let park = saved.park {
+                try await retryParkCommit(park)
+                saved.park = nil
+                saved.inputApplied = true
+                // A failed checkpoint write has now saved its effect. Do not
+                // execute that checkpoint a second time or move its deadline.
+                if park.presentationWakeAt != nil {
+                    saved.work = .input(park.run.id, nil, nil, nil, false)
+                }
+            } else if let execution = saved.execution {
+                try await resumeSavedExecution(execution, journal: journal)
+                saved.execution = nil
+                saved.inputApplied = true
+            } else {
+                switch saved.work {
+                case .admit(let arm, let state, let event, let attempt):
+                    try await attemptStart(arm, state: state, event: event, presentationAttempt: attempt)
+                case .input(let runId, let event, let deadline, let expected, let forceNative):
+                    if !saved.inputApplied {
+                        saved.settlement = event
+                        try await resumeQueuedRun(runId: runId, event: event, journal: journal,
+                            generation: journalGeneration, deadline: deadline, expected: expected, forceNative: forceNative)
+                        saved.inputApplied = true
                     }
+                case .execution(let execution):
+                    try await resumeSavedExecution(execution, journal: journal)
+                case .commerce(let id):
+                    try await settleQueuedCommerce(id)
                 }
             }
-        } catch let continuation as JourneyContinuation {
-            return .continueWith { [weak self] in
-                guard let self else { return .complete }
-                return await self.attemptQueuedJourney(owner: owner, generation: generation,
-                    operation: continuation.resume)
+            if let event = saved.settlement, let runId = saved.work.runId {
+                guard try await resumePresentationActionOutcome(event: event, onlyRunId: runId) else {
+                    throw DeferredJourneyWork.unavailable
+                }
+                saved.settlement = nil
             }
-        } catch { return .retry }
+            // A declined presentation is a saved availability park, but its
+            // input is unfinished until that same entry can present it.
+            if let runId = saved.work.runId,
+               let run = try await journal.runs().first(where: { $0.id == runId && $0.completion == nil }),
+               run.park?.anchorAt == nil, run.park?.wakeAt != nil {
+                saved.work = .input(runId, nil, nil, nil, false)
+                savedJourneyWork[key] = saved
+                return .notYet
+            }
+            savedJourneyWork.removeValue(forKey: key)
+            for owner in commerceInputOwners.filter({ $0.value == key }).keys {
+                commerceInputOwners.removeValue(forKey: owner)
+                deferredCommerceOutcomes.removeValue(forKey: owner)
+            }
+            await scheduleNextWake()
+            return .done
+        } catch let failure as ParkCommitFailure {
+            if case .admit = saved.work, let admitted = savedJourneyWork[key] { saved = admitted }
+            saved.park = failure
+            savedJourneyWork[key] = saved
+            return .failed
+        } catch let continuation as JourneyContinuation {
+            if case .admit = saved.work, let admitted = savedJourneyWork[key] { saved = admitted }
+            saved.execution = continuation.execution
+            savedJourneyWork[key] = saved
+            return continuation.blocked ? .notYet : .failed
+        } catch let blocked as DeferredJourneyWork {
+            if case .admit = saved.work, let admitted = savedJourneyWork[key] { saved = admitted }
+            savedJourneyWork[key] = saved
+            switch blocked { case .background, .unavailable: return .notYet }
+        } catch {
+            savedJourneyWork[key] = saved
+            return .failed
+        }
+    }
+
+    private func resumeSavedExecution(_ input: SavedExecution, journal: JourneyRunJournal) async throws {
+        guard executionFence.isCurrent(input.token), isCurrentIdentity(journal: journal),
+              let current = try await readJournalRuns(journal).first(where: { $0.id == input.runId }) else { return }
+        if current.completion != nil {
+            try await JourneyReporter(journal: journal, events: events).flushPending()
+            if try await journal.runs().contains(where: { $0.id == input.runId }) { throw DeferredJourneyWork.unavailable }
+            return
+        }
+        if !foreground, !input.release.descriptor.leg.screens.isEmpty { throw DeferredJourneyWork.background }
+        if current.pendingPresentationPublication != nil {
+            try await recoverPendingPresentationPublications(in: journal, runId: current.id)
+        }
+        guard let latest = try await journal.runs().first(where: { $0.id == current.id && $0.completion == nil }) else { return }
+        if latest.park != nil {
+            try await resumeQueuedRun(runId: latest.id, event: nil, journal: journal, generation: journalGeneration)
+            return
+        }
+        try await JourneyReporter(journal: journal, events: events).flushPending()
+        try await execute(latest, release: input.release, executionFenceToken: input.token,
+            signal: input.signal, checkpoint: latest.stepId == input.initialStepId ? input.checkpoint : nil,
+            journal: journal, startingEventAt: input.startingEventAt, startingLag: input.startingLag,
+            presentationSource: input.presentationSource, eventSource: input.eventSource,
+            dismissPresentationOnCompletion: input.dismissPresentation, originAdmission: input.admission)
     }
 
 }
 
 extension JourneyService {
     func handleJourneyDeadline(_ deadline: JourneyDeadline) async -> JourneyQueueResult {
-        guard initialized, deadline.distinctId == identity.getDistinctId() else { return .complete }
-        guard let journal, journal.distinctId == deadline.distinctId else { return .retry }
+        guard initialized, deadline.distinctId == identity.getDistinctId() else { return .done }
+        guard let journal, journal.distinctId == deadline.distinctId else { return .failed }
         let generation = journalGeneration
-        let result = await attemptQueuedJourney(owner: deadline.distinctId, generation: generation) {
-            try await self.resumeQueuedRun(runId: deadline.runId, event: nil, journal: journal,
-                generation: generation, deadline: deadline)
-        }
-        guard case .complete = result else { return result }
+        let key = JourneyQueueContext.key ?? .init(distinctId: deadline.distinctId,
+            id: "deadline:\(deadline.runId):\(deadline.stepId):\(deadline.wakeAt.timeIntervalSince1970)")
+        let result = await attemptQueuedJourney(key: key, generation: generation,
+            work: .input(deadline.runId, nil, deadline, nil, false))
+        guard case .done = result else { return result }
         // An attempt that returned without consuming a current checkpoint
         // (a background gate, or a fence that moved during restoration) keeps
         // its entry for the retry timer. The scheduler never queues it again.
@@ -910,11 +1034,11 @@ extension JourneyService {
             do {
                 if try await journal.runs().contains(where: {
                     $0.completion == nil && self.deadline(for: $0, distinctId: journal.distinctId) == deadline
-                }) { return .retry }
-            } catch { return .retry }
+                }) { return .notYet }
+            } catch { return .failed }
         }
         enqueuedDeadlines.remove(deadline)
-        return .complete
+        return .done
     }
 
 }
@@ -974,10 +1098,12 @@ private extension JourneyService {
                     return false
                 }
                 if deferredCommerceOutcomes[executionKey] == nil { deferredCommerceOutcomes[executionKey] = event }
+                if let key = JourneyQueueContext.key { commerceInputOwners[executionKey] = key }
                 // The authored route may have finished while the journal write suspended.
                 if activeRunExecutions[executionKey, default: 0] == 0 { endRunExecution(executionKey) }
-                // The journal owns settlement now. Other subscribers and Journey entries may proceed.
-                return true
+                // The input keeps settlement as remaining work. Its receipt
+                // stays pending, while unrelated Journey lanes may proceed.
+                return false
             }
             if candidate.pendingPresentationPublication != nil {
                 beginRunExecution(executionKey)
@@ -988,6 +1114,18 @@ private extension JourneyService {
                     return false
                 }
                 endRunExecution(executionKey)
+                return try await resumePresentationActionOutcome(event: event, excludingRunId: excludingRunId, onlyRunId: onlyRunId)
+            }
+            if candidate.pendingCommerceOutcome != nil, candidate.authoredCloseOutcome == nil,
+               candidate.park == nil, candidate.stepId != step.id {
+                // A renderer route that was already accepted may have queued
+                // its continuation behind this input while publication settled.
+                // Resume its saved cursor before applying the terminal outcome.
+                try await resumeSavedExecution(.init(runId: candidate.id, release: release, token: token), journal: journal)
+                if try await journal.runs().contains(where: {
+                    $0.id == candidate.id && $0.completion == nil && $0.stepId == candidate.stepId
+                        && $0.authoredCloseOutcome == nil && $0.park == nil
+                }) { return false }
                 return try await resumePresentationActionOutcome(event: event, excludingRunId: excludingRunId, onlyRunId: onlyRunId)
             }
             let nextStepId = step.outlets?[route.outlet]
@@ -1030,7 +1168,7 @@ private extension JourneyService {
         let remaining = max(0, activeRunExecutions[id, default: 0] - 1)
         if remaining > 0 { activeRunExecutions[id] = remaining; return }
         activeRunExecutions.removeValue(forKey: id)
-        if deferredCommerceOutcomes[id] != nil {
+        if deferredCommerceOutcomes[id] != nil, commerceInputOwners[id] == nil {
             scheduleCommerceSettlement(id)
         }
     }
@@ -1044,9 +1182,7 @@ private extension JourneyService {
 
     private func enqueueCommerceSettlement(_ id: RunExecutionKey) async {
         await events.enqueueJourneyWork(workRequest(id: "commerce:\(id.runID):\(id.generation)", runId: id.runID,
-            generation: journalGeneration) { [weak self] in
-                try await self?.settleQueuedCommerce(id)
-            })
+            generation: journalGeneration, work: .commerce(id)))
     }
 
     private func settleQueuedCommerce(_ id: RunExecutionKey) async throws {
@@ -1148,6 +1284,7 @@ extension JourneyService {
         await retireNativeValues(owner: oldDistinctId)
         pendingPresentationPurchasePlacements.removeAll()
         deferredCommerceOutcomes.removeAll()
+        commerceInputOwners.removeAll()
         await presenter?.shutdownJourneyPresentation(
             ownerDistinctId: oldDistinctId
         )
@@ -1163,7 +1300,8 @@ extension JourneyService {
             profileState = nil
             stateArmReceipts.removeAll()
             inFlightAttempts.removeAll()
-            pendingPresentationDismissalContinuations.removeAll()
+            savedJourneyWork.removeAll()
+        pendingPresentationDismissalContinuations.removeAll()
         }
         // IdentityService's own fence revokes the departing user's execution.
         // Do not advance the global execution fence here: a queued transition
@@ -1254,22 +1392,22 @@ extension JourneyService {
         let owner = distinctId ?? identity.getDistinctId()
         _ = await events.performJourneyWork(.init(key: .init(distinctId: owner, id: "reconcile"),
             afterFailure: afterFailure, bypassesHold: true, operation: { [weak self] in
-                guard let self else { return .complete }
+                guard let self else { return .done }
                 return await self.reconcileQueuedWork(owner: owner)
             }))
     }
 
     private func reconcileQueuedWork(owner: String) async -> JourneyQueueResult {
-        guard initialized, identity.getDistinctId() == owner else { return .complete }
+        guard initialized, identity.getDistinctId() == owner else { return .done }
         if profileRefetchesInFlight[owner] == nil { await releaseRefetchRouting(for: owner) }
-        guard storageScope != nil else { return .complete }
+        guard storageScope != nil else { return .done }
         await ensureJournal(for: owner)
-        guard journal?.distinctId == owner, !revokingCustomers.contains(owner) else { return .retry }
+        guard journal?.distinctId == owner, !revokingCustomers.contains(owner) else { return .notYet }
         do {
             _ = try await resumeParkedRuns(event: nil)
             await scheduleNextWake()
-            return .complete
-        } catch { return .retry }
+            return .done
+        } catch { return .failed }
     }
 
     /// The customer's withdrawn copy is being replaced: EventLog holds their
@@ -1481,23 +1619,30 @@ private extension JourneyService {
     /// queue entry. Recovery goes on, so the failure never strands routing.
     private func deferRecoveredJourneyWork(_ error: Error, journal opened: JourneyRunJournal,
         generation: UInt64) async throws {
+        let work: JourneyWork
+        var park: ParkCommitFailure?
         switch error {
         case let failure as ParkCommitFailure:
-            await events.enqueueJourneyWork(workRequest(id: "recovery:\(failure.run.id):\(generation)",
-                runId: failure.run.id, afterFailure: true, generation: generation) { [weak self] in
-                    try await self?.retryParkCommit(failure)
-                    if failure.presentationWakeAt != nil {
-                        try await self?.resumeQueuedRun(runId: failure.run.id, event: nil,
-                            journal: opened, generation: generation)
-                    }
-                })
+            park = failure
+            work = .input(failure.run.id, nil, nil, nil, false)
         case let continuation as JourneyContinuation:
-            await events.enqueueJourneyWork(workRequest(id: "recovery:\(continuation.runId):\(generation)",
-                runId: continuation.runId, afterFailure: true, generation: generation,
-                operation: continuation.resume))
+            work = .execution(continuation.execution)
         default:
             throw error
         }
+        let request = workRequest(id: "recovery:\(work.runId ?? "journal"):\(generation)",
+            runId: work.runId, afterFailure: true, generation: generation, work: work)
+        var saved = SavedWork(work: work, park: park)
+        if let runId = work.runId,
+           let run = try await opened.runs().first(where: { $0.id == runId }),
+           let pending = run.pendingCommerceOutcome {
+            saved.settlement = NuxieEvent(id: pending.effectId, name: pending.event.name,
+                distinctId: opened.distinctId,
+                properties: pending.event.properties.dictionary.mapValues { journeyFoundationValue($0) ?? NSNull() },
+                timestamp: JourneyTime.date(pending.event.occurredAtMillis))
+        }
+        savedJourneyWork[request.key] = saved
+        await events.enqueueJourneyWork(request)
     }
 
     private func recoverPendingPresentationPublications(
@@ -1534,7 +1679,7 @@ private extension JourneyService {
             case .accepted:
                 break
             case .continueExecution(let continuation):
-                try? await continuePresentedRun(
+                try await continuePresentedRun(
                     continuation.run,
                     release: release,
                     executionFenceToken: executionFenceToken,
@@ -1620,9 +1765,8 @@ private extension JourneyService {
             let kind = arm.entryCondition.type
             guard kind != .event, kinds?.contains(kind) ?? true else { continue }
             _ = await events.performJourneyWork(workRequest(id: armWorkID(arm, state: state, event: nil),
-                runId: arm.binding.journeyId ?? "admission:\(arm.reference.descriptorSha256)") { [weak self] in
-                try await self?.attemptStart(arm, state: state, event: nil)
-            })
+                runId: arm.binding.journeyId ?? "admission:\(arm.reference.descriptorSha256)",
+                work: .admit(arm, state, nil, nil)))
         }
         await scheduleNextWake()
     }
@@ -1775,6 +1919,11 @@ private extension JourneyService {
         journal: JourneyRunJournal, executionFenceToken: JourneyProfileFenceToken, event: NuxieEvent?,
         presentationReservation: (any JourneyPresentationReservation)? = nil) async throws {
         guard executionFence.isCurrent(executionFenceToken), isCurrentIdentity(journal: journal) else { return }
+        if let key = JourneyQueueContext.key {
+            savedJourneyWork[key] = SavedWork(work: .execution(.init(runId: run.id,
+                release: release, token: executionFenceToken, signal: executorSignal(event),
+                initialStepId: run.stepId, startingEventAt: event?.timestamp)))
+        }
         do {
             let reporter = JourneyReporter(journal: journal, events: events)
             try await reporter.flushPending()
@@ -1786,10 +1935,9 @@ private extension JourneyService {
         } catch let failure as ParkCommitFailure { throw failure }
         catch let continuation as JourneyContinuation { throw continuation }
         catch {
-            throw JourneyContinuation(runId: run.id, resume: { [weak self] in
-                try await self?.startAdmittedRun(run, release: release, journal: journal,
-                    executionFenceToken: executionFenceToken, event: event)
-            })
+            throw JourneyContinuation(execution: .init(runId: run.id, release: release, token: executionFenceToken,
+                signal: executorSignal(event), initialStepId: run.stepId, startingEventAt: event?.timestamp),
+                blocked: error is DeferredJourneyWork)
         }
     }
 
@@ -1870,10 +2018,7 @@ private extension JourneyService {
         let generation = journalGeneration
         let id = "native:\(runID):\(checkpoint.stepId):\(checkpoint.anchorAt?.timeIntervalSince1970 ?? -1):\(checkpoint.wakeAt.timeIntervalSince1970)"
         await events.enqueueJourneyWork(workRequest(id: id, runId: runID, afterFailure: true,
-            generation: generation) { [weak self] in
-                try await self?.resumeQueuedRun(runId: runID, event: nil, journal: journal,
-                    generation: generation, expected: checkpoint, forceNative: true)
-            })
+            generation: generation, work: .input(runID, nil, nil, checkpoint, true)))
     }
 
     @discardableResult
@@ -1913,15 +2058,8 @@ private extension JourneyService {
             let id = event.map { "input:\($0.id):\(run.id)" }
                 ?? "resume:\(run.id):\(run.stepId):\(checkpoint?.anchorAt?.timeIntervalSince1970 ?? -1):\(checkpoint?.wakeAt.timeIntervalSince1970 ?? -1)"
             let done = await events.performJourneyWork(workRequest(id: id, runId: run.id,
-                generation: generation, eventPlan: event != nil) { [weak self] in
-                    guard let self else { return }
-                    try await self.resumeQueuedRun(runId: run.id, event: event, journal: journal, generation: generation)
-                    if let event {
-                        guard try await self.resumePresentationActionOutcome(event: event, onlyRunId: run.id) else {
-                            throw DeferredJourneyWork.unavailable
-                        }
-                    }
-                })
+                generation: generation, eventPlan: event != nil,
+                work: .input(run.id, event, nil, nil, false)))
             complete = done && complete
         }
         return complete
@@ -1952,6 +2090,7 @@ private extension JourneyService {
             if deadline != nil { throw JourneyJournalError.invalidState }
             return
         }
+        if parked.pendingPresentationPublication != nil { throw DeferredJourneyWork.unavailable }
         let executionSnapshot = parked.executionSnapshot
         guard journalGeneration == inspectedJournalGeneration,
               admission.commitJournalIfCurrent({ true }) == true else {
@@ -2015,7 +2154,11 @@ private extension JourneyService {
         }
         guard journalGeneration == inspectedJournalGeneration,
               admission.commitJournalIfCurrent({ true }) == true else { return }
-        if !foreground, !release.descriptor.leg.screens.isEmpty { return }
+        if !foreground, !release.descriptor.leg.screens.isEmpty {
+            // Initial event delivery can finish once its matching input is
+            // saved on the park. Resuming it is separate foreground work.
+            return
+        }
         let now = dateProvider.now()
         if acceptedEvent == nil, let wake = parked.park?.wakeAt {
             guard wake <= now else { return }
@@ -2025,7 +2168,11 @@ private extension JourneyService {
         }
         guard initialized, journalGeneration == inspectedJournalGeneration,
               admission.commitJournalIfCurrent({ true }) == true else { return }
-        if !foreground, !release.descriptor.leg.screens.isEmpty { return }
+        if !foreground, !release.descriptor.leg.screens.isEmpty {
+            // Initial event delivery can finish once its matching input is
+            // saved on the park. Resuming it is separate foreground work.
+            return
+        }
         // Select the timed control's outlet before consuming the
         // durable checkpoint. The resume transaction commits both,
         // so a persistence failure leaves the route safely retryable.
@@ -2918,13 +3065,11 @@ private extension JourneyService {
         if !JourneyQueueContext.isJourneyOperation {
             await events.registerJourneyRun(runId: run.id, journeyId: run.journeyId, distinctId: journal.distinctId)
             _ = await events.performJourneyWork(workRequest(id: "continuation:\(run.id):\(run.stepId)",
-                runId: run.id, generation: journalGeneration) { [weak self] in
-                    try await self?.continuePresentedRun(run, release: release,
-                        executionFenceToken: executionFenceToken, signal: signal, checkpoint: checkpoint,
-                        presentationSource: presentationSource, eventSource: eventSource,
-                        dismissPresentationOnCompletion: dismissPresentationOnCompletion,
-                        journal: journal, originAdmission: originAdmission)
-                })
+                runId: run.id, generation: journalGeneration,
+                work: .execution(.init(runId: run.id, release: release, token: executionFenceToken,
+                    signal: signal, initialStepId: run.stepId, checkpoint: checkpoint,
+                    presentationSource: presentationSource, eventSource: eventSource,
+                    dismissPresentation: dismissPresentationOnCompletion, admission: originAdmission))))
             return
         }
         guard executionFence.isCurrent(executionFenceToken),
@@ -3107,37 +3252,13 @@ private extension JourneyService {
         catch let continuation as JourneyContinuation { throw continuation }
         catch {
             let retryLag = (error as? ExecutionRetryTiming)?.startingLag ?? startingLag
-            throw JourneyContinuation(runId: initial.id, resume: { [weak self] in
-                guard let self else { return }
-                try await self.retryExecution(runId: initial.id, initialStepId: initial.stepId,
-                    release: release, executionFenceToken: executionFenceToken, signal: initialSignal,
-                    checkpoint: initialCheckpoint, journal: journal, startingEventAt: startingEventAt, startingLag: retryLag,
-                    presentationSource: presentationSource, eventSource: eventSource,
-                    dismissPresentationOnCompletion: dismissPresentationOnCompletion,
-                    originAdmission: originAdmission)
-            })
+            throw JourneyContinuation(execution: .init(runId: initial.id, release: release, token: executionFenceToken,
+                signal: initialSignal, initialStepId: initial.stepId, checkpoint: initialCheckpoint,
+                startingEventAt: startingEventAt, startingLag: retryLag,
+                presentationSource: presentationSource, eventSource: eventSource,
+                dismissPresentation: dismissPresentationOnCompletion, admission: originAdmission),
+                blocked: error is DeferredJourneyWork)
         }
-    }
-
-    private func retryExecution(runId: String, initialStepId: String, release: AuthenticatedJourneyRelease,
-        executionFenceToken: JourneyProfileFenceToken, signal: JourneyControlExecutor.Signal,
-        checkpoint: JourneyControlExecutor.Checkpoint?, journal: JourneyRunJournal, startingEventAt: Date?, startingLag: TimeInterval?,
-        presentationSource: ScreenEmissionSource?, eventSource: ExperienceResolvedEventSource?,
-        dismissPresentationOnCompletion: Bool, originAdmission: JourneyCommitAdmission?) async throws {
-        guard executionFence.isCurrent(executionFenceToken), isCurrentIdentity(journal: journal),
-              let current = try await readJournalRuns(journal).first(where: { $0.id == runId }) else { return }
-        if current.completion != nil {
-            try await JourneyReporter(journal: journal, events: events).flushPending()
-            if try await journal.runs().contains(where: { $0.id == runId && $0.completion != nil }) {
-                throw DeferredJourneyWork.unavailable
-            }
-            return
-        }
-        guard current.park == nil else { return }
-        try await execute(current, release: release, executionFenceToken: executionFenceToken,
-            signal: signal, checkpoint: current.stepId == initialStepId ? checkpoint : nil, journal: journal,
-            startingEventAt: startingEventAt, startingLag: startingLag, presentationSource: presentationSource, eventSource: eventSource,
-            dismissPresentationOnCompletion: dismissPresentationOnCompletion, originAdmission: originAdmission)
     }
 
     private func executeAttempt(
@@ -4341,9 +4462,7 @@ private extension JourneyService {
                 presentationWakeAt: wakeAt, snapshot: nil, preparationFailed: false, journal: journal,
                 journalGeneration: generation, admission: admission)
         }
-        throw JourneyContinuation(runId: run.id, resume: { [weak self] in
-            try await self?.resumeQueuedRun(runId: run.id, event: nil, journal: journal, generation: generation)
-        })
+        throw DeferredJourneyWork.unavailable
     }
 
     private func presentationDidBecomeAvailable() async {
@@ -4363,21 +4482,21 @@ private extension JourneyService {
         let generation = journalGeneration
         await events.enqueueJourneyWork(.init(key: .init(distinctId: owner, id: "deadline-inspection:\(generation)"),
             afterFailure: false, bypassesHold: true, operation: { [weak self] in
-                guard let self else { return .complete }
+                guard let self else { return .done }
                 return await self.inspectDeadlineSchedule(generation: generation)
             }))
     }
 
     private func inspectDeadlineSchedule(generation: UInt64) async -> JourneyQueueResult {
         guard initialized, generation == journalGeneration, let journal,
-              isCurrentIdentity(journal: journal) else { return .complete }
+              isCurrentIdentity(journal: journal) else { return .done }
         do {
             let runs = try await readJournalRuns(journal)
-            guard generation == journalGeneration else { return .complete }
+            guard generation == journalGeneration else { return .done }
             for run in runs where run.completion == nil {
                 await events.registerJourneyRun(runId: run.id, journeyId: run.journeyId, distinctId: journal.distinctId)
             }
-            guard generation == journalGeneration, isCurrentIdentity(journal: journal) else { return .complete }
+            guard generation == journalGeneration, isCurrentIdentity(journal: journal) else { return .done }
             cancelWake()
             let schedulingGeneration = wakeGeneration
             // Availability parks and queued retries never become deadline wakes.
@@ -4389,13 +4508,13 @@ private extension JourneyService {
             let due = pending.filter { $0.wakeAt <= now }
             enqueuedDeadlines.formUnion(due)
             for deadline in due { await events.enqueueJourneyDeadline(deadline) }
-            guard schedulingGeneration == wakeGeneration, generation == journalGeneration else { return .complete }
+            guard schedulingGeneration == wakeGeneration, generation == journalGeneration else { return .done }
             if let next = pending.filter({ $0.wakeAt > now }).map(\.wakeAt).min() {
                 scheduleWake(generation: schedulingGeneration, at: next,
                     deadlines: pending.filter { $0.wakeAt == next })
             }
-            return .complete
-        } catch { return .retry }
+            return .done
+        } catch { return .failed }
     }
 
     private func scheduleWake(generation: UInt64, at date: Date, deadlines: [JourneyDeadline]) {

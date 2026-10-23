@@ -83,14 +83,12 @@ struct JourneyQueueKey: Hashable, Sendable {
 
 typealias JourneyQueueOperation = @Sendable () async -> JourneyQueueResult
 
+/// Every attempt states whether its effect is saved, failed, or blocked.
+/// Both failures and blocked work keep their key, position and one-second backoff.
 enum JourneyQueueResult: Sendable {
-  case complete
-  case retry
-  case continueWith(JourneyQueueOperation)
-  case waiting(Set<JourneyQueueKey>, JourneyQueueOperation)
-  /// Attempt again, with no backoff, once the entries now ahead allow it: a
-  /// deadline that has let its in-window inputs go first.
-  case reattempt
+  case done
+  case failed
+  case notYet
 }
 
 enum JourneyQueueContext {
@@ -128,7 +126,7 @@ actor OrderedCustomerQueue {
   static let retryInterval: TimeInterval = 1
   /// Events and deadlines keep capture order, so a routing hold holds them.
   /// Other Journey work does not wait for a hold.
-  enum Kind: Sendable { case event(durable: Bool), deadline, work }
+  enum Kind: Sendable { case event(durable: Bool), deadline(Date), work }
   private struct Entry: Sendable {
     let key: JourneyQueueKey
     let kind: Kind
@@ -248,9 +246,10 @@ actor OrderedCustomerQueue {
   /// still wait behind the deadline entry `key` ahead of it, in occurrence
   /// order: events not yet delivered, and inputs for the deadline's own
   /// Journey. Inputs that happened after it, and other Journeys' work, keep
-  /// their places. Returns whether anything moved.
-  func admitInputs(before key: JourneyQueueKey, through deadline: Date) -> Bool {
-    guard let held = entries[key], held.position.count == 2 else { return false }
+  /// their places. Queue ordering is established before an attempt starts;
+  /// moving inputs ahead never changes an operation's retry backoff.
+  private func admitInputs(before key: JourneyQueueKey, through deadline: Date) {
+    guard let held = entries[key], held.position.count == 2 else { return }
     let inputs = entries.values.filter { entry in
       guard entry.key.distinctId == key.distinctId, !entry.complete, !entry.running,
             held.position.lexicographicallyPrecedes(entry.position),
@@ -265,13 +264,19 @@ actor OrderedCustomerQueue {
       admittedRank[held.major] = rank + 1
       entries[input.key]?.position = [held.major, 0, rank]
     }
-    return !inputs.isEmpty
   }
 
   func releaseCapture(_ event: JourneyQueueKey) { capturePositions.removeValue(forKey: event) }
 
   func dependencies(of parent: JourneyQueueKey) -> Set<JourneyQueueKey> {
     Set(entries.values.filter { $0.parent == parent && !$0.complete }.map(\.key))
+  }
+
+  func waitForChildren(of key: JourneyQueueKey) {
+    guard var entry = entries[key] else { return }
+    entry.dependencies = dependencies(of: key)
+    if !entry.dependencies.isEmpty { entry.lane = "receipt:\(key.id)" }
+    entries[key] = entry
   }
 
   func completedPlan(for parent: JourneyQueueKey) -> Bool {
@@ -344,6 +349,12 @@ actor OrderedCustomerQueue {
   private func pump() {
     guard !closed else { return }
     let now = ProcessInfo.processInfo.systemUptime
+    // This is queue housekeeping, not an operation attempt. In-window inputs
+    // already in the queue go ahead before a deadline can acquire its lane.
+    // Its handler still authorizes timeout only after the watermark passes.
+    for entry in ordered() where !entry.running && !entry.complete {
+      if case .deadline(let wakeAt) = entry.kind { admitInputs(before: entry.key, through: wakeAt) }
+    }
     // A lane runs one entry at a time, even after an input admitted ahead
     // of a deadline sorts before an entry already running in its lane.
     var occupied = Set(entries.values.filter(\.running).map { "\($0.key.distinctId)\u{0}\($0.lane)" })
@@ -404,7 +415,7 @@ actor OrderedCustomerQueue {
     let continuation = entry.firstAttempt
     entry.firstAttempt = nil
     switch result {
-    case .complete:
+    case .done:
       entry.complete = true
       entry.retryAt = nil
       if let refresh = entry.refresh {
@@ -412,21 +423,10 @@ actor OrderedCustomerQueue {
         entry.operation = refresh
         entry.retryAt = entry.refreshAfterFailure ? ProcessInfo.processInfo.systemUptime + Self.retryInterval : nil
       }
-    case .retry:
+    case .failed, .notYet:
       entry.retryAt = ProcessInfo.processInfo.systemUptime + Self.retryInterval
-    case .continueWith(let operation):
-      entry.operation = operation
-      entry.dependencies.removeAll()
-      if case .event = entry.kind { entry.lane = "events" }
-      entry.retryAt = ProcessInfo.processInfo.systemUptime + Self.retryInterval
-    case .waiting(let dependencies, let operation):
-      entry.operation = operation
-      entry.dependencies = dependencies
-      entry.lane = "receipt:\(key.id)"
-      entry.retryAt = nil
-    case .reattempt:
-      entry.retryAt = nil
     }
+
     entry.refresh = nil
     entries[key] = entry
     continuation?.resume(returning: entry.complete)
@@ -1053,6 +1053,7 @@ actor EventLog: EventLogProtocol {
     let stableEventId: String?
     let hasDurableAdmission: Bool
   }
+  private var routeSubscriberPositions: [String: Int] = [:]
   private var pendingRouteAcknowledgements: [String: RouteAcknowledgement] = [:]
   private var enqueuedCommittedRouteSequence: UInt64?
   private var committedRouteReadFailed = false
@@ -2100,6 +2101,7 @@ actor EventLog: EventLogProtocol {
   }
 
   private func checkpointCommittedRoute(_ routed: RoutedCommittedEvent, nextSubscriber: Int) async {
+    routeSubscriberPositions[routed.event.id] = nextSubscriber
     guard routed.hasDurableAdmission else { return }
     do {
       try await store.checkpointCommittedRoute(eventId: routed.event.id,
@@ -2120,7 +2122,7 @@ actor EventLog: EventLogProtocol {
       kind: .event(durable: routed.hasDurableAdmission), lane: "events",
       occurredAt: routed.event.timestamp, cancelsWithJourney: false,
       waitForAttempt: waitForAttempt) { [weak self] in
-      guard let self else { return .complete }
+      guard let self else { return .done }
       return await Self.$isOnCommittedRouteWorker.withValue(true) {
         await self.deliverQueuedEvent(routed, startingAt: startingAt)
       }
@@ -2128,22 +2130,14 @@ actor EventLog: EventLogProtocol {
   }
 
   private func deliverQueuedEvent(_ routed: RoutedCommittedEvent, startingAt: Int) async -> JourneyQueueResult {
-    guard !closeFlag.isClosed else { return .complete }
-    for (index, subscriber) in subscribers.enumerated().dropFirst(startingAt) {
+    guard !closeFlag.isClosed else { return .done }
+    let position = routeSubscriberPositions[routed.event.id] ?? startingAt
+    for (index, subscriber) in subscribers.enumerated().dropFirst(position) {
       if let filter = subscriber.filter, !filter(routed.event) { continue }
       guard await subscriber.handler(routed.event, routed.subscriberAdmissions[subscriber.identifier]) else {
         await checkpointCommittedRoute(routed, nextSubscriber: index)
-        let dependencies = await orderedRoutes.dependencies(of: eventQueueKey(routed))
-        // The Journey subscriber's queued plan completes before it is offered
-        // this receipt again. It acknowledges that plan without applying inputs twice.
-        let resumeAt = index
-        let continuation: JourneyQueueOperation = { [weak self] in
-          guard let self else { return .complete }
-          return await Self.$isOnCommittedRouteWorker.withValue(true) {
-            await self.deliverQueuedEvent(routed, startingAt: resumeAt)
-          }
-        }
-        return dependencies.isEmpty ? .continueWith(continuation) : .waiting(dependencies, continuation)
+        await orderedRoutes.waitForChildren(of: eventQueueKey(routed))
+        return .notYet
       }
     }
     let receipt = RouteAcknowledgement(eventId: routed.event.id,
@@ -2154,10 +2148,10 @@ actor EventLog: EventLogProtocol {
       lane: "ack:\(receipt.eventId)", anchor: JourneyQueueContext.key, bypassesHold: true,
       cancelsWithJourney: false,
       waitForAttempt: false) { [weak self] in
-        guard let self else { return .complete }
+        guard let self else { return .done }
         return await self.acknowledgeQueuedRoute(receipt)
       }
-    return .complete
+    return .done
   }
 
   private func acknowledgeQueuedRoute(_ receipt: RouteAcknowledgement) async -> JourneyQueueResult {
@@ -2166,15 +2160,16 @@ actor EventLog: EventLogProtocol {
         try await store.markStableRouteDelivered(eventId: id)
         activeStableRouteIds.remove(id)
       } catch {
-        return .retry
+        return .failed
       }
     }
     if receipt.hasDurableAdmission {
       do { try await store.acknowledgeCommittedRoute(eventId: receipt.eventId, sessionId: committedRouteSessionId) }
-      catch { return .retry }
+      catch { return .failed }
     }
     pendingRouteAcknowledgements.removeValue(forKey: receipt.eventId)
-    return .complete
+    routeSubscriberPositions.removeValue(forKey: receipt.eventId)
+    return .done
   }
 
   @discardableResult
@@ -2219,8 +2214,8 @@ actor EventLog: EventLogProtocol {
       let key = JourneyQueueKey(distinctId: identityService.getDistinctId(), id: "route-inspection")
       if JourneyQueueContext.key != key { await queueJourneyWork(.init(key: key,
         bypassesHold: true, cancelsWithJourney: false, operation: { [weak self] in
-          guard let self else { return .complete }
-          return await self.drainCommittedRouteQueue() ? .complete : .retry
+          guard let self else { return .done }
+          return await self.drainCommittedRouteQueue() ? .done : .failed
         })) }
       return false
     }
@@ -2230,23 +2225,20 @@ actor EventLog: EventLogProtocol {
     let id = "deadline:\(deadline.runId):\(deadline.stepId):\(deadline.anchorAt?.timeIntervalSince1970 ?? -1):\(deadline.wakeAt.timeIntervalSince1970)"
     await queueJourneyWork(.init(key: .init(distinctId: deadline.distinctId, id: id), runId: deadline.runId,
       afterFailure: false, operation: { [weak self] in
-        guard let self else { return .complete }
+        guard let self else { return .done }
         return await self.attemptDeadline(deadline)
-      }), kind: .deadline)
+      }), kind: .deadline(deadline.wakeAt))
   }
 
   private func attemptDeadline(_ deadline: JourneyDeadline) async -> JourneyQueueResult {
-    guard deadline.distinctId == identityService.getDistinctId() else { return .complete }
+    guard deadline.distinctId == identityService.getDistinctId() else { return .done }
     // W is worked out afresh at each ask; a deadline it has not passed waits
     // on the one retry timer and holds only its own Journey's later inputs.
     guard inputWatermark.hasPassed(deadline.wakeAt, distinctId: deadline.distinctId,
-            now: dateProvider.now(), readFailed: committedRouteReadFailed) else { return .retry }
-    // Committed inputs that happened at or before the deadline go first, in
-    // occurrence order, through their ordinary delivery. The answer below is
-    // final: an input committed after it is late.
-    if let key = JourneyQueueContext.key,
-       await orderedRoutes.admitInputs(before: key, through: deadline.wakeAt) { return .reattempt }
-    return await journeyDeadlineHandler?(deadline) ?? .complete
+            now: dateProvider.now(), readFailed: committedRouteReadFailed) else { return .notYet }
+    // The queue has put committed in-window inputs ahead of this entry.
+    // This answer is final: an input committed after it is late.
+    return await journeyDeadlineHandler?(deadline) ?? .done
   }
 
   private func retryFailedCommittedRoutes() async {

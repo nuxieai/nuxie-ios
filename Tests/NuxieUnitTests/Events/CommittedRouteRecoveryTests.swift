@@ -17,7 +17,7 @@ private actor QueueAttemptRecorder {
     func recover() { failing = false }
     func attempt(_ name: String) -> JourneyQueueResult {
         attempts.append((name, ProcessInfo.processInfo.systemUptime))
-        return name == "head" && failing ? .retry : .complete
+        return name == "head" && failing ? .failed : .done
     }
 }
 
@@ -77,7 +77,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
             return await log.performJourneyWork(.init(key: .init(distinctId: event.distinctId, id: "input:\(event.id)"),
                 runId: run, afterFailure: false, eventPlan: true, operation: {
                     await observed.append(event.name)
-                    return .complete
+                    return .done
                 }))
         }
         let configuration = NuxieConfiguration(apiKey: "correlated-capture-order")
@@ -181,6 +181,17 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         }
         let eventLog = try source("Sources/Nuxie/Events/EventLog.swift")
         let service = try source("Sources/Nuxie/Journey/JourneyService.swift")
+        let presentation = try source("Sources/Nuxie/Experiences/ExperiencePresentationService.swift")
+        XCTAssertEqual(presentation.components(separatedBy: "Task.sleep(").count - 1, 1,
+            "Only the foreground presentation grace period sleeps; host input uses the queue")
+        XCTAssertFalse(presentation.contains("250_000_000"))
+        XCTAssertTrue(presentation.contains("applyHostDismissInput(id:"))
+        for oldContinuation in ["continueWith", "case waiting(", "case reattempt", "let resume: @Sendable"] {
+            XCTAssertFalse(eventLog.contains(oldContinuation))
+            XCTAssertFalse(service.contains(oldContinuation))
+        }
+        for outcome in ["case done", "case failed", "case notYet"] { XCTAssertTrue(eventLog.contains(outcome)) }
+
         let exposure = try source("Sources/Nuxie/Journey/Execution/JourneyExperimentExposureCoordinator.swift")
         let systemEvents = try source("Sources/Nuxie/DI/RuntimeProviders.swift")
         let queue = try XCTUnwrap(eventLog.range(of: "actor OrderedCustomerQueue"))
@@ -322,7 +333,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         await log.subscribeForwarding { event in await forwarded.append(event.event.name) }
         await log.setJourneyDeadlineHandler { _ in
             await observed.append("deadline")
-            return .complete
+            return .done
         }
         let reservation = log.reserveCommittedAdmission { 1 }
         await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
@@ -374,7 +385,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         await log.subscribeCommitted { event in await observed.append("\(event.distinctId):\(event.name)") }
         await log.setJourneyDeadlineHandler { deadline in
             await observed.append("deadline:\(deadline.distinctId)")
-            return .complete
+            return .done
         }
         let configuration = NuxieConfiguration(apiKey: "watermark-isolation")
         configuration.testingOverrides.suppressBackgroundWork = true
@@ -389,7 +400,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         _ = await log.performJourneyWork(.init(key: .init(distinctId: "customer-a", id: "other-journey"),
             runId: "run-other", afterFailure: false, operation: {
                 await observed.append("customer-a:other-journey")
-                return .complete
+                return .done
             }))
         await log.drain()
         for _ in 0..<200 {
@@ -420,7 +431,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         let attempts = RecoveredRouteRecorder()
         await log.setJourneyDeadlineHandler { _ in
             await observed.append("deadline")
-            return .complete
+            return .done
         }
         let reservation = log.reserveCommittedAdmission { 1 }
         await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
@@ -461,7 +472,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         let observed = RecoveredRouteRecorder()
         await log.setJourneyDeadlineHandler { _ in
             await observed.append("unavailable-deadline")
-            return .retry
+            return .failed
         }
         await log.subscribeCommitted { event in await observed.append(event.name) }
         let configuration = NuxieConfiguration(apiKey: "deadline-consumption-test")
@@ -491,7 +502,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
             await log.subscribeCommitted { event in await observed.append(event.name) }
             await log.setJourneyDeadlineHandler { _ in
                 await observed.append("deadline")
-                return .complete
+                return .done
             }
             let configuration = NuxieConfiguration(apiKey: "delivered-receipt-deadline-test")
             configuration.testingOverrides.suppressBackgroundWork = true
