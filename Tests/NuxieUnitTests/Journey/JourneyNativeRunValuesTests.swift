@@ -197,6 +197,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
             pinnedReleaseAuthenticator: { _, _ in release })
         addTeardownBlock { await restarted.shutdown() }
         await restarted.initialize()
+        await restartedEvents.drain()
         await fulfillment(of: [restoredBeforeContinue], timeout: 3)
         let completed = restartedEvents.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }
         XCTAssertEqual(completed.count, 1)
@@ -324,6 +325,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
                 return result
             }, pinnedReleaseAuthenticator: { _, _ in release })
         await restarted.initialize()
+        await restartedEvents.drain()
         if revokeRead {
             let retained = try await journal.runs()
             XCTAssertNotNil(retained.first?.park)
@@ -334,6 +336,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         }
         if wakeEvent {
             await restarted.handleEvent(NuxieEvent(name: "unlock", distinctId: "customer", properties: [:], timestamp: clock.now()))
+            await restartedEvents.drain()
         }
         if failFirstPreparation {
             let retained = try await journal.runs()
@@ -341,10 +344,10 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
             XCTAssertEqual(retained.first?.nativeSnapshot?.journeyValues[valueKey], .number(Double(written)))
             XCTAssertFalse(restartedEvents.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
             for _ in 0..<100 where sleeper.pendingSleepCount == 0 { await Task.yield() }
-            XCTAssertEqual(sleeper.pendingSleepDurations, [5])
-            clock.advance(by: 5)
-            sleeper.completeAllSleeps()
-            for _ in 0..<200 {
+            XCTAssertFalse(sleeper.pendingSleepDurations.contains(5), "Restoration retries use the queue timer")
+            // Leave the deadline sleeper and wall clock untouched. The queue
+            // retries restoration, preserving the original wait checkpoint.
+            for _ in 0..<500 {
                 if restartedEvents.routedEvents.contains(where: { $0.name == JourneyEvents.journeyCompleted }) { break }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }

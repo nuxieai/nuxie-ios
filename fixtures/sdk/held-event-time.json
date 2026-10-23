@@ -1,0 +1,33 @@
+{
+  "contract": "A Journey started by an event counts its waits from that event's own time. Until the run first parks, it runs behind the handling clock by how late the event was handled, taken at its first step and never negative, so time spent between its first steps still counts. A held follow-up event is judged by its own time against the saved wait window. A wait already overdue when it first parks gets a catch-up pass, after held events have replayed so an in-window follow-up can satisfy it first. Later evaluations use the current clock.",
+  "cases": [
+    {
+      "name": "first_launch_wait_takes_the_follow_up_sent_before_the_copy_arrives",
+      "hold": "first-launch",
+      "events": [
+        { "name": "onboarding_started", "atMillis": 0 },
+        { "name": "plan_viewed", "atMillis": 100 }
+      ],
+      "copyArrivesAtMillis": 800,
+      "journey": {
+        "triggerEvent": "onboarding_started",
+        "wait": { "eventName": "plan_viewed", "maxTimeMillis": 60000 }
+      },
+      "expected": { "waitStartedAtMillis": 0, "outcome": "satisfied" }
+    },
+    {
+      "name": "first_launch_overdue_wait_takes_the_held_follow_up_before_timing_out",
+      "hold": "first-launch",
+      "events": [
+        { "name": "onboarding_started", "atMillis": 0 },
+        { "name": "plan_viewed", "atMillis": 100 }
+      ],
+      "copyArrivesAtMillis": 800,
+      "journey": {
+        "triggerEvent": "onboarding_started",
+        "wait": { "eventName": "plan_viewed", "maxTimeMillis": 500 }
+      },
+      "expected": { "waitStartedAtMillis": 0, "outcome": "satisfied" }
+    }
+  ]
+}

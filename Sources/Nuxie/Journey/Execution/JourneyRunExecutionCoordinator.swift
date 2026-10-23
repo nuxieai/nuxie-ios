@@ -38,6 +38,13 @@ struct JourneyRunExecutionCoordinator {
     private let journal: JourneyRunJournal
     private var checkpoint: JourneyControlExecutor.Checkpoint?
     private var signal: JourneyControlExecutor.Signal
+    /// An event-started pass runs behind the real clock by how late its event
+    /// was handled, taken at its first evaluation, so its waits count from the
+    /// event's own time and time spent in the pass still counts. Once it parks,
+    /// the saved checkpoint owns the wait and later passes use the real clock.
+    /// Recovery resumes only parked checkpoints, so the lag is not journaled.
+    private let startingEventAt: Date?
+    private(set) var startingLag: TimeInterval?
 
     init(
         run: JourneyRun,
@@ -47,7 +54,9 @@ struct JourneyRunExecutionCoordinator {
         checkpoint: JourneyControlExecutor.Checkpoint?,
         journal: JourneyRunJournal,
         timezones: SignedTimezoneBundle,
-        currentDeviceTimezone: TimeZone
+        currentDeviceTimezone: TimeZone,
+        startingEventAt: Date? = nil,
+        startingLag: TimeInterval? = nil
     ) {
         self.run = run
         self.assignments = assignments
@@ -65,6 +74,8 @@ struct JourneyRunExecutionCoordinator {
         self.signal = signal
         self.checkpoint = checkpoint
         self.journal = journal
+        self.startingEventAt = startingEventAt
+        self.startingLag = startingLag
     }
 
     mutating func useNativeValues(
@@ -74,9 +85,13 @@ struct JourneyRunExecutionCoordinator {
         run.context = .init(event: run.context.event, responses: values, formAnswers: formAnswers)
     }
 
-    func command(at now: Date) -> Command {
+    mutating func command(at now: Date) -> Command {
+        // A future event time never extends a wait: the lag is never negative.
+        if startingLag == nil, let startingEventAt {
+            startingLag = max(0, now.timeIntervalSince(startingEventAt))
+        }
         guard let step = steps[run.stepId],
-              let nowMillis = JourneyTime.milliseconds(now) else {
+              let nowMillis = JourneyTime.milliseconds(now.addingTimeInterval(-(startingLag ?? 0))) else {
             return .invalid
         }
         switch executor.evaluate(
@@ -126,14 +141,14 @@ struct JourneyRunExecutionCoordinator {
     }
 
     func commit(_ command: ParkCommand, snapshot: ExperienceRunSnapshot?, admission: JourneyCommitAdmission) async throws {
-        _ = try await journal.transition(
+        guard try await journal.transition(
             run.id,
             stepId: command.stepId,
             context: run.context,
             checkpoint: command.checkpoint,
             nativeSnapshot: snapshot,
             admission: admission
-        )
+        ) else { throw JourneyJournalError.invalidState }
     }
 
     func claimEffect(for command: DispatchCommand) async throws -> String {

@@ -135,11 +135,13 @@ private actor ExperiencePresentationAcquisitionGate {
 @MainActor
 private final class JourneyPresentationOutcomeRecorder {
     private(set) var outcomes: [JourneySurfaceOutcome] = []
+    private(set) var attemptTimes: [TimeInterval] = []
     private(set) var availabilitySignals = 0
     var results: [Bool] = []
 
     func record(_ outcome: JourneySurfaceOutcome) -> Bool {
         outcomes.append(outcome)
+        attemptTimes.append(ProcessInfo.processInfo.systemUptime)
         return results.isEmpty ? true : results.removeFirst()
     }
 
@@ -426,7 +428,7 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         screenId: screenID
                     )
                     let outcomes = JourneyPresentationOutcomeRecorder()
-                    outcomes.results = [false, true]
+                    outcomes.results = [false, false, true]
                     let reservation = service.reserveJourneyPresentation(
                         ownerDistinctId: "user-1"
                     )
@@ -455,17 +457,27 @@ final class ExperiencePresentationServiceTests: AsyncSpec {
                         controller.traitOverrides.preferredContentSizeCategory = .large
                     }
                     #endif
-                    await service.dismissCurrentExperienceFromHost()
-
+                    let dismissalTask = Task { @MainActor in await service.dismissCurrentExperienceFromHost() }
+                    await polling(expect(mockWindowProvider.createdWindows.first?.dismissCalled)).value
+                        .toEventually(beTrue(), timeout: .seconds(3))
                     expect(service.isExperiencePresented).to(beFalse())
                     expect(mockWindowProvider.createdWindows.first?.dismissCalled).to(beTrue())
                     await polling(expect(outcomes.outcomes)).value
                         .toEventually(
-                            equal([.dismissed, .dismissed]),
-                            timeout: .seconds(2)
+                            equal([.dismissed, .dismissed, .dismissed]),
+                            timeout: .seconds(5)
                         )
                     await polling(expect(controller.shutdownRuntimeCallCount)).value
                         .toEventually(equal(1), timeout: .seconds(1))
+                    for (first, second) in zip(outcomes.attemptTimes, outcomes.attemptTimes.dropFirst()) {
+                        expect(second - first).to(beGreaterThanOrEqualTo(0.99))
+                    }
+                    if controller.shutdownRuntimeCallCount != 1 {
+                        dismissalTask.cancel()
+                        await service.shutdownCurrentExperience()
+                        return
+                    }
+                    await dismissalTask.value
                     let dismissal = mockEventLog.trackedEvents.last {
                         $0.name == JourneyEvents.experienceDismissed
                     }

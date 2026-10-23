@@ -101,7 +101,7 @@ final class ExperiencePresentationService {
     // MARK: - Dependencies
     
     private let experienceService: ExperienceServiceProtocol
-    private let eventLog: EventCapturing
+    private let eventLog: EventLogProtocol
     private let identity: IdentityServiceProtocol
     private let windowProvider: WindowProviderProtocol
     
@@ -131,6 +131,7 @@ final class ExperiencePresentationService {
     private var presentationCleanupTask: Task<Void, Never>?
     private var detachedHostPresentations: [UUID: DetachedHostPresentation] = [:]
     private var detachedHostDismissalTasks: [UUID: Task<Void, Never>] = [:]
+    private var hostDismissAcknowledgements: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var presentationTeardownIDs: Set<UUID> = []
     private var activePresentationOperations: [UUID: PresentationOperationState] = [:]
     private var pendingJourneyReservation: PendingJourneyReservation?
@@ -160,7 +161,7 @@ final class ExperiencePresentationService {
     nonisolated init(
         windowProvider: WindowProviderProtocol? = nil,
         experiences: ExperienceServiceProtocol,
-        eventLog: EventCapturing,
+        eventLog: EventLogProtocol,
         identity: IdentityServiceProtocol
     ) {
         self.windowProvider = windowProvider ?? DefaultWindowProvider()
@@ -1127,6 +1128,38 @@ final class ExperiencePresentationService {
         }
     }
 
+    private func enqueueHostDismissInput(_ presentation: DetachedHostPresentation) async -> Bool {
+        let id = presentation.id
+        let owner = presentation.journeyContext?.owner
+        let request = JourneyWorkRequest(
+            key: .init(distinctId: owner?.distinctId ?? identity.getDistinctId(), id: "host-dismiss:\(id)"),
+            runId: owner?.journeyId, afterFailure: false,
+            operation: { [weak self] in
+                guard let self else { return .done }
+                return await self.applyHostDismissInput(id: id)
+            })
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: false); return }
+                hostDismissAcknowledgements[id] = continuation
+                Task { await eventLog.enqueueJourneyWork(request) }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.hostDismissAcknowledgements.removeValue(forKey: id)?.resume(returning: false)
+            }
+        }
+    }
+
+    private func applyHostDismissInput(id: UUID) async -> JourneyQueueResult {
+        guard hostDismissAcknowledgements[id] != nil,
+              let presentation = detachedHostPresentations[id] else { return .done }
+        guard await presentation.runtimeDelegate?.experienceViewControllerDidRequestHostDismiss(
+            presentation.viewController) ?? true else { return .notYet }
+        hostDismissAcknowledgements.removeValue(forKey: id)?.resume(returning: true)
+        return .done
+    }
+
     private func completeDetachedHostPresentation(
         _ presentation: DetachedHostPresentation
     ) async {
@@ -1152,15 +1185,8 @@ final class ExperiencePresentationService {
         }
 
         if !Task.isCancelled {
-            if let runtimeDelegate {
-                while !Task.isCancelled {
-                    accepted = await runtimeDelegate
-                        .experienceViewControllerDidRequestHostDismiss(
-                            viewController
-                        )
-                    if accepted { break }
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                }
+            if runtimeDelegate != nil {
+                accepted = await enqueueHostDismissInput(presentation)
             } else {
                 accepted = true
             }

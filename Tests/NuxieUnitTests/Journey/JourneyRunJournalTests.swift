@@ -6,6 +6,56 @@ import XCTest
 #endif
 
 final class JourneyRunJournalTests: XCTestCase {
+    func testTimedResumePersistsOnlyEventContextBeforeRecoveryAndReporting() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.transition(run.id, stepId: "wait", context: run.context,
+            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
+        let stored = try await journal.runs()
+        let park = try XCTUnwrap(stored.first?.park)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        // Timed outlet evaluation carries the native values loaded by useNativeValues.
+        let context = ArmedJourney.Context(event: ["public_input": .string("kept")],
+            responses: ["private_native_value": .string("must never be reported")])
+        let resumed = try await journal.resumeParked(run.id, expectedStepId: "wait", expectedPark: park,
+            advancingTo: ("next_step", context), admission: admission)
+        XCTAssertNotNil(resumed)
+
+        // Reopen immediately: the process died before the next transition or completion boundary.
+        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let persisted = try await reopened.runs()
+        let cursor = try XCTUnwrap(persisted.first)
+        XCTAssertEqual(cursor.stepId, "next_step")
+        XCTAssertNil(cursor.park)
+        XCTAssertEqual(cursor.context.event, context.event)
+        XCTAssertTrue(cursor.context.responses.isEmpty)
+        let resumable = try await reopened.recover(at: date(210))
+        XCTAssertTrue(resumable.isEmpty)
+        let recovered = try await reopened.runs()
+        let abandoned = try XCTUnwrap(recovered.first)
+        XCTAssertEqual(abandoned.completion?.outcome, "abandoned")
+        // No completion boundary selected declared outputs before the crash.
+        XCTAssertTrue(abandoned.outputs.event.isEmpty)
+        XCTAssertTrue(abandoned.outputs.responses.isEmpty)
+
+        let events = MockEventLog()
+        try await JourneyReporter(journal: reopened, events: events).flushPending()
+        let completion = try XCTUnwrap(events.routedEvents.first { $0.name == JourneyEvents.journeyCompleted })
+        XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
+        let outputs = try XCTUnwrap(completion.properties["outputs"] as? [String: Any])
+        XCTAssertTrue(try XCTUnwrap(outputs["event"] as? [String: Any]).isEmpty)
+        XCTAssertTrue(try XCTUnwrap(outputs["responses"] as? [String: Any]).isEmpty)
+    }
+
     func testParkedCandidatesFromStaleObserversAreNotLost() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -62,6 +112,44 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertFalse(secondAccepted)
         let stored = try await journal.runs()
         XCTAssertEqual(stored.first?.park?.pendingEvent, first)
+    }
+
+    func testTimedResumePersistsOutletWithCheckpointConsumptionOrKeepsTheParkOnFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let candidate = arm()
+        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "wait", at: date(100))
+        let run = try XCTUnwrap(admitted)
+        try await journal.markStartedQueued(run)
+        try await journal.transition(run.id, stepId: "wait", context: run.context,
+            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
+        let parkedRuns = try await journal.runs()
+        let park = try XCTUnwrap(parkedRuns.first?.park)
+        let fence = JourneyProfileFence()
+        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
+            executionFence: fence, executionFenceToken: fence.token())
+        let failing = try JourneyRunJournal(directory: directory, distinctId: "customer", beforePersist: {
+            throw CocoaError(.fileWriteOutOfSpace)
+        })
+        do {
+            _ = try await failing.resumeParked(run.id, expectedStepId: "wait", expectedPark: park,
+                advancingTo: ("timed_out", run.context), admission: admission)
+            XCTFail("A failed write must retain the checkpoint")
+        } catch let error as CocoaError { XCTAssertEqual(error.code, .fileWriteOutOfSpace) }
+        let retained = try await journal.runs()
+        XCTAssertEqual(retained.first?.park, park)
+        XCTAssertEqual(retained.first?.stepId, "wait")
+        let resumed = try await journal.resumeParked(run.id, expectedStepId: "wait", expectedPark: park,
+            advancingTo: ("timed_out", run.context), admission: admission)
+        XCTAssertEqual(resumed?.stepId, "timed_out")
+        XCTAssertNil(resumed?.park)
+        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let persisted = try await reopened.runs()
+        XCTAssertEqual(persisted.first?.stepId, "timed_out")
+        XCTAssertNil(persisted.first?.park)
     }
 
     func testStaleResumeCannotConsumeALaterWait() async throws {

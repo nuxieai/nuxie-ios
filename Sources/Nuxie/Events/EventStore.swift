@@ -129,7 +129,7 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
     acceptedAt: Date,
     routeAdmission: CommittedRouteAdmission?
   ) async throws -> EventStoreInsertCommit
-  func firstPendingCommittedRoute(sessionId: String) async throws -> PendingCommittedRouteDelivery?
+  func firstPendingCommittedRoute(sessionId: String, afterSequence: UInt64?) async throws -> PendingCommittedRouteDelivery?
   func hasPendingCommittedRoute(eventId: String, sessionId: String) async throws -> Bool
   func checkpointCommittedRoute(eventId: String, sessionId: String, nextSubscriber: Int) async throws
   func acknowledgeCommittedRoute(eventId: String, sessionId: String) async throws
@@ -169,6 +169,8 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
   func queryPendingStableRoutes(
     distinctId: String, limit: Int
   ) async throws -> [StoredEvent]
+  /// Revalidate a retained page entry against its current durable route receipt.
+  func hasPendingStableRoute(eventId: String) async throws -> Bool
   /// Visits the pending prefix present when recovery starts, loading at most
   /// one page at a time. Returning false leaves later routes pending.
   func visitPendingStableRoutes(
@@ -218,6 +220,10 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
 }
 
 extension EventStoreProtocol {
+  func firstPendingCommittedRoute(sessionId: String) async throws -> PendingCommittedRouteDelivery? {
+    try await firstPendingCommittedRoute(sessionId: sessionId, afterSequence: nil)
+  }
+
   func commitStableCaptureAndStageRoute(
     eventId: String, event: StoredEvent?, recordedAt: Date,
     assigningCommitSequence: Bool, admission: (any StableEventCaptureCommitAdmission)?
@@ -1150,9 +1156,10 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
   }
 
-  public func firstPendingCommittedRoute(sessionId: String) throws -> PendingCommittedRouteDelivery? {
-    try withCommittedRouteStatement("SELECT event_id, admission, next_subscriber, commit_sequence FROM committed_route_deliveries WHERE session_id = ? ORDER BY commit_sequence LIMIT 1;") { statement in
+  public func firstPendingCommittedRoute(sessionId: String, afterSequence: UInt64? = nil) throws -> PendingCommittedRouteDelivery? {
+    try withCommittedRouteStatement("SELECT event_id, admission, next_subscriber, commit_sequence FROM committed_route_deliveries WHERE session_id = ? AND commit_sequence > ? ORDER BY commit_sequence LIMIT 1;") { statement in
       sqlite3_bind_text(statement, 1, sessionId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_int64(statement, 2, afterSequence.map { Int64($0) } ?? -1)
       let result = sqlite3_step(statement)
       if result == SQLITE_DONE { return nil }
       guard result == SQLITE_ROW, let id = sqlite3_column_text(statement, 0),
@@ -1820,6 +1827,18 @@ actor SQLiteEventStore: EventStoreProtocol {
   ) throws -> [StoredEvent] {
     try pendingStableRoutePage(distinctId: distinctId, after: 0, through: .max, limit: limit)
       .map(\.event)
+  }
+
+  public func hasPendingStableRoute(eventId: String) throws -> Bool {
+    try withCommittedRouteStatement("SELECT 1 FROM stable_event_routes WHERE event_id = ? AND delivery_state = ? LIMIT 1;") { statement in
+      sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_int(statement, 2, EventDeliveryState.pending.rawValue)
+      switch sqlite3_step(statement) {
+      case SQLITE_ROW: return true
+      case SQLITE_DONE: return false
+      default: throw EventStorageError.invalidProperties
+      }
+    }
   }
 
   public func visitPendingStableRoutes(
