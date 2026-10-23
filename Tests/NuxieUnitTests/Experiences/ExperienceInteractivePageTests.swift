@@ -5,6 +5,25 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class ExperienceInteractivePageTests: XCTestCase {
+    func testConfirmedRowSaveRestoresKeptValuesBeforeFiringTrigger() async throws {
+        try await withLayer { page, _ in
+            let row = try await page.prepareRow(screenID: "screen_1", products: [])
+            let rowRoot = try await row.rootViewModel()
+            let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: rowRoot.rawValue))
+            let pageRoot = try await page.runtime.rootViewModelReference()
+            XCTAssertNotEqual(reference, pageRoot)
+            let mutations = try await row.confirmedResponseSaveMutations(trigger: "saved", kept: [
+                .init(path: "keptValue", kind: NuxieNativeViewModelPropertyKind.number.rawValue, value: .number(42)),
+                .init(path: "markerX", kind: NuxieNativeViewModelPropertyKind.number.rawValue, value: .number(7))
+            ])
+            XCTAssertEqual(mutations, [
+                .setNumber(instance: reference, path: "keptValue", value: 42),
+                .setNumber(instance: reference, path: "markerX", value: 7),
+                .fireTrigger(instance: reference, path: "saved")
+            ], "The native batch restores every kept field on the row before firing its continuation")
+        }
+    }
+
     func testMappedArtboardProvidesRowSchemaWithoutJourneyTypeName() async throws {
         let base = try await interimLayerPayload()
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: base.authenticatedKeyID,
@@ -395,7 +414,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             _ = try await page.step(elapsedSeconds: 0)
             let host = await page.videoPlayback
             let playback = try XCTUnwrap(host)
-            let before = playback.videoTestPlayers
+            let before = playback.decoderPlayerIdentities
             XCTAssertEqual(before.count, 1)
             let ids = try await page.runtime.videos().map(\.componentID)
             await page.beginPresentationStep()
@@ -404,10 +423,10 @@ final class ExperienceInteractivePageTests: XCTestCase {
                 try await page.setPhases([("screen", phase)])
                 _ = try await page.step(elapsedSeconds: 1 / 60)
             }
-            let after = playback.videoTestPlayers
+            let after = playback.decoderPlayerIdentities
             try await page.setLayoutSize(width: 320, height: 640)
             playback.setStepInProgress(false)
-            XCTAssertEqual(after.map(ObjectIdentifier.init), before.map(ObjectIdentifier.init))
+            XCTAssertEqual(after, before)
             let afterIDs = try await page.runtime.videos().map(\.componentID)
             XCTAssertEqual(afterIDs, ids)
         }
