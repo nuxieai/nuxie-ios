@@ -713,8 +713,7 @@ final class ExperienceScreenViewController: UIViewController {
                 pageHistory.back(to: targetID, steps: backSteps)
                 let reachable = Set(pageHistory.screenIDs)
                 try await pageWork {
-                    try await layer.apply([.retire], source: sourceID, target: targetID, reachable: reachable, reduceMotion: reduceMotion)
-                    return nil
+                    try await layer.apply([.reconcile, .retire], source: sourceID, target: targetID, reachable: reachable, reduceMotion: reduceMotion)
                 }
             }
             return
@@ -752,7 +751,6 @@ final class ExperienceScreenViewController: UIViewController {
                 try await pageWork {
                     try await layer.apply(changes, source: sourceID, target: targetID,
                         reachable: reachable, reduceMotion: reduceMotion)
-                    return nil
                 }
                 lifecycleState = await layer.state(screenID: sourceID) ?? lifecycleState
             }, present: {
@@ -789,7 +787,6 @@ final class ExperienceScreenViewController: UIViewController {
                 try? await pageWork {
                     try await layer.restoreCancelledStep(source: sourceID, target: targetID,
                         reachable: reachable, reduceMotion: reduceMotion)
-                    return nil
                 }
                 await activate(reduceMotion: reduceMotion)
             }
