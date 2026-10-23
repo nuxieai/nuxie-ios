@@ -1,176 +1,44 @@
 import Foundation
 
-/// A retry record is removed only after the event log durably accepts its
-/// stable ID. Concurrent drainers and crashes between capture and journal
-/// acknowledgement replay that same ID through EventLog's existing dedupe.
-struct JourneyReporter {
-    let journal: JourneyRunJournal
-    let events: any RoutedStableSystemEventCapturing
-
-    /// Persist the complete lifecycle outbox before startup routing can start
-    /// newer runs. Acknowledgement/removal still waits for ordinary recovery.
-    func stagePending() async throws -> Bool {
-        for run in try await journal.runs() {
-            if !run.startedQueued, !(await queue(run, completion: false)) { return false }
-            if run.completion != nil, !(await queue(run, completion: true)) { return false }
-        }
-        return true
+/// Pure projections prepared through the ordinary event privacy pipeline before SQL.
+enum JourneyReporter {
+    static func started(_ journey: JourneyRun, owner: String) throws -> RoutedStableSystemEventBatchItem {
+        .init(request: .init(name: JourneyEvents.journeyStarted, properties: properties(journey),
+            eventId: journey.startedEventId, distinctId: owner), occurredAt: journey.startedAt)
     }
 
-    func flushPending() async throws {
-        for run in try await journal.runs() {
-            if !run.startedQueued {
-                guard await queue(run, completion: false) else { continue }
-                try await journal.markStartedQueued(run)
-            }
-            if run.completion != nil {
-                // A shown experiment decision owns its exposure record before
-                // the terminal run can be removed from the journal.
-                guard !run.experimentExposures.contains(where: {
-                    $0.shownAt != nil && !$0.queued
-                }) else { continue }
-                guard await queue(run, completion: true) else { continue }
-                try await journal.markCompletionQueued(run)
-            }
-        }
+    static func completed(_ journey: JourneyRun, owner: String, outcome: String, at: Date,
+                          outputs: ArmedJourney.Context) throws -> RoutedStableSystemEventBatchItem {
+        var values = properties(journey)
+        values["completed_at"] = timestamp(at)
+        values["outcome"] = outcome
+        values["outputs"] = try JSONSerialization.jsonObject(with: ExactJSONCodec.encode(outputs))
+        return .init(request: .init(name: JourneyEvents.journeyCompleted, properties: values,
+            eventId: journey.completedEventId, distinctId: owner), occurredAt: at)
     }
 
-    private func queue(_ run: JourneyRun, completion: Bool) async -> Bool {
-        var properties: [String: Any] = [
-            "journey_id": run.journeyId,
-            "experience_id": run.reference.experienceId,
-            "experience_version_id": run.reference.versionId,
-            "leg_id": run.reference.legId,
-            "leg_generation": run.generation,
-            "started_at": Self.timestamp(run.startedAt),
+    static func exposure(_ exposure: JourneyRun.ExperimentExposure, journey: JourneyRun,
+                         owner: String, at: Date) throws -> RoutedStableSystemEventBatchItem {
+        let values: [String: Any] = [
+            "journey_id": journey.journeyId, "experience_id": journey.reference.experienceId,
+            "experience_version": journey.reference.versionId, "leg_id": journey.reference.legId,
+            "leg_generation": journey.generation, "experiment_key": exposure.experimentId,
+            "variant_key": exposure.variantId, "assignment_source": exposure.kind == .assigned ? "profile" : "fallback",
+            "is_holdout": exposure.isHoldout,
         ]
-        if completion, let result = run.completion {
-            properties["completed_at"] = Self.timestamp(result.at)
-            properties["outcome"] = result.outcome
-            guard let data = try? ExactJSONCodec.encode(run.outputs),
-                  let outputs = try? JSONSerialization.jsonObject(with: data) else { return false }
-            properties["outputs"] = outputs
-        }
-        // Terminal beforeSend drops are also durable acknowledgements. Host
-        // privacy policy must not create an immortal retry record.
-        guard let _ = await events.captureAndRouteSystemEvent(.init(
-            name: completion
-                ? JourneyEvents.journeyCompleted
-                : JourneyEvents.journeyStarted,
-            properties: properties,
-            eventId: completion ? run.completedEventId : run.startedEventId,
-            distinctId: journal.distinctId
-        )) else { return false }
-        return true
+        return .init(request: .init(name: JourneyEvents.experimentExposure, properties: values,
+            eventId: exposure.eventId, distinctId: owner), occurredAt: at)
+    }
+
+    private static func properties(_ journey: JourneyRun) -> [String: Any] {
+        ["journey_id": journey.journeyId, "experience_id": journey.reference.experienceId,
+         "experience_version_id": journey.reference.versionId, "leg_id": journey.reference.legId,
+         "leg_generation": journey.generation, "started_at": timestamp(journey.startedAt)]
     }
 
     private static func timestamp(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
-    }
-}
-
-extension JourneyReporter: Sendable {}
-
-/// Flushes only experiment decisions whose selected variant reached a visible
-/// surface. The journal keeps the stable event ID until EventLog accepts it,
-/// so a crash or transient storage failure cannot duplicate an exposure.
-struct JourneyExperimentExposureReporter: Sendable {
-    private struct Projection {
-        let eventName: String
-        let properties: [String: Any]
-    }
-
-    let journal: JourneyRunJournal
-    let events: any RoutedStableSystemEventCapturing
-
-    /// Stage every pending exposure while live routing is held, without
-    /// prematurely marking its subscriber receipt as drained.
-    func stagePending() async throws -> Bool {
-        for run in try await journal.runs() {
-            for exposure in run.experimentExposures
-            where exposure.shownAt != nil && !exposure.queued {
-                let projection = projection(exposure, run: run)
-                guard await captureStableSystemEvent(
-                    projection.eventName, properties: projection.properties,
-                    eventId: exposure.eventId, admission: nil
-                ) != nil else { return false }
-            }
-        }
-        return true
-    }
-
-    func flushPending(
-        admission: JourneyCommitAdmission? = nil
-    ) async throws -> Bool {
-        for run in try await journal.runs() {
-            for exposure in run.experimentExposures
-            where exposure.shownAt != nil && !exposure.queued {
-                let projection = projection(exposure, run: run)
-                let capture = await captureStableSystemEvent(
-                    projection.eventName,
-                    properties: projection.properties,
-                    eventId: exposure.eventId,
-                    admission: admission
-                )
-                guard capture != nil else { return false }
-                guard await events.drainCommittedRouting() else {
-                    return false
-                }
-                try await journal.markExperimentExposureQueued(
-                    run.id,
-                    eventId: exposure.eventId
-                )
-            }
-        }
-        return true
-    }
-
-    private func captureStableSystemEvent(
-        _ name: String,
-        properties: sending [String: Any],
-        eventId: String,
-        admission: JourneyCommitAdmission?
-    ) async -> DurableTriggerCapture? {
-        let request = StableSystemEventCaptureRequest(
-            name: name,
-            properties: properties,
-            eventId: eventId,
-            distinctId: journal.distinctId
-        )
-        if let admission {
-            return await events.captureAndRouteSystemEvent(
-                request,
-                admission: admission
-            )
-        }
-        return await events.captureAndRouteSystemEvent(request)
-    }
-
-    private func projection(
-        _ exposure: JourneyRun.ExperimentExposure,
-        run: JourneyRun
-    ) -> Projection {
-        var properties: [String: Any] = [
-            "journey_id": run.journeyId,
-            "experience_id": run.reference.experienceId,
-            "experience_version": run.reference.versionId,
-            "leg_id": run.reference.legId,
-            "leg_generation": run.generation,
-            "experiment_key": exposure.experimentId,
-            "variant_key": exposure.variantId,
-        ]
-        properties["assignment_source"] = exposure.kind == .assigned
-            ? "profile"
-            : "fallback"
-        // The selected variant's flag from the authenticated release, for a
-        // fallback too: publishing never signs a holdout fallback, but a
-        // release that did would run its holdout path.
-        properties["is_holdout"] = exposure.isHoldout
-        return Projection(
-            eventName: JourneyEvents.experimentExposure,
-            properties: properties
-        )
     }
 }

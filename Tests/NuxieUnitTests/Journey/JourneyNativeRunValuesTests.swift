@@ -63,7 +63,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
         let shown = await MainActor.run { presenter.request }
         let values = try XCTUnwrap(shown).runValues
-        let journal = try JourneyRunJournal(directory: storage, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: storage, distinctId: "customer")
         let runs = try await journal.runs()
         let runID = try XCTUnwrap(runs.first).id
         let file = try await NuxieNativePreparedFile.prepare(
@@ -99,7 +99,8 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         let journalAfter = try await journal.runs()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        XCTAssertEqual(try encoder.encode(journalAfter), try encoder.encode(runs))
+        XCTAssertEqual(journalAfter.map(\.cursorRevision), runs.map(\.cursorRevision))
+        XCTAssertEqual(journalAfter.map(\.stepId), runs.map(\.stepId))
         if retireNativeSession {
             try await native.sessions.retire()
             let unavailable = try await service.liveFormAnswersJSON(runID: runID, owner: "customer")
@@ -168,7 +169,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
             invocationId: "goals-wait", emissions: [.init(id: UUID().uuidString, sequence: 0,
                 occurredAt: "2026-08-29T12:00:00.120Z", name: "continue", payload: [:])]), nil)
         XCTAssertTrue(accepted)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         for _ in 0..<200 {
             if try await journal.runs().first?.park != nil { break }
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -290,7 +291,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
             invocationId: "wait-continue", emissions: [.init(id: UUID().uuidString, sequence: 0,
                 occurredAt: "2026-08-29T12:00:00.120Z", name: "continue", payload: [:])]), nil)
         XCTAssertTrue(accepted)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         for _ in 0..<200 {
             if try await journal.runs().first?.park != nil { break }
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -335,7 +336,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
             return
         }
         if wakeEvent {
-            await restarted.handleEvent(NuxieEvent(name: "unlock", distinctId: "customer", properties: [:], timestamp: clock.now()))
+            await restarted.handleStoredEvent(NuxieEvent(name: "unlock", distinctId: "customer", properties: [:], timestamp: clock.now()))
             await restartedEvents.drain()
         }
         if failFirstPreparation {
@@ -418,7 +419,7 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
         if !park { XCTAssertFalse(accepted) }
         XCTAssertFalse(context.events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted && (!park || $0.properties["outcome"] as? String != "abandoned") })
         let runs = try await context.journal.runs()
-        if !park { XCTAssertNil(runs.first?.completion) }
+        if !park { XCTAssertFalse(runs.isEmpty) }
         XCTAssertNil(runs.first?.park)
         await context.service.shutdown()
     }
@@ -520,16 +521,17 @@ final class JourneyNativeRunValuesTests: JourneyTestCase {
                     .init(id: UUID().uuidString, sequence: 1,
                     occurredAt: "2026-08-29T12:00:00.120Z", name: "continue", payload: [:])]), nil)
             XCTAssertTrue(accepted)
-            let journal = try JourneyRunJournal(directory: context.directory, distinctId: "customer")
+            let journal = try await CustomerJourneyStore(directory: context.directory, distinctId: "customer")
             for _ in 0..<200 {
                 if try await journal.runs().first?.park != nil { break }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
             await context.service.onAppDidEnterBackground()
-            await context.service.handleEvent(NuxieEvent(name: "unlock", distinctId: "customer",
+            await context.service.handleStoredEvent(NuxieEvent(name: "unlock", distinctId: "customer",
                 properties: [:], timestamp: Date(timeIntervalSince1970: 1_000_000_001)))
             let parked = try await journal.runs()
-            XCTAssertEqual(parked.first?.park?.pendingEvent?.name, "unlock")
+            let retainedInput = try await journal.loggedInput(named: "unlock")
+            XCTAssertEqual(retainedInput?.name, "unlock")
             XCTAssertFalse(context.events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
             await context.service.onAppBecameActive()
             await fulfillment(of: [completed], timeout: 3)

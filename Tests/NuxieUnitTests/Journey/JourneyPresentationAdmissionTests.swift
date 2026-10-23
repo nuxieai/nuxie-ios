@@ -107,13 +107,13 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 nativeReads.record()
                 return try await values.journeyValues()
             }, readJournalRuns: { journal in
-                if failReads.isCompleted, !repaired.isCompleted { throw JourneyJournalError.invalidState }
+                if failReads.isCompleted, !repaired.isCompleted { throw JourneyExecutionError.invalidState }
                 return try await journal.runs()
-            }, pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            }, pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
         let reservation = events.reserveCommittedAdmission { service.eventAdmissionGeneration() }
         await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, generation in
-            await service.handleEvent(event, admittedProfileGeneration: generation)
+            await service.handleStoredEvent(event, admittedProfileGeneration: generation)
         }
         await service.prepareForEvents()
         let configuration = NuxieConfiguration(apiKey: "direct-route-retry-test")
@@ -134,7 +134,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
                 id: "00000000-0000-7000-8000-000000000437", sequence: 0,
                 occurredAt: "1970-01-12T13:46:40Z", name: "continue", payload: [:])]), nil)
         XCTAssertTrue(accepted)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         for _ in 0..<200 {
             if try await journal.runs().first?.park != nil { break }
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -154,7 +154,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         let afterReplay = try await journal.runs().first
         XCTAssertEqual(afterReplay?.park, beforeFailure?.park,
                        "Replay must still exclude the run that directly routed this publication")
-        XCTAssertNil(afterReplay?.completion)
+
         XCTAssertEqual(nativeReads.callCount, readsBeforeReplay,
                        "The publication's owning run must be excluded from replay evaluation")
         events.track("finish")
@@ -279,7 +279,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
             where: nil,
             reservation: admission
         ) { event, generation in
-            await service.handleEvent(
+            await service.handleStoredEvent(
                 event,
                 admittedProfileGeneration: generation
             )
@@ -301,7 +301,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
             )]
         ), nil)
         XCTAssertTrue(waitAccepted)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -447,7 +447,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
             )]
         ), nil)
         XCTAssertTrue(accepted)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -599,7 +599,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
             )]
         ), nil)
         XCTAssertTrue(enteredWait)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -609,7 +609,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         }
 
         await service.onAppDidEnterBackground()
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             name: "unlock",
             distinctId: "customer",
             properties: ["allowed": true],
@@ -618,7 +618,8 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
 
         let backgroundRuns = try await journal.runs()
         let backgroundRun = try XCTUnwrap(backgroundRuns.first)
-        XCTAssertEqual(backgroundRun.park?.pendingEvent?.name, "unlock")
+        let retainedInput = try await journal.loggedInput(named: "unlock")
+            XCTAssertEqual(retainedInput?.name, "unlock")
         let backgroundNavigation = await MainActor.run {
             presenter.navigationScreenIds
         }
@@ -762,7 +763,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
             context.snapshot,
             distinctId: "customer"
         )
-        await context.service.handleEvent(NuxieEvent(
+        await context.service.handleStoredEvent(NuxieEvent(
             name: "hello",
             distinctId: "customer",
             properties: [:]
@@ -773,7 +774,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         for _ in 0..<10 { await Task.yield() }
         XCTAssertTrue(context.events.routedEvents.isEmpty)
 
-        await context.service.handleEvent(NuxieEvent(
+        await context.service.handleStoredEvent(NuxieEvent(
             name: "hello",
             distinctId: "customer",
             properties: [:]

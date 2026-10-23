@@ -17,17 +17,10 @@ actor JourneyPresentationPublicationCoordinator {
         var eventID: String? = nil
     }
 
-    struct BatchFailure: Sendable {
-        let publishedOrdinaryEvents: Bool
-        let run: JourneyRun
-        let context: ArmedJourney.Context
-    }
-
     enum BatchDisposition: Sendable {
         case rejected
         case accepted
         case continueExecution(BatchContinuation)
-        case publicationFailed(BatchFailure)
     }
 
     private let identity: IdentityServiceProtocol
@@ -57,285 +50,58 @@ actor JourneyPresentationPublicationCoordinator {
         directlyRoutedRunByEventId.removeAll()
     }
 
-    /// Commits the ordinary events of one renderer invocation before they
-    /// become visible. The pending marker is cleared by the transition consuming a routed
-    /// event. The service only owns presentation validation and the resulting
-    /// run continuation or terminal recovery.
-    func process(
-        _ batch: ScreenEmissionBatch,
-        for run: JourneyRun,
-        leg: Journey,
-        in journal: JourneyRunJournal,
-        executionFenceToken: JourneyProfileFenceToken
-    ) async -> BatchDisposition {
-        let expectedStepId = run.stepId
-        let expectedCheckpoint = Self.controlCheckpoint(from: run.park)
-        let screenId = batch.source.screenId
-        var stagedRun = run
-        var publicationItems: [
-            JourneyRun.PendingPresentationPublication.Item
-        ] = []
-        publicationItems.reserveCapacity(batch.emissions.count)
-
+    /// A renderer invocation publishes its privacy projection and selected cursor together.
+    func process(_ batch: ScreenEmissionBatch, for run: JourneyRun, leg: Journey,
+                 in journal: CustomerJourneyStore, executionFenceToken: JourneyProfileFenceToken,
+                 responsesChanged: Bool = false, responseAdvance: JourneyRunExecutionCoordinator.AdvanceCommand? = nil,
+                 occurredAt: Date? = nil) async -> BatchDisposition {
+        guard let admission = commitAdmission(in: journal, executionFenceToken: executionFenceToken) else { return .rejected }
+        var items: [RoutedStableSystemEventBatchItem] = []
         for emission in batch.emissions where !emission.name.hasPrefix("$") {
-            guard let occurredAt = JourneyPresentationEventProjector.date(
-                emission.occurredAt
-            ), JourneyTime.milliseconds(occurredAt) != nil else {
-                return .rejected
-            }
-            let properties = JourneyPresentationEventProjector.values(
-                payload: ExactJSONObject(
-                    emission.payload.mapValues(\.releaseJSONValue)
-                ),
-                screenId: screenId,
-                run: run
-            )
-            publicationItems.append(.init(
-                name: emission.name,
-                properties: properties,
-                eventId: emission.id,
-                occurredAt: occurredAt
-            ))
+            guard let date = JourneyPresentationEventProjector.date(emission.occurredAt),
+                  let properties = JourneyPresentationEventProjector.properties(payload: ExactJSONObject(emission.payload.mapValues(\.releaseJSONValue)), screenId: batch.source.screenId, run: run) else { return .rejected }
+            items.append(.init(request: .init(name: emission.name, properties: properties, eventId: emission.id, distinctId: journal.distinctId,
+                journeyOrigin: .init(journeyId: run.journeyId, experienceId: run.reference.experienceId, versionId: run.reference.versionId,
+                    legId: run.reference.legId, generation: run.generation, screenId: batch.source.screenId,
+                    actionId: batch.source.actionId, invocationId: batch.invocationId, occurrenceId: emission.id)), occurredAt: date))
         }
-
-        let context = ArmedJourney.Context(
-            event: run.context.event,
-            responses: [:]
-        )
-        let publication = JourneyRun.PendingPresentationPublication(
-            invocationId: batch.invocationId,
-            source: batch.source,
-            context: context,
-            items: publicationItems
-        )
         do {
-            guard let admission = commitAdmission(
-                in: journal,
-                executionFenceToken: executionFenceToken
-            ), try await journal.stagePresentationPublication(
-                run.id,
-                expectedStepId: expectedStepId,
-                expectedCheckpoint: expectedCheckpoint,
-                publication: publication,
-                admission: admission
-            ) else { return .rejected }
+            let records = try await events.prepareCustomerEvents(items)
+            let routed = records.compactMap(\.event).first { JourneyPresentationEventProjector.route(in: leg, eventName: $0.name, screenId: batch.source.screenId) != nil }
+            let routeStep = routed.flatMap { JourneyPresentationEventProjector.route(in: leg, eventName: $0.name, screenId: batch.source.screenId) }
+            let step = routeStep ?? responseAdvance?.stepId
+            let control = routed.flatMap { JourneyPresentationEventProjector.controlEvent($0.customerEvent) }
+            let context = ArmedJourney.Context(event: control?.properties ?? responseAdvance?.context.event ?? run.context.event, responses: run.context.responses)
+            var transition = CustomerInputTransition(key: journal.key(run), expectedRevision: run.cursorRevision, eventId: routed?.id,
+                targetKey: "renderer:" + batch.invocationId, stepId: step ?? run.stepId, context: context,
+                checkpoint: step == nil ? Self.controlCheckpoint(from: run.park) : nil, nativeSnapshot: run.nativeSnapshot,
+                presentationSource: batch.source, rendererInvocationId: batch.invocationId)
+            transition.commerceToRetain = run.pendingCommerce
+            transition.responsesChanged = responsesChanged
+            transition.consumesWait = routeStep == nil && responseAdvance != nil
+            transition.rendererOccurredAt = occurredAt.flatMap(JourneyTime.milliseconds)
+            for record in records { directlyRoutedRunByEventId[record.eventId] = run.id }
+            let result: CustomerExecutionResult
+            do { result = try await journal.commit(.applyInput(transition), records: records, admission: admission) }
+            catch { removeDirectRoutes(items, runId: run.id); throw error }
+            for (record, commit) in zip(records, result.commits) {
+                if !commit.localRoutePending { removeDirectRoute(eventId: record.eventId, runId: run.id) }
+            }
+            guard !result.replayed, let committed = result.journey else { return .accepted }
+            guard step != nil else { return .accepted }
+            return .continueExecution(.init(run: committed, signal: .init(event: control, responsesChanged: responsesChanged), checkpoint: nil, eventID: routed?.id))
+        } catch CustomerStoreError.staleRevision {
+            return .accepted
         } catch {
-            LogWarning(
-                "JourneyPresentationPublicationCoordinator: failed to stage renderer publication: \(error)"
-            )
+            LogWarning("JourneyPresentationPublicationCoordinator: renderer transaction failed: \(error)")
             return .rejected
         }
-        stagedRun.context = context
-        return await settle(
-            publication,
-            for: stagedRun,
-            leg: leg,
-            in: journal,
-            executionFenceToken: executionFenceToken
-        )
-    }
-
-    /// Replays a renderer outbox through the same authenticated route and
-    /// transition path as a live invocation. The marker remains durable until
-    /// its event or response signal is applied to the owning run.
-    func recover(
-        _ run: JourneyRun,
-        leg: Journey,
-        in journal: JourneyRunJournal,
-        executionFenceToken: JourneyProfileFenceToken
-    ) async -> BatchDisposition {
-        guard let publication = run.pendingPresentationPublication else {
-            return .accepted
-        }
-        return await settle(
-            publication,
-            for: run,
-            leg: leg,
-            in: journal,
-            executionFenceToken: executionFenceToken
-        )
-    }
-
-    /// Publishes renderer events retained across a process break after the
-    /// owning run has already become terminal. The ordinary event pipeline
-    /// still observes the stable captures, while no screen route can mutate
-    /// the completed run.
-    func recoverObservability(
-        _ run: JourneyRun,
-        in journal: JourneyRunJournal,
-        executionFenceToken: JourneyProfileFenceToken
-    ) async -> Bool {
-        guard let publication = run.pendingPresentationPublication,
-              let ordinaryItems = JourneyPresentationEventProjector
-                .routedItems(
-                    publication,
-                    run: run,
-                    distinctId: journal.distinctId
-                ) else { return false }
-        guard !ordinaryItems.isEmpty else { return true }
-        return await publish(
-            ordinaryItems,
-            forRunId: run.id,
-            in: journal,
-            executionFenceToken: executionFenceToken
-        ) != nil
-    }
-
-    private func settle(
-        _ publication: JourneyRun.PendingPresentationPublication,
-        for run: JourneyRun,
-        leg: Journey,
-        in journal: JourneyRunJournal,
-        executionFenceToken: JourneyProfileFenceToken
-    ) async -> BatchDisposition {
-        let expectedStepId = run.stepId
-        let screenId = publication.source.screenId
-        var stagedRun = run
-        var context = publication.context
-        guard let ordinaryItems = JourneyPresentationEventProjector
-            .routedItems(
-                publication,
-                run: run,
-                distinctId: journal.distinctId
-            ) else { return .rejected }
-
-        var publishedOrdinaryEvents = false
-        var routedEvent: NuxieEvent?
-        var routeStepId: String?
-        if !ordinaryItems.isEmpty {
-            guard let published = await publish(
-                ordinaryItems,
-                forRunId: run.id,
-                in: journal,
-                executionFenceToken: executionFenceToken
-            ) else { return .rejected }
-            publishedOrdinaryEvents = true
-            guard published.remainsAuthorized else { return .accepted }
-            for item in ordinaryItems {
-                guard let capture = published.captures[item.request.eventId],
-                      capture.routesLocally,
-                      let candidate = JourneyPresentationEventProjector.route(
-                        in: leg,
-                        eventName: capture.event.name,
-                        screenId: screenId
-                      ) else {
-                    continue
-                }
-                routedEvent = capture.event
-                routeStepId = candidate
-                break
-            }
-        }
-
-        do {
-            guard let current = try await journal.runs().first(where: {
-                $0.id == run.id
-                    && $0.completion == nil
-                    && $0.stepId == expectedStepId
-                    && $0.pendingPresentationPublication?.invocationId
-                        == publication.invocationId
-            }) else {
-                return .publicationFailed(.init(
-                    publishedOrdinaryEvents: publishedOrdinaryEvents,
-                    run: stagedRun,
-                    context: context
-                ))
-            }
-            stagedRun = current
-        } catch {
-            return .publicationFailed(.init(
-                publishedOrdinaryEvents: publishedOrdinaryEvents,
-                run: stagedRun,
-                context: context
-            ))
-        }
-
-        if let routedEvent, let routeStepId {
-            guard let controlEvent = JourneyPresentationEventProjector
-                .controlEvent(routedEvent) else {
-                return .publicationFailed(.init(
-                    publishedOrdinaryEvents: publishedOrdinaryEvents,
-                    run: stagedRun,
-                    context: context
-                ))
-            }
-            context = ArmedJourney.Context(
-                event: controlEvent.properties,
-                responses: publication.context.responses,
-                formAnswers: publication.context.formAnswers
-            )
-            do {
-                guard let admission = commitAdmission(
-                    in: journal,
-                    executionFenceToken: executionFenceToken
-                ), try await journal.transition(
-                    run.id,
-                    stepId: routeStepId,
-                    context: context,
-                    clearingPresentationPublication: publication.invocationId,
-                    admission: admission
-                ) else {
-                    return .publicationFailed(.init(
-                        publishedOrdinaryEvents: publishedOrdinaryEvents,
-                        run: stagedRun,
-                        context: context
-                    ))
-                }
-            } catch {
-                LogWarning(
-                    "JourneyPresentationPublicationCoordinator: failed to persist screen route: \(error)"
-                )
-                return .publicationFailed(.init(
-                    publishedOrdinaryEvents: publishedOrdinaryEvents,
-                    run: stagedRun,
-                    context: context
-                ))
-            }
-            stagedRun.stepId = routeStepId
-            stagedRun.context = context
-            stagedRun.park = nil
-            stagedRun.pendingPresentationPublication = nil
-            return .continueExecution(.init(
-                run: stagedRun,
-                signal: .init(event: controlEvent),
-                checkpoint: nil,
-                eventID: routedEvent.id
-            ))
-        }
-
-        do {
-            guard let admission = commitAdmission(
-                in: journal,
-                executionFenceToken: executionFenceToken
-            ), try await journal.clearPresentationPublication(
-                run.id,
-                invocationId: publication.invocationId,
-                admission: admission
-            ) else {
-                return .publicationFailed(.init(
-                    publishedOrdinaryEvents: publishedOrdinaryEvents,
-                    run: stagedRun,
-                    context: context
-                ))
-            }
-        } catch {
-            LogWarning(
-                "JourneyPresentationPublicationCoordinator: failed to clear renderer publication: \(error)"
-            )
-            return .publicationFailed(.init(
-                publishedOrdinaryEvents: publishedOrdinaryEvents,
-                run: stagedRun,
-                context: context
-            ))
-        }
-        stagedRun.pendingPresentationPublication = nil
-        return .accepted
     }
 
     func publish(
         _ items: [RoutedStableSystemEventBatchItem],
         forRunId runId: String,
-        in journal: JourneyRunJournal,
+        in journal: CustomerJourneyStore,
         executionFenceToken: JourneyProfileFenceToken
     ) async -> BatchPublication? {
         await publish(
@@ -350,7 +116,7 @@ actor JourneyPresentationPublicationCoordinator {
     private func publish(
         _ items: [RoutedStableSystemEventBatchItem],
         forRunId runId: String,
-        in journal: JourneyRunJournal,
+        in journal: CustomerJourneyStore,
         identityFenceToken suppliedIdentityFenceToken: IdentityFenceToken?,
         executionFenceToken: JourneyProfileFenceToken
     ) async -> BatchPublication? {
@@ -428,7 +194,7 @@ actor JourneyPresentationPublicationCoordinator {
         eventId: String,
         occurredAt: Date,
         forRunId runId: String,
-        in journal: JourneyRunJournal,
+        in journal: CustomerJourneyStore,
         identityFenceToken: IdentityFenceToken,
         executionFenceToken: JourneyProfileFenceToken
     ) async -> DurableTriggerCapture? {
@@ -470,7 +236,7 @@ actor JourneyPresentationPublicationCoordinator {
 
     private func isCurrentIdentity(
         _ token: IdentityFenceToken,
-        journal: JourneyRunJournal
+        journal: CustomerJourneyStore
     ) async -> Bool {
         guard identity.getDistinctId() == journal.distinctId else {
             return false
@@ -481,7 +247,7 @@ actor JourneyPresentationPublicationCoordinator {
     }
 
     private func commitAdmission(
-        in journal: JourneyRunJournal,
+        in journal: CustomerJourneyStore,
         executionFenceToken: JourneyProfileFenceToken
     ) -> JourneyCommitAdmission? {
         guard executionFence.isCurrent(executionFenceToken),
@@ -585,41 +351,6 @@ enum JourneyPresentationEventProjector {
         return properties
     }
 
-    static func routedItems(
-        _ publication: JourneyRun.PendingPresentationPublication,
-        run: JourneyRun,
-        distinctId: String
-    ) -> [RoutedStableSystemEventBatchItem]? {
-        var routed: [RoutedStableSystemEventBatchItem] = []
-        routed.reserveCapacity(publication.items.count)
-        for item in publication.items {
-            guard let properties = foundationValues(item.properties) else {
-                return nil
-            }
-            routed.append(.init(
-                request: .init(
-                    name: item.name,
-                    properties: properties,
-                    eventId: item.eventId,
-                    distinctId: distinctId,
-                    journeyOrigin: item.name.hasPrefix("$") ? nil : JourneyEventOrigin(
-                        journeyId: run.journeyId,
-                        experienceId: run.reference.experienceId,
-                        versionId: run.reference.versionId,
-                        legId: run.reference.legId,
-                        generation: run.generation,
-                        screenId: publication.source.screenId,
-                        actionId: publication.source.actionId,
-                        invocationId: publication.invocationId,
-                        occurrenceId: item.eventId
-                    )
-                ),
-                occurredAt: item.occurredAt
-            ))
-        }
-        return routed
-    }
-
     static func route(
         in leg: Journey,
         eventName: String,
@@ -673,7 +404,7 @@ enum JourneyPresentationEventProjector {
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
-    private static func jsonValue(_ value: Any) -> JourneyReleaseJSONValue? {
+    static func jsonValue(_ value: Any) -> JourneyReleaseJSONValue? {
         if value is NSNull { return .null }
         if let number = value as? NSNumber {
             if CFGetTypeID(number) == CFBooleanGetTypeID() {

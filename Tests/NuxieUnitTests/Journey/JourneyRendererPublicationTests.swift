@@ -21,12 +21,12 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             await service.profileDidCommit(snapshot, distinctId: "customer")
             let request = await MainActor.run { presenter.request }
             XCTAssertEqual(request?.screenId, "screen_welcome")
-            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
             let rows = try await journal.runs()
             let run = try XCTUnwrap(rows.first)
             XCTAssertNil(run.park)
-            XCTAssertNil(run.completion)
-            XCTAssertNil(run.pendingPresentationPublication)
+
+            XCTAssertNil(run.park)
         }
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -70,14 +70,14 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyStarted,
         ])
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
         let activeRuns = try await journal.runs()
         let run = try XCTUnwrap(activeRuns.first)
         XCTAssertNil(run.park)
-        XCTAssertNil(run.completion)
+
     }
 
     func testRenderedEmissionCommitsBeforeCompletionAndFinishesItsOwnedSurface() async throws {
@@ -198,7 +198,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -256,10 +256,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         let runAfterFailure = try XCTUnwrap(runsAfterFailure.first)
         XCTAssertEqual(runAfterFailure.stepId, initialStep)
         XCTAssertTrue(runAfterFailure.context.responses.isEmpty)
-        XCTAssertEqual(
-            runAfterFailure.pendingPresentationPublication?.invocationId,
-            batch.invocationId
-        )
+        XCTAssertEqual(runAfterFailure.cursorRevision, 0)
 
         events.stableCaptureBatchFailureIndex = nil
         let completionCommitted = expectation(description: "completion committed")
@@ -352,16 +349,13 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             ), nil)
 
             XCTAssertFalse(accepted)
-            let journal = try JourneyRunJournal(
+            let journal = try await CustomerJourneyStore(
                 directory: directory,
                 distinctId: "customer"
             )
             let persistedRuns = try await journal.runs()
             let run = try XCTUnwrap(persistedRuns.first)
-            XCTAssertEqual(
-                run.pendingPresentationPublication?.invocationId,
-                "restart-publication"
-            )
+            XCTAssertEqual(run.stepId, "present")
             XCTAssertTrue(run.context.responses.isEmpty)
             XCTAssertFalse(events.routedEvents.contains {
                 $0.name == "continue"
@@ -399,7 +393,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         )
         let responses = try XCTUnwrap(outputs["responses"] as? [String: Any])
         XCTAssertNil(responses["plan"])
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -457,7 +451,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -494,7 +488,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         XCTAssertFalse(accepted)
         let persistedRuns = try await journal.runs()
         let run = try XCTUnwrap(persistedRuns.first)
-        XCTAssertNil(run.completion)
+
         XCTAssertNil(run.context.responses["plan"])
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyStarted,
@@ -512,7 +506,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         let runsAfterRetry = try await journal.runs()
         let persistedAfterRetry = try XCTUnwrap(runsAfterRetry.first)
         XCTAssertTrue(persistedAfterRetry.context.responses.isEmpty)
-        XCTAssertNil(persistedAfterRetry.pendingPresentationPublication)
+        XCTAssertEqual(persistedAfterRetry.stepId, initialStep)
     }
 
     func testBeforeSendDroppedRenderedEventDoesNotAdvanceItsScreenRoute() async throws {
@@ -545,7 +539,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         let currentRuns = try await harness.journal.runs()
         let currentRun = try XCTUnwrap(currentRuns.first)
         XCTAssertEqual(currentRun.stepId, initialRun.stepId)
-        XCTAssertNil(currentRun.completion)
+
         let finishedOwners = await MainActor.run {
             harness.presenter.finishedOwners
         }
@@ -585,7 +579,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         })
         let runs = try await harness.journal.runs()
         let run = try XCTUnwrap(runs.first)
-        XCTAssertNil(run.completion)
+
     }
 
     func testBeforeSendRenameIntoRenderedRouteAdvances() async throws {
@@ -766,14 +760,14 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
         let presentedRequest = await MainActor.run { presenter.request }
         let request = try XCTUnwrap(presentedRequest)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
         let persistence = JourneyPublicationPersistenceProbe()
         events.prepareEventPropertiesHandler = {
             let runs = try? await journal.runs()
-            await persistence.record(runs?.first?.pendingPresentationPublication?.invocationId)
+            await persistence.record(runs?.first?.stepId)
         }
 
         let accepted = await request.onEmissionBatch(ScreenEmissionBatch(

@@ -117,11 +117,14 @@ struct StoredEvent: Codable, Sendable {
 
     /// Canonical replay identity for durable event deduplication.
     func isByteEquivalent(to other: StoredEvent) -> Bool {
-        id == other.id
+        guard let leftTime = try? SQLiteEventStore.historyMilliseconds(for: timestamp, rounding: .down),
+              let rightTime = try? SQLiteEventStore.historyMilliseconds(for: other.timestamp, rounding: .down) else { return false }
+        return id == other.id
             && name == other.name
             && canonicalPropertiesForComparison() == other.canonicalPropertiesForComparison()
-            && Int64(timestamp.timeIntervalSince1970 * 1_000)
-                == Int64(other.timestamp.timeIntervalSince1970 * 1_000)
+            && leftTime == rightTime
+            && journeyOrigin == other.journeyOrigin
+            && origin == other.origin
             && distinctId == other.distinctId
     }
 

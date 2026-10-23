@@ -1,0 +1,12 @@
+{
+  "contract": "A customer input owns one committed Journey transition before its route acknowledgement. If the process stops after the terminal transaction commits and before acknowledgement, reopening and redelivering that input preserves the completion event identity, declared outputs and committed enrollment. The event application and completed admission plan prevent a second logical step or enrollment. The driver uses the actual Journey service, a file-backed SQLite database and injected clocks. It interrupts after SQL commit, never by editing execution rows.",
+  "cases": [
+    {
+      "name": "terminal_transition_commits_before_input_acknowledgement",
+      "crashPoint": "after_commit",
+      "triggerAtMillis": 100000,
+      "inputAtMillis": 101000,
+      "expected": { "enrollments": 1, "completionReports": 1, "logicalSteps": 1, "answer": 42 }
+    }
+  ]
+}

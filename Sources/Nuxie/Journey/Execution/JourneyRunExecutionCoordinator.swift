@@ -35,14 +35,14 @@ struct JourneyRunExecutionCoordinator {
     private let assignments: ExactJSONObject<JourneyFactTable.Assignment?>
     private let steps: [String: Journey.Step]
     private let executor: JourneyControlExecutor
-    private let journal: JourneyRunJournal
+    private let journal: CustomerJourneyStore
     private var checkpoint: JourneyControlExecutor.Checkpoint?
     private var signal: JourneyControlExecutor.Signal
     /// An event-started pass runs behind the real clock by how late its event
     /// was handled, taken at its first evaluation, so its waits count from the
     /// event's own time and time spent in the pass still counts. Once it parks,
     /// the saved checkpoint owns the wait and later passes use the real clock.
-    /// Recovery resumes only parked checkpoints, so the lag is not journaled.
+    /// SQL retains the sampled lag and evaluation time across failed saves.
     private let startingEventAt: Date?
     private(set) var startingLag: TimeInterval?
 
@@ -52,7 +52,7 @@ struct JourneyRunExecutionCoordinator {
         release: AuthenticatedJourneyRelease,
         signal: JourneyControlExecutor.Signal,
         checkpoint: JourneyControlExecutor.Checkpoint?,
-        journal: JourneyRunJournal,
+        journal: CustomerJourneyStore,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone,
         startingEventAt: Date? = nil,
@@ -71,12 +71,15 @@ struct JourneyRunExecutionCoordinator {
             currentDeviceTimezone: currentDeviceTimezone,
             appDefaultTimezone: appDefaultTimezone
         )
-        self.signal = signal
+        if run.inputEventId != nil, run.lastConsumed?.eventId == run.inputEventId { self.signal = .init() }
+        else { self.signal = signal }
         self.checkpoint = checkpoint
         self.journal = journal
         self.startingEventAt = startingEventAt
         self.startingLag = startingLag
     }
+
+    mutating func reload(_ journey: JourneyRun) { run = journey; checkpoint = nil }
 
     mutating func useNativeValues(
         _ values: ExactJSONObject<JourneyReleaseJSONValue>,
@@ -85,13 +88,19 @@ struct JourneyRunExecutionCoordinator {
         run.context = .init(event: run.context.event, responses: values, formAnswers: formAnswers)
     }
 
-    mutating func command(at now: Date) -> Command {
+    mutating func command(at now: Date) async throws -> Command {
         // A future event time never extends a wait: the lag is never negative.
         if startingLag == nil, let startingEventAt {
             startingLag = max(0, now.timeIntervalSince(startingEventAt))
         }
-        guard let step = steps[run.stepId],
-              let nowMillis = JourneyTime.milliseconds(now.addingTimeInterval(-(startingLag ?? 0))) else {
+        let sampledTrigger = startingLag.map { now.addingTimeInterval(-$0) } ?? startingEventAt
+        let evaluationContext = run.context
+        run = try await journal.beginEvaluation(run, at: now, triggeringAt: sampledTrigger)
+        run.context = evaluationContext
+        startingLag = run.initialLagMillis.map { Double($0) / 1000 }
+        guard let step = steps[run.stepId], let savedAt = run.evaluationAt else { return .invalid }
+        let nowMillis = savedAt - (run.initialLagMillis ?? 0)
+        guard nowMillis >= 0 else {
             return .invalid
         }
         switch executor.evaluate(
@@ -129,32 +138,39 @@ struct JourneyRunExecutionCoordinator {
             stepId: command.stepId,
             context: command.context,
             experimentExposure: command.experimentExposure,
+            expectedRevision: run.cursorRevision,
             admission: admission
-        ) else { throw JourneyJournalError.invalidState }
-        run.stepId = command.stepId
-        run.context = command.context
-        if let exposure = command.experimentExposure {
-            run.experimentExposures.append(exposure)
-        }
+        ) else { throw JourneyExecutionError.invalidState }
+        run = try await journal.current(run.id)
         run.park = nil
         checkpoint = nil
     }
 
     func commit(_ command: ParkCommand, snapshot: ExperienceRunSnapshot?, admission: JourneyCommitAdmission) async throws {
+        let step = steps[command.stepId]
+        let kind: String
+        switch step?.action.flatMap({ JourneyActionType(action: $0) }) {
+        case .delay: kind = "delay"
+        case .timeWindow: kind = "time_window"
+        default:
+            if let step, try executor.acceptsResponseChange(step), try executor.eventNameForWait(step) == nil { kind = "response" }
+            else { kind = "event" }
+        }
         guard try await journal.transition(
             run.id,
             stepId: command.stepId,
             context: run.context,
             checkpoint: command.checkpoint,
-            nativeSnapshot: snapshot,
+            nativeSnapshot: snapshot, waitKind: kind,
+            expectedRevision: run.cursorRevision,
             admission: admission
-        ) else { throw JourneyJournalError.invalidState }
+        ) else { throw JourneyExecutionError.invalidState }
     }
 
-    func claimEffect(for command: DispatchCommand) async throws -> String {
+    mutating func claimEffect(for command: DispatchCommand) async throws -> String {
         try await journal.claimEffect(
             run.id,
-            stepId: command.step.id
+            stepId: command.step.id, expectedRevision: run.cursorRevision
         )
     }
 
@@ -167,7 +183,7 @@ struct JourneyRunExecutionCoordinator {
         admission: JourneyCommitAdmission
     ) async throws -> Bool {
         guard run.experimentExposures.contains(where: {
-            !$0.queued && $0.shownAt == nil && $0.presentationScreenId == nil
+            $0.shownAt == nil && $0.presentationScreenId == nil
         }) else { return true }
         guard try await journal.bindExperimentExposures(
             run.id,
@@ -175,8 +191,7 @@ struct JourneyRunExecutionCoordinator {
             admission: admission
         ) else { return false }
         for index in run.experimentExposures.indices
-        where !run.experimentExposures[index].queued
-            && run.experimentExposures[index].shownAt == nil
+        where run.experimentExposures[index].shownAt == nil
             && run.experimentExposures[index].presentationScreenId == nil {
             run.experimentExposures[index].presentationScreenId = screenId
         }
@@ -196,18 +211,15 @@ struct JourneyRunExecutionCoordinator {
             outlet: outlet,
             context: run.context
         ) else { return false }
-        _ = try await journal.transition(
-            run.id,
-            stepId: stepId,
-            context: context
-        )
-        run.stepId = stepId
-        run.context = context
+        let latest = try await journal.current(run.id)
+        guard let effectId = latest.effectReceipts[command.step.id],
+              let committed = try await journal.settlePresentationCommerce(run.id, stepId: command.step.id, effectId: effectId,
+                nextStepId: stepId, eventId: presentationSignal?.eventId, admission: nil) else { return false }
+        run = committed
+        run = try await journal.current(run.id)
         run.park = nil
         checkpoint = nil
-        if let presentationSignal {
-            signal = presentationSignal
-        }
+        signal = .init()
         return true
     }
 
@@ -234,8 +246,7 @@ struct JourneyRunExecutionCoordinator {
             eventId: UUID.v7().uuidString.lowercased(),
             selectedAt: selectedAt,
             presentationScreenId: nil,
-            shownAt: nil,
-            queued: false
+            shownAt: nil
         )
     }
 

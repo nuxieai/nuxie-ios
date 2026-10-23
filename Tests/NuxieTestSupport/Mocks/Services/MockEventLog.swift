@@ -15,7 +15,66 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
     }
 
-    private var conversionAcknowledgements: Set<String> = []
+    private var customerDatabase: Task<SQLiteEventStore, Error>?
+    func openCustomerStore(at directory: URL) async throws -> (any CustomerStore)? {
+        let task = lock.withLock { () -> Task<SQLiteEventStore, Error> in
+            if let customerDatabase { return customerDatabase }
+            let captures = _routedEvents
+            let task = Task {
+                let store = SQLiteEventStore()
+                try await store.initialize(path: directory)
+                _ = try await store.openCustomerState(cutoverAt: 0)
+                for event in captures {
+                    _ = try await store.insert(StoredEvent(id: event.id, name: event.name, properties: event.properties,
+                        timestamp: event.timestamp, distinctId: event.distinctId, journeyOrigin: event.journeyOrigin),
+                        deliveryState: .pending, origin: .device, assigningCommitSequence: false, acceptedAt: event.timestamp)
+                }
+                return store
+            }
+            customerDatabase = task
+            return task
+        }
+        return try await task.value
+    }
+    func customerStore() async -> (any CustomerStore)? {
+        guard let task = lock.withLock({ customerDatabase }) else { return nil }
+        return try? await task.value
+    }
+    func prepareCustomerEvents(_ items: [RoutedStableSystemEventBatchItem]) async throws -> [StableEventCaptureRecord] {
+        if let before = lock.withLock({ _beforeBatchCapture }) { await before() }
+        var records: [StableEventCaptureRecord] = []
+        for (index, item) in items.enumerated() {
+            if let hook = lock.withLock({ _routedCaptureHandler }) { await hook(item.request.name, item.request.eventId) }
+            let shouldFail = lock.withLock {
+                if _stableCaptureBatchFailureIndex == index { return true }
+                if _routedCaptureFailuresRemaining > 0 { _routedCaptureFailuresRemaining -= 1; return true }
+                return false
+            }
+            if shouldFail { throw CocoaError(.fileWriteOutOfSpace) }
+            let properties = await prepareEventProperties(item.request.properties)
+            let original = NuxieEvent(id: item.request.eventId, name: item.request.name, distinctId: item.request.distinctId,
+                properties: properties, timestamp: item.occurredAt, journeyOrigin: item.request.journeyOrigin)
+            let event: NuxieEvent?
+            if case .prepared(let prepared) = item.preparation { event = prepared }
+            else if let hook = lock.withLock({ _preparedTriggerBeforeSend }) { event = hook(original) }
+            else { event = original }
+            records.append(.init(eventId: item.request.eventId, event: try event.map { try StoredEvent(id: $0.id, name: $0.name,
+                properties: $0.properties, timestamp: $0.timestamp, distinctId: $0.distinctId, journeyOrigin: $0.journeyOrigin) }, recordedAt: item.occurredAt))
+        }
+        return records
+    }
+    func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
+        guard let store = await customerStore() else { throw EventStorageError.databaseNotInitialized }
+        let result = try await store.executeCustomerCommand(command)
+        for commit in result.commits {
+            if case .captured(let stored, let isNew) = commit.outcome {
+                lock.withLock { _stableCaptures[stored.id] = .init(event: stored.customerEvent, isNewlyCommitted: isNew) }
+                if isNew { _ = await route(stored.customerEvent) }
+            }
+        }
+        return result
+    }
+
     private var deadlineHandler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?
     private let journeyQueue = OrderedCustomerQueue()
     public func queuedJourneyRetryKeys() async -> [JourneyQueueKey] { await journeyQueue.retryingJourneyKeys() }
@@ -83,29 +142,6 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         try lock.withLock {
             guard boundConversionScope == nil || boundConversionScope == scope else { throw EventStorageError.invalidProperties }
             boundConversionScope = scope
-        }
-    }
-
-    public func pendingConversionOccurrences(distinctId: String, limit: Int, throughEventId: String?) async throws -> [PendingConversionOccurrence] {
-        try lock.withLock {
-            let end: Int
-            if let throughEventId {
-                guard !conversionAcknowledgements.contains(throughEventId),
-                      let index = _routedEvents.firstIndex(where: { $0.id == throughEventId && $0.distinctId == distinctId }) else { return [] }
-                end = index + 1
-            } else { end = _routedEvents.count }
-            return try _routedEvents.prefix(end).filter { $0.distinctId == distinctId && !conversionAcknowledgements.contains($0.id) }
-                .prefix(max(1, min(limit, 1000))).map {
-                    .init(event: try StoredEvent(id: $0.id, name: $0.name, properties: $0.properties,
-                        timestamp: $0.timestamp, distinctId: $0.distinctId), acceptedAt: $0.timestamp)
-                }
-        }
-    }
-    public func acknowledgeConversionOccurrence(eventId: String, distinctId: String) async throws {
-        lock.withLock {
-            if _routedEvents.contains(where: { $0.id == eventId && $0.distinctId == distinctId }) {
-                conversionAcknowledgements.insert(eventId)
-            }
         }
     }
 
@@ -331,6 +367,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         _ event: NuxieEvent,
         subscriberAdmissions: [UInt64: UInt64]
     ) async -> NuxieEvent? {
+        if let store = await customerStore() as? SQLiteEventStore {
+            do { try await store.insert(StoredEvent(id: event.id, name: event.name, properties: event.properties,
+                timestamp: event.timestamp, distinctId: event.distinctId, journeyOrigin: event.journeyOrigin)) }
+            catch { return nil }
+        }
         let handlers: [(String, (NuxieEvent) -> Void)] = lock.withLock {
             _routedEvents.append(event)
             return _eventHandlers
@@ -916,7 +957,6 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         lock.withLock {
             // `identity` is wired once by MockFactory and survives resets.
             _routedEvents.removeAll()
-            conversionAcknowledgements.removeAll()
             deadlineHandler = nil
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
@@ -1071,7 +1111,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
     public func close() async {
         await journeyQueue.close()
-        // Mock implementation: just reset state
+        if let writer = await customerStore() as? SQLiteEventStore { await writer.close() }
+        lock.withLock { customerDatabase = nil }
         reset()
     }
 

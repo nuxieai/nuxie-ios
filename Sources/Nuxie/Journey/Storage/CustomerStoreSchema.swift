@@ -1,6 +1,6 @@
 import Foundation
 
-/// The dormant customer schema shares the event database and its writer.
+/// Journey execution shares the event database and its writer.
 enum CustomerStoreSchema {
     static let stateVersion = "device-customer-state-v1"
     static let owner = "authority_scope TEXT NOT NULL, user_id TEXT NOT NULL"

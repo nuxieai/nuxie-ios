@@ -63,3 +63,5 @@ The signed release fixture is the only release wire shape. Tests consume it dire
 - `ir/eval-vectors.json` and `ir/response-field-conformance.json`: expression and buffered-response evaluation used by Journey controls.
 
 - `runtime/forms-saves/goals/`: F5 goals from publisher `81fa73c87f0638d151d0a4082fbcab1cd61ec73c`. The unchanged source and oracle qualify ordered native list snapshot/recovery. SDK timed-wait persistence remains its own proof; this fixture has no row-remove event, forms or saves.
+
+The shared device-store contracts are `sdk/device-store-apply-crash.json` and `sdk/device-store-leg-end-crash.json`. The iOS drivers are in `DeviceLocalRuntimeStep1Tests`. Android mirrors the same commit boundaries, report identities, outputs and privacy-drop expectations.

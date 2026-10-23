@@ -5,9 +5,10 @@ actor JourneyResponseSaveDelivery {
     private let transport: any JourneyResponseSaveTransport
     private let clock: any DateProviderProtocol
     private let sleeper: any SleepProviderProtocol
+    private var store: (any CustomerStore)?
     private var scope: JourneyStorageScope?
-    private var displayObserver: (@Sendable (JourneyRunJournal, String) async -> Void)?
-    private var journals: ExactJSONObject<JourneyRunJournal> = [:]
+    private var displayObserver: (@Sendable (CustomerJourneyStore, String) async -> Void)?
+    private var journals: ExactJSONObject<CustomerJourneyStore> = [:]
     private var receiptBackoffs: ExactJSONObject<RetryBackoff> = [:]
     private struct RetryBackoff {
         var delay: TimeInterval = 5
@@ -34,18 +35,28 @@ actor JourneyResponseSaveDelivery {
         self.sleeper = sleeper
     }
 
-    func setDisplayObserver(_ observer: @escaping @Sendable (JourneyRunJournal, String) async -> Void) {
+    func setDisplayObserver(_ observer: @escaping @Sendable (CustomerJourneyStore, String) async -> Void) {
         displayObserver = observer
     }
 
-    func activate(scope: JourneyStorageScope) {
+    func activate(scope: JourneyStorageScope, store suppliedStore: (any CustomerStore)? = nil) async {
+        if let suppliedStore { store = suppliedStore }
+        if store == nil {
+            let sqlite = SQLiteEventStore(conversionCaptureScope: scope.conversionNamespace)
+            do {
+                try await sqlite.initialize(path: directory)
+                try await sqlite.bindConversionAuthority(scope)
+                _ = try await sqlite.openCustomerState(cutoverAt: Int64(JourneyConversionWatch.millis(clock.now())))
+                store = sqlite
+            } catch { LogWarning("Response save store could not be opened"); return }
+        }
         guard self.scope == nil || self.scope == scope else { return }
         self.scope = scope
         active = true
         wake()
     }
 
-    func enqueue(journal: JourneyRunJournal, run: JourneyRun, formName: String,
+    func enqueue(journal: CustomerJourneyStore, run: JourneyRun, formName: String,
                  answers: ExactJSONObject<JourneyReleaseJSONValue>,
                  admission: JourneyCommitAdmission? = nil) async throws -> JourneyResponseSave {
         guard active, journal.responseSaveNamespace == scope?.conversionNamespace else {
@@ -57,7 +68,7 @@ actor JourneyResponseSaveDelivery {
         return sheet
     }
 
-    func reserveWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
+    func reserveWaiting(journal: CustomerJourneyStore, run: JourneyRun, formName: String,
                         answers: ExactJSONObject<JourneyReleaseJSONValue>,
                  admission: JourneyCommitAdmission? = nil) async throws -> JourneyResponseSave {
         guard active, journal.responseSaveNamespace == scope?.conversionNamespace else {
@@ -66,13 +77,13 @@ actor JourneyResponseSaveDelivery {
         return try await journal.reserveResponseSave(run: run, formName: formName, answers: answers, queued: false, admission: admission)
     }
 
-    func sendWaiting(journal: JourneyRunJournal, run: JourneyRun, formName: String,
+    func sendWaiting(journal: CustomerJourneyStore, run: JourneyRun, formName: String,
                      answers: ExactJSONObject<JourneyReleaseJSONValue>) async throws -> JourneyResponseSaveReply {
         let sheet = try await reserveWaiting(journal: journal, run: run, formName: formName, answers: answers)
         return try await sendWaiting(sheet: sheet, journal: journal)
     }
 
-    func sendWaiting(sheet: JourneyResponseSave, journal: JourneyRunJournal) async throws -> JourneyResponseSaveReply {
+    func sendWaiting(sheet: JourneyResponseSave, journal: CustomerJourneyStore) async throws -> JourneyResponseSaveReply {
         guard journal.responseSaveNamespace == scope?.conversionNamespace,
               sheet.distinctId.utf16.elementsEqual(journal.distinctId.utf16) else {
             throw JourneyResponseSaveError.wrongOwner
@@ -154,12 +165,12 @@ actor JourneyResponseSaveDelivery {
                 let now = currentTime()
                 if !discovered && (discoveryBackoff.retryAt ?? .distantPast) <= now {
                     do {
-                        let recovery = try await JourneyRunJournal.recoverResponseSaveOwners(directory: directory, scope: scope)
-                        for owner in recovery.owners where journals[owner] == nil {
-                            journals[owner] = try JourneyRunJournal(directory: directory, distinctId: owner, storageScope: scope)
+                        guard let store else { return }
+                        let owners = try await store.customerResponseOwners(scope: scope)
+                        for owner in owners where journals[owner] == nil {
+                            journals[owner] = try await CustomerJourneyStore(directory: directory, distinctId: owner, storageScope: scope, openExecution: false, store: store)
                         }
-                        discovered = !recovery.needsRetry
-                        if recovery.needsRetry { discoveryBackoff.failed(at: currentTime()) }
+                        discovered = true
                     } catch is CancellationError { return }
                     catch {
                         LogWarning("Response save journals could not be discovered")

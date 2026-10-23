@@ -49,6 +49,8 @@ final class EventStoreSchemaTests: XCTestCase {
         )
         let first = SQLiteEventStore()
         try await first.initialize(path: temporaryRoot)
+        _ = try await first.openCustomerState(cutoverAt: 0)
+        try await first.bindConversionAuthority(.testFixture)
         let event = try StoredEvent(id: "event", name: "finished", properties: ["answer": 42],
             distinctId: "customer", journeyOrigin: origin)
         _ = try await first.insert(event, deliveryState: .pending, origin: .device, assigningCommitSequence: true)
@@ -61,7 +63,7 @@ final class EventStoreSchemaTests: XCTestCase {
         XCTAssertEqual(direct?.journeyOrigin, origin)
         XCTAssertEqual(pending.first?.journeyOrigin, origin)
         XCTAssertEqual(history.first?.journeyOrigin, origin)
-        let conversions = try await reopened.pendingConversionOccurrences(distinctId: "customer")
+        let conversions = try await reopened.measurementInputs(distinctId: "customer")
         XCTAssertEqual(conversions.first?.event.journeyOrigin, origin)
         await reopened.close()
     }
@@ -71,6 +73,9 @@ final class EventStoreSchemaTests: XCTestCase {
         let other = SQLiteEventStore(conversionCaptureScope: "other")
         try await first.initialize(path: temporaryRoot)
         try await other.initialize(path: temporaryRoot)
+        _ = try await first.openCustomerState(cutoverAt: 0)
+        try await first.bindConversionAuthority(.init(namespaceHash: "first"))
+        try await other.bindConversionAuthority(.init(namespaceHash: "other"))
         let accepted = Date(timeIntervalSince1970: 100)
         for (store, id) in [(first, "first-event"), (other, "other-event")] {
             let event = try StoredEvent(id: id, name: "outcome", timestamp: accepted, distinctId: "customer")
@@ -78,19 +83,19 @@ final class EventStoreSchemaTests: XCTestCase {
                 assigningCommitSequence: true, acceptedAt: accepted)
         }
         let boundary = accepted.addingTimeInterval(Double(PendingConversionOccurrence.retentionMillis) / 1000)
-        let atBoundary = try await first.pruneConversionOccurrences(at: boundary)
+        let atBoundary = try await first.expireMeasurement(at: boundary)
         XCTAssertEqual(atBoundary, 0)
-        let expired = try await first.pruneConversionOccurrences(at: boundary.addingTimeInterval(0.001))
+        let expired = try await first.expireMeasurement(at: boundary.addingTimeInterval(0.001))
         XCTAssertEqual(expired, 1)
-        let gone = try await first.pendingConversionOccurrences(distinctId: "customer")
+        let gone = try await first.measurementInputs(distinctId: "customer")
         XCTAssertTrue(gone.isEmpty)
-        let isolated = try await other.pendingConversionOccurrences(distinctId: "customer")
+        let isolated = try await other.measurementInputs(distinctId: "customer")
         XCTAssertEqual(isolated.map { $0.event.id }, ["other-event"])
         let analytics = try await first.queryEvent(id: "first-event")
         XCTAssertNotNil(analytics)
         let delivery = try await first.queryPendingDelivery(limit: 10)
         XCTAssertEqual(Set(delivery.map(\.id)), ["first-event", "other-event"])
-        let rolledBackClock = try await first.pruneConversionOccurrences(at: accepted)
+        let rolledBackClock = try await first.expireMeasurement(at: accepted)
         XCTAssertEqual(rolledBackClock, 0)
         await first.close()
         await other.close()
@@ -99,6 +104,7 @@ final class EventStoreSchemaTests: XCTestCase {
     func testConversionInboxUsesAuthenticatedAppScopeAndSurvivesCredentialRotation() async throws {
         let original = SQLiteEventStore(conversionCaptureScope: "old-key")
         try await original.initialize(path: temporaryRoot)
+        _ = try await original.openCustomerState(cutoverAt: 0)
         let event = try StoredEvent(id: "goal", name: "outcome", distinctId: "customer")
         _ = try await original.insert(event, deliveryState: .pending, origin: .device, assigningCommitSequence: true)
         let app = JourneyStorageScope(authority: .init(appId: "app-a", environment: "production"))
@@ -112,9 +118,9 @@ final class EventStoreSchemaTests: XCTestCase {
             let other = SQLiteEventStore(conversionCaptureScope: key)
             try await other.initialize(path: temporaryRoot)
             try await other.bindConversionAuthority(JourneyStorageScope(authority: authority))
-            let invisible = try await other.pendingConversionOccurrences(distinctId: "customer")
+            let invisible = try await other.measurementInputs(distinctId: "customer")
             XCTAssertTrue(invisible.isEmpty)
-            try await other.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "customer")
+            try await other.acknowledgeMeasurement(eventId: "goal", distinctId: "customer")
             do {
                 try await other.bindConversionAuthority(app)
                 XCTFail("A bound credential cannot be reassigned to another app/environment")
@@ -124,40 +130,44 @@ final class EventStoreSchemaTests: XCTestCase {
 
         let rotated = SQLiteEventStore(conversionCaptureScope: "new-key")
         try await rotated.initialize(path: temporaryRoot)
-        let unbound = try await rotated.pendingConversionOccurrences(distinctId: "customer")
+        let unbound = try await rotated.measurementInputs(distinctId: "customer")
         XCTAssertTrue(unbound.isEmpty)
         try await rotated.bindConversionAuthority(app)
-        let pending = try await rotated.pendingConversionOccurrences(distinctId: "customer")
+        let pending = try await rotated.measurementInputs(distinctId: "customer")
         XCTAssertEqual(pending.map { $0.event.id }, ["goal"])
         await rotated.close()
         let reopened = SQLiteEventStore(conversionCaptureScope: "new-key")
         try await reopened.initialize(path: temporaryRoot)
-        let restored = try await reopened.pendingConversionOccurrences(distinctId: "customer")
+        let restored = try await reopened.measurementInputs(distinctId: "customer")
         XCTAssertEqual(restored.map { $0.event.id }, ["goal"])
-        try await reopened.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "customer")
+        try await reopened.acknowledgeMeasurement(eventId: "goal", distinctId: "customer")
         await reopened.close()
     }
 
     func testConversionInboxCutoffDoesNotConsumeEventsBeyondCurrentRoute() async throws {
         let store = SQLiteEventStore()
         try await store.initialize(path: temporaryRoot)
+        _ = try await store.openCustomerState(cutoverAt: 0)
+        try await store.bindConversionAuthority(.testFixture)
         for id in ["entry", "later-goal"] {
             let event = try StoredEvent(id: id, name: id, distinctId: "customer")
             _ = try await store.insert(event, deliveryState: .pending, origin: .device, assigningCommitSequence: true)
         }
-        let prefix = try await store.pendingConversionOccurrences(distinctId: "customer", throughEventId: "entry")
+        let prefix = try await store.measurementInputs(distinctId: "customer", throughEventId: "entry")
         XCTAssertEqual(prefix.map { $0.event.id }, ["entry"])
-        try await store.acknowledgeConversionOccurrence(eventId: "entry", distinctId: "customer")
-        let repeated = try await store.pendingConversionOccurrences(distinctId: "customer", throughEventId: "entry")
+        try await store.acknowledgeMeasurement(eventId: "entry", distinctId: "customer")
+        let repeated = try await store.measurementInputs(distinctId: "customer", throughEventId: "entry")
         XCTAssertTrue(repeated.isEmpty)
-        let remainder = try await store.pendingConversionOccurrences(distinctId: "customer")
+        let remainder = try await store.measurementInputs(distinctId: "customer")
         XCTAssertEqual(remainder.map { $0.event.id }, ["later-goal"])
         await store.close()
     }
 
-    func testConversionInboxSurvivesHistoryDeletionAndReopenUntilScopedAcknowledgement() async throws {
+    func testPendingMeasurementProtectsItsSoleEventThroughPruningAndReopen() async throws {
         let store = SQLiteEventStore()
         try await store.initialize(path: temporaryRoot)
+        _ = try await store.openCustomerState(cutoverAt: 0)
+        try await store.bindConversionAuthority(.testFixture)
         let event = try StoredEvent(id: "goal", name: "outcome", properties: ["product": "pro"],
             timestamp: Date(timeIntervalSince1970: 100), distinctId: "customer")
         _ = try await store.insert(event, deliveryState: .pending, origin: .device,
@@ -165,23 +175,23 @@ final class EventStoreSchemaTests: XCTestCase {
         _ = try await store.insert(event, deliveryState: .pending, origin: .device,
             assigningCommitSequence: true, acceptedAt: Date(timeIntervalSince1970: 300))
         await store.close()
-        let database = try openDatabase()
-        try execute("DELETE FROM events;", on: database)
-        sqlite3_close(database)
         try await store.initialize(path: temporaryRoot)
-        _ = try await store.insert(event, deliveryState: .pending, origin: .device,
-            assigningCommitSequence: true, acceptedAt: Date(timeIntervalSince1970: 400))
-        let pending = try await store.pendingConversionOccurrences(distinctId: "customer")
+        _ = try await store.openCustomerState(cutoverAt: 0)
+        try await store.bindConversionAuthority(.testFixture)
+        _ = try await store.readOrInitializeHistoryCoverage(startingAt: Date(timeIntervalSince1970: 0))
+        try await store.markDelivered(ids: [event.id])
+        _ = try await store.pruneHistory(keeping: 0, olderThan: Date(timeIntervalSince1970: 1000))
+        let pending = try await store.measurementInputs(distinctId: "customer")
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending.first?.event.id, "goal")
         XCTAssertEqual(pending.first?.acceptedAt, Date(timeIntervalSince1970: 200))
-        let other = try await store.pendingConversionOccurrences(distinctId: "other")
+        let other = try await store.measurementInputs(distinctId: "other")
         XCTAssertTrue(other.isEmpty)
-        try await store.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "other")
-        let retained = try await store.pendingConversionOccurrences(distinctId: "customer")
+        try await store.acknowledgeMeasurement(eventId: "goal", distinctId: "other")
+        let retained = try await store.measurementInputs(distinctId: "customer")
         XCTAssertEqual(retained.count, 1)
-        try await store.acknowledgeConversionOccurrence(eventId: "goal", distinctId: "customer")
-        let acknowledged = try await store.pendingConversionOccurrences(distinctId: "customer")
+        try await store.acknowledgeMeasurement(eventId: "goal", distinctId: "customer")
+        let acknowledged = try await store.measurementInputs(distinctId: "customer")
         XCTAssertTrue(acknowledged.isEmpty)
         await store.close()
     }
@@ -189,13 +199,15 @@ final class EventStoreSchemaTests: XCTestCase {
     func testStableCaptureStagesConversionWithOriginalAcceptanceTime() async throws {
         let store = SQLiteEventStore()
         try await store.initialize(path: temporaryRoot)
+        _ = try await store.openCustomerState(cutoverAt: 0)
+        try await store.bindConversionAuthority(.testFixture)
         let event = try StoredEvent(id: "purchase", name: SystemEventNames.purchaseCompleted,
             timestamp: Date(timeIntervalSince1970: 100), distinctId: "customer")
         _ = try await store.commitStableCapture(eventId: event.id, event: event,
             recordedAt: Date(timeIntervalSince1970: 200), assigningCommitSequence: true, admission: nil)
         _ = try await store.commitStableCapture(eventId: event.id, event: event,
             recordedAt: Date(timeIntervalSince1970: 300), assigningCommitSequence: true, admission: nil)
-        let pending = try await store.pendingConversionOccurrences(distinctId: "customer")
+        let pending = try await store.measurementInputs(distinctId: "customer")
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending.first?.acceptedAt, Date(timeIntervalSince1970: 200))
         await store.close()
@@ -204,8 +216,10 @@ final class EventStoreSchemaTests: XCTestCase {
     func testConversionInboxWriteFailureRollsBackEventInsert() async throws {
         let store = SQLiteEventStore()
         try await store.initialize(path: temporaryRoot)
+        _ = try await store.openCustomerState(cutoverAt: 0)
+        try await store.bindConversionAuthority(.testFixture)
         let database = try openDatabase()
-        try execute("CREATE TRIGGER reject_conversion BEFORE INSERT ON conversion_event_inbox BEGIN SELECT RAISE(ABORT, 'injected failure'); END;", on: database)
+        try execute("CREATE TRIGGER reject_conversion BEFORE UPDATE OF capture_sequence ON events BEGIN SELECT RAISE(ABORT, 'injected failure'); END;", on: database)
         sqlite3_close(database)
         let event = try StoredEvent(id: "atomic", name: "outcome", distinctId: "customer")
         do {
@@ -214,7 +228,7 @@ final class EventStoreSchemaTests: XCTestCase {
         } catch { }
         let captured = try await store.queryEvent(id: "atomic")
         XCTAssertNil(captured)
-        let pending = try await store.pendingConversionOccurrences(distinctId: "customer")
+        let pending = try await store.measurementInputs(distinctId: "customer")
         XCTAssertTrue(pending.isEmpty)
         await store.close()
     }

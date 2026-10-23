@@ -778,7 +778,7 @@ final class NuxieConfigurationLifecycleTests: XCTestCase {
             journalDirectory: directory.appendingPathComponent("journeys"),
             storageScope: .testFixture, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: log),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         var overrides = mocks.unitTestOverrides()

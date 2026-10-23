@@ -29,7 +29,7 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
                                   directory: directory, dateProvider: dateProvider)
         await earlier.initialize()
         await earlier.profileDidCommit(savedCopy, distinctId: "customer-b")
-        await earlier.handleEvent(NuxieEvent(name: "start_waiting", distinctId: "customer-b",
+        await earlier.handleStoredEvent(NuxieEvent(name: "start_waiting", distinctId: "customer-b",
                                              timestamp: dateProvider.now()))
 
         // This launch has settled as customer A, then the app signs in B and
@@ -210,12 +210,12 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
                                   dateProvider: dateProvider, sleepProvider: sleeper)
         await service.initialize()
         await service.profileDidCommit(savedCopy, distinctId: "customer")
-        await service.handleEvent(NuxieEvent(name: "start_waiting", distinctId: "customer",
+        await service.handleStoredEvent(NuxieEvent(name: "start_waiting", distinctId: "customer",
                                              timestamp: dateProvider.now()))
         let capturedAt = dateProvider.now().addingTimeInterval(30)
         dateProvider.advance(by: 70)
 
-        await service.handleEvent(NuxieEvent(name: "screen_viewed", distinctId: "customer",
+        await service.handleStoredEvent(NuxieEvent(name: "screen_viewed", distinctId: "customer",
                                              timestamp: capturedAt))
         // The event's own pass queues the overdue deadline; no wake is needed.
         await events.drain()
@@ -348,7 +348,7 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         let reservation = events.reserveCommittedAdmission { journeys.eventAdmissionGeneration() }
         await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, admitted in
             await beforeHandling?(event.name, journeys)
-            return await journeys.handleEvent(event, admittedProfileGeneration: admitted)
+            return await journeys.handleStoredEvent(event, admittedProfileGeneration: admitted)
         }
         await journeys.prepareForEvents()
         let configuration = NuxieConfiguration(apiKey: "refetch-event-hold-test")

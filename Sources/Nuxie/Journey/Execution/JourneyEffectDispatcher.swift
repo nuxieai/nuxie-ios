@@ -159,7 +159,7 @@ protocol JourneyDispatching: Sendable {
     func dispatch(_ request: JourneyDispatchRequest) async -> JourneyDispatchResult
 }
 
-/// Executes authenticated local effects after JourneyRunJournal has made
+/// Executes authenticated local effects after CustomerJourneyStore has made
 /// their stable identity durable. Presentation and commerce are handled by
 /// the renderer-backed presentation owner before this seam.
 struct JourneyEffectDispatcher {
@@ -208,6 +208,22 @@ struct JourneyEffectDispatcher {
         default:
             return .unsupported
         }
+    }
+
+    func sendEventProjection(action: [String: JourneyReleaseJSONValue], context: ArmedJourney.Context,
+                             customer: ExactJSONObject<JourneyReleaseJSONValue>, journey: JourneyRun,
+                             effectId: String, owner: String, at: Date) -> RoutedStableSystemEventBatchItem? {
+        guard let action = decode(SendEvent.self, action),
+              var properties = resolve(action.payload ?? [:], context: context, customer: customer) else { return nil }
+        properties["journey_id"] = journey.journeyId
+        properties["experience_id"] = journey.reference.experienceId
+        properties["experience_version_id"] = journey.reference.versionId
+        properties["leg_id"] = journey.reference.legId
+        properties["leg_generation"] = journey.generation
+        return .init(request: .init(name: action.eventName, properties: properties, eventId: effectId, distinctId: owner,
+            journeyOrigin: .init(journeyId: journey.journeyId, experienceId: journey.reference.experienceId,
+                versionId: journey.reference.versionId, legId: journey.reference.legId, generation: journey.generation,
+                stepId: journey.stepId, occurrenceId: effectId)), occurredAt: at)
     }
 
     private func sendEvent(

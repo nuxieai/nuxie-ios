@@ -9,7 +9,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testWaitingReservationPrecedesSendAndObserverSeesPersistedReply() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let started = expectation(description: "request held")
         let observed = expectation(description: "committed reply observed")
@@ -61,7 +61,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             from: Data(contentsOf: root.appendingPathComponent("fixtures/responses/save-display.json")))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        var journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        var journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         var sheets: [Int64: JourneyResponseSave] = [:]
         var newest: Int64 = 0
@@ -83,7 +83,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
                 try await journal.confirmResponseSave(try XCTUnwrap(sheets[step.sequence]), storedSequence: step.sequence)
             default: XCTFail("Unknown shared save-display action")
             }
-            journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+            journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
             let states = try await journal.responseSaveDisplays(journeyId: run.journeyId)
             let state = try XCTUnwrap(states["feedback"])
             XCTAssertEqual(state.sequence, newest)
@@ -112,7 +112,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             from: Data(contentsOf: root.appendingPathComponent("fixtures/responses/save-cases.json")))
     }
 
-    private func run(_ journal: JourneyRunJournal) async throws -> JourneyRun {
+    private func run(_ journal: CustomerJourneyStore) async throws -> JourneyRun {
         let arm = ArmedJourney(reference: .init(experienceId: "experience-1", versionId: "version-1",
             legId: String(repeating: "a", count: 64), descriptorSha256: String(repeating: "b", count: 64)),
             binding: .init(type: .continuation, journeyId: "01900000-0000-7000-8000-000000000001", generation: 1),
@@ -138,7 +138,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             for status in [vector.httpStatus, 201] {
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 defer { try? FileManager.default.removeItem(at: directory) }
-                let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+                let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
                 let run = try await run(journal)
                 let sheet = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: expectedSheet.answers, queued: true)
                 let host = UUID().uuidString.lowercased() + ".test"
@@ -173,7 +173,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testWaitingFailureKeepsOlderSheetAndNewTapConfirmsWithoutQueueing() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let older = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(1)], queued: true)
         _ = try await journal.recordResponseSaveReply(older, reply: .noAnswer, at: Date(timeIntervalSince1970: 1000))
@@ -204,7 +204,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testAppBackgroundDoesNotDiscardAnAcceptedSave() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let started = expectation(description: "background request held")
         let transport = HeldResponseSaveTransport(started: started)
@@ -217,7 +217,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         let service = JourneyService(identity: identity, events: events, dateProvider: MockDateProvider(),
             sleepProvider: MockSleepProvider(), journalDirectory: directory, responseSaveDelivery: delivery,
             featureAccess: { _ in nil }, dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
         addTeardownBlock { await transport.release(); await service.shutdown() }
         await delivery.activate(scope: .testFixture)
@@ -250,7 +250,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testWaitingReplyAfterRunEndsDoesNotEraseNewerQueuedSheet() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let started = expectation(description: "waiting request held")
         let transport = HeldResponseSaveTransport(started: started)
@@ -262,9 +262,9 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         await fulfillment(of: [started], timeout: 5)
         await delivery.shutdown()
         let replacement = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(2)], queued: true)
-        try await journal.markStartedQueued(run)
+
         try await journal.complete(run.id, outcome: "done", at: Date())
-        try await journal.markCompletionQueued(run)
+
         await transport.release()
         let reply = try await waiting.value
         XCTAssertTrue(reply.confirmed)
@@ -278,7 +278,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testWaitingTransportPreservesEmptyAndLargeExactAnswerSheets() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         var large: ExactJSONObject<JourneyReleaseJSONValue> = [:]
         for index in 0..<300 { large["field-\(index)"] = .string("invalid as typed") }
@@ -304,16 +304,16 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testUnknownFormDeadlineAndBackoffSurviveRestartAndBackwardClock() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let sheet = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
         let unknown = JourneyResponseSaveReply.decode(Data(#"{"status":"error","code":"unknown_form"}"#.utf8), attemptedSequence: 1)
         _ = try await journal.recordResponseSaveReply(sheet, reply: unknown, at: Date(timeIntervalSince1970: 1000))
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let backward = try await reopened.responseSaveAttempts(at: Date(timeIntervalSince1970: 900))
         XCTAssertEqual(backward.first?.delay(at: Date(timeIntervalSince1970: 900)), 5)
         XCTAssertEqual(backward.first?.unknownFormExpired(at: Date(timeIntervalSince1970: 1499)), false)
-        let restarted = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let restarted = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let before = try await restarted.responseSaveAttempts(at: Date(timeIntervalSince1970: 1499))
         XCTAssertEqual(before.first?.unknownFormExpired(at: Date(timeIntervalSince1970: 1499)), false)
         let atDeadline = try await restarted.responseSaveAttempts(at: Date(timeIntervalSince1970: 1500))
@@ -324,7 +324,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         XCTAssertTrue(ended.isEmpty)
         let next = try await restarted.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
         for (time, delay) in [(2000.0, 5.0), (2005, 10), (2015, 20)] {
-            let current = try JourneyRunJournal(directory: directory, distinctId: "anon")
+            let current = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
             _ = try await current.recordResponseSaveReply(next, reply: .noAnswer, at: Date(timeIntervalSince1970: time))
             let attempts = try await current.responseSaveAttempts(at: Date(timeIntervalSince1970: time))
             XCTAssertEqual(attempts.first?.delay(at: Date(timeIntervalSince1970: time)), delay)
@@ -334,7 +334,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testWorkerRecoversNewestAnonymousSheetAfterOfflineCompletionAndSignIn() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
         let sleeper = MockSleepProvider()
@@ -351,12 +351,12 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
         await fulfillment(of: [offline], timeout: 5)
         await first.shutdown()
         _ = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: ["stars": .number(2)], queued: true)
-        try await journal.markStartedQueued(run)
+
         try await journal.complete(run.id, outcome: "done", at: clock.now())
-        try await journal.markCompletionQueued(run)
+
         let identity = MockIdentityService()
         identity.setDistinctId("signed-in")
-        let currentJournal = try JourneyRunJournal(directory: directory, distinctId: identity.getDistinctId())
+        let currentJournal = try await CustomerJourneyStore(directory: directory, distinctId: identity.getDistinctId())
         let currentSheets = try await currentJournal.pendingResponseSaves()
         XCTAssertTrue(currentSheets.isEmpty)
         let online = expectation(description: "recovered send")
@@ -383,14 +383,14 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testRecoverySkipsUnreadableJournalAndSendsValidOwner() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         _ = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
         let damaged = directory.appendingPathComponent("journey-journal-v2/" + String(repeating: "c", count: 64) + ".json")
         try Data("unreadable journal".utf8).write(to: damaged)
-        let recovery = try await JourneyRunJournal.recoverResponseSaveOwners(directory: directory, scope: .testFixture)
-        XCTAssertEqual(recovery.owners, ["anon"])
-        XCTAssertTrue(recovery.needsRetry)
+        let owners = try await journal.store.customerResponseOwners(scope: .testFixture)
+        XCTAssertEqual(owners, ["anon"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: damaged.path))
         let sent = expectation(description: "valid owner's sheet")
         let host = UUID().uuidString.lowercased() + ".test"
         StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
@@ -411,7 +411,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testLongBackoffSleepsOnceAndEnqueueWakesIt() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
         let sheet = try await journal.reserveResponseSave(run: run, formName: "old", answers: [:], queued: true)
@@ -441,7 +441,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testUnreadableDiscoveryBacksOffWhileValidOwnerDelivers() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         _ = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
         let damaged = directory.appendingPathComponent("journey-journal-v2/" + String(repeating: "c", count: 64) + ".json")
@@ -486,7 +486,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
             try? FileManager.default.removeItem(at: directory)
         }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         _ = try await journal.reserveResponseSave(run: run, formName: "first", answers: [:], queued: true)
         let started = expectation(description: "old send held")
@@ -524,7 +524,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
             try? FileManager.default.removeItem(at: directory)
         }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         _ = try await journal.reserveResponseSave(run: run, formName: "first", answers: [:], queued: true)
         let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
@@ -582,7 +582,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
             try? FileManager.default.removeItem(at: directory)
         }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         _ = try await journal.reserveResponseSave(run: run, formName: "first", answers: [:], queued: true)
         _ = try await journal.reserveResponseSave(run: run, formName: "second", answers: [:], queued: true)
@@ -610,7 +610,7 @@ final class JourneyResponseSaveDeliveryTests: XCTestCase {
     func testWorkerReselectsUnsentSheetsAfterAnAwaitedSend() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let run = try await run(journal)
         _ = try await journal.reserveResponseSave(run: run, formName: "first", answers: [:], queued: true)
         _ = try await journal.reserveResponseSave(run: run, formName: "second", answers: [:], queued: true)

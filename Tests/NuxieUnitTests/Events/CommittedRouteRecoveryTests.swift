@@ -878,7 +878,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
             XCTFail("Routing without a commit sequence must roll back the event and inbox")
         } catch {}
         let rolledBackCount = try await store.getEventCount()
-        let rolledBackInbox = try await store.pendingConversionOccurrences(distinctId: "customer-a")
+        let rolledBackInbox = try await store.measurementInputs(distinctId: "customer-a")
         XCTAssertEqual(rolledBackCount, 0)
         XCTAssertTrue(rolledBackInbox.isEmpty)
         let inserted = try await store.insert(event, deliveryState: .pending, origin: .device,
@@ -908,7 +908,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         let discarded = try await reopened.firstPendingCommittedRoute(sessionId: originalAdmission.sessionId)
         XCTAssertNil(discarded)
         let retainedEventCount = try await reopened.getEventCount()
-        let retainedInbox = try await reopened.pendingConversionOccurrences(distinctId: "customer-a")
+        let retainedInbox = try await reopened.measurementInputs(distinctId: "customer-a")
         XCTAssertEqual(retainedEventCount, 1)
         XCTAssertEqual(retainedInbox.map(\.event.id), [event.id])
         await reopened.close()
@@ -1094,7 +1094,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
         let deliveryCount = try await reopenedStore.getPendingDeliveryCount()
         XCTAssertEqual(deliveryCount, 2)
-        let measurement = try await reopenedStore.pendingConversionOccurrences(distinctId: "customer-a")
+        let measurement = try await reopenedStore.measurementInputs(distinctId: "customer-a")
         XCTAssertEqual(measurement.map(\.event.id), ["entry", "goal"])
         await reopened.close()
     }

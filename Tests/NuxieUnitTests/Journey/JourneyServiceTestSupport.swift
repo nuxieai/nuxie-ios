@@ -82,7 +82,7 @@ struct RenderedJourneyTestContext {
     let events: MockEventLog
     let presenter: RecordingJourneyPresenter
     let service: JourneyService
-    let journal: JourneyRunJournal
+    let journal: CustomerJourneyStore
 }
 
 struct RenderedJourneyHarness {
@@ -91,7 +91,7 @@ struct RenderedJourneyHarness {
     let presenter: RecordingJourneyPresenter
     let service: JourneyService
     let request: JourneyPresentationRequest
-    let journal: JourneyRunJournal
+    let journal: CustomerJourneyStore
 }
 
 actor JourneyNthRoutedCaptureGate {
@@ -322,7 +322,7 @@ extension JourneyTestCase {
                 readNativeValues: readNativeValues
             )
             await service.initialize()
-            let journal = try JourneyRunJournal(
+            let journal = try await CustomerJourneyStore(
                 directory: directory,
                 distinctId: "customer"
             )
@@ -879,7 +879,7 @@ extension JourneyTestCase {
         readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         readJournalRuns: @escaping JourneyService.JournalRunsReader = { try await $0.runs() },
         pinnedReleaseAuthenticator: @escaping JourneyService.PinnedReleaseAuthenticator = {
-            _, _ in throw JourneyJournalError.invalidState
+            _, _ in throw JourneyExecutionError.invalidState
         },
         journalBeforePersist: (@Sendable () throws -> Void)? = nil,
         beforeCommerceOutcomeDeferral: (@Sendable (String) async throws -> Void)? = nil,
@@ -1225,7 +1225,7 @@ actor InspectingJourneyDispatcher {
         _ request: JourneyDispatchRequest
     ) async -> JourneyDispatchResult {
         requests.append(request)
-        if let journal = try? JourneyRunJournal(
+        if let journal = try? await CustomerJourneyStore(
             directory: directory,
             distinctId: distinctId
         ), let run = try? await journal.runs().first(where: {

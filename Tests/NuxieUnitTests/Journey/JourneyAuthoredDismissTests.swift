@@ -279,7 +279,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             }, journalBeforePersist: { try reportPersistence.beforePersist() },
             beforeCommerceOutcomeDeferral: { runId in
                 guard let deferralRace else { return }
-                let competing = try JourneyRunJournal(directory: directory, distinctId: "customer")
+                let competing = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
                 if deferralRace == "completed" {
                     try await competing.complete(runId, outcome: "abandoned", at: Date())
                 } else {
@@ -301,7 +301,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         if let routeLog {
             let admission = routeLog.reserveCommittedAdmission { journeys.eventAdmissionGeneration() }
             await routeLog.subscribeAcknowledgingCommitted(reservation: admission) { event, generation in
-                let accepted = await journeys.handleEvent(event, admittedProfileGeneration: generation)
+                let accepted = await journeys.handleStoredEvent(event, admittedProfileGeneration: generation)
                 if event.name == (terminalOutcome ?? SystemEventNames.purchaseCompleted) { terminalRouted?.fulfill() }
                 return accepted
             }
@@ -379,14 +379,14 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                 }
                 let whilePending = await retry()
                 XCTAssertEqual(whilePending, false, "An in-flight purchase rejects a second operation")
-                await journeys.handleEvent(NuxieEvent(id: "unrelated-effect", name: retryOutcome,
+                await journeys.handleStoredEvent(NuxieEvent(id: "unrelated-effect", name: retryOutcome,
                     distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
-                await journeys.handleEvent(NuxieEvent(id: correlation.eventId, name: retryOutcome,
+                await journeys.handleStoredEvent(NuxieEvent(id: correlation.eventId, name: retryOutcome,
                     distinctId: "other-customer", properties: ["placement_id": "golden:monthly"]))
                 let afterUnrelated = await retry()
                 XCTAssertEqual(afterUnrelated, false, "Only this owner's correlated outcome releases the operation")
                 XCTAssertEqual(controller.correlations.count, 1)
-                await journeys.handleEvent(NuxieEvent(id: correlation.eventId, name: retryOutcome,
+                await journeys.handleStoredEvent(NuxieEvent(id: correlation.eventId, name: retryOutcome,
                     distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
                 XCTAssertTrue(presentations.isExperiencePresented)
                 XCTAssertEqual(presentations.presentedJourneyId, journeyID)
@@ -400,13 +400,13 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                 let previous = correlation
                 correlation = try XCTUnwrap(controller.correlations.last)
                 XCTAssertNotEqual(correlation.eventId, previous.eventId)
-                await journeys.handleEvent(NuxieEvent(id: previous.eventId, name: SystemEventNames.purchaseCompleted,
+                await journeys.handleStoredEvent(NuxieEvent(id: previous.eventId, name: SystemEventNames.purchaseCompleted,
                     distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
                 XCTAssertTrue(presentations.isExperiencePresented, "The first effect cannot complete the retry")
                 XCTAssertFalse(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
             }
             if pendingClose {
-                await journeys.handleEvent(NuxieEvent(id: "pending-telemetry", name: SystemEventNames.purchasePending,
+                await journeys.handleStoredEvent(NuxieEvent(id: "pending-telemetry", name: SystemEventNames.purchasePending,
                     distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
                 let close = ScreenEmissionBatch(journeyId: journeyID, executionOwnershipEpoch: 0,
                     lifecycleGeneration: 0, presentationEpoch: 1, batchSequence: 1,
@@ -422,7 +422,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     await journeys.profileDidCommit(removingDeliveredReleases(from: snapshot), distinctId: "customer")
                     let eventId = correlation.eventId
                     earlyTerminal = Task {
-                        await journeys.handleEvent(NuxieEvent(id: eventId, name: terminalOutcome ?? SystemEventNames.purchaseCompleted,
+                        await journeys.handleStoredEvent(NuxieEvent(id: eventId, name: terminalOutcome ?? SystemEventNames.purchaseCompleted,
                             distinctId: "customer", properties: ["placement_id": "golden:monthly"]),
                             admittedProfileGeneration: journeys.eventAdmissionGeneration())
                     }
@@ -463,7 +463,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                         await releaseGate.release()
                         accepted = await earlyTerminal.value
                     } else {
-                        accepted = await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
+                        accepted = await journeys.handleStoredEvent(NuxieEvent(id: correlation.eventId,
                             name: SystemEventNames.purchaseCompleted, distinctId: "customer",
                             properties: ["placement_id": "golden:monthly"]),
                             admittedProfileGeneration: journeys.eventAdmissionGeneration())
@@ -473,10 +473,10 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                     } else {
                         XCTAssertFalse(accepted, "The input keeps its receipt until commerce settles")
                     }
-                    let deferred = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+                    let deferred = try await CustomerJourneyStore(directory: directory, distinctId: "customer").runs()
                     if deferralRace != nil {
                         XCTAssertNil(deferred.first?.pendingCommerceOutcome)
-                        if deferralRace == "completed" { XCTAssertEqual(deferred.first?.completion?.outcome, "abandoned") }
+                        if deferralRace == "completed" { XCTAssertTrue(deferred.isEmpty) }
                         else { XCTAssertEqual(deferred.first?.stepId, "dismiss") }
                         await publicationGate.release()
                         _ = await closeTask.value
@@ -492,7 +492,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                         return
                     }
                     XCTAssertEqual(deferred.first?.pendingCommerceOutcome?.effectId, correlation.eventId)
-                    XCTAssertNil(deferred.first?.completion)
+
                     await publicationGate.release()
                 }
                 let closed = await closeTask.value
@@ -506,13 +506,13 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                 }
                 XCTAssertEqual(controller.correlations.count, pendingExpected.commerceOperations)
                 if !holdClosePublication {
-                    let waiting = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+                    let waiting = try await CustomerJourneyStore(directory: directory, distinctId: "customer").runs()
                     XCTAssertEqual(waiting.count, 1)
                     XCTAssertEqual(waiting.first?.pendingCommerce?.effectId, correlation.eventId)
                     XCTAssertEqual(waiting.first?.pendingCommerce?.stepId, "commerce")
                     XCTAssertEqual(waiting.first?.authoredCloseOutcome, "author_closed")
                     for (id, owner) in [("unrelated", "customer"), (correlation.eventId, "another-customer")] {
-                        await journeys.handleEvent(NuxieEvent(id: id,
+                        await journeys.handleStoredEvent(NuxieEvent(id: id,
                             name: commerce == "restore" ? SystemEventNames.restoreCompleted : SystemEventNames.purchaseCompleted,
                             distinctId: owner, properties: commerce == "restore" ? [:] : ["placement_id": "golden:monthly"]))
                     }
@@ -526,7 +526,7 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             }
             if failCompletionOnce && !holdClosePublication {
                 await completionFailure.arm()
-                let settled = await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
+                let settled = await journeys.handleStoredEvent(NuxieEvent(id: correlation.eventId,
                     name: try XCTUnwrap(terminalOutcome), distinctId: "customer", properties: ["placement_id": "golden:monthly"]),
                     admittedProfileGeneration: journeys.eventAdmissionGeneration())
                 XCTAssertFalse(settled)
@@ -535,13 +535,13 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
             let nextController = AuthoredDismissCommerceController(mockExperienceVersionId: release.descriptor.identity.experienceVersionId,
                 mockScreenId: "screen_thanks", mockExperience: experience)
             if secondPurchase { experiences.defaultMockViewController = nextController }
-            if !holdClosePublication { await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
+            if !holdClosePublication { await journeys.handleStoredEvent(NuxieEvent(id: correlation.eventId,
                 name: terminalOutcome ?? (commerce == "purchase" ? SystemEventNames.purchaseCompleted : SystemEventNames.restoreCompleted),
                 distinctId: "customer", properties: commerce == "purchase" ? ["placement_id": "golden:monthly"] : [:])) }
             if secondPurchase {
                 for _ in 0..<200 where !presentations.isExperiencePresented { try await Task.sleep(nanoseconds: 10_000_000) }
-                let beforeSecond = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
-                XCTAssertTrue(presentations.isExperiencePresented, "Second presentation state: \(beforeSecond.map { ($0.stepId, $0.completion?.outcome, $0.park?.wakeAt) })")
+                let beforeSecond = try await CustomerJourneyStore(directory: directory, distinctId: "customer").runs()
+                XCTAssertTrue(presentations.isExperiencePresented, "Second presentation state: \(beforeSecond.map { ($0.stepId, $0.park?.wakeAt) })")
                 await nextController.runtimeDelegate?.experienceViewController(nextController, didChangeScreen: "screen_thanks")
                 let buyMore = ScreenEmissionBatch(journeyId: journeyID, executionOwnershipEpoch: 0,
                     lifecycleGeneration: 0, presentationEpoch: 1, batchSequence: 0,
@@ -555,10 +555,10 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
                 for _ in 0..<200 where nextController.correlation == nil { try await Task.sleep(nanoseconds: 10_000_000) }
                 let nextCorrelation = try XCTUnwrap(nextController.correlation)
                 XCTAssertNotEqual(nextCorrelation.eventId, correlation.eventId)
-                await journeys.handleEvent(NuxieEvent(id: nextCorrelation.eventId, name: SystemEventNames.purchaseCancelled,
+                await journeys.handleStoredEvent(NuxieEvent(id: nextCorrelation.eventId, name: SystemEventNames.purchaseCancelled,
                     distinctId: "customer", properties: ["placement_id": "golden:monthly"]))
-                let runs = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
-                XCTAssertNil(runs.first?.completion)
+                let runs = try await CustomerJourneyStore(directory: directory, distinctId: "customer").runs()
+
                 XCTAssertTrue(presentations.isExperiencePresented)
                 XCTAssertEqual(presentations.presentedJourneyId, journeyID)
                 XCTAssertFalse(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
@@ -577,12 +577,14 @@ final class JourneyAuthoredDismissTests: JourneyTestCase {
         XCTAssertEqual(completed.first?.properties["outcome"] as? String, pendingClose ? pendingExpected.outcome : expected.outcome)
         XCTAssertFalse(presentations.isExperiencePresented)
         if failReportJournalWrite {
-            let persisted = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
-            XCTAssertEqual(persisted.first?.completion?.outcome, "completed")
-            XCTAssertEqual(persisted.count, 1, "The failed report write retains the completed run for recovery")
+            let persisted = try await CustomerJourneyStore(directory: directory, distinctId: "customer").runs()
+            let customer = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
+            let reports = try await customer.terminalRecords()
+            if persisted.isEmpty { XCTAssertEqual(reports.first?.outcome, "completed") }
+            else { XCTAssertTrue(reports.isEmpty, "A failed completion transaction retains the old active state") }
         }
         if pendingClose, let correlation = controller.correlation {
-            await journeys.handleEvent(NuxieEvent(id: correlation.eventId,
+            await journeys.handleStoredEvent(NuxieEvent(id: correlation.eventId,
                 name: commerce == "restore" ? SystemEventNames.restoreCompleted : SystemEventNames.purchaseCompleted,
                 distinctId: "customer", properties: commerce == "restore" ? [:] : ["placement_id": "golden:monthly"]))
             XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }.count, 1)

@@ -55,12 +55,24 @@ struct CustomerReleasePin: Sendable, Equatable {
 enum CustomerStoreError: Error {
     case invalidRow
     case wrongOwner
+    case staleRevision
+    case revoked
+    case eventIdentityConflict
     case unsupportedStateVersion(String)
 }
 
 /// All commands execute on the event store's connection and writer actor.
-/// The execution commands arrive with the atomic execution layer.
+/// Every typed execution command commits its complete boundary before returning.
 protocol CustomerStore: Sendable {
+    func executeCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult
+    func activeJourneys(owner: CustomerStoreOwner) async throws -> [JourneyRun]
+    func customerFrequency(owner: CustomerStoreOwner, experienceId: String) async throws -> Int64?
+    func customerArmReceipts(owner: CustomerStoreOwner) async throws -> Set<JourneyStateArmReceipt>
+    func customerWatches(owner: CustomerStoreOwner) async throws -> [String: JourneyConversionWatch]
+    func customerLogPage(owner: CustomerStoreOwner, name: String?, startedAt: Int64, deadlineAt: Int64?, after: CustomerLogPosition?, limit: Int) async throws -> [StoredEvent]
+    func customerMeasurementPage(owner: CustomerStoreOwner, throughEventId: String?, limit: Int) async throws -> [PendingConversionOccurrence]
+    func customerResponseLanes(owner: CustomerStoreOwner) async throws -> [CustomerResponseLaneKey: CustomerResponseSaveLane]
+    func customerResponseOwners(scope: JourneyStorageScope) async throws -> [String]
     func customerMetadata() async throws -> CustomerStoreMetadata
     func customerScope(owner: CustomerStoreOwner) async throws -> CustomerScope?
     func putCustomerScope(_ scope: CustomerScope) async throws
@@ -73,4 +85,12 @@ protocol CustomerStore: Sendable {
     func finishLegacyCleanup(cutoverSequence: Int64) async throws
     func historyCoverage(owner: CustomerStoreOwner) async throws -> Int64?
     func advanceHistoryCoverage(owner: CustomerStoreOwner, to milliseconds: Int64) async throws
+}
+
+
+/// Adapters can supply the customer writer while retaining their event transport controls.
+protocol CustomerStoreProviding: Sendable {
+    func openCustomerStore(at directory: URL) async throws -> any CustomerStore
+    func customerStore() async -> (any CustomerStore)?
+    func customerDidCommit(_ records: [StableEventCaptureRecord], commits: [StableEventCaptureCommit]) async
 }

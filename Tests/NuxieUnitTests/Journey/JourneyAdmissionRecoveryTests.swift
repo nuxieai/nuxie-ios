@@ -19,7 +19,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
 
-        let pending = try await events.pendingConversionOccurrences(
+        let pending = try await events.measurementInputs(
             distinctId: "customer", limit: 100, throughEventId: nil
         )
         XCTAssertEqual(pending.map(\.event.id), [captured[1].id])
@@ -82,8 +82,8 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             _ = await events.captureAndRouteSystemEvent(.init(name: "acquired", properties: nil,
                 eventId: "first-acquisition", distinctId: "customer"))
             let outcome = try XCTUnwrap(events.routedEvents.first { $0.id == "first-acquisition" })
-            await service.handleEvent(outcome)
-            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            await service.handleStoredEvent(outcome)
+            let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
             let converted = try await journal.conversionWatches()
             XCTAssertEqual(converted[firstJourneyId]?.conversion?.eventId, outcome.id)
 
@@ -238,7 +238,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             admissionGeneration: 1,
             distinctId: "customer"
         )
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             id: "00000000-0000-7000-8000-000000000090",
             name: "new-profile-event",
             distinctId: "customer"
@@ -294,7 +294,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             admissionGeneration: 4,
             distinctId: "customer-a"
         )
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             id: "00000000-0000-7000-8000-000000000091",
             name: "current-customer-event",
             distinctId: "customer-b"
@@ -346,7 +346,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             admissionGeneration: 5,
             distinctId: "customer-b"
         )
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             id: "00000000-0000-7000-8000-000000000092",
             name: "replacement-profile-event",
             distinctId: "customer-b"
@@ -400,20 +400,20 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             name: "unrelated",
             distinctId: "customer"
         ))
         XCTAssertTrue(events.routedEvents.isEmpty)
 
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             id: "00000000-0000-7000-8000-000000000101",
             name: "purchase_intent",
             distinctId: "customer",
             properties: ["sku": "pro", "ignored": "extra"],
             timestamp: Date(timeIntervalSince1970: 1_001)
         ))
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             id: "00000000-0000-7000-8000-000000000102",
             name: "purchase_intent",
             distinctId: "customer",
@@ -487,7 +487,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         // The fresh copy arrived before the event routed: the event starts
         // from that copy instead of being used up.
-        await service.handleEvent(
+        await service.handleStoredEvent(
             capturedBeforeReplacement,
             admittedProfileGeneration: capturedGeneration
         )
@@ -539,7 +539,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
 
         XCTAssertTrue(events.routedEvents.isEmpty)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -693,7 +693,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         let events = MockEventLog()
         events.identity = identity
         let now = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1_000))
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -786,7 +786,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer-a")
         await service.onAppDidEnterBackground()
-        let oldJournal = try JourneyRunJournal(
+        let oldJournal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-a"
         )
@@ -806,7 +806,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             oldCompletion.properties["outcome"] as? String,
             "abandoned"
         )
-        let newJournal = try JourneyRunJournal(
+        let newJournal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-b"
         )
@@ -871,7 +871,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer-a")
-        let oldJournal = try JourneyRunJournal(
+        let oldJournal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-a"
         )
@@ -967,7 +967,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer-a")
-        let oldJournal = try JourneyRunJournal(
+        let oldJournal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-a"
         )
@@ -986,8 +986,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         let pendingRuns = try await oldJournal.runs()
         let pending = try XCTUnwrap(pendingRuns.first)
-        XCTAssertEqual(pending.completion?.outcome, "abandoned")
-        XCTAssertTrue(pending.startedQueued)
+        XCTAssertNotNil(pending.park)
         XCTAssertFalse(events.routedEvents.contains {
             $0.distinctId == "customer-a"
                 && $0.name == JourneyEvents.journeyCompleted
@@ -1047,7 +1046,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         let storageScope = JourneyStorageScope(
             authority: fixture.deliveryAuthority
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer",
             storageScope: storageScope
@@ -1066,8 +1065,6 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             at: Date(timeIntervalSince1970: 1_000)
         )
         let run = try XCTUnwrap(admitted)
-        try await JourneyReporter(journal: journal, events: events)
-            .flushPending()
         try await journal.transition(
             run.id,
             stepId: "wait",
@@ -1137,7 +1134,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         let events = MockEventLog()
         events.identity = identity
         let now = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1_002))
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1155,8 +1152,6 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             at: Date(timeIntervalSince1970: 1_000)
         )
         let run = try XCTUnwrap(admitted)
-        try await JourneyReporter(journal: journal, events: events)
-            .flushPending()
         try await journal.transition(
             run.id,
             stepId: "wait",
@@ -1228,7 +1223,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1303,7 +1298,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1358,7 +1353,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1415,7 +1410,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )

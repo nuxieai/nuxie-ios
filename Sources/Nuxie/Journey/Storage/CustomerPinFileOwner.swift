@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// References the existing pin layout without copying descriptor or artifact bytes.
 struct CustomerPinFileOwner: Sendable {
@@ -22,6 +27,18 @@ struct CustomerPinFileOwner: Sendable {
         let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize else { throw CustomerStoreError.invalidRow }
         return CustomerReleasePin(objectSHA256: sha256, kind: kind, relativePath: path, sizeBytes: Int64(size))
+    }
+
+    /// Admission makes file bytes and their directory entries durable before referencing them.
+    func synchronize(_ pins: [CustomerReleasePin]) throws {
+        let files = pins.map { root.appendingPathComponent($0.relativePath) }
+        let directories = Set(files.map { $0.deletingLastPathComponent() }).union([root, root.deletingLastPathComponent(), root.deletingLastPathComponent().deletingLastPathComponent()])
+        for file in files + directories.sorted(by: { $0.path > $1.path }) {
+            let descriptor = open(file.path, O_RDONLY | O_NOFOLLOW)
+            guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+            defer { close(descriptor) }
+            guard fsync(descriptor) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        }
     }
 
     func collectOrphans(in store: SQLiteEventStore) async throws -> [String] {
@@ -54,6 +71,9 @@ struct CustomerPinFileOwner: Sendable {
                     try manager.removeItem(at: file)
                     removed.append(path)
                 }
+            }
+            if try manager.contentsOfDirectory(atPath: directory.path).isEmpty {
+                try manager.removeItem(at: directory)
             }
         }
         return removed.sorted()

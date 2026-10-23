@@ -761,7 +761,7 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
                 signature: originalPin.envelope.signature
             )
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: journalDirectory,
             distinctId: "customer"
         )
@@ -791,7 +791,7 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
             requests.increment()
             throw URLError(.notConnectedToInternet)
         }
-        let relaunched = try JourneyRunJournal(
+        let relaunched = try await CustomerJourneyStore(
             directory: journalDirectory,
             distinctId: "customer"
         )

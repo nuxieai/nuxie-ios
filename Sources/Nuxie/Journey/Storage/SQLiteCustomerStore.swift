@@ -3,12 +3,12 @@ import SQLite3
 
 private let customerTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-private enum CustomerSQLValue {
+enum CustomerSQLValue {
     case text(String), integer(Int64), blob(Data), null
 }
 
 extension SQLiteEventStore: CustomerStore {
-    private func customerQuery<T>(_ sql: String, _ values: [CustomerSQLValue] = [], body: (OpaquePointer?) throws -> T) throws -> T {
+    func customerQuery<T>(_ sql: String, _ values: [CustomerSQLValue] = [], body: (OpaquePointer?) throws -> T) throws -> T {
         try customerStatement(sql) { statement in
             for (offset, value) in values.enumerated() {
                 let index = Int32(offset + 1)
@@ -28,40 +28,48 @@ extension SQLiteEventStore: CustomerStore {
         }
     }
 
-    private func customerWrite(_ sql: String, _ values: [CustomerSQLValue] = []) throws {
+    func customerWrite(_ sql: String, _ values: [CustomerSQLValue] = []) throws {
         try customerQuery(sql, values) { statement in
             guard sqlite3_step(statement) == SQLITE_DONE else { throw CustomerStoreError.invalidRow }
         }
     }
 
-    private func customerTransaction<T>(_ operation: () throws -> T) throws -> T {
+    func customerTransaction<T>(_ operation: () throws -> T) throws -> T {
         try customerExecute("BEGIN IMMEDIATE;")
         let startedAt = Date()
+        let previousSequence = nextCommitSequence
+        var committed = false
         do {
             let result = try operation()
+            if customerCommandActive { try customerFaultBoundary(.beforeCommit) }
             try customerExecute("COMMIT;")
+            committed = true
+            if customerCommandActive { try customerFaultBoundary(.afterCommit) }
             LogDebug("Customer store transaction committed in \(Date().timeIntervalSince(startedAt) * 1000) ms")
             return result
         } catch {
-            try? customerExecute("ROLLBACK;")
+            if !committed {
+                try? customerExecute("ROLLBACK;")
+                nextCommitSequence = previousSequence
+            }
             throw error
         }
     }
 
-    private func ownerValues(_ owner: CustomerStoreOwner) -> [CustomerSQLValue] {
+    func ownerValues(_ owner: CustomerStoreOwner) -> [CustomerSQLValue] {
         [.text(owner.authorityScope), .text(owner.userId)]
     }
 
-    private func journeyValues(_ key: CustomerJourneyKey) -> [CustomerSQLValue] {
+    func journeyValues(_ key: CustomerJourneyKey) -> [CustomerSQLValue] {
         ownerValues(key.owner) + [.text(key.journeyId), .integer(key.legGeneration)]
     }
 
-    private func rowText(_ statement: OpaquePointer?, _ index: Int32) throws -> String {
+    func rowText(_ statement: OpaquePointer?, _ index: Int32) throws -> String {
         guard let bytes = sqlite3_column_text(statement, index) else { throw CustomerStoreError.invalidRow }
         return String(decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, index))), as: UTF8.self)
     }
 
-    private func optionalInteger(_ statement: OpaquePointer?, _ index: Int32) -> Int64? {
+    func optionalInteger(_ statement: OpaquePointer?, _ index: Int32) -> Int64? {
         sqlite3_column_type(statement, index) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, index)
     }
 
@@ -110,7 +118,7 @@ extension SQLiteEventStore: CustomerStore {
         """, ownerValues(owner) + [.integer(milliseconds)])
     }
 
-    private func ownsResponseSaveJourney(owner: CustomerStoreOwner, journeyId: String, experienceId: String, versionId: String) throws -> Bool {
+    func ownsResponseSaveJourney(owner: CustomerStoreOwner, journeyId: String, experienceId: String, versionId: String) throws -> Bool {
         try customerQuery("""
         SELECT 1 FROM journeys WHERE authority_scope=? AND user_id=? AND journey_id=? AND experience_id=? AND version_id=? LIMIT 1;
         """, ownerValues(owner) + [.text(journeyId), .text(experienceId), .text(versionId)]) { statement in
@@ -144,22 +152,7 @@ extension SQLiteEventStore: CustomerStore {
                     throw JourneyResponseSaveError.wrongOwner
                 }
             }
-            let answers: CustomerSQLValue
-            if let pending = lane.pending { answers = .blob(try ExactJSONCodec.encode(pending.answers)) } else { answers = .null }
-            let retry = lane.retry
-            let display = lane.display
-            try customerWrite("""
-            INSERT INTO journey_response_saves VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(authority_scope,user_id,journey_id,form_name) DO UPDATE SET
-            experience_id=excluded.experience_id,version_id=excluded.version_id,sequence=excluded.sequence,pending_sequence=excluded.pending_sequence,pending_answers_json=excluded.pending_answers_json,
-            display_sequence=excluded.display_sequence,saving=excluded.saving,saved=excluded.saved,save_error=excluded.save_error,
-            attempts=excluded.attempts,observed_at=excluded.observed_at,next_attempt_at=excluded.next_attempt_at,
-            unknown_form_since=excluded.unknown_form_since,last_code=excluded.last_code;
-            """, ownerValues(owner) + [.text(journeyId), .text(formName), .text(lane.experienceId), .text(lane.versionId), .integer(lane.sequence),
-                lane.pending.map { .integer($0.sequence) } ?? .null, answers, display.map { .integer($0.sequence) } ?? .null,
-                .integer(display?.saving == true ? 1 : 0), .integer(display?.saved == true ? 1 : 0), .text(display?.saveError ?? ""),
-                .integer(retry?.attempts ?? 0), retry.map { .integer($0.observedAt) } ?? .null, retry.map { .integer($0.nextAttemptAt) } ?? .null,
-                retry?.unknownFormSince.map { .integer($0) } ?? .null, retry.map { .text($0.lastCode.rawValue) } ?? .null])
+            try customerWriteLane(owner: owner, journeyId: journeyId, formName: formName, lane: lane)
         }
     }
 
@@ -235,7 +228,7 @@ extension SQLiteEventStore: CustomerStore {
         }
     }
 
-    /// Dormant until the atomic execution switch calls this before journal recovery.
+    /// The state gate commits before execution or legacy file cleanup.
     func openCustomerState(cutoverAt: Int64) throws -> CustomerStoreMetadata {
         try customerTransaction {
             let previous = try customerMetadata()

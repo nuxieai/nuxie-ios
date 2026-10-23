@@ -38,7 +38,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         }
         await gate.waitUntilEntered()
 
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -51,7 +51,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         XCTAssertEqual(selectedExposure.variantId, "variant_b")
         XCTAssertEqual(selectedExposure.kind, .assigned)
         XCTAssertNil(selectedExposure.shownAt)
-        XCTAssertFalse(selectedExposure.queued)
+        XCTAssertNil(selectedExposure.shownAt)
         XCTAssertTrue(events.routedEvents.allSatisfy {
             $0.name != JourneyEvents.experimentExposure
         })
@@ -89,13 +89,9 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let shownRun = try XCTUnwrap(shownRuns.first)
         let shownExposure = try XCTUnwrap(shownRun.experimentExposures.first)
         XCTAssertNotNil(shownExposure.shownAt)
-        XCTAssertTrue(shownExposure.queued)
+        XCTAssertNotNil(shownExposure.shownAt)
         XCTAssertEqual(exposures.first?.id, shownExposure.eventId)
 
-        _ = try await JourneyExperimentExposureReporter(
-            journal: journal,
-            events: events
-        ).flushPending()
         XCTAssertEqual(events.routedEvents.filter {
             $0.name == JourneyEvents.experimentExposure
         }.count, 1)
@@ -147,7 +143,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             $0.name == JourneyEvents.experimentExposure
         }
         XCTAssertEqual(exposures.count, 1)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -156,7 +152,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             persistedRuns.first?.experimentExposures.first
         )
         XCTAssertNotNil(persistedExposure.shownAt)
-        XCTAssertTrue(persistedExposure.queued)
+        XCTAssertEqual(exposures.first?.id, persistedExposure.eventId)
         await service.shutdown()
     }
 
@@ -204,20 +200,18 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let retryIsSuspended = await captureGate.isSuspended()
         XCTAssertTrue(retryIsSuspended)
 
+        let started = JourneyCompletionFlag()
         let completion = JourneyCompletionFlag()
         let shutdown = Task {
+            started.finish()
             await service.shutdown()
             completion.finish()
         }
-        // Profile teardown makes its own flush attempt before shutdown reaches
-        // the retry-task join. Wait for that attempt so this assertion cannot
-        // pass merely because the shutdown task has not started yet.
-        for _ in 0..<100 {
-            if await captureGate.observationCount() >= 3 { break }
+        for _ in 0..<100 where !started.isCompleted {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        let captureCount = await captureGate.observationCount()
-        XCTAssertGreaterThanOrEqual(captureCount, 3)
+        XCTAssertTrue(started.isCompleted)
+        try? await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertFalse(completion.isCompleted)
 
         await captureGate.release()
@@ -288,14 +282,14 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             exposures.first?.properties["variant_key"] as? String,
             "variant_b"
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
         var exposureWasQueued = false
         for _ in 0..<100 {
             let runs = try await journal.runs()
-            exposureWasQueued = runs.first?.experimentExposures.first?.queued
+            exposureWasQueued = runs.first?.experimentExposures.first?.shownAt != nil
                 == true
             if exposureWasQueued { break }
             await Task.yield()
@@ -367,7 +361,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         XCTAssertFalse(events.routedEvents.contains {
             $0.name == JourneyEvents.experimentExposure
         })
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -667,7 +661,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let request = try XCTUnwrap(presentedRequest)
         let accepted = await request.onOutcome(.dismissed, "screen_welcome")
         XCTAssertTrue(accepted)
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )

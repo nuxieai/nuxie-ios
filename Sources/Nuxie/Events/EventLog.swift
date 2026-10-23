@@ -739,7 +739,7 @@ protocol EventIdentityMigrating: AnyObject, Sendable {
 
 /// Protocol for the unified event log: capture → enrich → persist → deliver → query.
 protocol EventLogProtocol:
-  ConversionOccurrenceQueue,
+  EventAuthorityBinding,
   EventQuerySource,
   EventQueueLifecycle,
   EventIdentityMigrating,
@@ -1206,10 +1206,15 @@ actor EventLog: EventLogProtocol {
       try await store.initialize(
         path: snapshot?.internalConfiguration.customStoragePath
       )
+      if let customer = store as? any CustomerStore {
+        _ = try await customer.openCustomerState(cutoverAt: Int64(JourneyConversionWatch.millis(dateProvider.now())))
+      }
       try await store.discardOtherCommittedRouteSessions(keeping: committedRouteSessionId)
       _ = try await store.readOrInitializeHistoryCoverage(
         startingAt: dateProvider.now()
       )
+    } catch let error as CustomerStoreError {
+      throw error
     } catch let error as EventStorageError {
       if case .invalidSchema = error {
         throw error
@@ -3543,6 +3548,10 @@ actor EventLog: EventLogProtocol {
 /// ordered route resolution before returning to the caller. Recovery-only
 /// captures continue to use `captureSystemEvent` and never enter this lane.
 protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
+  func openCustomerStore(at directory: URL) async throws -> (any CustomerStore)?
+  func customerStore() async -> (any CustomerStore)?
+  func prepareCustomerEvents(_ items: [RoutedStableSystemEventBatchItem]) async throws -> [StableEventCaptureRecord]
+  func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult
   /// Waits until every committed route enqueued before this call has reached
   /// its subscribers. In-memory test captures route inline and can use the
   /// default no-op implementation below.
@@ -3572,6 +3581,24 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
 }
 
 extension RoutedStableSystemEventCapturing {
+  func openCustomerStore(at directory: URL) async throws -> (any CustomerStore)? { await customerStore() }
+  func customerStore() async -> (any CustomerStore)? { nil }
+  func prepareCustomerEvents(_ items: [RoutedStableSystemEventBatchItem]) async throws -> [StableEventCaptureRecord] {
+    try items.map { item in
+      let event: StoredEvent?
+      if case .prepared(let prepared) = item.preparation {
+        event = try prepared.map { try StoredEvent(id: $0.id, name: $0.name, properties: $0.properties, timestamp: $0.timestamp, distinctId: $0.distinctId, journeyOrigin: $0.journeyOrigin) }
+      } else {
+        event = try StoredEvent(id: item.request.eventId, name: item.request.name, properties: item.request.properties ?? [:], timestamp: item.occurredAt, distinctId: item.request.distinctId, journeyOrigin: item.request.journeyOrigin)
+      }
+      return .init(eventId: item.request.eventId, event: event, recordedAt: item.occurredAt)
+    }
+  }
+  func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
+    guard let store = await customerStore() else { throw EventStorageError.databaseNotInitialized }
+    return try await store.executeCustomerCommand(command)
+  }
+
   @discardableResult
   func drainCommittedRouting() async -> Bool { true }
 
@@ -3605,18 +3632,6 @@ extension EventLog {
     await ready.wait()
     guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
     try await store.bindConversionAuthority(scope)
-  }
-
-  func pendingConversionOccurrences(distinctId: String, limit: Int, throughEventId: String?) async throws -> [PendingConversionOccurrence] {
-    await ready.wait()
-    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
-    _ = try await store.pruneConversionOccurrences(at: dateProvider.now())
-    return try await store.pendingConversionOccurrences(distinctId: distinctId, limit: limit, throughEventId: throughEventId)
-  }
-
-  func acknowledgeConversionOccurrence(eventId: String, distinctId: String) async throws {
-    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
-    try await store.acknowledgeConversionOccurrence(eventId: eventId, distinctId: distinctId)
   }
 
   private func recoverStableRoutes(
@@ -3869,5 +3884,53 @@ extension EventLog {
       await recordHistoryGap(at: attemptedTimestamp)
       return nil
     }
+  }
+}
+
+
+extension EventLog {
+  func openCustomerStore(at directory: URL) async throws -> (any CustomerStore)? {
+    if let provider = store as? any CustomerStoreProviding { return try await provider.openCustomerStore(at: directory) }
+    return store as? any CustomerStore
+  }
+
+  func customerStore() async -> (any CustomerStore)? {
+    if let provider = store as? any CustomerStoreProviding { return await provider.customerStore() }
+    return store as? any CustomerStore
+  }
+
+  func prepareCustomerEvents(_ items: [RoutedStableSystemEventBatchItem]) async throws -> [StableEventCaptureRecord] {
+    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
+    let admissions = committedAdmissionRegistry.capture()
+    var records: [StableEventCaptureRecord] = []
+    for item in items {
+      let event = try await prepareStableSystemEvent(item.request, occurredAt: item.occurredAt,
+        preparation: item.preparation, preservesJourneyCompletionOutputs: item.request.name == JourneyEvents.journeyCompleted)
+      records.append(.init(eventId: item.request.eventId, event: event.map(makeStoredEvent(from:)), recordedAt: dateProvider.now(),
+        routeAdmission: committedRouteAdmission(admissions, stableEventId: item.request.eventId)))
+    }
+    return records
+  }
+
+  func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
+    guard !closeFlag.isClosed, let customer = await customerStore() else { throw EventStorageError.databaseNotInitialized }
+    await acquireStableCaptureCommit()
+    defer { releaseStableCaptureCommit() }
+    await drainCaptureWorker()
+    guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
+    activeDurableCommitCount += 1
+    defer { durableCommitDidFinish() }
+    let result = try await customer.executeCustomerCommand(command)
+    if let provider = store as? any CustomerStoreProviding { await provider.customerDidCommit(command.events, commits: result.commits) }
+    for (record, commit) in zip(command.events, result.commits) {
+      let capture: DurableTriggerCapture?
+      if case .captured(let event, let isNew) = commit.outcome {
+        capture = .init(event: event.customerEvent, isNewlyCommitted: isNew, localRoutePending: commit.localRoutePending)
+      } else { capture = nil }
+      publishStableCapture(capture, commit: commit,
+        forwardingAdmission: forwardingAdmission(receivedAt: record.recordedAt, activityIdentity: captureActivityIdentity()),
+        routeToSubscribers: true, subscriberAdmissions: record.routeAdmission?.subscribers ?? [:])
+    }
+    return result
   }
 }

@@ -70,7 +70,7 @@ final class JourneyNativeCompletionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(), journalDirectory: directory,
             storageScope: .testFixture, featureAccess: { _ in .notFound },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events), presenter: presentations,
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed), currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!)
         addTeardownBlock {
             await observer.stopListening()
@@ -80,7 +80,7 @@ final class JourneyNativeCompletionTests: JourneyTestCase {
         }
         let admission = events.reserveCommittedAdmission { journeys.eventAdmissionGeneration() }
         await events.subscribeAcknowledgingCommitted(reservation: admission) { event, generation in
-            await journeys.handleEvent(event, admittedProfileGeneration: generation)
+            await journeys.handleStoredEvent(event, admittedProfileGeneration: generation)
         }
         let configuration = NuxieConfiguration(apiKey: "native-completion-test")
         configuration.testingOverrides.suppressBackgroundWork = true

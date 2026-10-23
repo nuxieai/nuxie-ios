@@ -8,7 +8,7 @@ import SQLite3
 /// several tasks (capture worker, delivery flushes, queries), so they run
 /// concurrently on the cooperative pool. Every state access goes through
 /// one lock — an unsynchronized mock segfaults under real load.
-public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
+public final class MockEventStore: EventStoreProtocol, CustomerStoreProviding, @unchecked Sendable {
 
     public enum InitializeFailure: Equatable, Sendable {
         case none
@@ -18,9 +18,47 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
 
     private let lock = NSLock()
 
+    private var customerWriter: Task<SQLiteEventStore, Error>?
+
+    func openCustomerStore(at directory: URL) async throws -> any CustomerStore {
+        let task = lock.withLock { () -> Task<SQLiteEventStore, Error> in
+            if let customerWriter { return customerWriter }
+            let captured = _storedEvents
+            let task = Task {
+                let writer = SQLiteEventStore()
+                try await writer.initialize(path: directory)
+                for event in captured { _ = try await writer.insert(event, deliveryState: .pending) }
+                return writer
+            }
+            customerWriter = task
+            return task
+        }
+        return try await task.value
+    }
+    func customerStore() async -> (any CustomerStore)? {
+        guard let task = lock.withLock({ customerWriter }) else { return nil }
+        return try? await task.value
+    }
+    func customerDidCommit(_ records: [StableEventCaptureRecord], commits: [StableEventCaptureCommit]) async {
+        lock.withLock {
+            for (record, commit) in zip(records, commits) {
+                if let sequence = commit.commitSequence { _nextCommitSequence = max(_nextCommitSequence, sequence + 1) }
+                switch commit.outcome {
+                case .captured(let event, let isNew):
+                    if isNew, !_storedEvents.contains(where: { $0.id == event.id }) { _storedEvents.append(event); _pendingIds.insert(event.id) }
+                    if commit.localRoutePending, !_pendingStableRouteIds.contains(event.id) { _pendingStableRouteIds.append(event.id) }
+                    if let admission = record.routeAdmission, let sequence = commit.commitSequence,
+                       !_committedRoutes.contains(where: { $0.event.id == event.id }) {
+                        _committedRoutes.append(.init(commitSequence: sequence, event: event, admission: admission, nextSubscriber: 0))
+                    }
+                case .dropped: _stableDroppedAt[record.eventId] = record.recordedAt
+                }
+            }
+        }
+    }
+
     // Storage (lock-guarded)
     private var _storedEvents: [StoredEvent] = []
-    private var _conversionInbox: [PendingConversionOccurrence] = []
     private var _originsByEventId: [String: StoredEventOrigin] = [:]
     private var _pendingIds: Set<String> = []
     private var _deliveredIds: [String] = []
@@ -286,7 +324,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             let suspended = Array(_suspendedInsertContinuations.values)
                 + Array(_suspendedStableCaptureAfterCommitContinuations.values)
             _storedEvents.removeAll()
-            _conversionInbox.removeAll()
+
             _originsByEventId.removeAll()
             _pendingIds.removeAll()
             _stableDroppedAt.removeAll()
@@ -330,6 +368,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
         await waitIfInsertSuspended(id: event.id)
+        if let writer = await customerStore() as? SQLiteEventStore {
+            _ = try await writer.insert(event, deliveryState: deliveryState, origin: origin, assigningCommitSequence: assigningCommitSequence,
+                acceptedAt: acceptedAt, routeAdmission: routeAdmission)
+        }
         return lock.withLock {
             if let existing = _storedEvents.first(where: { $0.id == event.id }) {
                 if !existing.isByteEquivalent(to: event) {
@@ -347,7 +389,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 _committedRoutes.append(.init(commitSequence: sequence, event: event, admission: routeAdmission, nextSubscriber: 0))
             }
             _storedEvents.append(event)
-            _conversionInbox.append(.init(event: event, acceptedAt: acceptedAt))
+
             _originsByEventId[event.id] = origin
             if deliveryState == .pending {
                 _pendingIds.insert(event.id)
@@ -400,40 +442,11 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
-    public func pruneConversionOccurrences(at now: Date) async throws -> Int {
-        try lock.withLock {
-            if _shouldFailStore { throw mockError(2, "Mock store error") }
-            let before = _conversionInbox.count
-            let floor = now.addingTimeInterval(-Double(PendingConversionOccurrence.retentionMillis) / 1000)
-            _conversionInbox.removeAll { $0.acceptedAt < floor }
-            return before - _conversionInbox.count
-        }
-    }
-
     private var boundConversionScope: JourneyStorageScope?
     public func bindConversionAuthority(_ scope: JourneyStorageScope) async throws {
         try lock.withLock {
             guard boundConversionScope == nil || boundConversionScope == scope else { throw EventStorageError.invalidProperties }
             boundConversionScope = scope
-        }
-    }
-
-    public func pendingConversionOccurrences(distinctId: String, limit: Int, throughEventId: String?) async throws -> [PendingConversionOccurrence] {
-        try lock.withLock {
-            if _shouldFailQuery { throw mockError(3, "Mock query error") }
-            let end: Int
-            if let throughEventId {
-                guard let index = _conversionInbox.firstIndex(where: { $0.event.id == throughEventId && $0.event.distinctId == distinctId }) else { return [] }
-                end = index + 1
-            } else { end = _conversionInbox.count }
-            return Array(_conversionInbox.prefix(end).filter { $0.event.distinctId == distinctId }.prefix(max(1, min(limit, 1000))))
-        }
-    }
-
-    public func acknowledgeConversionOccurrence(eventId: String, distinctId: String) async throws {
-        try lock.withLock {
-            if _shouldFailStore { throw mockError(2, "Mock store error") }
-            _conversionInbox.removeAll { $0.event.id == eventId && $0.event.distinctId == distinctId }
         }
     }
 
@@ -552,7 +565,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 )
             }
             _storedEvents.append(event)
-            _conversionInbox.append(.init(event: event, acceptedAt: recordedAt))
+
             _originsByEventId[eventId] = .device
             _pendingIds.insert(eventId)
             return stagingRouteIfNeeded(StableEventCaptureCommit(
@@ -569,6 +582,10 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             commit = admitted
         } else {
             commit = try operation()
+        }
+        if let writer = await customerStore() as? SQLiteEventStore {
+            _ = try await writer.commitStableCaptureAndStageRoute(eventId: eventId, event: event, recordedAt: recordedAt,
+                assigningCommitSequence: assigningCommitSequence, admission: nil, routeAdmission: routeAdmission)
         }
         let shouldSuspend = lock.withLock {
             _suspendedStableCaptureAfterCommitIds.contains(eventId)
@@ -715,7 +732,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 _storeEventCallCount += records.count
                 for (record, commit) in zip(records, commits) {
                     if case .captured(let event, isNew: true) = commit.outcome {
-                        _conversionInbox.append(.init(event: event, acceptedAt: record.recordedAt))
+
                     }
                 }
                 _storedEvents = storedEvents
@@ -728,13 +745,18 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
                 return commits
             }
         }
+        let committed: [StableEventCaptureCommit]
         if let admission {
-            guard let committed = try admission.commitBatchIfCurrent(operation) else {
+            guard let admitted = try admission.commitBatchIfCurrent(operation) else {
                 throw StableEventCaptureCommitAdmissionError.rejected
             }
-            return committed
+            committed = admitted
+        } else { committed = try operation() }
+        if let writer = await customerStore() as? SQLiteEventStore {
+            if stageRoutes { _ = try await writer.commitStableCaptureBatchAndStageRoutes(records, assigningCommitSequence: assigningCommitSequence, admission: nil) }
+            else { _ = try await writer.commitStableCaptureBatch(records, assigningCommitSequence: assigningCommitSequence, admission: nil) }
         }
-        return try operation()
+        return committed
     }
 
     public func commitStableCaptureBatchAndStageRoutes(
@@ -947,7 +969,9 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
 
     public func close() async {
+        if let writer = await customerStore() as? SQLiteEventStore { await writer.close() }
         lock.withLock {
+            customerWriter = nil
             _closeCallCount += 1
             _isClosed = true
         }
@@ -1080,7 +1104,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             let suspended = Array(_suspendedInsertContinuations.values)
                 + Array(_suspendedStableCaptureAfterCommitContinuations.values)
             _storedEvents.removeAll()
-            _conversionInbox.removeAll()
+
             _originsByEventId.removeAll()
             _pendingIds.removeAll()
             _deliveredIds.removeAll()

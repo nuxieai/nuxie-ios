@@ -15,7 +15,7 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
             await fulfillment(of: [harness.continuation.finished], timeout: 3)
             XCTAssertTrue(harness.presenter.isExperiencePresented, variant)
             let runs = try await harness.journal.runs()
-            XCTAssertNil(runs.first?.completion, variant)
+
             let purchase = try XCTUnwrap(harness.leg.steps.first { $0.action?["type"] == .string("purchase") })
             XCTAssertNil(runs.first?.effectReceipts[purchase.id], "Retry must not retain a receipt")
             let errorStatus = try await harness.controller.status("purchase")
@@ -43,7 +43,7 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
         XCTAssertEqual(accepted, true)
         await fulfillment(of: [harness.continuation.finished], timeout: 3)
         let runs = try await harness.journal.runs()
-        XCTAssertFalse(runs.contains { $0.completion == nil && !$0.effectReceipts.isEmpty })
+        XCTAssertFalse(runs.contains { !$0.effectReceipts.isEmpty })
         XCTAssertFalse(harness.presenter.isExperiencePresented)
         await harness.journeys.shutdown()
         try await harness.controller.screen.close()
@@ -156,7 +156,7 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
             journalBeforePersist: { try persistenceFailures?.beforePersist() },
             onPresentationContinuationFinished: { continuation.notify() })
         sink.route = { request in
-            await journeys.handleEvent(NuxieEvent(id: request.eventId, name: request.name, distinctId: request.distinctId, properties: request.properties ?? [:]))
+            await journeys.handleStoredEvent(NuxieEvent(id: request.eventId, name: request.name, distinctId: request.distinctId, properties: request.properties ?? [:]))
             return true
         }
         await journeys.initialize()
@@ -165,7 +165,7 @@ final class PublishedPaywallStatusTests: JourneyTestCase {
         await controller.runtimeDelegate?.experienceViewController(controller, didChangeScreen: "state-screen")
         controller.journeyID = try XCTUnwrap(presenter.presentedJourneyId)
         return .init(leg: leg, controller: controller, presenter: presenter, journeys: journeys, store: store, sink: sink, continuation: continuation,
-            journal: try JourneyRunJournal(directory: directory, distinctId: "customer"))
+            journal: try await CustomerJourneyStore(directory: directory, distinctId: "customer"))
     }
 }
 
@@ -178,7 +178,7 @@ private struct PaywallHarness {
     let store: PaywallStore
     let sink: PaywallOutcomeSink
     let continuation: PaywallContinuationSignal
-    let journal: JourneyRunJournal
+    let journal: CustomerJourneyStore
 }
 
 // Only the window shell and engine command drain are supplied by the test.

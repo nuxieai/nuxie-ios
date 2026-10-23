@@ -1,0 +1,8 @@
+{
+  "contract": "A leg's terminal state, stable completion report or stable privacy drop, watch completion, continuation receipt, execution deletion and pin-reference deletion share one SQLite transaction. Interrupt every statement and both sides of commit. Before commit the old active state and no terminal event remain; after commit no executable state and exactly one terminal event or privacy drop remain. File cleanup follows commit and may fail without reverting, changing or duplicating the terminal result. The driver uses the actual Journey service and closes and reopens a real temporary database. Crash injection never edits execution rows.",
+  "cases": [
+    { "name": "ordinary_report", "privacyDrop": false, "cleanupFailure": false, "failurePoints": ["each_statement", "before_commit", "after_commit"] },
+    { "name": "terminal_privacy_drop", "privacyDrop": true, "cleanupFailure": false, "failurePoints": ["each_statement", "before_commit", "after_commit"] },
+    { "name": "pin_cleanup_failure_after_commit", "privacyDrop": false, "cleanupFailure": true, "failurePoints": ["before_commit", "after_commit"] }
+  ]
+}

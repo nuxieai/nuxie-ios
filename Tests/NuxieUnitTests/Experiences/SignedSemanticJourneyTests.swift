@@ -166,7 +166,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             automaticPreparation: false)
         let presentations = ExperiencePresentationService(experiences: experiences, eventLog: events, identity: identity)
         let storageScope = JourneyStorageScope(authority: authority)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: owner, storageScope: storageScope)
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: owner, storageScope: storageScope)
         let observer = SemanticJourneyPresenter(base: presentations, journal: journal)
         let continuationFinished = XCTestExpectation(description: "Routed link execution finished")
         let journeys = JourneyService(identity: identity, events: events, dateProvider: SystemDateProvider(),
@@ -191,7 +191,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
             }
         }
         do {
-            await events.subscribeCommitted { event in await journeys.handleEvent(event) }
+            await events.subscribeCommitted { event in await journeys.handleStoredEvent(event) }
             try await events.configure(configuration: configuration)
             let artifacts = try await experiences.prepareJourneyProfile(prepared.snapshot)
             let didCommit = await experiences.commitJourneyProfile(artifacts, generation: 1, admission: nil)
@@ -484,7 +484,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
     }
 
     private func assertAuthoredRoles(in view: UIView?, observer: SemanticJourneyPresenter,
-                                     journal: JourneyRunJournal) async throws {
+                                     journal: CustomerJourneyStore) async throws {
         let elements = semanticElements(in: view)
         XCTAssertEqual(elements.compactMap(\.accessibilityLabel).sorted(), try XCTUnwrap(visibleRoleLabels(in: view)).sorted())
         XCTAssertTrue(elements.allSatisfy { !($0 is UITextField) }, "The roles artifact has no native editor declaration")
@@ -609,7 +609,7 @@ private final class FixtureRequests: @unchecked Sendable {
 @MainActor
 private final class SemanticJourneyPresenter: JourneyPresenting {
     let base: ExperiencePresentationService
-    let journal: JourneyRunJournal
+    let journal: CustomerJourneyStore
     var lastRequest: JourneyPresentationRequest?
     var beforeLink: (() async -> Void)?
     var beforeBatch: (() async -> Void)?
@@ -621,7 +621,7 @@ private final class SemanticJourneyPresenter: JourneyPresenting {
     var navigationResponses: ExactJSONObject<JourneyReleaseJSONValue>?
     var failureResponses: ExactJSONObject<JourneyReleaseJSONValue>?
 
-    init(base: ExperiencePresentationService, journal: JourneyRunJournal) { self.base = base; self.journal = journal }
+    init(base: ExperiencePresentationService, journal: CustomerJourneyStore) { self.base = base; self.journal = journal }
     func openJourneyLink(owner: JourneyPresentationOwner, request: ExperienceRendererOpenLinkRequest) async -> ExperienceRendererOpenLinkRequest? {
         let change = beforeLink; beforeLink = nil
         await change?()

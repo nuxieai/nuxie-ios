@@ -29,6 +29,7 @@ final class CustomerStoreCutoverTests: XCTestCase {
         INSERT INTO journey_response_saves VALUES(\(authority),'customer','journey','form','experience','version',1,1,X'7B7D',1,1,0,'',0,NULL,NULL,NULL,NULL);
         INSERT INTO journey_release_pins VALUES(\(authority),'customer','journey',0,'descriptor','descriptor','legacy.json',2);
         INSERT INTO journey_pending_work VALUES(\(authority),'customer','input','input','journey',0,0,'ordinary','input','failed',1,1,2,'retry');
+        INSERT INTO conversion_event_inbox VALUES('ordinary','customer',X'7B7D',1,\(authority));
         INSERT INTO stable_event_drops VALUES('privacy',1);
         INSERT INTO stable_event_routes VALUES('ordinary',0);
         INSERT INTO committed_route_deliveries VALUES('ordinary','session',0,X'7B7D',0);
@@ -38,6 +39,37 @@ final class CustomerStoreCutoverTests: XCTestCase {
     private var executionTables: [String] {
         ["customer_scopes", "journey_execution_snapshots", "journeys", "journey_cursors", "journey_waits", "journey_frequency", "journey_arm_receipts",
          "journey_event_applications", "journey_effects", "journey_experiment_selections", "journey_conversion_watches", "journey_response_saves", "journey_release_pins", "journey_pending_work"]
+    }
+
+    func testLayerOneOpenAndReopenCutsOverBeforeTouchingLegacyJSON() async throws {
+        try await seedOldState()
+        let legacy = disk.root.appendingPathComponent("journey-journal-v2")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let digest = owner.scope.customerDigest(distinctId: owner.userId)
+        let journal = legacy.appendingPathComponent(digest + ".json")
+        let revoked = legacy.appendingPathComponent(digest + ".revoked")
+        let unknown = legacy.appendingPathComponent("unknown.json")
+        try Data("intentionally invalid old JSON".utf8).write(to: journal)
+        try Data("revoked".utf8).write(to: revoked)
+        try Data("unrelated file".utf8).write(to: unknown)
+        let before = try await store.customerMetadata()
+        XCTAssertEqual(before.stateVersion, "legacy")
+        await store.close()
+        store = SQLiteEventStore()
+        try await store.initialize(path: disk.root)
+        let foundationReopen = try await store.customerMetadata()
+        XCTAssertEqual(foundationReopen.stateVersion, "legacy")
+        let customer = try await CustomerJourneyStore(directory: disk.root, distinctId: owner.userId, openedAt: .init(timeIntervalSince1970: 1), store: store)
+        let active = try await customer.runs()
+        XCTAssertTrue(active.isEmpty)
+        let after = try await store.customerMetadata()
+        XCTAssertEqual(after.stateVersion, CustomerStoreSchema.stateVersion)
+        XCTAssertFalse(after.legacyCleanupPending)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: revoked.path))
+        XCTAssertEqual(try Data(contentsOf: unknown), Data("unrelated file".utf8))
+        XCTAssertEqual(try disk.integer("SELECT COUNT(*) FROM events;"), 1)
+        await store.close()
     }
 
     func testGateDiscardsOldJourneyStateBeforeDecodingAndPreservesOrdinaryEvidence() async throws {

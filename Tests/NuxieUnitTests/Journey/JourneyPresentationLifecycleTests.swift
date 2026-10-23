@@ -72,7 +72,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         let events = MockEventLog(); events.identity = identity
         let presenter = await MainActor.run { RecordingJourneyPresenter() }
         let recorder = LinkStepProbe()
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let actualPresenter = await MainActor.run {
             ExperiencePresentationService(experiences: MockExperienceService(), eventLog: events, identity: identity)
         }
@@ -156,7 +156,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         let accepted = await request.onEmissionBatch(presentationBatch(request: request, invocationId: "buy-without-selection",
             emissions: [.init(id: "00000000-0000-7000-8000-000000000912", sequence: 0, occurredAt: "2026-08-29T12:00:00Z", name: "buy", payload: [:])]), nil)
         XCTAssertTrue(accepted)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         for _ in 0..<200 {
             if try await journal.runs().first?.stepId == "failed" { break }
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -227,7 +227,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
         let request = try XCTUnwrap(presentedRequest)
         let completed = await request.onScreenDismissed("screen_welcome", nil, "user")
         XCTAssertEqual(completed, .completed)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let runs = try await journal.runs()
         XCTAssertTrue(runs.isEmpty)
 
@@ -380,7 +380,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             completion.properties["outcome"] as? String,
             "host_dismissed"
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -440,7 +440,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             completion.properties["outcome"] as? String,
             "host_dismissed"
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -625,8 +625,8 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 eventId: "reading-outcome", distinctId: "customer"
             ))
             let outcome = try XCTUnwrap(events.routedEvents.first { $0.id == "reading-outcome" })
-            await service.handleEvent(outcome)
-            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            await service.handleStoredEvent(outcome)
+            let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
             let watches = try await journal.conversionWatches()
             XCTAssertEqual(watches[request.owner.journeyId]?.conversion?.eventId, "reading-outcome")
             let finished = await MainActor.run { presenter.finishedOwners.count }
@@ -841,7 +841,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             if attempted { break }
             await Task.yield()
         }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -850,7 +850,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
 
         XCTAssertEqual(runs.count, 1)
         XCTAssertEqual(runs.first?.stepId, "show_details")
-        XCTAssertNil(runs.first?.completion)
+
         XCTAssertTrue(finishedOwners.isEmpty)
         XCTAssertFalse(events.routedEvents.contains {
             $0.name == JourneyEvents.journeyCompleted
@@ -1154,13 +1154,13 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
             completion.properties["outcome"] as? String,
             "permission_granted"
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
         let runs = try await journal.runs()
         XCTAssertFalse(runs.contains {
-            $0.completion == nil && $0.park != nil
+            $0.park != nil
         })
     }
 
@@ -1363,7 +1363,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 resolvedSource?.instanceId,
                 "commerce-instance-\(index)"
             )
-            let journal = try JourneyRunJournal(
+            let journal = try await CustomerJourneyStore(
                 directory: directory,
                 distinctId: "customer"
             )
@@ -1419,7 +1419,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     return XCTFail("Expected the resolved purchase placement")
                 }
                 XCTAssertEqual(resolvedPlacement, "golden:monthly")
-                await service.handleEvent(NuxieEvent(
+                await service.handleStoredEvent(NuxieEvent(
                     name: actionFixture.eventName,
                     distinctId: "customer",
                     properties: [
@@ -1432,7 +1432,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                     runsAfterMismatch.first?.stepId,
                     actionStep.id
                 )
-                await service.handleEvent(NuxieEvent(
+                await service.handleStoredEvent(NuxieEvent(
                     name: actionFixture.eventName,
                     distinctId: "customer",
                     properties: [
@@ -1451,7 +1451,7 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 format: "00000000-0000-7000-8000-%012d",
                 521 + index
             )
-            await service.handleEvent(NuxieEvent(
+            await service.handleStoredEvent(NuxieEvent(
                 id: staleOutcomeEventId,
                 name: actionFixture.eventName,
                 distinctId: "customer",
@@ -1500,18 +1500,18 @@ final class JourneyPresentationLifecycleTests: JourneyTestCase {
                 await MainActor.run {
                     presenter.dropPresentationOwnershipForRelaunch()
                 }
-                await service.handleEvent(outcomeEvent)
+                await service.handleStoredEvent(outcomeEvent)
             } else {
                 let outcomeAdmissionGeneration = service.eventAdmissionGeneration()
                 await service.profileDidCommit(snapshot, distinctId: "customer")
-                await service.handleEvent(
+                await service.handleStoredEvent(
                     outcomeEvent,
                     admittedProfileGeneration: outcomeAdmissionGeneration
                 )
                 await MainActor.run {
                     presenter.dropPresentationOwnershipForRelaunch()
                 }
-                await service.handleEvent(outcomeEvent)
+                await service.handleStoredEvent(outcomeEvent)
             }
 
             let completionEvents = events.routedEvents.filter {

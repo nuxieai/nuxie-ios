@@ -1,14 +1,8 @@
 import Foundation
 
-struct JourneyReleasePinReferences: Sendable {
-    let descriptorSHA256s: Set<String>
-    let artifactSHA256s: Set<String>
-}
-
 /// Owns the content-addressed release and artifact files retained by live
-/// device-owned journeys. Callers provide the journal transaction and the
-/// exact references that remain live; this store owns path validation,
-/// bounded I/O, rollback, budgets, and orphan cleanup.
+/// Journeys. SQL references govern collection through CustomerPinFileOwner.
+/// This store prepares validated files within the configured budgets.
 struct JourneyReleasePinStore: Sendable {
     struct PreparedAdmission: Sendable {
         let artifactSHA256s: [String]
@@ -65,14 +59,14 @@ struct JourneyReleasePinStore: Sendable {
     ) throws -> PreparedAdmission {
         let releaseBytes = try ExactJSONCodec.encode(release)
         guard releaseBytes.count <= Self.maximumReleaseBytes else {
-            throw JourneyJournalError.storageLimit
+            throw JourneyExecutionError.storageLimit
         }
         let pinFile = try releasePinFile(descriptorSHA256: descriptorSHA256)
         let pinExisted = FileManager.default.fileExists(atPath: pinFile.path)
         let inventory = try inventory()
         guard inventory.count <= countLimit,
               inventory.totalBytes <= budgetBytes else {
-            throw JourneyJournalError.storageLimit
+            throw JourneyExecutionError.storageLimit
         }
 
         var createdFiles: [URL] = []
@@ -80,7 +74,7 @@ struct JourneyReleasePinStore: Sendable {
         do {
             if pinExisted {
                 guard try loadReleaseBytes(pinFile) == releaseBytes else {
-                    throw JourneyJournalError.invalidState
+                    throw JourneyExecutionError.invalidState
                 }
             } else {
                 let (nextBytes, overflowed) = projectedBytes
@@ -88,7 +82,7 @@ struct JourneyReleasePinStore: Sendable {
                 guard inventory.count < countLimit,
                       !overflowed,
                       nextBytes <= budgetBytes else {
-                    throw JourneyJournalError.storageLimit
+                    throw JourneyExecutionError.storageLimit
                 }
                 try releaseBytes.write(
                     to: pinFile,
@@ -144,75 +138,13 @@ struct JourneyReleasePinStore: Sendable {
         for sha256 in sha256s {
             let file = try artifactPinFile(sha256: sha256)
             guard FileManager.default.fileExists(atPath: file.path) else {
-                throw JourneyJournalError.invalidState
+                throw JourneyExecutionError.invalidState
             }
             objectURLsBySHA256[sha256] = file
         }
         return JourneyPinnedReleaseArtifacts(
             objectURLsBySHA256: objectURLsBySHA256
         )
-    }
-
-    func removeUnreferenced(
-        _ references: JourneyReleasePinReferences
-    ) throws {
-        let fileManager = FileManager.default
-        for file in try fileManager.contentsOfDirectory(
-            at: customerDirectory,
-            includingPropertiesForKeys: nil
-        ) {
-            let sha256 = file.deletingPathExtension().lastPathComponent
-            let isReferencedDescriptor = file.pathExtension == "json"
-                && (try? releasePinFile(descriptorSHA256: sha256)) != nil
-                && references.descriptorSHA256s.contains(sha256)
-            let isReferencedArtifact = file.pathExtension == "artifact"
-                && (try? artifactPinFile(sha256: sha256)) != nil
-                && references.artifactSHA256s.contains(sha256)
-            if !isReferencedDescriptor && !isReferencedArtifact {
-                try fileManager.removeItem(at: file)
-            }
-        }
-    }
-
-    func removeGlobalOrphans(
-        journalRoot: URL,
-        referencesForJournal:
-            (URL) throws -> JourneyReleasePinReferences
-    ) throws {
-        let fileManager = FileManager.default
-        let excluded = customerDirectory.lastPathComponent
-        for directory in try fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: nil
-        ) {
-            let customerDigest = directory.lastPathComponent
-            let attributes = try fileManager.attributesOfItem(
-                atPath: directory.path
-            )
-            guard Self.isLowercaseSHA256(customerDigest),
-                  attributes[.type] as? FileAttributeType == .typeDirectory else {
-                try fileManager.removeItem(at: directory)
-                continue
-            }
-            guard customerDigest != excluded else { continue }
-            let journalFile = journalRoot.appendingPathComponent(
-                "\(customerDigest).json",
-                isDirectory: false
-            )
-            guard fileManager.fileExists(atPath: journalFile.path) else {
-                try fileManager.removeItem(at: directory)
-                continue
-            }
-            guard let references = try? referencesForJournal(journalFile) else {
-                // A transiently unreadable journal may still be recoverable.
-                // Its pins continue to count against the global budget.
-                continue
-            }
-            try removeUnreferenced(
-                references,
-                from: directory
-            )
-        }
     }
 
     static func isLowercaseSHA256(_ value: String) -> Bool {
@@ -224,7 +156,7 @@ struct JourneyReleasePinStore: Sendable {
 
     private func releasePinFile(descriptorSHA256: String) throws -> URL {
         guard Self.isLowercaseSHA256(descriptorSHA256) else {
-            throw JourneyJournalError.invalidState
+            throw JourneyExecutionError.invalidState
         }
         return customerDirectory.appendingPathComponent(
             "\(descriptorSHA256).json",
@@ -244,7 +176,7 @@ struct JourneyReleasePinStore: Sendable {
         directory: URL
     ) throws -> URL {
         guard isLowercaseSHA256(sha256) else {
-            throw JourneyJournalError.invalidState
+            throw JourneyExecutionError.invalidState
         }
         return directory.appendingPathComponent(
             "\(sha256).artifact",
@@ -262,7 +194,7 @@ struct JourneyReleasePinStore: Sendable {
                     + JourneyReleaseLimits.screenCount
                     + 1,
               Set(source.objects.map(\.sha256)).count == source.objects.count else {
-            throw JourneyJournalError.invalidState
+            throw JourneyExecutionError.invalidState
         }
         var declaredBytes = 0
         for object in source.objects {
@@ -270,7 +202,7 @@ struct JourneyReleasePinStore: Sendable {
                   object.sizeBytes > 0,
                   object.sizeBytes
                     <= JourneyReleaseLimits.sceneArtifactBytes else {
-                throw JourneyJournalError.invalidState
+                throw JourneyExecutionError.invalidState
             }
             let (nextBytes, overflowed) = declaredBytes.addingReportingOverflow(
                 object.sizeBytes
@@ -278,7 +210,7 @@ struct JourneyReleasePinStore: Sendable {
             guard !overflowed,
                   nextBytes
                     <= JourneyReleaseLimits.artifactAggregateBytes else {
-                throw JourneyJournalError.storageLimit
+                throw JourneyExecutionError.storageLimit
             }
             declaredBytes = nextBytes
         }
@@ -294,7 +226,7 @@ struct JourneyReleasePinStore: Sendable {
                 )
                 guard retained.digest.byteCount == object.sizeBytes,
                       retained.digest.sha256 == object.sha256 else {
-                    throw JourneyJournalError.invalidState
+                    throw JourneyExecutionError.invalidState
                 }
                 pinned.append(object.sha256)
                 continue
@@ -306,7 +238,7 @@ struct JourneyReleasePinStore: Sendable {
             )
             guard FileManager.default.fileExists(atPath: sourceFile.path) else {
                 if object.required {
-                    throw JourneyJournalError.invalidState
+                    throw JourneyExecutionError.invalidState
                 }
                 continue
             }
@@ -316,12 +248,12 @@ struct JourneyReleasePinStore: Sendable {
             )
             guard acquired.digest.byteCount == object.sizeBytes,
                   acquired.digest.sha256 == object.sha256 else {
-                throw JourneyJournalError.invalidState
+                throw JourneyExecutionError.invalidState
             }
             let (nextBytes, overflowed) = projectedBytes
                 .addingReportingOverflow(acquired.data.count)
             guard !overflowed, nextBytes <= budgetBytes else {
-                throw JourneyJournalError.storageLimit
+                throw JourneyExecutionError.storageLimit
             }
             try acquired.data.write(
                 to: destination,
@@ -359,7 +291,7 @@ struct JourneyReleasePinStore: Sendable {
             guard Self.isLowercaseSHA256(customerDigest),
                   directoryAttributes[.type] as? FileAttributeType
                     == .typeDirectory else {
-                throw JourneyJournalError.invalidState
+                throw JourneyExecutionError.invalidState
             }
             for file in try fileManager.contentsOfDirectory(
                 at: directory,
@@ -374,7 +306,7 @@ struct JourneyReleasePinStore: Sendable {
                         directory: directory
                     )) != nil
                 guard isDescriptor || isArtifact else {
-                    throw JourneyJournalError.invalidState
+                    throw JourneyExecutionError.invalidState
                 }
                 let bytes = try regularFileSize(
                     file,
@@ -385,38 +317,13 @@ struct JourneyReleasePinStore: Sendable {
                 let (nextTotal, overflowed) = totalBytes
                     .addingReportingOverflow(bytes)
                 guard !overflowed else {
-                    throw JourneyJournalError.storageLimit
+                    throw JourneyExecutionError.storageLimit
                 }
                 totalBytes = nextTotal
                 if isDescriptor { count += 1 }
             }
         }
         return (count, totalBytes)
-    }
-
-    private func removeUnreferenced(
-        _ references: JourneyReleasePinReferences,
-        from directory: URL
-    ) throws {
-        let fileManager = FileManager.default
-        for file in try fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        ) {
-            let sha256 = file.deletingPathExtension().lastPathComponent
-            let isReferencedDescriptor = file.pathExtension == "json"
-                && Self.isLowercaseSHA256(sha256)
-                && references.descriptorSHA256s.contains(sha256)
-            let isReferencedArtifact = file.pathExtension == "artifact"
-                && (try? Self.artifactPinFile(
-                    sha256: sha256,
-                    directory: directory
-                )) != nil
-                && references.artifactSHA256s.contains(sha256)
-            if !isReferencedDescriptor && !isReferencedArtifact {
-                try fileManager.removeItem(at: file)
-            }
-        }
     }
 
     private func regularFileSize(
@@ -428,11 +335,11 @@ struct JourneyReleasePinStore: Sendable {
         )
         guard attributes[.type] as? FileAttributeType == .typeRegular,
               let size = attributes[.size] as? NSNumber else {
-            throw JourneyJournalError.invalidState
+            throw JourneyExecutionError.invalidState
         }
         let value = size.int64Value
         guard value >= 0, value <= Int64(maximumBytes) else {
-            throw JourneyJournalError.storageLimit
+            throw JourneyExecutionError.storageLimit
         }
         return Int(value)
     }

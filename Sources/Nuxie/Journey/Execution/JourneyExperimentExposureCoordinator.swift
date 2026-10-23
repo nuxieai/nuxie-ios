@@ -27,7 +27,7 @@ actor JourneyExperimentExposureCoordinator {
     func markShown(
         forRunId runId: String,
         screenId: String,
-        in journal: JourneyRunJournal,
+        in journal: CustomerJourneyStore,
         at date: Date,
         admission: JourneyCommitAdmission
     ) async {
@@ -37,6 +37,8 @@ actor JourneyExperimentExposureCoordinator {
             shownAt: date,
             admission: admission
         )
+        let observedGeneration = generation
+        retainPendingMark(mark, in: journal)
         do {
             guard try await journal.markExperimentExposuresShown(
                 runId,
@@ -47,6 +49,7 @@ actor JourneyExperimentExposureCoordinator {
             removePendingMark(mark, from: journal)
             try await flushPending(in: journal, admission: admission)
         } catch {
+            guard observedGeneration == generation else { return }
             LogWarning(
                 "JourneyExperimentExposureCoordinator: failed to queue shown exposure: \(error)"
             )
@@ -56,23 +59,13 @@ actor JourneyExperimentExposureCoordinator {
     }
 
     @discardableResult
-    func flushPending(
-        in journal: JourneyRunJournal,
-        admission: JourneyCommitAdmission? = nil
-    ) async throws -> Bool {
-        do {
-            let settled = try await JourneyExperimentExposureReporter(
-                journal: journal,
-                events: events
-            ).flushPending(admission: admission)
-            if !settled {
-                await scheduleRetry(for: journal)
-            }
-            return settled
-        } catch {
-            await scheduleRetry(for: journal)
-            throw error
+    func flushPending(in journal: CustomerJourneyStore, admission: JourneyCommitAdmission? = nil) async throws -> Bool {
+        let marks = pendingMarks[journal.distinctId].map { Array($0.values) } ?? []
+        for mark in marks {
+            guard try await journal.markExperimentExposuresShown(mark.runId, screenId: mark.screenId, at: mark.shownAt, admission: mark.admission) else { return false }
+            removePendingMark(mark, from: journal)
         }
+        return true
     }
 
     func cancelPendingPublication() {
@@ -80,7 +73,7 @@ actor JourneyExperimentExposureCoordinator {
         pendingMarks.removeAll()
     }
 
-    private func scheduleRetry(for journal: JourneyRunJournal) async {
+    private func scheduleRetry(for journal: CustomerJourneyStore) async {
         let generation = generation
         await events.enqueueJourneyWork(.init(key: .init(distinctId: journal.distinctId, id: "exposure-publication"),
             operation: { [weak self] in
@@ -90,7 +83,7 @@ actor JourneyExperimentExposureCoordinator {
     }
 
     private func retryOnce(
-        in journal: JourneyRunJournal, generation: UInt64
+        in journal: CustomerJourneyStore, generation: UInt64
     ) async -> JourneyQueueResult {
         guard generation == self.generation else { return .done }
         var markFailed = false
@@ -112,32 +105,13 @@ actor JourneyExperimentExposureCoordinator {
                 )
             }
         }
-        do {
-            let settled = try await JourneyExperimentExposureReporter(
-                journal: journal,
-                events: events
-            ).flushPending()
-            try await JourneyReporter(
-                journal: journal,
-                events: events
-            ).flushPending()
-            let reportsPending = try await journal.runs().contains { !$0.startedQueued || $0.completion != nil }
-            if settled && !markFailed && !reportsPending
-                    && pendingMarks[journalKey]?.isEmpty != false {
-                _ = try await journal.finalizeRevocation()
-                return .done
-            }
-        } catch {
-            LogWarning(
-                "JourneyExperimentExposureCoordinator: exposure retry remains pending: \(error)"
-            )
-        }
+        if !markFailed && pendingMarks[journalKey]?.isEmpty != false { return .done }
         return .failed
     }
 
     private func retainPendingMark(
         _ mark: PendingMark,
-        in journal: JourneyRunJournal
+        in journal: CustomerJourneyStore
     ) {
         pendingMarks[journal.distinctId, default: [:]][
             pendingMarkKey(mark)
@@ -146,7 +120,7 @@ actor JourneyExperimentExposureCoordinator {
 
     private func removePendingMark(
         _ mark: PendingMark,
-        from journal: JourneyRunJournal
+        from journal: CustomerJourneyStore
     ) {
         let journalKey = journal.distinctId
         pendingMarks[journalKey]?.removeValue(forKey: pendingMarkKey(mark))

@@ -4,7 +4,7 @@ import XCTest
 @testable import Nuxie
 
 /// Independent SQL fixtures describe the shipped v4 layout and observable rows.
-final class CustomerStoreTestDatabase {
+final class CustomerStoreTestDatabase: @unchecked Sendable {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("CustomerStore-\(UUID().uuidString)")
     var databaseURL: URL { root.appendingPathComponent("nuxie/events.db") }
 

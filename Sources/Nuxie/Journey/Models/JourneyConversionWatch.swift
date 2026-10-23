@@ -30,17 +30,47 @@ struct JourneyConversionWatch: Codable, Sendable {
     let versionId: String
     let policyHash: String
     let goal: Goal
+    struct EntryContext: Codable, Sendable {
+        let context: ArmedJourney.Context
+        let customer: ExactJSONObject<JourneyReleaseJSONValue>
+        let formAnswers: ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>
+
+        init(context: ArmedJourney.Context, customer: ExactJSONObject<JourneyReleaseJSONValue>) {
+            self.context = context
+            self.customer = customer
+            formAnswers = context.formAnswers
+        }
+
+        private enum CodingKeys: String, CodingKey { case context, customer, formAnswers }
+        init(from decoder: Decoder) throws {
+            let row = try decoder.container(keyedBy: CodingKeys.self)
+            context = try row.decode(ArmedJourney.Context.self, forKey: .context)
+            customer = try row.decode(ExactJSONObject<JourneyReleaseJSONValue>.self, forKey: .customer)
+            formAnswers = try row.decodeIfPresent(ExactJSONObject<ExactJSONObject<JourneyReleaseJSONValue>>.self, forKey: .formAnswers) ?? [:]
+        }
+    }
+    let entryContext: EntryContext
     let startedAt: Int
     var basis: Occurrence?
     var conversion: Occurrence?
     var serverRevision: Int?
     var legCompletedAt: Int?
+    var expiresAt: Int?
+    var retainUntil: Int { (expiresAt ?? (startedAt + 90 * 86_400_000)) + Self.backdateMillis }
+
+    init(journeyId: String, experienceId: String, versionId: String, policyHash: String, goal: Goal, entryContext: EntryContext, startedAt: Int, basis: Occurrence?, conversion: Occurrence?, serverRevision: Int?, legCompletedAt: Int?, expiresAt: Int?) {
+        self.journeyId = journeyId; self.experienceId = experienceId; self.versionId = versionId
+        self.policyHash = policyHash; self.goal = goal; self.entryContext = entryContext; self.startedAt = startedAt
+        self.basis = basis; self.conversion = conversion; self.serverRevision = serverRevision
+        self.legCompletedAt = legCompletedAt; self.expiresAt = expiresAt
+    }
 
     init(run: JourneyRun, policy: Journey.Policy, delivery: ArmedJourney.Conversion?) throws {
-        guard let raw = policy.goal else { throw JourneyJournalError.invalidState }
+        guard let raw = policy.goal else { throw JourneyExecutionError.invalidState }
         goal = try ExactJSONCodec.decode(Goal.self, from: ExactJSONCodec.encode(raw))
-        guard goal.windowMillis != nil else { throw JourneyJournalError.invalidState }
-        if !run.isEnrollment && delivery == nil { throw JourneyJournalError.invalidState }
+        guard goal.windowMillis != nil else { throw JourneyExecutionError.invalidState }
+        if !run.isEnrollment && delivery == nil { throw JourneyExecutionError.invalidState }
+        entryContext = .init(context: run.context, customer: run.executionSnapshot.customer ?? [:])
         journeyId = run.journeyId
         experienceId = run.reference.experienceId
         versionId = run.reference.versionId
@@ -48,23 +78,46 @@ struct JourneyConversionWatch: Codable, Sendable {
         startedAt = delivery?.startedAt ?? Self.millis(run.startedAt)
         if goal.attribution.basis == .entry {
             basis = .init(eventId: journeyId, occurredAt: startedAt)
+            expiresAt = startedAt + (goal.windowMillis ?? 0)
         }
         if let delivery { try reconcile(delivery) }
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case journeyId, experienceId, versionId, policyHash, goal, entryContext, startedAt, basis, conversion, serverRevision, legCompletedAt, expiresAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let row = try decoder.container(keyedBy: CodingKeys.self)
+        journeyId = try row.decode(String.self, forKey: .journeyId)
+        experienceId = try row.decode(String.self, forKey: .experienceId)
+        versionId = try row.decode(String.self, forKey: .versionId)
+        policyHash = try row.decode(String.self, forKey: .policyHash)
+        goal = try row.decode(Goal.self, forKey: .goal)
+        entryContext = try row.decodeIfPresent(EntryContext.self, forKey: .entryContext) ?? .init(context: .init(event: [:], responses: [:]), customer: [:])
+        startedAt = try row.decode(Int.self, forKey: .startedAt)
+        basis = try row.decodeIfPresent(Occurrence.self, forKey: .basis)
+        conversion = try row.decodeIfPresent(Occurrence.self, forKey: .conversion)
+        serverRevision = try row.decodeIfPresent(Int.self, forKey: .serverRevision)
+        legCompletedAt = try row.decodeIfPresent(Int.self, forKey: .legCompletedAt)
+        let window = goal.windowMillis ?? 0
+        expiresAt = try row.decodeIfPresent(Int.self, forKey: .expiresAt) ?? basis.map { $0.occurredAt + window }
+    }
+
     mutating func reconcile(_ delivery: ArmedJourney.Conversion) throws {
-        guard delivery.startedAt == startedAt, let window = goal.windowMillis else { throw JourneyJournalError.invalidState }
+        guard delivery.startedAt == startedAt, let window = goal.windowMillis else { throw JourneyExecutionError.invalidState }
         if let serverRevision, delivery.revision <= serverRevision { return }
         if let basis = delivery.basis {
-            guard basis.occurredAt >= startedAt else { throw JourneyJournalError.invalidState }
+            guard basis.occurredAt >= startedAt else { throw JourneyExecutionError.invalidState }
             if goal.attribution.basis == .entry && (basis.occurredAt != startedAt || basis.eventId != journeyId) {
-                throw JourneyJournalError.invalidState
+                throw JourneyExecutionError.invalidState
             }
-        } else if goal.attribution.basis == .entry { throw JourneyJournalError.invalidState }
+        } else if goal.attribution.basis == .entry { throw JourneyExecutionError.invalidState }
         if let converted = delivery.conversion {
             guard let basis = delivery.basis, converted.occurredAt >= basis.occurredAt,
-                  converted.occurredAt <= basis.occurredAt + window else { throw JourneyJournalError.invalidState }
+                  converted.occurredAt <= basis.occurredAt + window else { throw JourneyExecutionError.invalidState }
         }
+        expiresAt = delivery.basis.map { $0.occurredAt + window }
         basis = delivery.basis
         conversion = delivery.conversion
         serverRevision = delivery.revision
@@ -78,23 +131,25 @@ struct JourneyConversionWatch: Codable, Sendable {
         case .event:
             guard event.name == goal.criterion.eventName else { return false }
         case .segmentEnter:
-            return event.name == "$segment_entered" && event.properties["segment_id"] as? String == goal.criterion.segmentId
+            guard event.name == "$segment_entered", event.properties["segment_id"] as? String == goal.criterion.segmentId else { return false }
         case .segmentLeave:
-            return event.name == "$segment_exited" && event.properties["segment_id"] as? String == goal.criterion.segmentId
+            guard event.name == "$segment_exited", event.properties["segment_id"] as? String == goal.criterion.segmentId else { return false }
         }
         guard let condition = goal.criterion.condition else { return true }
         do {
             let ir = try ExactJSONCodec.decode(IREnvelope.self, from: ExactJSONCodec.encode(condition))
             guard ir.ir_version == 1, ir.isSupportedByThisEngine else { return false }
-            return try await IRInterpreter(ctx: EvalContext(now: event.timestamp, event: event, journeyId: journeyId)).evalBool(ir.expr)
+            let responses = entryContext.context.responses.dictionary.mapValues(\.measurementValue)
+            let forms = entryContext.formAnswers.dictionary.mapValues { $0.dictionary.mapValues(\.measurementValue) }
+            return try await IRInterpreter(ctx: EvalContext(now: event.timestamp,
+                user: ConversionEntryProperties(values: entryContext.customer), event: event, journeyId: journeyId,
+                responseValues: responses, formAnswers: forms)).evalBool(ir.expr)
         } catch { return false }
     }
 
     func shouldRetain(at now: Int, executing: Bool) -> Bool {
         if executing { return true }
-        let expires = basis.map { $0.occurredAt + (goal.windowMillis ?? 0) }
-            ?? legCompletedAt ?? (startedAt + 90 * 86_400_000)
-        return now <= expires + Self.backdateMillis
+        return now <= retainUntil
     }
 
     // Date stores seconds relative to 2001. Converting an integral wire
@@ -132,6 +187,7 @@ struct JourneyConversionWatch: Codable, Sendable {
            watch.goal.attribution.basis == .firstShown, time >= watch.startedAt,
            watch.basis == nil {
             watch.basis = .init(eventId: event.id, occurredAt: time)
+            watch.expiresAt = time + (watch.goal.windowMillis ?? 0)
             watches[reportedJourney] = watch
         }
         let direct = event.journeyOrigin?.journeyId
@@ -153,5 +209,25 @@ struct JourneyConversionWatch: Codable, Sendable {
         guard var selected = eligible.first, selected.conversion == nil else { return }
         selected.conversion = .init(eventId: event.id, occurredAt: time)
         watches[selected.journeyId] = selected
+    }
+}
+
+
+private struct ConversionEntryProperties: IRUserProps {
+    let values: ExactJSONObject<JourneyReleaseJSONValue>
+    func userProperty(for key: String) async -> Any? { values[key].flatMap(journeyFoundationValue) }
+}
+
+
+private extension JourneyReleaseJSONValue {
+    var measurementValue: ScreenEmissionValue {
+        switch self {
+        case .null: return .null
+        case .bool(let value): return .bool(value)
+        case .number(let value): return .number(value)
+        case .string(let value): return .string(value)
+        case .array(let values): return .array(values.map(\.measurementValue))
+        case .object(let values): return .object(values.dictionary.mapValues(\.measurementValue))
+        }
     }
 }

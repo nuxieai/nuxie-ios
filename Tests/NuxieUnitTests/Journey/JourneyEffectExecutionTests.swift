@@ -60,11 +60,11 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
             journalDirectory: directory, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        await events.subscribeCommitted { event in await service.handleStoredEvent(event) }
         events.track("startup_trigger")
         await service.prepareForEvents()
         let configuration = NuxieConfiguration(apiKey: "startup-test")
@@ -93,7 +93,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             entry: .init(type: .event, eventName: "startup_trigger", segmentId: nil, member: nil, condition: nil),
             reentry: .init(type: .everyMatch, window: nil)
         )
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let retained = try await journal.admit(
             arm: XCTUnwrap(snapshot.profile.armedLegs.first),
             release: XCTUnwrap(snapshot.profile.releases.first),
@@ -113,11 +113,11 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
             journalDirectory: directory, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        await events.subscribeCommitted { event in await service.handleStoredEvent(event) }
         events.track("startup_trigger")
         await service.prepareForEvents()
         let configuration = NuxieConfiguration(apiKey: "warm-outbox-test")
@@ -160,11 +160,11 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
             journalDirectory: directory, storageScope: nil, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         await events.deferCommittedRouting()
-        await events.subscribeCommitted { event in await service.handleEvent(event) }
+        await events.subscribeCommitted { event in await service.handleStoredEvent(event) }
         await service.prepareForEvents()
         let configuration = NuxieConfiguration(apiKey: "startup-test")
         configuration.testingOverrides.suppressBackgroundWork = true
@@ -304,7 +304,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
             journalDirectory: directory, storageScope: nil, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         await subscribeLikeTheSDK(events, service)
@@ -390,7 +390,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
             journalDirectory: directory, storageScope: nil, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         let routed = RoutedEventNames()
@@ -453,7 +453,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
             journalDirectory: directory, storageScope: nil, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         await subscribeLikeTheSDK(events, service)
@@ -516,7 +516,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             dateProvider: MockDateProvider(), sleepProvider: MockSleepProvider(),
             journalDirectory: directory, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         await service.profileDidCommit(snapshot, distinctId: "customer-a")
@@ -543,7 +543,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
         }
         await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, admitted in
             await observe?(event.name)
-            return await service.handleEvent(event, admittedProfileGeneration: admitted)
+            return await service.handleStoredEvent(event, admittedProfileGeneration: admitted)
         }
     }
 
@@ -899,7 +899,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             id: "00000000-0000-7000-8000-000000000201",
             name: "check_inventory",
             distinctId: "customer",
@@ -975,7 +975,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             events.routedEvents.last?.properties["outcome"] as? String,
             "opted_out"
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1020,7 +1020,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             events.routedEvents.last?.properties["outcome"] as? String,
             "completed"
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1110,7 +1110,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
 
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
-        await service.handleEvent(NuxieEvent(
+        await service.handleStoredEvent(NuxieEvent(
             id: "00000000-0000-7000-8000-000000000202",
             name: "check_inventory",
             distinctId: "customer",
@@ -1311,7 +1311,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
                 events: events
             ),
             pinnedReleaseAuthenticator: {
-                _, _ in throw JourneyJournalError.invalidState
+                _, _ in throw JourneyExecutionError.invalidState
             },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed),
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!
@@ -1328,7 +1328,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
             },
             [JourneyEvents.journeyStarted, JourneyEvents.journeyCompleted]
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1359,7 +1359,7 @@ final class JourneyEffectExecutionTests: JourneyTestCase {
                 events: events
             ),
             pinnedReleaseAuthenticator: {
-                _, _ in throw JourneyJournalError.invalidState
+                _, _ in throw JourneyExecutionError.invalidState
             },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed),
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!

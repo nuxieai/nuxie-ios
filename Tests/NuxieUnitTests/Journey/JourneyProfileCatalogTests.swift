@@ -245,7 +245,7 @@ final class JourneyProfileCatalogTests: JourneyTestCase {
             await service.profileDidCommit(try XCTUnwrap(current), distinctId: "customer")
             clock.advance(by: 100)
         }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let watches = try await journal.conversionWatches()
         let oldWatch = try XCTUnwrap(watches.values.first { $0.versionId == "version_earlier" })
         let newWatch = try XCTUnwrap(watches.values.first { $0.versionId == "version_current" })
@@ -260,7 +260,7 @@ final class JourneyProfileCatalogTests: JourneyTestCase {
             _ = await events.captureAndRouteSystemEvent(.init(name: name, properties: nil,
                 eventId: id, distinctId: "customer"), occurredAt: Date(timeIntervalSince1970: seconds), admission: admission)
             let event = try XCTUnwrap(events.routedEvents.first { $0.id == id })
-            await service.handleEvent(event)
+            await service.handleStoredEvent(event)
         }
         try await deliver("earlier_done", id: "outside-earlier-window", at: 1_120)
         try await deliver("newer_done", id: "newer-outcome", at: 1_120)
@@ -269,7 +269,7 @@ final class JourneyProfileCatalogTests: JourneyTestCase {
         XCTAssertEqual(afterNew[newWatch.journeyId]?.conversion?.eventId, "newer-outcome")
         try await deliver("earlier_done", id: "delayed-earlier-outcome", at: 1_010)
         try await deliver("earlier_done", id: "delayed-earlier-outcome", at: 1_010)
-        let retained = try await JourneyRunJournal(directory: directory, distinctId: "customer").conversionWatches()
+        let retained = try await CustomerJourneyStore(directory: directory, distinctId: "customer").conversionWatches()
         XCTAssertEqual(retained[oldWatch.journeyId]?.conversion?.eventId, "delayed-earlier-outcome")
         XCTAssertEqual(retained[newWatch.journeyId]?.conversion?.eventId, "newer-outcome")
         await service.shutdown()

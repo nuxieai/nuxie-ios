@@ -5,125 +5,60 @@ import XCTest
 @testable import NuxieTestSupport
 #endif
 
-final class JourneyRunJournalTests: XCTestCase {
+final class CustomerJourneyStoreTests: XCTestCase {
     func testTimedResumePersistsOnlyEventContextBeforeRecoveryAndReporting() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let candidate = arm()
-        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
-            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
-            entryStepId: "wait", at: date(100))
-        let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
-        try await journal.transition(run.id, stepId: "wait", context: run.context,
-            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
-        let stored = try await journal.runs()
-        let park = try XCTUnwrap(stored.first?.park)
-        let fence = JourneyProfileFence()
-        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
-            executionFence: fence, executionFenceToken: fence.token())
-        // Timed outlet evaluation carries the native values loaded by useNativeValues.
-        let context = ArmedJourney.Context(event: ["public_input": .string("kept")],
-            responses: ["private_native_value": .string("must never be reported")])
-        let resumed = try await journal.resumeParked(run.id, expectedStepId: "wait", expectedPark: park,
-            advancingTo: ("next_step", context), admission: admission)
-        XCTAssertNotNil(resumed)
-
-        // Reopen immediately: the process died before the next transition or completion boundary.
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let persisted = try await reopened.runs()
-        let cursor = try XCTUnwrap(persisted.first)
-        XCTAssertEqual(cursor.stepId, "next_step")
-        XCTAssertNil(cursor.park)
-        XCTAssertEqual(cursor.context.event, context.event)
-        XCTAssertTrue(cursor.context.responses.isEmpty)
-        let resumable = try await reopened.recover(at: date(210))
+        let rig = try await CustomerExecutionTestRig(.wait)
+        defer { try? FileManager.default.removeItem(at: rig.disk.root) }
+        _ = try await rig.store.executeCustomerCommand(rig.command)
+        await rig.reopen()
+        let facade = try await CustomerJourneyStore(directory: rig.disk.root, distinctId: "customer", store: rig.store)
+        let resumable = try await facade.recover(at: date(210))
         XCTAssertTrue(resumable.isEmpty)
-        let recovered = try await reopened.runs()
-        let abandoned = try XCTUnwrap(recovered.first)
-        XCTAssertEqual(abandoned.completion?.outcome, "abandoned")
-        // No completion boundary selected declared outputs before the crash.
-        XCTAssertTrue(abandoned.outputs.event.isEmpty)
-        XCTAssertTrue(abandoned.outputs.responses.isEmpty)
-
-        let events = MockEventLog()
-        try await JourneyReporter(journal: reopened, events: events).flushPending()
-        let completion = try XCTUnwrap(events.routedEvents.first { $0.name == JourneyEvents.journeyCompleted })
-        XCTAssertEqual(completion.properties["outcome"] as? String, "abandoned")
-        let outputs = try XCTUnwrap(completion.properties["outputs"] as? [String: Any])
-        XCTAssertTrue(try XCTUnwrap(outputs["event"] as? [String: Any]).isEmpty)
-        XCTAssertTrue(try XCTUnwrap(outputs["responses"] as? [String: Any]).isEmpty)
+        let reports = try await facade.reports()
+        XCTAssertEqual(reports.count, 1)
+        XCTAssertEqual(reports.first?.getPropertiesDict()["outcome"] as? String, "abandoned")
+        let outputs = reports.first?.getPropertiesDict()["outputs"] as? [String: Any]
+        XCTAssertTrue((outputs?["responses"] as? [String: Any])?.isEmpty == true)
+        await rig.store.close()
     }
 
     func testParkedCandidatesFromStaleObserversAreNotLost() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let candidate = arm()
-        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
-            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
-            entryStepId: "wait", at: date(100))
-        let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
-        try await journal.transition(run.id, stepId: "wait", context: run.context,
-            checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
-        let read = try await journal.runs()
-        let park = try XCTUnwrap(read.first?.park)
-        let fence = JourneyProfileFence()
-        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(), executionFence: fence, executionFenceToken: fence.token())
-        let rejected = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 101_000, properties: ["allowed": .bool(false)])
-        let accepted = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 102_000, properties: ["allowed": .bool(true)])
-        _ = try await journal.appendParkedCandidate(run.id, expectedStepId: "wait", expectedPark: park,
-            event: rejected, admission: admission)
-        _ = try await journal.appendParkedCandidate(run.id, expectedStepId: "wait", expectedPark: park,
-            event: accepted, admission: admission)
-        let after = try await journal.runs()
-        XCTAssertEqual(after.first?.park?.candidateEvents, [rejected, accepted])
-        _ = try await journal.removeParkedCandidates(run.id, expectedStepId: "wait", expectedPark: park,
-            evaluated: [rejected], admission: admission)
-        let remaining = try await journal.runs()
-        XCTAssertEqual(remaining.first?.park?.candidateEvents, [accepted])
+        let rig = try await CustomerExecutionTestRig(.wait)
+        defer { try? FileManager.default.removeItem(at: rig.disk.root) }
+        try await rig.facade.captureFixtureInput(id: "later", name: "unlock", at: date(102), properties: ["allowed": true])
+        try await rig.facade.captureFixtureInput(id: "earlier", name: "unlock", at: date(101), properties: ["allowed": false])
+        await rig.reopen()
+        let rows = try await rig.store.customerLogPage(owner: rig.owner, name: "unlock", startedAt: 100_000, deadlineAt: 200_000, after: nil, limit: 128)
+        XCTAssertEqual(rows.map(\.id), ["earlier", "later"])
+        let active = try await rig.store.activeJourneys(owner: rig.owner)
+        XCTAssertNotNil(active.first?.park)
+        await rig.store.close()
     }
 
-
     func testPendingWaitEventDoesNotAcknowledgeADifferentCandidate() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let candidate = arm()
-        let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
-            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
-            entryStepId: "wait", at: date(100))
-        let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
-        let checkpoint = JourneyControlExecutor.Checkpoint(anchorAtMillis: 100_000, wakeAtMillis: 200_000)
-        try await journal.transition(run.id, stepId: "wait", context: run.context, checkpoint: checkpoint)
-        let fence = JourneyProfileFence()
-        let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
-            executionFence: fence, executionFenceToken: fence.token())
-        let first = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 101_000, properties: ["choice": .string("A")])
-        let second = JourneyControlExecutor.Event(name: "unlock", occurredAtMillis: 102_000, properties: ["choice": .string("B")])
-        let firstAccepted = try await journal.stageParkedEvent(run.id, expectedStepId: "wait",
-            expectedCheckpoint: checkpoint, event: first, admission: admission)
-        let secondAccepted = try await journal.stageParkedEvent(run.id, expectedStepId: "wait",
-            expectedCheckpoint: checkpoint, event: second, admission: admission)
-        XCTAssertTrue(firstAccepted)
-        XCTAssertFalse(secondAccepted)
-        let stored = try await journal.runs()
-        XCTAssertEqual(stored.first?.park?.pendingEvent, first)
+        let rig = try await CustomerExecutionTestRig(.wait)
+        defer { try? FileManager.default.removeItem(at: rig.disk.root) }
+        _ = try await rig.store.executeCustomerCommand(rig.command)
+        let first = try await rig.store.activeJourneys(owner: rig.owner)
+        XCTAssertEqual(first.first?.lastConsumed?.eventId, "matched")
+        let replay = try await rig.store.executeCustomerCommand(rig.command)
+        XCTAssertTrue(replay.replayed)
+        let second = try await rig.store.activeJourneys(owner: rig.owner)
+        XCTAssertEqual(second.first?.cursorRevision, first.first?.cursorRevision)
+        XCTAssertEqual(second.first?.stepId, first.first?.stepId)
+        await rig.store.close()
     }
 
     func testTimedResumePersistsOutletWithCheckpointConsumptionOrKeepsTheParkOnFailure() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let candidate = arm()
         let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
             executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait", at: date(100))
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         try await journal.transition(run.id, stepId: "wait", context: run.context,
             checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
         let parkedRuns = try await journal.runs()
@@ -131,7 +66,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let fence = JourneyProfileFence()
         let admission = JourneyCommitAdmission.executionOnly(identity: MockIdentityService(),
             executionFence: fence, executionFenceToken: fence.token())
-        let failing = try JourneyRunJournal(directory: directory, distinctId: "customer", beforePersist: {
+        let failing = try await CustomerJourneyStore(directory: directory, distinctId: "customer", beforePersist: {
             throw CocoaError(.fileWriteOutOfSpace)
         })
         do {
@@ -146,7 +81,7 @@ final class JourneyRunJournalTests: XCTestCase {
             advancingTo: ("timed_out", run.context), admission: admission)
         XCTAssertEqual(resumed?.stepId, "timed_out")
         XCTAssertNil(resumed?.park)
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let persisted = try await reopened.runs()
         XCTAssertEqual(persisted.first?.stepId, "timed_out")
         XCTAssertNil(persisted.first?.park)
@@ -155,13 +90,13 @@ final class JourneyRunJournalTests: XCTestCase {
     func testStaleResumeCannotConsumeALaterWait() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let candidate = arm()
         let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
             executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait", at: date(100))
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         try await journal.transition(run.id, stepId: "wait", context: run.context,
             checkpoint: .init(anchorAtMillis: 100_000, wakeAtMillis: 200_000))
         let read = try await journal.runs()
@@ -185,7 +120,7 @@ final class JourneyRunJournalTests: XCTestCase {
             for queued in [false, true] {
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 defer { try? FileManager.default.removeItem(at: directory) }
-                let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+                let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
                 let candidate = arm()
                 let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
                     executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
@@ -217,7 +152,7 @@ final class JourneyRunJournalTests: XCTestCase {
     func testResponseSaveSequenceAndNewestSheetSurviveRunCompletionAndRestart() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let candidate = arm()
         let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
             executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
@@ -230,10 +165,10 @@ final class JourneyRunJournalTests: XCTestCase {
         let other = try await journal.reserveResponseSave(run: run, formName: "onboarding", answers: [:], queued: true)
         XCTAssertEqual(other.sequence, 1)
         try await journal.confirmResponseSave(one, storedSequence: 1)
-        try await journal.markStartedQueued(run)
+
         try await journal.complete(run.id, outcome: "done", at: date(200))
-        try await journal.markCompletionQueued(run)
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "anon")
+
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let pending = try await reopened.pendingResponseSaves()
         XCTAssertEqual(pending.count, 2)
         XCTAssertEqual(pending.first { $0.formName == "feedback" }?.answers, ["stars": .number(3)])
@@ -261,27 +196,28 @@ final class JourneyRunJournalTests: XCTestCase {
     func testRestartAbandonsAnUnsettledSynchronousCommerceReceipt() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let candidate = arm()
         let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
             executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "buy", at: date(100))
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         _ = try await journal.claimEffect(run.id, stepId: "buy")
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let resumable = try await reopened.recover(at: date(200))
-        let recoveredRuns = try await reopened.runs()
+        let recoveredRuns = try await reopened.terminalRecords()
         let recovered = try XCTUnwrap(recoveredRuns.first { $0.id == run.id })
         XCTAssertTrue(resumable.isEmpty)
-        XCTAssertEqual(recovered.completion?.outcome, "abandoned")
-        XCTAssertNil(recovered.pendingCommerce)
+        XCTAssertEqual(recovered.outcome, "abandoned")
+        let active = try await reopened.runs()
+        XCTAssertTrue(active.isEmpty)
     }
 
     func testResponseSaveFailedPersistenceKeepsSequenceSheetAndOriginalOwner() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "anon")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
         let candidate = arm()
         let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
             executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
@@ -290,7 +226,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let values = try ExactJSONCodec.decode(ExactJSONObject<JourneyReleaseJSONValue>.self,
             from: Data(#"{"é":1,"e\u0301":2,"__proto__":"kept","empty":"","invalid_email":"x","null":null}"#.utf8))
         _ = try await journal.reserveResponseSave(run: run, formName: "feedback", answers: values, queued: true)
-        let failing = try JourneyRunJournal(directory: directory, distinctId: "anon", beforePersist: {
+        let failing = try await CustomerJourneyStore(directory: directory, distinctId: "anon", beforePersist: {
             throw CocoaError(.fileWriteOutOfSpace)
         })
         do {
@@ -301,7 +237,7 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertEqual(pending.map(\.sequence), [1])
         XCTAssertEqual(pending.first?.answers, values)
         XCTAssertEqual(pending.first?.answers.count, 6)
-        let signedIn = try JourneyRunJournal(directory: directory, distinctId: "signed-in")
+        let signedIn = try await CustomerJourneyStore(directory: directory, distinctId: "signed-in")
         do {
             _ = try await signedIn.reserveResponseSave(run: run, formName: "feedback", answers: [:], queued: true)
             XCTFail("The new customer's journal cannot save the old customer's run")
@@ -314,17 +250,17 @@ final class JourneyRunJournalTests: XCTestCase {
     func testConversionWatchSurvivesCompletionAndReopeningWithoutReleasePin() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let candidate = arm()
         let policy = try ExactJSONCodec.decode(Journey.Policy.self, from: Data(#"{"entry":{"trigger":{"type":"event","eventName":"start"},"frequency":{"type":"every_match"}},"goal":{"criterion":{"type":"event","eventName":"done"},"attribution":{"basis":"entry","window":{"amount":1,"unit":"day"}}},"exitWhenAny":[]}"#.utf8))
         let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
             executionSnapshot: testJourneyExecutionSnapshot(), reentry: policy.entry.frequency,
             policy: policy, entryStepId: "step", at: date(100))
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         try await journal.complete(run.id, outcome: "done", at: date(200))
-        try await journal.markCompletionQueued(run)
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let runs = try await reopened.runs()
         XCTAssertTrue(runs.isEmpty)
         let pin = try await reopened.releasePin(descriptorSHA256: candidate.reference.descriptorSha256)
@@ -343,15 +279,17 @@ final class JourneyRunJournalTests: XCTestCase {
         let staleAdmission = JourneyCommitAdmission(identity: identity, identityFenceToken: identityFence.token,
             executionFence: executionFence, executionFenceToken: executionFence.token())
         _ = executionFence.advance()
+        try await reopened.captureFixtureInput(id: event.id, name: event.name, at: event.timestamp, properties: event.properties)
         let rejectedCommit = try await reopened.recordConversionOccurrence(event, acceptedAt: date(300), matching: [run.journeyId], admission: staleAdmission)
         XCTAssertFalse(rejectedCommit)
         let rejected = try await reopened.conversionWatches()
         XCTAssertNil(rejected[run.journeyId]?.conversion)
         let admission = JourneyCommitAdmission(identity: identity, identityFenceToken: identityFence.token,
             executionFence: executionFence, executionFenceToken: executionFence.token())
+        try await reopened.captureFixtureInput(id: event.id, name: event.name, at: event.timestamp, properties: event.properties)
         let committed = try await reopened.recordConversionOccurrence(event, acceptedAt: date(300), matching: [run.journeyId], admission: admission)
         XCTAssertTrue(committed)
-        let persisted = try await JourneyRunJournal(directory: directory, distinctId: "customer").conversionWatches()
+        let persisted = try await CustomerJourneyStore(directory: directory, distinctId: "customer").conversionWatches()
         XCTAssertEqual(persisted[run.journeyId]?.conversion?.eventId, "outcome")
         // Simulate a crash before inbox acknowledgement. A newer eligible
         // continuation arrives before replay; the same occurrence must not
@@ -363,7 +301,8 @@ final class JourneyRunJournalTests: XCTestCase {
             executionSnapshot: testJourneyExecutionSnapshot(), reentry: policy.entry.frequency,
             policy: policy, entryStepId: "step", at: date(400))
         XCTAssertNotNil(continued)
-        let retryJournal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let retryJournal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
+        try await retryJournal.captureFixtureInput(id: event.id, name: event.name, at: event.timestamp, properties: event.properties)
         let retry = try await retryJournal.recordConversionOccurrence(event, acceptedAt: date(300),
             matching: [run.journeyId, "another"], admission: admission, processingAt: date(400))
         XCTAssertTrue(retry)
@@ -377,7 +316,7 @@ final class JourneyRunJournalTests: XCTestCase {
     func testReturningCustomerCanMeasureAnAbandonedJourneyWithoutResumingIt() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let candidate = arm()
         let policy = try ExactJSONCodec.decode(Journey.Policy.self, from: Data(#"{"entry":{"trigger":{"type":"event","eventName":"start"},"frequency":{"type":"every_match"}},"goal":{"criterion":{"type":"event","eventName":"done"},"attribution":{"basis":"entry","window":{"amount":1,"unit":"day"}}},"exitWhenAny":[]}"#.utf8))
         let admitted = try await journal.admit(arm: candidate, release: release(for: candidate.reference),
@@ -393,6 +332,7 @@ final class JourneyRunJournalTests: XCTestCase {
         identity.setDistinctId("other")
         try await journal.abandonAll(at: date(200))
         let event = NuxieEvent(id: "late", name: "done", distinctId: "customer", timestamp: date(300))
+        try await journal.captureFixtureInput(id: event.id, name: event.name, at: event.timestamp, properties: event.properties)
         let rejected = try await journal.recordConversionOccurrence(event, acceptedAt: date(300),
             matching: [run.journeyId], admission: oldAdmission)
         XCTAssertFalse(rejected)
@@ -400,14 +340,17 @@ final class JourneyRunJournalTests: XCTestCase {
         let returned = try XCTUnwrap(identity.performWithCurrentIdentityFence("customer", { _ in () }))
         let newAdmission = JourneyCommitAdmission(identity: identity, identityFenceToken: returned.token,
             executionFence: execution, executionFenceToken: execution.token())
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
+        try await reopened.captureFixtureInput(id: event.id, name: event.name, at: event.timestamp, properties: event.properties)
         let measured = try await reopened.recordConversionOccurrence(event, acceptedAt: date(300),
             matching: [run.journeyId], admission: newAdmission)
         XCTAssertTrue(measured)
         let watches = try await reopened.conversionWatches()
         XCTAssertEqual(watches[run.journeyId]?.conversion?.eventId, "late")
         let runs = try await reopened.runs()
-        XCTAssertEqual(runs.first?.completion?.outcome, "abandoned")
+        XCTAssertTrue(runs.isEmpty)
+        let reports = try await reopened.terminalRecords()
+        XCTAssertEqual(reports.first?.outcome, "abandoned")
     }
 
     func testConversionOccurrenceTimeAdmission() {
@@ -434,7 +377,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let commerceBytes = Data("verified purchase evidence".utf8)
         try commerceBytes.write(to: commerceFile)
 
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let runs = try await journal.runs()
         XCTAssertTrue(runs.isEmpty)
         XCTAssertEqual(try Data(contentsOf: oldFile), retiredBytes)
@@ -444,7 +387,7 @@ final class JourneyRunJournalTests: XCTestCase {
     func testCustomerPropertiesSurviveJournalReopening() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let candidate = arm()
         var snapshot = testJourneyExecutionSnapshot()
         snapshot.customer = ["plan": .string("pro"), "nullable": .null]
@@ -452,7 +395,7 @@ final class JourneyRunJournalTests: XCTestCase {
             release: release(for: candidate.reference), executionSnapshot: snapshot,
             reentry: .init(type: .everyMatch, window: nil), entryStepId: "step", at: date(100))
         XCTAssertNotNil(admitted)
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let retained = try await reopened.runs().first
         XCTAssertEqual(retained?.executionSnapshot.customer?["plan"], .string("pro"))
         XCTAssertEqual(retained?.executionSnapshot.customer?["nullable"], .null)
@@ -511,7 +454,7 @@ final class JourneyRunJournalTests: XCTestCase {
             let log = try await eventLog(directory: directory, store: store, api: MockNuxieApiForQueue(), dropEvents: mode == "drop")
             let forwarding = LegForwardingRecorder()
             await log.subscribeForwarding { event in await forwarding.record(event.event) }
-            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer", events: log)
             let admitted = try await journal.admit(arm: arm(binding: vector.binding), reentry: .init(type: .everyMatch, window: nil),
                                                    entryStepId: "step", at: date(vector.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
@@ -520,13 +463,11 @@ final class JourneyRunJournalTests: XCTestCase {
                                        eventOutputs: vector.outputs.event,
                                        responseOutputs: vector.outputs.responses)
             if mode == "accept_then_lost_receipt" {
-                try await JourneyReporter(journal: journal, events: LostCompletionAcknowledgement(events: log)).flushPending()
                 let retained = try await journal.runs()
-                XCTAssertEqual(retained.count, 1)
+                XCTAssertTrue(retained.isEmpty)
                 try await journal.complete(run.id, outcome: "abandoned", at: date(900))
             }
-            try await JourneyReporter(journal: journal, events: log).flushPending()
-            await log.drain()
+                await log.drain()
             let remaining = try await journal.runs()
             XCTAssertTrue(remaining.isEmpty, mode)
             let rows = try await store.queryEventsForUser("customer", limit: 10)
@@ -563,8 +504,8 @@ final class JourneyRunJournalTests: XCTestCase {
     func testAdmissionIsAtomicAcrossInstancesAndIsolatedByCustomer() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = try JourneyRunJournal(directory: directory, distinctId: "../customer")
-        let second = try JourneyRunJournal(directory: directory, distinctId: "../customer")
+        let first = try await CustomerJourneyStore(directory: directory, distinctId: "../customer")
+        let second = try await CustomerJourneyStore(directory: directory, distinctId: "../customer")
         let candidate = arm()
         let policy = Journey.Frequency(type: .oneTime, window: nil)
         let at = date(100)
@@ -572,10 +513,10 @@ final class JourneyRunJournalTests: XCTestCase {
         async let right = second.admit(arm: candidate, reentry: policy, entryStepId: "step", at: at)
         let admitted = try await [left, right].compactMap { $0 }
         XCTAssertEqual(admitted.count, 1)
-        let other = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let other = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let independent = try await other.admit(arm: candidate, reentry: policy, entryStepId: "step", at: at)
         XCTAssertNotNil(independent)
-        let recovered = try JourneyRunJournal(directory: directory, distinctId: "../customer")
+        let recovered = try await CustomerJourneyStore(directory: directory, distinctId: "../customer")
         let existing = try await recovered.runs()
         XCTAssertEqual(existing.map(\.id), admitted.map(\.id))
     }
@@ -584,11 +525,11 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = try JourneyRunJournal(
+        let first = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
-        let second = try JourneyRunJournal(
+        let second = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -618,6 +559,11 @@ final class JourneyRunJournalTests: XCTestCase {
         let admitted = try await [left, right].compactMap { $0 }
 
         XCTAssertEqual(admitted.count, 1)
+        let firstJourney = try XCTUnwrap(admitted.first)
+        _ = try await first.complete(firstJourney.id, outcome: "done", at: date(150))
+        let stillLatched = try await first.admit(arm: candidate, release: retainedRelease,
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: policy, entryStepId: "step", at: date(160), stateArmReceipt: receipt)
+        XCTAssertNil(stillLatched)
         try await first.clearStateArmReceipts(entryKind: receipt.entryKind)
         let readmittedAfterLatchReset = try await first.admit(
             arm: candidate,
@@ -628,7 +574,8 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(200),
             stateArmReceipt: receipt
         )
-        XCTAssertNotNil(readmittedAfterLatchReset)
+        let secondJourney = try XCTUnwrap(readmittedAfterLatchReset)
+        _ = try await first.complete(secondJourney.id, outcome: "done", at: date(250))
 
         try await first.retainStateArmReceipts([])
         let readmittedAfterArmRetirement = try await first.admit(
@@ -647,7 +594,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = try JourneyRunJournal(
+        let first = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-a"
         )
@@ -664,7 +611,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: firstPinDirectory,
             withIntermediateDirectories: true
         )
-        let second = try JourneyRunJournal(
+        let second = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-b"
         )
@@ -697,18 +644,17 @@ final class JourneyRunJournalTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SQLiteEventStore()
         let log = try await eventLog(directory: directory, store: store, api: MockNuxieApiForQueue(), dropEvents: true)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer", events: log)
         let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .oneTime, window: nil),
                                                entryStepId: "step", at: date(100))
         let run = try XCTUnwrap(admitted)
         try await journal.complete(run.id, outcome: "done", at: date(200))
-        try await JourneyReporter(journal: journal, events: log).flushPending()
         let rows = try await store.queryEventsForUser("customer", limit: 10)
         XCTAssertTrue(rows.isEmpty, "The host's privacy policy applies to ordinary leg reports")
         let remaining = try await journal.runs()
         XCTAssertTrue(remaining.isEmpty)
-        let mark = try await journal.checkmark(experienceId: "experience")
-        XCTAssertEqual(mark?.outcome, "done")
+        let frequency = try await journal.store.customerFrequency(owner: journal.owner, experienceId: "experience")
+        XCTAssertNotNil(frequency)
         for id in [run.startedEventId, run.completedEventId] {
             guard case .dropped? = try await store.queryStableCapture(id: id) else {
                 XCTFail("The event log must retain the terminal privacy decision"); continue
@@ -720,17 +666,21 @@ final class JourneyRunJournalTests: XCTestCase {
     func testContinuationsDoNotRestartReentryWindowOrRegressCompletedGeneration() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let policy = Journey.Frequency(type: .oncePerWindow, window: .init(amount: 2, unit: .minute))
         let enrolled = try await journal.admit(arm: arm(), reentry: policy, entryStepId: "step", at: date(100))
         let first = try XCTUnwrap(enrolled)
         try await finish(journal, run: first, at: 110)
         let earlier = try await journal.admit(arm: arm(binding: .init(type: .continuation, journeyId: first.journeyId, generation: 1)),
                                               reentry: policy, entryStepId: "step", at: date(150))
+        try await finish(journal, run: XCTUnwrap(earlier), at: 155)
         let later = try await journal.admit(arm: arm(binding: .init(type: .continuation, journeyId: first.journeyId, generation: 2)),
                                             reentry: policy, entryStepId: "step", at: date(160))
         try await finish(journal, run: XCTUnwrap(later), at: 170)
         try await finish(journal, run: XCTUnwrap(earlier), at: 180)
+        let obsolete = try await journal.admit(arm: arm(binding: .init(type: .continuation, journeyId: first.journeyId, generation: 1)),
+            reentry: policy, entryStepId: "step", at: date(181))
+        XCTAssertNil(obsolete)
         let mark = try await journal.checkmark(experienceId: "experience")
         XCTAssertEqual(mark?.generation, 2, "A late lower chapter cannot re-enable a consumed arm")
         XCTAssertEqual(mark?.lastEnrollmentAt, date(100))
@@ -740,10 +690,10 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertNotNil(allowed, "The window counts from enrollment, not a continuation or completion")
     }
 
-    private func finish(_ journal: JourneyRunJournal, run: JourneyRun, at: Double) async throws {
-        try await journal.markStartedQueued(run)
+    private func finish(_ journal: CustomerJourneyStore, run: JourneyRun, at: Double) async throws {
+
         try await journal.complete(run.id, outcome: "done", at: date(at))
-        try await journal.markCompletionQueued(run)
+
     }
 
     func testSharedRecoveryVectorsOnlyResumeParkPoints() async throws {
@@ -768,11 +718,11 @@ final class JourneyRunJournalTests: XCTestCase {
         for vector in suite.cases {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
-            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
             let admitted = try await journal.admit(arm: arm(binding: vector.binding),
                 reentry: .init(type: .everyMatch, window: nil), entryStepId: "step", at: date(suite.startedAtMillis / 1000))
             let run = try XCTUnwrap(admitted)
-            try await journal.markStartedQueued(run)
+
 
             if vector.beforeDeath == "parked" {
                 try await journal.park(run.id, stepId: "wait", until: vector.wakeAtMillis.map { date($0 / 1000) })
@@ -784,20 +734,28 @@ final class JourneyRunJournalTests: XCTestCase {
                     responseOutputs: vector.responses
                 )
             }
-            let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
             let resumable = try await reopened.recover(at: date(suite.reopenedAtMillis / 1000))
             let rows = try await reopened.runs()
-            let recovered = try XCTUnwrap(rows.first)
-            XCTAssertEqual(recovered.generation, vector.expectedGeneration, vector.name)
-            XCTAssertEqual(recovered.completion?.outcome, vector.expectedOutcome, vector.name)
-            XCTAssertEqual(recovered.completion?.at, vector.expectedCompletedAtMillis.map { date($0 / 1000) }, vector.name)
+            let reports = try await reopened.terminalRecords()
+            let retainedResponses: ExactJSONObject<JourneyReleaseJSONValue>
+            if let outcome = vector.expectedOutcome {
+                XCTAssertTrue(rows.isEmpty, vector.name)
+                let report = try XCTUnwrap(reports.first)
+                XCTAssertEqual(report.generation, vector.expectedGeneration, vector.name)
+                XCTAssertEqual(report.outcome, outcome, vector.name)
+                XCTAssertEqual(report.at, vector.expectedCompletedAtMillis.map { date($0 / 1000) }, vector.name)
+                retainedResponses = report.outputs.responses
+            } else {
+                XCTAssertTrue(reports.isEmpty, vector.name)
+                let recovered = try XCTUnwrap(rows.first)
+                XCTAssertEqual(recovered.generation, vector.expectedGeneration, vector.name)
+                retainedResponses = recovered.context.responses
+            }
             let expected = try JSONEncoder().encode(vector.beforeDeath == "completed" ? vector.responses : [:])
-            let retainedResponses = recovered.completion == nil
-                ? recovered.context.responses
-                : recovered.outputs.responses
             let actual = try JSONEncoder().encode(retainedResponses)
             XCTAssertEqual(try JSONSerialization.jsonObject(with: expected) as? NSDictionary,
-                           try JSONSerialization.jsonObject(with: actual) as? NSDictionary, vector.name)
+                try JSONSerialization.jsonObject(with: actual) as? NSDictionary, vector.name)
             if vector.beforeDeath == "parked" {
                 XCTAssertEqual(resumable.map(\.id), [run.id], vector.name)
                 XCTAssertEqual(resumable.first?.park?.wakeAt, date(300))
@@ -814,11 +772,11 @@ final class JourneyRunJournalTests: XCTestCase {
                 )
                 // Consuming a park point is durable before the next action.
                 // Death after consumption must never replay that action.
-                let again = try JourneyRunJournal(directory: directory, distinctId: "customer")
+                let again = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
                 let parked = try await again.recover(at: date(500))
-                let abandoned = try await again.runs()
+                let abandoned = try await again.terminalRecords()
                 XCTAssertTrue(parked.isEmpty)
-                XCTAssertEqual(abandoned.first?.completion?.outcome, "abandoned")
+                XCTAssertEqual(abandoned.first?.outcome, "abandoned")
             } else {
                 XCTAssertTrue(resumable.isEmpty, vector.name)
             }
@@ -829,7 +787,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -840,7 +798,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         try await journal.park(
             run.id,
             stepId: "wait",
@@ -850,153 +808,59 @@ final class JourneyRunJournalTests: XCTestCase {
         try await journal.abandonAll(at: date(200))
 
         let remaining = try await journal.runs()
-        let abandoned = try XCTUnwrap(remaining.first)
-        XCTAssertEqual(abandoned.completion?.outcome, "abandoned")
-        XCTAssertEqual(abandoned.completion?.at, date(200))
+        XCTAssertTrue(remaining.isEmpty)
+        let terminal = try await journal.terminalRecords()
+        let abandoned = try XCTUnwrap(terminal.first)
+        XCTAssertEqual(abandoned.outcome, "abandoned")
+        XCTAssertEqual(abandoned.at, date(200))
     }
 
-    func testAuthorityRevocationSurvivesRelaunchAndBlocksAdmissionUntilReportingRetiresRuns() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let candidate = arm()
-        let admitted = try await journal.admit(
-            arm: candidate,
-            reentry: .init(type: .everyMatch, window: nil),
-            entryStepId: "wait",
-            at: date(100)
-        )
-        let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
-        try await journal.park(
-            run.id,
-            stepId: "wait",
-            until: date(300)
-        )
-        try await journal.abandonAll(at: date(200))
-
-        let reopened = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let resumable = try await reopened.recover(at: date(250))
-        let rows = try await reopened.runs()
-        let abandoned = try XCTUnwrap(rows.first)
-        XCTAssertTrue(resumable.isEmpty)
-        XCTAssertEqual(abandoned.completion?.outcome, "abandoned")
-        let finalizedBeforeReporting = try await reopened.finalizeRevocation()
-        XCTAssertFalse(finalizedBeforeReporting)
-        let blocked = try await reopened.admit(
-            arm: candidate,
-            reentry: .init(type: .everyMatch, window: nil),
-            entryStepId: "wait",
-            at: date(260)
-        )
-        XCTAssertNil(blocked)
-
-        try await reopened.markCompletionQueued(abandoned)
-        let finalizedAfterReporting = try await reopened.finalizeRevocation()
-        XCTAssertTrue(finalizedAfterReporting)
-        let admittedAfterRetirement = try await reopened.admit(
-            arm: candidate,
-            reentry: .init(type: .everyMatch, window: nil),
-            entryStepId: "wait",
-            at: date(270)
-        )
-        XCTAssertNotNil(admittedAfterRetirement)
+    func testExecutionEpochSurvivesRelaunchAndRejectsOldCallbacks() async throws {
+        let rig = try await CustomerExecutionTestRig(.wait)
+        defer { try? FileManager.default.removeItem(at: rig.disk.root) }
+        let before = try await rig.store.customerScope(owner: rig.owner)
+        try await rig.facade.abandonAll(at: date(200))
+        let revoked = try await rig.store.customerScope(owner: rig.owner)
+        XCTAssertEqual(revoked?.executionEpoch, (before?.executionEpoch ?? 0) + 1)
+        XCTAssertTrue(revoked?.executionRevoked == true)
+        let active = try await rig.store.activeJourneys(owner: rig.owner)
+        XCTAssertTrue(active.isEmpty)
+        let reports = try await rig.facade.terminalRecords()
+        XCTAssertEqual(reports.first?.outcome, "abandoned")
+        await rig.reopen()
+        let reopened = try await CustomerJourneyStore(directory: rig.disk.root, distinctId: rig.owner.userId, store: rig.store)
+        XCTAssertGreaterThan(reopened.epoch, rig.facade.epoch)
+        do { _ = try await rig.store.executeCustomerCommand(.init(owner: rig.owner, epoch: rig.facade.epoch, mutation: .compact(eventId: "trigger"))); XCTFail("An old execution epoch cannot publish") }
+        catch CustomerStoreError.revoked { }
+        let retained = try await reopened.terminalRecords()
+        XCTAssertEqual(retained.map(\.id), reports.map(\.id))
+        await rig.store.close()
     }
 
-    func testCheckmarksRetireAfterDeliveryAndTheAuthoredReentryWindow() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
+    func testFrequencySurvivesProfileOmissionAndUsesTheCurrentPolicy() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let once = Journey.Frequency(type: .oneTime, window: nil)
-        let admittedOnce = try await journal.admit(
-            arm: arm(),
-            reentry: once,
-            entryStepId: "step",
-            at: date(100)
-        )
-        let onceRun = try XCTUnwrap(admittedOnce)
-        try await finish(journal, run: onceRun, at: 110)
-        try await journal.retainCheckmarks(
-            liveExperiences: ["experience": once],
-            at: date(200)
-        )
-        try await journal.retainCheckmarks(
-            liveExperiences: [:],
-            at: date(201)
-        )
-        let retiredOnceCheckmark = try await journal.checkmark(
-            experienceId: "experience"
-        )
-        XCTAssertNil(retiredOnceCheckmark)
-        let onceReadmitted = try await journal.admit(
-            arm: arm(),
-            reentry: once,
-            entryStepId: "step",
-            at: date(202)
-        )
-        XCTAssertNotNil(onceReadmitted)
-
-        let windowArm = ArmedJourney(
-            reference: .init(
-                experienceId: "window-experience",
-                versionId: "version",
-                legId: String(repeating: "c", count: 64),
-                descriptorSha256: String(repeating: "d", count: 64)
-            ),
-            binding: .init(type: .new, journeyId: nil, generation: nil),
-            entryCondition: arm().entryCondition,
-            context: .init(event: [:], responses: [:])
-        )
-        let window = Journey.Frequency(
-            type: .oncePerWindow,
-            window: .init(amount: 2, unit: .minute)
-        )
-        let admittedWindow = try await journal.admit(
-            arm: windowArm,
-            reentry: window,
-            entryStepId: "step",
-            at: date(300)
-        )
-        let windowRun = try XCTUnwrap(admittedWindow)
-        try await finish(journal, run: windowRun, at: 310)
-        try await journal.retainCheckmarks(
-            liveExperiences: ["window-experience": window],
-            at: date(400)
-        )
-        try await journal.retainCheckmarks(
-            liveExperiences: [:],
-            at: date(519)
-        )
-        let retainedWindowCheckmark = try await journal.checkmark(
-            experienceId: "window-experience"
-        )
-        XCTAssertNotNil(retainedWindowCheckmark)
-        try await journal.retainCheckmarks(
-            liveExperiences: [:],
-            at: date(520)
-        )
-        let retiredWindowCheckmark = try await journal.checkmark(
-            experienceId: "window-experience"
-        )
-        XCTAssertNil(retiredWindowCheckmark)
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
+        let every = Journey.Frequency(type: .everyMatch, window: nil)
+        let first = try await journal.admit(arm: arm(), reentry: every, entryStepId: "step", at: date(100))
+        let journey = try XCTUnwrap(first)
+        _ = try await journal.complete(journey.id, outcome: "done", at: date(110))
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
+        let once = try await reopened.admit(arm: arm(), reentry: .init(type: .oneTime, window: nil), entryStepId: "step", at: date(1000))
+        XCTAssertNil(once, "Current one-time policy interprets every committed enrollment")
+        let inside = try await reopened.admit(arm: arm(), reentry: .init(type: .oncePerWindow, window: .init(amount: 2, unit: .minute)), entryStepId: "step", at: date(219))
+        XCTAssertNil(inside)
+        let boundary = try await reopened.admit(arm: arm(), reentry: .init(type: .oncePerWindow, window: .init(amount: 2, unit: .minute)), entryStepId: "step", at: date(220))
+        XCTAssertNotNil(boundary)
+        let frequency = try await reopened.store.customerFrequency(owner: reopened.owner, experienceId: "experience")
+        XCTAssertEqual(frequency, 220_000)
     }
 
     func testExecutionRevocationCannotConsumeAParkWithAStaleToken() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1007,7 +871,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         try await journal.park(run.id, stepId: "wait", until: date(200))
         let fence = JourneyProfileFence()
         let stale = fence.token()
@@ -1033,7 +897,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1083,7 +947,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1127,7 +991,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 at: date(105)
             )
             XCTFail("Expected one digest to retain exactly one release")
-        } catch JourneyJournalError.invalidState {
+        } catch JourneyExecutionError.invalidState {
         } catch {
             XCTFail("Unexpected release conflict error: \(error)")
         }
@@ -1139,7 +1003,7 @@ final class JourneyRunJournalTests: XCTestCase {
             entryStepId: "step",
             at: date(110)
         )
-        let second = try XCTUnwrap(admittedSecond)
+        XCTAssertNil(admittedSecond, "An active Experience cannot admit an overlapping leg")
 
         let persistedPin = try await journal.releasePin(
             descriptorSHA256: enrollmentArm.reference.descriptorSha256
@@ -1151,15 +1015,16 @@ final class JourneyRunJournalTests: XCTestCase {
         )
 
         try await finish(journal, run: first, at: 120)
-        let retainedAfterFirst = try await journal.releasePin(
-            descriptorSHA256: enrollmentArm.reference.descriptorSha256
-        )
-        XCTAssertNotNil(retainedAfterFirst)
-
+        let released = try await journal.releasePin(descriptorSHA256: enrollmentArm.reference.descriptorSha256)
+        XCTAssertNil(released)
+        let sequential = try await journal.admit(arm: continuationArm, release: pin,
+            executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+            entryStepId: "step", at: date(125))
+        let second = try XCTUnwrap(sequential)
+        let retainedAgain = try await journal.releasePin(descriptorSHA256: enrollmentArm.reference.descriptorSha256)
+        XCTAssertNotNil(retainedAgain)
         try await finish(journal, run: second, at: 130)
-        let retainedAfterSecond = try await journal.releasePin(
-            descriptorSHA256: enrollmentArm.reference.descriptorSha256
-        )
+        let retainedAfterSecond = try await journal.releasePin(descriptorSHA256: enrollmentArm.reference.descriptorSha256)
         XCTAssertNil(retainedAfterSecond)
     }
 
@@ -1180,7 +1045,7 @@ final class JourneyRunJournalTests: XCTestCase {
         try artifactBytes.write(
             to: cacheDirectory.appendingPathComponent(artifactSHA256)
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1213,14 +1078,16 @@ final class JourneyRunJournalTests: XCTestCase {
         )
         XCTAssertEqual(try Data(contentsOf: artifactPin), artifactBytes)
 
-        let continuationArm = arm(binding: .init(
-            type: .continuation,
-            journeyId: first.journeyId,
-            generation: 1
-        ))
+        let continuationArm = ArmedJourney(reference: .init(experienceId: "other-experience", versionId: "other-version",
+            legId: String(repeating: "c", count: 64), descriptorSha256: String(repeating: "d", count: 64)),
+            binding: .init(type: .new, journeyId: nil, generation: nil), entryCondition: enrollmentArm.entryCondition,
+            context: enrollmentArm.context)
+        let sharedSource = JourneyReleaseArtifactSource(descriptorSHA256: continuationArm.reference.descriptorSha256,
+            objects: source.objects, cacheRoot: cacheDirectory)
         let admittedSecond = try await journal.admit(
             arm: continuationArm,
             release: release(for: continuationArm.reference),
+            artifactSource: sharedSource,
             executionSnapshot: testJourneyExecutionSnapshot(),
             reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "step",
@@ -1252,7 +1119,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: cacheDirectory,
             withIntermediateDirectories: true
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1278,7 +1145,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 at: date(100)
             )
             XCTFail("Expected missing required artifact rejection")
-        } catch JourneyJournalError.invalidState {
+        } catch JourneyExecutionError.invalidState {
         } catch {
             XCTFail("Unexpected artifact pin error: \(error)")
         }
@@ -1330,7 +1197,7 @@ final class JourneyRunJournalTests: XCTestCase {
             ],
             cacheRoot: directory
         )
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1346,7 +1213,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 at: date(100)
             )
             XCTFail("Expected artifact aggregate limit rejection")
-        } catch JourneyJournalError.storageLimit {
+        } catch JourneyExecutionError.storageLimit {
         } catch {
             XCTFail("Unexpected artifact aggregate error: \(error)")
         }
@@ -1363,7 +1230,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1424,7 +1291,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1458,7 +1325,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1485,9 +1352,10 @@ final class JourneyRunJournalTests: XCTestCase {
             eventOutputs: ["payload": .string(payload)]
         )
 
-        let completedRuns = try await journal.runs()
+        let execution = try await journal.runs()
+        XCTAssertTrue(execution.isEmpty)
+        let completedRuns = try await journal.terminalRecords()
         let completed = try XCTUnwrap(completedRuns.first)
-        XCTAssertTrue(completed.context.event.isEmpty)
         guard case .string(let retainedPayload)? = completed.outputs.event["payload"] else {
             return XCTFail("Expected retained terminal event output")
         }
@@ -1498,7 +1366,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1517,9 +1385,10 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(200),
             responseOutputs: ["answer": .string(answer)]
         )
-        let completedRuns = try await journal.runs()
+        let execution = try await journal.runs()
+        XCTAssertTrue(execution.isEmpty)
+        let completedRuns = try await journal.terminalRecords()
         let completed = try XCTUnwrap(completedRuns.first)
-        XCTAssertTrue(completed.context.responses.isEmpty)
         guard case .string(let completedAnswer)? = completed.outputs.responses["answer"] else {
             return XCTFail("Expected retained terminal response output")
         }
@@ -1530,7 +1399,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1550,9 +1419,10 @@ final class JourneyRunJournalTests: XCTestCase {
             responseOutputs: ["declared": .string("publish")]
         )
 
-        let completedRuns = try await journal.runs()
+        let execution = try await journal.runs()
+        XCTAssertTrue(execution.isEmpty)
+        let completedRuns = try await journal.terminalRecords()
         let completed = try XCTUnwrap(completedRuns.first)
-        XCTAssertTrue(completed.context.responses.isEmpty)
         XCTAssertEqual(
             try ExactJSONCodec.encode(completed.outputs.responses),
             try ExactJSONCodec.encode([
@@ -1565,11 +1435,11 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = try JourneyRunJournal(
+        let first = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-a"
         )
-        let second = try JourneyRunJournal(
+        let second = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-b"
         )
@@ -1611,7 +1481,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = try JourneyRunJournal(
+        let first = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer",
             storageScope: .init(
@@ -1621,7 +1491,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 )
             )
         )
-        let second = try JourneyRunJournal(
+        let second = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer",
             storageScope: .init(
@@ -1676,12 +1546,12 @@ final class JourneyRunJournalTests: XCTestCase {
         let secondRelease = release(for: secondArm.reference)
         let aggregateBytes = try ExactJSONCodec.encode(firstRelease).count
             + ExactJSONCodec.encode(secondRelease).count
-        let firstJournal = try JourneyRunJournal(
+        let firstJournal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-a",
             releasePinBudgetBytes: aggregateBytes - 1
         )
-        let secondJournal = try JourneyRunJournal(
+        let secondJournal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer-b",
             releasePinBudgetBytes: aggregateBytes - 1
@@ -1706,7 +1576,7 @@ final class JourneyRunJournalTests: XCTestCase {
                 at: date(101)
             )
             XCTFail("Expected aggregate release-pin budget rejection")
-        } catch JourneyJournalError.storageLimit {
+        } catch JourneyExecutionError.storageLimit {
         } catch {
             XCTFail("Unexpected aggregate release-pin error: \(error)")
         }
@@ -1720,7 +1590,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1734,7 +1604,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         try await journal.park(
             run.id,
             stepId: "wait",
@@ -1755,31 +1625,33 @@ final class JourneyRunJournalTests: XCTestCase {
             )
         try FileManager.default.removeItem(at: pinFile)
 
-        let reopened = try JourneyRunJournal(
+        let reopened = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
         let resumable = try await reopened.recover(at: date(200))
-        let recoveredRuns = try await reopened.runs()
+        let active = try await reopened.runs()
+        XCTAssertTrue(active.isEmpty)
+        let recoveredRuns = try await reopened.terminalRecords()
         let recovered = try XCTUnwrap(recoveredRuns.first)
         XCTAssertTrue(resumable.isEmpty)
-        XCTAssertEqual(recovered.completion?.outcome, "abandoned")
-        XCTAssertEqual(recovered.completion?.at, date(200))
+        XCTAssertEqual(recovered.outcome, "abandoned")
+        XCTAssertEqual(recovered.at, date(200))
     }
 
     func testExecutorTransitionsAtomicallyPersistCursorContextAndFixedTimerAnchors() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
                                                entryStepId: "condition", at: date(1))
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         let changedContext = ArmedJourney.Context(event: ["ready": .bool(true)], responses: run.context.responses)
         try await journal.transition(run.id, stepId: "wait", context: changedContext,
                                      checkpoint: .init(anchorAtMillis: 2_000, wakeAtMillis: 12_000))
 
-        let parkedRuns = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+        let parkedRuns = try await CustomerJourneyStore(directory: directory, distinctId: "customer").runs()
         let parked = try XCTUnwrap(parkedRuns.first)
         XCTAssertEqual(parked.stepId, "wait")
         XCTAssertEqual(try ExactJSONCodec.encode(parked.context), try ExactJSONCodec.encode(changedContext))
@@ -1787,81 +1659,29 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertEqual(parked.park?.wakeAt, date(12))
 
         try await journal.transition(run.id, stepId: "present", context: changedContext)
-        let advancedRuns = try await JourneyRunJournal(directory: directory, distinctId: "customer").runs()
+        let advancedRuns = try await CustomerJourneyStore(directory: directory, distinctId: "customer").runs()
         let advanced = try XCTUnwrap(advancedRuns.first)
         XCTAssertEqual(advanced.stepId, "present")
         XCTAssertNil(advanced.park)
     }
 
     func testParkedEventPersistsWithItsCheckpointAcrossRelaunch() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let admitted = try await journal.admit(
-            arm: arm(),
-            reentry: .init(type: .everyMatch, window: nil),
-            entryStepId: "wait",
-            at: date(1)
-        )
-        let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
-        let checkpoint = JourneyControlExecutor.Checkpoint(
-            anchorAtMillis: 2_000,
-            wakeAtMillis: 12_000
-        )
-        try await journal.transition(
-            run.id,
-            stepId: "wait",
-            context: run.context,
-            checkpoint: checkpoint
-        )
-        let identity = MockIdentityService()
-        identity.setDistinctId("customer")
-        let identityFence = try XCTUnwrap(
-            identity.performWithCurrentIdentityFence("customer", { _ in () })
-        )
-        let executionFence = JourneyProfileFence()
-        let admission = JourneyCommitAdmission(
-            identity: identity,
-            identityFenceToken: identityFence.token,
-            executionFence: executionFence,
-            executionFenceToken: executionFence.token()
-        )
-        let event = JourneyControlExecutor.Event(
-            name: "unlock",
-            occurredAtMillis: 3_000,
-            properties: ["allowed": .bool(true)]
-        )
-
-        let staged = try await journal.stageParkedEvent(
-            run.id,
-            expectedStepId: "wait",
-            expectedCheckpoint: checkpoint,
-            event: event,
-            admission: admission
-        )
-        XCTAssertTrue(staged)
-
-        let reopened = try JourneyRunJournal(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let reopenedRuns = try await reopened.runs()
-        let persisted = try XCTUnwrap(reopenedRuns.first?.park)
-        XCTAssertEqual(persisted.anchorAt, date(2))
-        XCTAssertEqual(persisted.wakeAt, date(12))
-        XCTAssertEqual(persisted.pendingEvent, event)
+        let rig = try await CustomerExecutionTestRig(.wait)
+        defer { try? FileManager.default.removeItem(at: rig.disk.root) }
+        await rig.reopen()
+        let active = try await rig.store.activeJourneys(owner: rig.owner)
+        XCTAssertEqual(active.first?.park?.anchorAt, date(100))
+        XCTAssertEqual(active.first?.park?.wakeAt, date(200))
+        let rows = try await rig.store.customerLogPage(owner: rig.owner, name: "go", startedAt: 100_000, deadlineAt: 200_000, after: active.first?.lastConsumed, limit: 128)
+        XCTAssertEqual(rows.map(\.id), ["matched"])
+        await rig.store.close()
     }
 
     func testTransitionAdmissionRejectsRevokedExecutionAuthority() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1872,7 +1692,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(1)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let identityFence = try XCTUnwrap(
@@ -1906,7 +1726,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1917,7 +1737,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(1)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
         let identityFence = try XCTUnwrap(
@@ -1942,14 +1762,14 @@ final class JourneyRunJournalTests: XCTestCase {
         XCTAssertFalse(committed)
         let retainedRuns = try await journal.runs()
         let retained = try XCTUnwrap(retainedRuns.first)
-        XCTAssertNil(retained.completion)
+
     }
 
     func testEffectClaimExpiresAfterTheCursorAdvances() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -1960,7 +1780,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
 
         let first = try await journal.claimEffect(run.id, stepId: "effect")
         try await journal.transition(
@@ -1985,43 +1805,27 @@ final class JourneyRunJournalTests: XCTestCase {
     func testInterruptedCompletionCaptureReplaysTheSameEventAndTerminalOutputsAfterRelaunch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let firstStore = SQLiteEventStore()
-        let firstLog = try await eventLog(directory: directory, store: firstStore, api: MockNuxieApiForQueue())
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
-                                               entryStepId: "survey", at: date(100))
-        let run = try XCTUnwrap(admitted)
-
-        try await journal.complete(
-            run.id,
-            outcome: "done",
-            at: date(200),
-            responseOutputs: ["answer": .string("yes")]
-        )
-        let interrupted = JourneyReporter(journal: journal, events: LostCompletionAcknowledgement(events: firstLog))
-        try await interrupted.flushPending()
-        let pending = try await journal.runs()
-        XCTAssertEqual(pending.count, 1, "Uncertain capture must retain the only retry record")
-        let before = try await firstStore.queryEventsForUser("customer", limit: 10)
-        XCTAssertEqual(before.count, 2, "The event was already durably captured")
-        await firstLog.close()
-
-        let secondStore = SQLiteEventStore()
-        let secondLog = try await eventLog(directory: directory, store: secondStore, api: MockNuxieApiForQueue())
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        try await reopened.complete(run.id, outcome: "abandoned", at: date(500))
-        try await JourneyReporter(journal: reopened, events: secondLog).flushPending()
-        let after = try await secondStore.queryEventsForUser("customer", limit: 10)
-        XCTAssertEqual(Set(after.map(\.id)), Set(before.map(\.id)))
-        let completion = try XCTUnwrap(after.first { $0.name == JourneyEvents.journeyCompleted })
-        let properties = completion.getPropertiesDict()
-        XCTAssertEqual(properties["outcome"] as? String, "done")
-        XCTAssertEqual(properties["completed_at"] as? String, "1970-01-01T00:03:20.000Z")
-        let outputs = try XCTUnwrap(properties["outputs"] as? [String: Any])
-        XCTAssertEqual((outputs["responses"] as? [String: String])?["answer"], "yes")
-        let remaining = try await reopened.runs()
-        XCTAssertTrue(remaining.isEmpty)
-        await secondLog.close()
+        let store = SQLiteEventStore()
+        let log = try await eventLog(directory: directory, store: store, api: MockNuxieApiForQueue())
+        let customer = try await CustomerJourneyStore(directory: directory, distinctId: "customer", events: log)
+        let admitted = try await customer.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil), entryStepId: "survey", at: date(100))
+        let journey = try XCTUnwrap(admitted)
+        await store.setCustomerFaultInjector({ if $0 == .afterCommit { throw CustomerExecutionTestFault.interrupted } }, for: "completion")
+        do { _ = try await customer.complete(journey.id, outcome: "done", at: date(200), responseOutputs: ["answer": .string("yes")]); XCTFail("Expected lost acknowledgement") }
+        catch CustomerExecutionTestFault.interrupted { }
+        await log.close()
+        let reopenedStore = SQLiteEventStore()
+        try await reopenedStore.initialize(path: directory)
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer", store: reopenedStore)
+        _ = try await reopened.complete(journey.id, outcome: "abandoned", at: date(500))
+        let reports = try await reopened.reports()
+        XCTAssertEqual(reports.map(\.id), [journey.completedEventId])
+        XCTAssertEqual(reports.first?.getPropertiesDict()["outcome"] as? String, "done")
+        let outputs = reports.first?.getPropertiesDict()["outputs"] as? [String: Any]
+        XCTAssertEqual((outputs?["responses"] as? [String: String])?["answer"], "yes")
+        let active = try await reopened.runs()
+        XCTAssertTrue(active.isEmpty)
+        await reopenedStore.close()
     }
 
     func testLifecycleCaptureReplayDoesNotRedeliverCommittedSubscribersAfterCrashWindow() async throws {
@@ -2030,50 +1834,16 @@ final class JourneyRunJournalTests: XCTestCase {
         let log = try await eventLog(directory: directory, store: SQLiteEventStore(), api: MockNuxieApiForQueue())
         let routes = LegRouteRecorder()
         await log.subscribeCommitted { event in await routes.record(event) }
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
-        let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil),
-                                               entryStepId: "screen", at: date(100))
-        let run = try XCTUnwrap(admitted)
-
-        // Simulate termination after the stable event reached subscribers but
-        // before the journal acknowledged that capture.
-        let startedAttempt = await log.captureAndRouteSystemEvent(
-            .init(
-                name: JourneyEvents.journeyStarted,
-                properties: ["journey_id": run.journeyId],
-                eventId: run.startedEventId,
-                distinctId: "customer"
-            )
-        )
-        _ = try XCTUnwrap(startedAttempt)
+        let customer = try await CustomerJourneyStore(directory: directory, distinctId: "customer", events: log)
+        let admitted = try await customer.admit(arm: arm(), reentry: .init(type: .everyMatch, window: nil), entryStepId: "screen", at: date(100))
+        let journey = try XCTUnwrap(admitted)
+        _ = try await customer.complete(journey.id, outcome: "done", at: date(200))
         await log.drain()
-
-        try await JourneyReporter(journal: journal, events: log).flushPending()
+        _ = await log.replayPendingStableRoutes(distinctId: "customer")
+        _ = try await customer.complete(journey.id, outcome: "changed", at: date(500))
         await log.drain()
-        let startedRoutes = await routes.names()
-        XCTAssertEqual(startedRoutes, [JourneyEvents.journeyStarted])
-
-        try await journal.complete(run.id, outcome: "done", at: date(200))
-        let completedAttempt = await log.captureAndRouteSystemEvent(
-            .init(
-                name: JourneyEvents.journeyCompleted,
-                properties: ["journey_id": run.journeyId],
-                eventId: run.completedEventId,
-                distinctId: "customer"
-            )
-        )
-        _ = try XCTUnwrap(completedAttempt)
-        await log.drain()
-
-        try await JourneyReporter(journal: journal, events: log).flushPending()
-        await log.drain()
-        let completedRoutes = await routes.names()
-        XCTAssertEqual(completedRoutes, [
-            JourneyEvents.journeyStarted,
-            JourneyEvents.journeyCompleted,
-        ])
-        let remaining = try await journal.runs()
-        XCTAssertTrue(remaining.isEmpty)
+        let names = await routes.names()
+        XCTAssertEqual(names, [JourneyEvents.journeyStarted, JourneyEvents.journeyCompleted])
         await log.close()
     }
 
@@ -2083,16 +1853,13 @@ final class JourneyRunJournalTests: XCTestCase {
         let store = SQLiteEventStore()
         let api = MockNuxieApiForQueue()
         let log = try await eventLog(directory: directory, store: store, api: api)
-        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer", events: log)
         let admitted = try await journal.admit(arm: arm(), reentry: .init(type: .oneTime, window: nil),
                                                entryStepId: "screen", at: date(100))
         let run = try XCTUnwrap(admitted)
-        let reporter = JourneyReporter(journal: journal, events: log)
-        try await reporter.flushPending()
         try await journal.complete(run.id, outcome: "closed", at: date(200))
-        try await reporter.flushPending()
 
-        let reopened = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let reopened = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let runs = try await reopened.runs()
         let checklist = try await reopened.checkmark(experienceId: "experience")
         XCTAssertTrue(runs.isEmpty)
@@ -2120,7 +1887,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -2131,7 +1898,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
         try await journal.complete(
             run.id,
             outcome: "closed",
@@ -2148,7 +1915,6 @@ final class JourneyRunJournalTests: XCTestCase {
         try FileManager.default.removeItem(at: customerPins)
         try Data("blocks-directory-enumeration".utf8).write(to: customerPins)
 
-        try await journal.markCompletionQueued(run)
 
         let remainingRuns = try await journal.runs()
         XCTAssertTrue(remainingRuns.isEmpty)
@@ -2160,7 +1926,7 @@ final class JourneyRunJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try JourneyRunJournal(
+        let journal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer"
         )
@@ -2171,7 +1937,7 @@ final class JourneyRunJournalTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-        try await journal.markStartedQueued(run)
+
 
         let customerDigest = JourneyStorageScope.testFixture.customerDigest(
             distinctId: "customer"
@@ -2180,7 +1946,7 @@ final class JourneyRunJournalTests: XCTestCase {
             .appendingPathComponent("journey-journal-v2", isDirectory: true)
             .appendingPathComponent("release-pins", isDirectory: true)
             .appendingPathComponent(customerDigest, isDirectory: true)
-        let recoveryJournal = try JourneyRunJournal(
+        let recoveryJournal = try await CustomerJourneyStore(
             directory: directory,
             distinctId: "customer",
             beforePersist: {
@@ -2200,11 +1966,14 @@ final class JourneyRunJournalTests: XCTestCase {
         )
 
         XCTAssertTrue(resumable.isEmpty)
-        let recoveredRuns = try await recoveryJournal.runs()
+        let active = try await recoveryJournal.runs()
+        XCTAssertTrue(active.isEmpty)
+        let recoveredRuns = try await recoveryJournal.terminalRecords()
         let recovered = try XCTUnwrap(recoveredRuns.first)
-        XCTAssertEqual(recovered.completion?.outcome, "abandoned")
-        XCTAssertEqual(recovered.completion?.at, date(200))
-        XCTAssertTrue(recovered.startedQueued)
+        XCTAssertEqual(recovered.outcome, "abandoned")
+        XCTAssertEqual(recovered.at, date(200))
+        let started = try await recoveryJournal.loggedInput(named: JourneyEvents.journeyStarted)
+        XCTAssertNotNil(started)
     }
 
     private func eventLog(directory: URL, store: SQLiteEventStore, api: MockNuxieApiForQueue, dropEvents: Bool = false) async throws -> EventLog {
@@ -2235,7 +2004,7 @@ final class JourneyRunJournalTests: XCTestCase {
     private func date(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds) }
 }
 
-private extension JourneyRunJournal {
+private extension CustomerJourneyStore {
     func admit(
         arm: ArmedJourney,
         reentry: Journey.Frequency,
@@ -2306,45 +2075,6 @@ private actor AsyncBoolean {
     private var stored = false
     func setTrue() { stored = true }
     func value() -> Bool { stored }
-}
-
-private actor LostCompletionAcknowledgement: RoutedStableSystemEventCapturing {
-    let events: EventLog
-    init(events: EventLog) { self.events = events }
-
-    func captureSystemEvent(_ event: String, properties: sending [String: Any]?, eventId: String,
-                            distinctId: String) async -> DurableTriggerCapture? {
-        let captured = await events.captureSystemEvent(event, properties: properties, eventId: eventId, distinctId: distinctId)
-        return event == JourneyEvents.journeyCompleted ? nil : captured
-    }
-
-    func captureAndRouteSystemEvent(
-        _ request: StableSystemEventCaptureRequest
-    ) async -> DurableTriggerCapture? {
-        let captured = await events.captureAndRouteSystemEvent(request)
-        return request.name == JourneyEvents.journeyCompleted ? nil : captured
-    }
-
-    func captureAndRouteSystemEvent(
-        _ request: StableSystemEventCaptureRequest,
-        admission: any StableEventCaptureCommitAdmission
-    ) async -> DurableTriggerCapture? {
-        let captured = await events.captureAndRouteSystemEvent(
-            request,
-            admission: admission
-        )
-        return request.name == JourneyEvents.journeyCompleted ? nil : captured
-    }
-
-    func captureAndRouteSystemEventBatch(
-        _ items: [RoutedStableSystemEventBatchItem],
-        admission: any StableEventCaptureBatchCommitAdmission
-    ) async -> [String: DurableTriggerCapture]? {
-        await events.captureAndRouteSystemEventBatch(
-            items,
-            admission: admission
-        )
-    }
 }
 
 private actor LegForwardingRecorder {

@@ -674,6 +674,12 @@ final class ForwardingPersistenceTests: XCTestCase {
     let persistBody = try functionBody(in: source, startingWith: "  private func persist(")
     XCTAssertEqual(persistBody.components(separatedBy: "store.insert(").count - 1, 1)
 
+    let customerLane = try functionBody(in: source, startingWith: "extension EventLog {\n  func openCustomerStore(")
+    XCTAssertEqual(customerLane.components(separatedBy: "customer.executeCustomerCommand(").count - 1, 1)
+    XCTAssertTrue(customerLane.contains("await drainCaptureWorker()"))
+    XCTAssertTrue(customerLane.contains("activeDurableCommitCount += 1"))
+    XCTAssertTrue(customerLane.contains("defer { durableCommitDidFinish() }"))
+
     let storeCallPattern = try NSRegularExpression(
       pattern: #"store\.([A-Za-z_][A-Za-z0-9_]*)\("#
     )
@@ -686,41 +692,39 @@ final class ForwardingPersistenceTests: XCTestCase {
     ).mapValues(\.count)
     let expectedStoreCalls = [
       "acknowledgeCommittedRoute": 1,
-      "checkpointCommittedRoute": 1,
-      "discardOtherCommittedRouteSessions": 1,
-      "firstPendingCommittedRoute": 1,
-      "hasPendingCommittedRoute": 2,
-      "hasPendingStableRoute": 2,
-      "acknowledgeConversionOccurrence": 1,
       "advanceHistoryCoverage": 1,
       "bindConversionAuthority": 1,
+      "checkpointCommittedRoute": 1,
       "close": 1,
       "commitStableCapture": 1,
       "commitStableCaptureAndStageRoute": 2,
       "commitStableCaptureBatchAndStageRoutes": 1,
       "countEvents": 2,
       "deleteStableDropsOlderThan": 1,
+      "discardOtherCommittedRouteSessions": 1,
+      "executeCustomerCommand": 1,
+      "firstPendingCommittedRoute": 1,
       "getEventCount": 1,
       "getFirstEventTime": 1,
       "getLastEventTime": 2,
       "getPendingDeliveryCount": 1,
       "hasEvent": 1,
+      "hasPendingCommittedRoute": 2,
+      "hasPendingStableRoute": 2,
       "historyCoverageStartingAt": 1,
       "initialize": 1,
       "insert": 1,
       "markDelivered": 1,
       "markStableRouteDelivered": 1,
-      "pendingConversionOccurrences": 1,
-      "pruneConversionOccurrences": 1,
       "pruneHistory": 1,
       "queryEventsForUser": 4,
       "queryPendingDelivery": 1,
       "queryPendingStableRoutes": 1,
-      "visitPendingStableRoutes": 2,
       "queryRecentEvents": 1,
       "queryStableCapture": 2,
       "readOrInitializeHistoryCoverage": 1,
       "reassignEvents": 1,
+      "visitPendingStableRoutes": 2,
     ]
     XCTAssertEqual(
       actualStoreCalls,

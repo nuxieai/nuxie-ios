@@ -2,7 +2,7 @@ import Foundation
 
 /// Evaluates one authenticated flat-leg transition. The caller persists every
 /// advance or park before evaluating another step or dispatching an effect.
-struct JourneyControlExecutor {
+struct JourneyControlExecutor: Sendable {
     /// Route only inputs this parked control can consume. Conditions are still
     /// evaluated against restored values when the ordered operation executes.
     func takesEvent(named name: String, step: Journey.Step) throws -> Bool {
@@ -10,6 +10,22 @@ struct JourneyControlExecutor {
         switch try decode(CompiledWait.self, action).trigger {
         case .responseChange: return false
         case .event(let expected, _), .eventOrResponseChange(let expected, _): return name == expected
+        }
+    }
+
+    func eventNameForWait(_ step: Journey.Step) throws -> String? {
+        guard let action = step.action, JourneyActionType(action: action) == .waitUntil else { return nil }
+        switch try decode(CompiledWait.self, action).trigger {
+        case .responseChange: return nil
+        case .event(let name, _), .eventOrResponseChange(let name, _): return name
+        }
+    }
+
+    func acceptsResponseChange(_ step: Journey.Step) throws -> Bool {
+        guard let action = step.action, JourneyActionType(action: action) == .waitUntil else { return false }
+        switch try decode(CompiledWait.self, action).trigger {
+        case .responseChange, .eventOrResponseChange: return true
+        case .event: return false
         }
     }
 
@@ -27,8 +43,9 @@ struct JourneyControlExecutor {
     struct Signal: Sendable {
         let event: Event?
         let responsesChanged: Bool
-        init(event: Event? = nil, responsesChanged: Bool = false) {
-            self.event = event; self.responsesChanged = responsesChanged
+        let eventId: String?
+        init(event: Event? = nil, responsesChanged: Bool = false, eventId: String? = nil) {
+            self.event = event; self.responsesChanged = responsesChanged; self.eventId = eventId
         }
     }
 

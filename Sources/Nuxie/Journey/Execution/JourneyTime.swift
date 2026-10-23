@@ -5,7 +5,7 @@ enum JourneyTime {
         let value = date.timeIntervalSince1970 * 1_000
         guard value.isFinite,
               value >= Double(Int64.min),
-              value <= Double(Int64.max) else { return nil }
+              value < Double(Int64.max) else { return nil }
         return Int64(value.rounded(.towardZero))
     }
 

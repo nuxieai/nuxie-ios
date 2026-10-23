@@ -142,7 +142,7 @@ final class CustomerStoreResponseLaneTests: XCTestCase {
         let history = try await store.queryEventsForUser(owner.userId, limit: 10)
         let recent = try await store.queryRecentEvents(limit: 10)
         let count = try await store.countEvents(name: "response", distinctId: owner.userId, since: nil, until: nil)
-        let conversions = try await store.pendingConversionOccurrences(distinctId: owner.userId)
+        let conversions = try await store.measurementInputs(distinctId: owner.userId)
         XCTAssertTrue(upload.isEmpty)
         XCTAssertTrue(history.isEmpty)
         XCTAssertTrue(recent.isEmpty)
