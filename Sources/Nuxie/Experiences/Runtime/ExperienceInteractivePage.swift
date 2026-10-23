@@ -43,6 +43,8 @@ actor ExperienceInteractivePage {
     private let environmentBindings: ExperienceEnvironmentBindings
     private var rows: [String: Row] = [:]
     private var rowList = ExperiencePageRows()
+    // Together steps take before registering waiters; only rows already present need positioning.
+    private var incomingRowToPosition: String?
     var mountedScreenIDs: [String] { rowList.screenIDs }
     private var closed = false
     private var activeScreenID: String?
@@ -292,7 +294,16 @@ actor ExperienceInteractivePage {
         for change in changes {
             switch change {
             case .take:
+                incomingRowToPosition = mountedScreenIDs.contains(target) ? target : nil
                 try await insertLocked(screenID: target, at: mountedScreenIDs.count, products: rows[target]?.products ?? [])
+            case .position(let isBack):
+                guard incomingRowToPosition == target else { continue }
+                incomingRowToPosition = nil
+                var next = rowList
+                if let mutation = next.position(target, relativeTo: source, isBack: isBack) {
+                    try await applyRowMutation(mutation)
+                    rowList = next
+                }
             case .phases(let phases, let transition):
                 try await setPhasesLocked(phases, transition: transition, reduceMotion: reduceMotion, exitReason: .navigation)
                 if phases.contains(where: { $0.1 == .active }) { await videoPlayback?.setStepInProgress(false) }
@@ -334,6 +345,9 @@ actor ExperienceInteractivePage {
             guard let row = rows[id] else { throw ExperienceInteractiveScreenError.screenNotFound(id) }
             _ = try await runtime.mutateViewModel([.listInsert(instance: root, path: contract.listPath,
                 index: index, value: row.reference)])
+        case .move(_, let from, let to):
+            _ = try await runtime.mutateViewModel([.listMove(instance: root, path: contract.listPath,
+                from: from, to: to)])
         case .collapse(_, let index, let collapsed):
             try await runtime.setRowCollapsed(list: contract.listPath, index: index, collapsed: collapsed)
         case .remove(_, let index):

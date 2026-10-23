@@ -49,20 +49,22 @@ final class ExperiencePageHostContractTests: XCTestCase {
         for marker in [nil, false, true] as [Bool?] {
             var transition = validTransition
             transition["defaultPair"] = marker
-            transition["incomingKept"] = marker
             XCTAssertNoThrow(try validate(transition))
             let decoded = try JSONDecoder().decode(ExperiencePageHostContract.Transition.self,
                 from: JSONSerialization.data(withJSONObject: transition))
             XCTAssertEqual(decoded.planKind, .page)
             XCTAssertEqual(decoded.isDefaultPair, marker == true)
-            XCTAssertEqual(decoded.isIncomingKept, marker == true)
         }
         for kind in ["layer", "choreographed", "unknown"] {
             var transition = validTransition; transition["kind"] = kind
             XCTAssertThrowsError(try validate(transition))
         }
-        for field in ["defaultPair", "incomingKept"] {
+        for field in ["defaultPair"] {
             var transition = validTransition; transition[field] = 1
+            XCTAssertThrowsError(try validate(transition))
+        }
+        for marker in [false, true] {
+            var transition = validTransition; transition["incomingKept"] = marker
             XCTAssertThrowsError(try validate(transition))
         }
         var transition = validTransition; transition["incomingOnTop"] = true
@@ -101,13 +103,6 @@ final class ExperiencePageHostContractTests: XCTestCase {
     func testMagicMoveWithoutPublishedIDFallsBackToCut() {
         XCTAssertEqual(ExperienceScreenTransitionSpec(raw: ["type": "magic-move"]), .none)
         XCTAssertEqual(ExperienceScreenTransitionSpec(raw: ["type": "magic-move", "transitionId": ""]), .none)
-    }
-
-    func testNavigateToKeptRowUsesUnderAndBackKeepsActualForwardID() {
-        XCTAssertEqual(ExperiencePageHostContract.stepID("ab", incomingKept: false, isBack: false), "ab")
-        XCTAssertEqual(ExperiencePageHostContract.stepID("ba", incomingKept: true, isBack: false), "ba.under")
-        XCTAssertEqual(ExperiencePageHostContract.stepID("ba.under", incomingKept: true, isBack: true), "ba.under")
-        XCTAssertNil(ExperiencePageHostContract.stepID(nil, incomingKept: true, isBack: false))
     }
 
     func testMoveHostCommandsArriveOnNextStepInOrderExactlyOnce() {

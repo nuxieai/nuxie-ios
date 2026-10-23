@@ -1692,7 +1692,6 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     id: $0.id,
                     kind: $0.planKind,
                     isDefaultPair: $0.isDefaultPair,
-                    isIncomingKept: $0.isIncomingKept,
                     sourceScreenId: $0.sourceScreenId,
                     destinationScreenId: $0.destinationScreenId,
                     durationMs: $0.durationMs,
