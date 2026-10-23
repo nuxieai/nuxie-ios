@@ -50,6 +50,19 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
         }
     }
 
+    func testPageBackWithOwnPrimitiveReversesTheForwardStep() async throws {
+        try await withCoordinator { coordinator, controller, probe, preparation in
+            try await navigate(coordinator, to: "screen_2",
+                transition: ["type": "magic-move", "transitionId": "transition.native-contract"])
+            try await back(coordinator, to: "screen_1", transition: ["type": "none"])
+            XCTAssertEqual(controller.screenId, "screen_1")
+            XCTAssertTrue(probe.events.contains("screen_2:nx_exit_done:transition.native-contract.reverse"))
+            XCTAssertTrue(probe.events.contains("screen_1:nx_enter_done:transition.native-contract.reverse"))
+            let metrics = await preparation.metrics()
+            XCTAssertEqual(metrics.openedSessionCount, 1)
+        }
+    }
+
     func testCachedSnapshotInitializesNewRowsWithoutOverwritingRevisitedValues() async throws {
         try await withCoordinator { coordinator, controller, _, _ in
             let layer = try XCTUnwrap(controller.interactivePage)
@@ -479,9 +492,9 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
         XCTAssertEqual(result, .navigated)
     }
 
-    private func back(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String) async throws {
+    private func back(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String, transition: Any? = nil) async throws {
         let result: ExperienceScreenNavigationResult = await withCheckedContinuation { continuation in
-            if !coordinator.back(to: id, steps: 1, completion: { result, _ in continuation.resume(returning: result) }) {
+            if !coordinator.back(to: id, steps: 1, transition: transition, completion: { result, _ in continuation.resume(returning: result) }) {
                 continuation.resume(returning: .failed)
             }
         }

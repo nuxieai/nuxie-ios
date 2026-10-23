@@ -77,6 +77,24 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
             })
     }
 
+    /// Page Back uses history at execution time. Older primitive fades have no compiled step.
+    static func pageTransition(raw: Any?, sourceScreenID: String, isBack: Bool,
+                               inferredBack: Self = .none,
+                               diagnostic: (String) -> Void = { LogWarning("\($0, privacy: .public)") }) -> Self {
+        let authored = Self(raw: raw, sourceScreenID: sourceScreenID)
+        if isBack {
+            if transitionRecord(from: raw) != nil {
+                diagnostic("Experience page: ignoring Back transition; using page history")
+            }
+            return inferredBack
+        }
+        if authored.kind == .fade, authored.transitionId == nil {
+            diagnostic("Experience page: fade without a published transition ID uses a cut")
+            return .none
+        }
+        return authored
+    }
+
     private static func transitionRecord(from raw: Any?) -> [String: Any]? {
         if let anyCodable = raw as? AnyCodable {
             return transitionRecord(from: anyCodable.value)
