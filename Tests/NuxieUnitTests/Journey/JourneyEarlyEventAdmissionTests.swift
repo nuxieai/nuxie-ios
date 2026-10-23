@@ -227,6 +227,162 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         await live.events.close()
     }
 
+    func testFailedFirstCheckpointSaveKeepsTheTriggerPendingUntilRetry() async throws {
+        for step in [Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)[0], Self.delayStep] {
+            let directory = temporaryDirectory()
+            let writes = JourneyJournalPersistenceFailures()
+            let armed = JourneyCompletionFlag()
+            let rejected = expectation(description: "The failed \(step.id) checkpoint refuses delivery")
+            let accepted = expectation(description: "The shared route timer retries the \(step.id) checkpoint")
+            let rejection = JourneyNthRoutedCaptureGate(eventName: "rejection", suspendedCall: 1)
+            let deliveries = JourneyDeliveryObservation()
+            let live = try await liveTimedWait(directory: directory, step: step,
+                prepareNativeValues: { _, _, _, _ in
+                    if !armed.isCompleted {
+                        writes.failNext(1)
+                        armed.finish()
+                    }
+                }, journalBeforePersist: { try writes.beforePersist() },
+                afterJourney: { event, delivered in
+                    guard event.name == "start_waiting" else { return }
+                    await deliveries.record(delivered)
+                    if delivered { accepted.fulfill() }
+                    else {
+                        rejected.fulfill()
+                        await rejection.intercept(event: "rejection")
+                    }
+                })
+            addTeardownBlock {
+                await rejection.release()
+                await live.service.shutdown()
+                await live.events.close()
+                try? FileManager.default.removeItem(at: directory)
+            }
+            live.events.track("start_waiting")
+            // Observe the refused delivery before releasing its handler, so a
+            // slow test runner cannot race the real one-second retry timer.
+            await fulfillment(of: [rejected], timeout: 3)
+            let firstDeliveries = await deliveries.values
+            XCTAssertEqual(firstDeliveries, [false])
+            let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+            let initial = try await journal.runs()
+            let admitted = try XCTUnwrap(initial.first)
+            XCTAssertEqual(initial.count, 1)
+            XCTAssertNil(admitted.park)
+            XCTAssertTrue(live.store.pendingCommittedRoutes.contains { $0.event.name == "start_waiting" })
+            XCTAssertEqual(starts(in: live.store), 1)
+            XCTAssertTrue(live.sleeper.pendingSleepDurations.isEmpty,
+                "The refused head must retry without a queued deadline or native-restoration timer")
+
+            // The retry must save the original t=60 checkpoint, not evaluate
+            // the wait again at this later clock time or admit another run.
+            live.clock.advance(by: 7)
+            await rejection.release()
+            await fulfillment(of: [accepted], timeout: 5)
+            await live.events.drain()
+            let retried = try await journal.runs()
+            let parked = try XCTUnwrap(retried.first)
+            XCTAssertEqual(retried.count, 1)
+            XCTAssertEqual(parked.id, admitted.id)
+            XCTAssertEqual(parked.park?.anchorAt, Date(timeIntervalSince1970: 1000))
+            XCTAssertEqual(parked.park?.wakeAt, Date(timeIntervalSince1970: 1060))
+            XCTAssertEqual(starts(in: live.store), 1)
+            XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
+            let retriedDeliveries = await deliveries.values
+            XCTAssertEqual(retriedDeliveries, [false, true])
+            for _ in 0..<200 where !live.sleeper.pendingSleepDurations.contains(53) {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(live.sleeper.pendingSleepDurations, [53])
+            live.clock.advance(by: 53)
+            live.sleeper.completeSleeps(withDuration: 53)
+            for _ in 0..<200 where completions(in: live.store).isEmpty {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(completions(in: live.store), [step.id == "delay" ? "satisfied" : "timeout"])
+            await live.events.drain()
+            XCTAssertEqual(starts(in: live.store), 1)
+            XCTAssertEqual(completions(in: live.store), [step.id == "delay" ? "satisfied" : "timeout"])
+            await live.service.shutdown()
+            await live.events.close()
+        }
+    }
+
+    func testFailedParkAfterAnEventResumesAWaitRetriesTheSelectedCheckpoint() async throws {
+        let directory = temporaryDirectory()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let writes = JourneyJournalPersistenceFailures()
+        let armed = JourneyCompletionFlag()
+        let rejected = expectation(description: "The event refuses delivery when its next park cannot be saved")
+        let accepted = expectation(description: "The event retry saves the next park")
+        let rejection = JourneyNthRoutedCaptureGate(eventName: "rejection", suspendedCall: 1)
+        var steps = Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)
+        steps[0] = .init(kind: .action, id: "wait", action: steps[0].action,
+            outlets: ["satisfied": "delay", "timeout": "timeout"], outcome: nil)
+        steps.append(Self.delayStep)
+        let live = try await liveTimedWait(directory: directory, steps: steps,
+            readNativeValues: { values in
+                let runs = try await journal.runs()
+                if !armed.isCompleted, runs.first?.stepId == "delay", runs.first?.park == nil {
+                    writes.failNext(1)
+                    armed.finish()
+                }
+                return try await values.journeyValues()
+            }, journalBeforePersist: { try writes.beforePersist() },
+            afterJourney: { event, delivered in
+                guard event.name == "go" else { return }
+                if delivered { accepted.fulfill() }
+                else {
+                    rejected.fulfill()
+                    await rejection.intercept(event: "rejection")
+                }
+            })
+        addTeardownBlock {
+            await rejection.release()
+            await live.service.shutdown()
+            await live.events.close()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        live.events.track("start_waiting")
+        await live.events.drain()
+        let initial = try await journal.runs()
+        let admitted = try XCTUnwrap(initial.first)
+        XCTAssertNotNil(admitted.park)
+        live.clock.advance(by: 1)
+        live.events.track("go")
+        await fulfillment(of: [rejected], timeout: 3)
+        XCTAssertTrue(armed.isCompleted)
+        let failed = try await journal.runs()
+        XCTAssertEqual(failed.first?.stepId, "delay")
+        XCTAssertNil(failed.first?.park)
+        XCTAssertTrue(live.store.pendingCommittedRoutes.contains { $0.event.name == "go" })
+        live.clock.advance(by: 7)
+        await rejection.release()
+        await fulfillment(of: [accepted], timeout: 5)
+        await live.events.drain()
+        let retried = try await journal.runs()
+        XCTAssertEqual(retried.count, 1)
+        XCTAssertEqual(retried.first?.id, admitted.id)
+        XCTAssertEqual(retried.first?.park?.anchorAt, Date(timeIntervalSince1970: 1001))
+        XCTAssertEqual(retried.first?.park?.wakeAt, Date(timeIntervalSince1970: 1061))
+        XCTAssertEqual(starts(in: live.store), 1)
+        XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
+        for _ in 0..<200 where !live.sleeper.pendingSleepDurations.contains(53) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(live.sleeper.pendingSleepDurations, [53])
+        live.clock.advance(by: 53)
+        live.sleeper.completeSleeps(withDuration: 53)
+        for _ in 0..<200 where completions(in: live.store).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(completions(in: live.store), ["satisfied"])
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), ["satisfied"])
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
     func testInitialWaitAndDelaySurviveNativePreparationFailureAndRetryBeforeTheirDeadline() async throws {
         for step in [Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)[0], Self.delayStep] {
             let directory = temporaryDirectory()
@@ -1319,7 +1475,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
     // MARK: - Helpers
 
-    private func liveTimedWait(directory: URL, step: Journey.Step? = nil,
+    private func liveTimedWait(directory: URL, step: Journey.Step? = nil, steps authoredSteps: [Journey.Step]? = nil,
         prepareNativeValues: @escaping JourneyService.NativeValuesPreparer = { _, _, _, _ in },
         readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         readJournalRuns: @escaping JourneyService.JournalRunsReader = { try await $0.runs() },
@@ -1333,7 +1489,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         clock: MockDateProvider, sleeper: MockSleepProvider
     ) {
         let fixture = try JourneyPlaneProfileTestFixture.load()
-        var steps = Self.waitSteps(eventName: "go", maxTimeMillis: 500)
+        var steps = authoredSteps ?? Self.waitSteps(eventName: "go", maxTimeMillis: 500)
         if let step { steps[0] = step }
         let snapshot = replacing(try await authenticatedSnapshot(fixture), entry: Self.eventEntry("start_waiting"),
             reentry: .init(type: .everyMatch, window: nil), completionOutputs: Self.heldWaitOutcomes,

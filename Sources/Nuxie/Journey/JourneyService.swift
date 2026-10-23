@@ -200,6 +200,31 @@ actor JourneyService {
         let checkpoint: ParkCheckpoint
         let at: Date
     }
+    private struct ParkCommitFailure: Error, CustomStringConvertible {
+        let run: JourneyRun
+        let stepId: String
+        let checkpoint: JourneyControlExecutor.Checkpoint?
+        let presentationWakeAt: Date?
+        let snapshot: ExperienceRunSnapshot?
+        let preparationFailed: Bool
+        let journal: JourneyRunJournal
+        let journalGeneration: UInt64
+        let admission: JourneyCommitAdmission
+        var description: String { "Journey checkpoint persistence failed" }
+    }
+    private struct RemainingEventStarts {
+        let arms: [ArmedJourney]
+        let index: Int
+        let state: ProfileState
+        let presentationAttempt: ExperiencePresentationAttempt?
+    }
+    private struct EventParkRetry {
+        let park: ParkCommitFailure
+        let remainingStarts: RemainingEventStarts?
+        let excludingRunIds: Set<String>
+    }
+    // Only refused deliveries retain checkpoint writes. EventLog owns their retry timer.
+    private var eventParkRetries: [String: EventParkRetry] = [:]
     /// Checkpoints currently queued for this journal instance.
     private var enqueuedDeadlines: Set<JourneyDeadline> = []
     private var deadlineRetryAt: [JourneyDeadline: Date] = [:]
@@ -227,6 +252,7 @@ actor JourneyService {
     private var journal: JourneyRunJournal? {
         didSet {
             journalGeneration &+= 1
+            eventParkRetries.removeAll()
             enqueuedDeadlines.removeAll()
             deadlineRetryAt.removeAll()
             foregroundDeadlines.removeAll()
@@ -417,6 +443,7 @@ extension JourneyService {
         transitionInFlight = nil
         profileRefetchesInFlight.removeAll()
         refetchRoutingDeferral = nil
+        eventParkRetries.removeAll()
         foreground = false
         cancelWake()
         await events.setJourneyDeadlineHandler(nil)
@@ -714,6 +741,7 @@ extension JourneyService {
         let journalToAbandon = journal?.distinctId == distinctId ? journal : nil
         _ = profileFence.advance()
         _ = executionFence.advance()
+        eventParkRetries.removeAll()
         profileState = nil
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
@@ -756,6 +784,7 @@ extension JourneyService {
             ?? profileState?.distinctId
         _ = profileFence.advance()
         _ = executionFence.advance()
+        eventParkRetries.removeAll()
         profileState = nil
         clearRetainedReleaseCache()
         stateArmReceipts.removeAll()
@@ -821,21 +850,49 @@ extension JourneyService {
             return true
         }
 
+        var excludingRunIds: Set<String> = []
+        if let retry = eventParkRetries[event.id] {
+            do {
+                try await retryParkCommit(retry.park)
+            } catch {
+                LogWarning("JourneyService: failed to retry park point: \(error)")
+                return false
+            }
+            guard retry.park.journalGeneration == journalGeneration else { return true }
+            eventParkRetries.removeValue(forKey: event.id)
+            if let remaining = retry.remainingStarts {
+                let delivered = await startEventArms(remaining, event: event)
+                await scheduleNextWake()
+                return delivered
+            }
+            excludingRunIds = retry.excludingRunIds
+        }
         guard await recoverConversionOccurrences(throughEventId: event.id) else { return false }
         let directlyRoutedRunId = await presentationPublications
             .directRoute(eventId: event.id)
         do {
-            try await resumeParkedRuns(event: event, excludingRunId: directlyRoutedRunId)
+            try await resumeParkedRuns(event: event, excludingRunId: directlyRoutedRunId,
+                excludingRunIds: excludingRunIds)
+        } catch let failure as ParkCommitFailure {
+            eventParkRetries[event.id] = .init(park: failure, remainingStarts: nil,
+                excludingRunIds: excludingRunIds.union([failure.run.id]))
+            return false
         } catch {
             // Retain unsuccessful delivery so replay can still offer this
             // event to its original event-time window.
             LogWarning("JourneyService: failed to inspect parked Journeys for event: \(error)")
             return false
         }
-        guard await resumePresentationActionOutcome(
-            event: event,
-            excludingRunId: directlyRoutedRunId
-        ) else { return false }
+        do {
+            guard try await resumePresentationActionOutcome(
+                event: event,
+                excludingRunId: directlyRoutedRunId
+            ) else { return false }
+        } catch let failure as ParkCommitFailure {
+            eventParkRetries[event.id] = .init(park: failure, remainingStarts: nil,
+                excludingRunIds: excludingRunIds.union([failure.run.id]))
+            return false
+        } catch { return false }
         // Keep ownership through every failure above so replay cannot offer a
         // renderer publication to the owning run's newly parked wait.
         _ = await presentationPublications.consumeDirectRoute(eventId: event.id)
@@ -849,17 +906,27 @@ extension JourneyService {
         // under. Identity can change while routing awaits; one customer's
         // event never starts another customer's Journey.
         guard isCurrent(state), state.distinctId == event.distinctId else { return true }
-        for arm in state.snapshot.profile.armedLegs
-        where arm.entryCondition.type == .event
-            && arm.entryCondition.eventName == event.name {
-            await attemptStart(
-                arm,
-                state: state,
-                event: event,
-                presentationAttempt: presentationAttempt
-            )
+        let arms = state.snapshot.profile.armedLegs.filter {
+            $0.entryCondition.type == .event && $0.entryCondition.eventName == event.name
         }
+        let delivered = await startEventArms(.init(arms: arms, index: 0, state: state,
+            presentationAttempt: presentationAttempt), event: event)
         await scheduleNextWake()
+        return delivered
+    }
+
+    private func startEventArms(_ remaining: RemainingEventStarts, event: NuxieEvent) async -> Bool {
+        for index in remaining.index..<remaining.arms.count {
+            do {
+                try await attemptStart(remaining.arms[index], state: remaining.state, event: event,
+                    presentationAttempt: remaining.presentationAttempt)
+            } catch let failure as ParkCommitFailure {
+                eventParkRetries[event.id] = .init(park: failure,
+                    remainingStarts: .init(arms: remaining.arms, index: index + 1, state: remaining.state,
+                        presentationAttempt: remaining.presentationAttempt), excludingRunIds: [])
+                return false
+            } catch { return false }
+        }
         return true
     }
 }
@@ -889,7 +956,7 @@ private extension JourneyService {
     private func resumePresentationActionOutcome(
         event: NuxieEvent,
         excludingRunId: String? = nil
-    ) async -> Bool {
+    ) async throws -> Bool {
         guard let route = JourneyActionType.presentationOutcomeRoute(eventName: event.name),
               let journal, isCurrentIdentity(journal: journal) else { return true }
         guard let candidates = try? await journal.runs() else { return false }
@@ -951,7 +1018,7 @@ private extension JourneyService {
                     return false
                 }
                 endRunExecution(executionKey)
-                return await resumePresentationActionOutcome(event: event, excludingRunId: excludingRunId)
+                return try await resumePresentationActionOutcome(event: event, excludingRunId: excludingRunId)
             }
             let nextStepId = step.outlets?[route.outlet]
             if nextStepId == nil, let outcome = candidate.authoredCloseOutcome {
@@ -969,9 +1036,11 @@ private extension JourneyService {
                 await presenter?.projectJourneyCommerceOutcome(owner: .init(journeyId: candidate.journeyId, distinctId: journal.distinctId),
                     actionType: route.actionType, outlet: route.outlet, errorCode: errorCode, effectId: effectId)
                 if nextStepId != nil {
-                    await continuePresentedRun(continued, release: release, executionFenceToken: token,
+                    try await continuePresentedRun(continued, release: release, executionFenceToken: token,
                         signal: .init(), journal: journal)
                 }
+            } catch let failure as ParkCommitFailure {
+                throw failure
             } catch {
                 LogWarning("JourneyService: failed to settle presentation commerce outcome: \(error)")
                 return false
@@ -1026,7 +1095,7 @@ private extension JourneyService {
                 distinctId: journal.distinctId,
                 properties: pending.event.properties.dictionary.mapValues { journeyFoundationValue($0) ?? NSNull() },
                 timestamp: Date(timeIntervalSince1970: Double(pending.event.occurredAtMillis) / 1000))
-            guard await resumePresentationActionOutcome(event: event) else { return false }
+            guard (try? await resumePresentationActionOutcome(event: event)) == true else { return false }
         }
         return true
     }
@@ -1441,7 +1510,7 @@ private extension JourneyService {
             case .accepted:
                 break
             case .continueExecution(let continuation):
-                await continuePresentedRun(
+                try? await continuePresentedRun(
                     continuation.run,
                     release: release,
                     executionFenceToken: executionFenceToken,
@@ -1523,7 +1592,7 @@ private extension JourneyService {
         for arm in state.snapshot.profile.armedLegs {
             let kind = arm.entryCondition.type
             guard kind != .event, kinds?.contains(kind) ?? true else { continue }
-            await attemptStart(arm, state: state, event: nil)
+            try? await attemptStart(arm, state: state, event: nil)
         }
         await scheduleNextWake()
     }
@@ -1533,7 +1602,7 @@ private extension JourneyService {
         state: ProfileState,
         event: NuxieEvent?,
         presentationAttempt: ExperiencePresentationAttempt? = nil
-    ) async {
+    ) async throws {
         let stateKey = StateArmKey(arm)
         guard arm.entryCondition.type == .event
                 || !stateArmReceipts.contains(stateKey),
@@ -1605,7 +1674,7 @@ private extension JourneyService {
             // next matching event, preserving the canonical no-queue rule.
             return
         }
-        await withPresentationReservation(presentationReservation) {
+        try await withPresentationReservation(presentationReservation) {
             guard let profileFenceToken = profileFence.token(
                 ifCurrent: state.generation
             ) else { return }
@@ -1659,7 +1728,7 @@ private extension JourneyService {
                 guard let queued = try await journal.runs().first(where: {
                     $0.id == run.id && $0.startedQueued
                 }) else { return }
-                await execute(
+                try await execute(
                     queued,
                     release: release,
                     executionFenceToken: executionFenceToken,
@@ -1669,6 +1738,8 @@ private extension JourneyService {
                     startingEventAt: event?.timestamp,
                     presentationReservation: presentationReservation
                 )
+            } catch let failure as ParkCommitFailure {
+                throw failure
             } catch {
                 LogWarning("JourneyService: failed to start Journey: \(error)")
             }
@@ -1775,6 +1846,7 @@ private extension JourneyService {
     private func resumeParkedRuns(
         event: NuxieEvent?,
         excludingRunId: String? = nil,
+        excludingRunIds: Set<String> = [],
         deadline: JourneyDeadline? = nil,
         nativeRetry: (runID: String, checkpoint: ParkCheckpoint)? = nil
     ) async throws {
@@ -1795,7 +1867,8 @@ private extension JourneyService {
             for parked in runs
             where parked.park != nil
                 && parked.completion == nil
-                && parked.id != excludingRunId {
+                && parked.id != excludingRunId
+                && !excludingRunIds.contains(parked.id) {
                 guard journalGeneration == inspectedJournalGeneration,
                       isCurrentIdentity(journal: journal) else { return }
                 var parked = parked
@@ -1938,7 +2011,7 @@ private extension JourneyService {
                 // A rendered leg can wake into a branch that never presents.
                 // Reserve only if execution reaches navigate; execute also
                 // recognizes an already-owned presentation before reserving.
-                await execute(
+                try await execute(
                     resumed,
                     release: release,
                     executionFenceToken: executionFenceToken,
@@ -2259,7 +2332,7 @@ private extension JourneyService {
             Task { [weak self] in
                 guard let self else { return }
                 defer { self.onPresentationContinuationFinished?() }
-                await self.continuePresentedRun(
+                try? await self.continuePresentedRun(
                     continuation.run,
                     release: release,
                     executionFenceToken: executionFenceToken,
@@ -2512,7 +2585,7 @@ private extension JourneyService {
             .removeValue(forKey: runId) else {
             return
         }
-        await continuePresentedRun(
+        try? await continuePresentedRun(
             pending.run,
             release: pending.release,
             executionFenceToken: pending.executionFenceToken,
@@ -2733,7 +2806,7 @@ private extension JourneyService {
         run.park = nil
         let dismissPresentationOnCompletion = !awaitContinuation
         let continueRun = { [weak self] in
-            await self?.continuePresentedRun(
+            try? await self?.continuePresentedRun(
                 run,
                 release: release,
                 executionFenceToken: executionFenceToken,
@@ -2808,7 +2881,7 @@ private extension JourneyService {
         dismissPresentationOnCompletion: Bool = true,
         journal: JourneyRunJournal,
         originAdmission: JourneyCommitAdmission? = nil
-    ) async {
+    ) async throws {
         guard executionFence.isCurrent(executionFenceToken),
               isCurrentIdentity(journal: journal) else {
             await finishAfterAuthorityLoss(
@@ -2819,7 +2892,7 @@ private extension JourneyService {
             )
             return
         }
-        await execute(
+        try await execute(
             run,
             release: release,
             executionFenceToken: executionFenceToken,
@@ -2944,6 +3017,31 @@ private extension JourneyService {
         }
     }
 
+    private func retryParkCommit(_ failure: ParkCommitFailure) async throws {
+        guard initialized, journalGeneration == failure.journalGeneration,
+              failure.admission.commitJournalIfCurrent({ true }) == true else { return }
+        // Retry only the write selected by the failed delivery. Evaluating the
+        // control again would move its anchor, and re-admission would start a new run.
+        let runs = try await failure.journal.runs()
+        guard let current = runs.first(where: { $0.id == failure.run.id && $0.completion == nil }),
+              current.stepId == failure.run.stepId, current.park == nil else { return }
+        if let checkpoint = failure.checkpoint {
+            guard try await failure.journal.transition(failure.run.id, stepId: failure.stepId,
+                context: failure.run.context, checkpoint: checkpoint, nativeSnapshot: failure.snapshot,
+                admission: failure.admission) else { return }
+        } else {
+            guard try await failure.journal.park(failure.run.id, stepId: failure.stepId,
+                until: failure.presentationWakeAt, admission: failure.admission) else { return }
+        }
+        guard initialized, journalGeneration == failure.journalGeneration,
+              failure.admission.commitJournalIfCurrent({ true }) == true else { return }
+        if failure.preparationFailed, let checkpoint = failure.checkpoint {
+            registerNativeRestoreRetry(runID: failure.run.id,
+                checkpoint: .init(stepId: failure.stepId, checkpoint: checkpoint))
+        }
+        await scheduleNextWake()
+    }
+
     private func execute(
         _ initial: JourneyRun,
         release: AuthenticatedJourneyRelease,
@@ -2958,7 +3056,7 @@ private extension JourneyService {
         presentationReservation initialPresentationReservation:
             (any JourneyPresentationReservation)? = nil,
         originAdmission: JourneyCommitAdmission? = nil
-    ) async {
+    ) async throws {
         let executionKey = RunExecutionKey(runID: initial.id, owner: journal.distinctId, generation: executionFenceToken.generation)
         let executionJournalGeneration = journalGeneration
         beginRunExecution(executionKey)
@@ -3050,6 +3148,9 @@ private extension JourneyService {
                     }
                 } catch {
                     LogWarning("JourneyService: failed to persist park point: \(error)")
+                    throw ParkCommitFailure(run: run, stepId: command.stepId, checkpoint: command.checkpoint,
+                        presentationWakeAt: nil, snapshot: snapshot, preparationFailed: preparationFailed, journal: journal,
+                        journalGeneration: executionJournalGeneration, admission: originAdmission)
                 }
                 await scheduleNextWake()
                 return
@@ -3199,7 +3300,7 @@ private extension JourneyService {
                     case .noPresentation:
                         break
                     case .declined:
-                        await parkPresentationRetry(
+                        try await parkPresentationRetry(
                             run,
                             stepId: command.step.id,
                             journal: journal,
@@ -3363,13 +3464,14 @@ private extension JourneyService {
                         await reserved?.release()
                         return
                     case .declined:
-                        await parkPresentationRetry(
-                            run,
-                            stepId: command.step.id,
-                            journal: journal,
-                            executionFenceToken: executionFenceToken
-                        )
-                        await reserved?.release()
+                        try await withPresentationReservation(reserved) {
+                            try await parkPresentationRetry(
+                                run,
+                                stepId: command.step.id,
+                                journal: journal,
+                                executionFenceToken: executionFenceToken
+                            )
+                        }
                         return
                     case .failed:
                         await reserved?.release()
@@ -3582,9 +3684,11 @@ private extension JourneyService {
                                     stepId: command.step.id, effectId: effectId, nextStepId: nextStepId,
                                     admission: originAdmission) else { return }
                                 if nextStepId != nil {
-                                    await continuePresentedRun(continued, release: release,
+                                    try await continuePresentedRun(continued, release: release,
                                         executionFenceToken: executionFenceToken, signal: .init(), journal: journal)
                                 }
+                            } catch let failure as ParkCommitFailure {
+                                throw failure
                             } catch {
                                 LogWarning("JourneyService: failed to settle synchronous commerce outcome: \(error)")
                                 await finish(run, outcome: "abandoned", leg: leg, journal: journal,
@@ -4094,22 +4198,27 @@ private extension JourneyService {
         stepId: String,
         journal: JourneyRunJournal,
         executionFenceToken: JourneyProfileFenceToken
-    ) async {
+    ) async throws {
+        let generation = journalGeneration
         guard let admission = journalCommitAdmission(
             journal: journal,
             executionFenceToken: executionFenceToken
         ) else { return }
+        let wakeAt = dateProvider.now()
         do {
             guard try await journal.park(
                 run.id,
                 stepId: stepId,
-                until: dateProvider.now(),
+                until: wakeAt,
                 admission: admission
             ) else { return }
         } catch {
             LogWarning(
                 "JourneyService: failed to preserve declined presentation: \(error)"
             )
+            throw ParkCommitFailure(run: run, stepId: stepId, checkpoint: nil,
+                presentationWakeAt: wakeAt, snapshot: nil, preparationFailed: false, journal: journal,
+                journalGeneration: generation, admission: admission)
         }
         await scheduleNextWake()
     }
