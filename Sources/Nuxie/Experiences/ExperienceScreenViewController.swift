@@ -719,8 +719,7 @@ final class ExperienceScreenViewController: UIViewController {
             }
             return
         }
-        let kept = await layer.mountedScreenIDs.contains(targetID)
-        let effectiveID = ExperiencePageHostContract.stepID(spec.transitionId, incomingKept: kept, isBack: isBack)
+        let effectiveID = spec.transitionId
         let plan = effectiveID.flatMap {
             ExperienceScreenCustomTransitionPlan.resolve(transitionId: $0, sourceScreenId: sourceID,
                 destinationScreenId: targetID, declarations: artifact.renderPlan.transitions)

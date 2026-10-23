@@ -17,10 +17,6 @@ enum ExperiencePageHostContract {
     static let modelName = "$nuxie.Page"
     static let screens = "screens"
 
-    static func stepID(_ id: String?, incomingKept: Bool, isBack: Bool) -> String? {
-        id.map { incomingKept && !isBack ? $0 + ".under" : $0 }
-    }
-
     struct Transition: Decodable {
         struct Endpoint: Decodable { let completeEventName: String }
         struct Reverse: Decodable {
@@ -31,9 +27,7 @@ enum ExperiencePageHostContract {
         private enum PublishedKind: String, Decodable { case page }
         private let kind: PublishedKind
         private let defaultPair: Bool?
-        private let incomingKept: Bool?
         var isDefaultPair: Bool { defaultPair == true }
-        var isIncomingKept: Bool { incomingKept == true }
         var planKind: NativeExperienceTransition.Kind { .page }
         let sourceScreenId: String
         let destinationScreenId: String
