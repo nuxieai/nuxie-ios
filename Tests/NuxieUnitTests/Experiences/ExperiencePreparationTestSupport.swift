@@ -592,7 +592,7 @@ func interimLayerPayload() async throws -> AuthenticatedRuntimePayload {
     let definition = ExperienceDefinition(screens: screens, viewModelValues: [], controlsByScreen: [:])
     return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
         renderPlan: .init(identity: base.renderPlan.identity, scene: base.renderPlan.scene,
-            entry: .init(screenId: "screen_1"), layerHost: .init(artboardName: "LayerList", listPath: "screens"),
+            entry: .init(screenId: "screen_1"), pageHost: .init(artboardName: "LayerList", listPath: "screens"),
             screens: [.init(screenId: "screen_1", artboardId: "screen_1", artboardName: "Paywall", width: 390, height: 844, exit: nil),
                       .init(screenId: "screen_2", artboardId: "screen_2", artboardName: "Upsell", width: 430, height: 932, exit: nil)],
             transitions: [interimLayerTransition()], textInputs: [], images: base.renderPlan.images, fonts: base.renderPlan.fonts),

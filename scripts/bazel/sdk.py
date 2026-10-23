@@ -260,7 +260,7 @@ def test_options(args, sdk_platform):
     if args.suite == "native-runtime" and not selectors:
         selectors = ["NuxieSDKUnitTests/" + name for name in (
             "NuxieNativeRuntimeTests", "ExperienceInteractiveScreenTests", "ExperienceRuntimePresentationLoopTests",
-            "ExperienceInteractiveLayerTests", "ExperienceLayerHostContractTests")]
+            "ExperienceInteractivePageTests", "ExperiencePageHostContractTests", "ExperiencePageStepTests")]
     if selectors:
         # Xcode accepts Target/Class[/method]; xctestrunner passes the filter
         # directly to XCTest, which identifies Swift classes as Module.Class.
