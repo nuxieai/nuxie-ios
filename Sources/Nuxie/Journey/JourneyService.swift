@@ -200,9 +200,10 @@ actor JourneyService {
         let checkpoint: ParkCheckpoint
         let at: Date
     }
-    /// At most one route per current checkpoint, including a consumed route
-    /// whose rendered run is waiting for the foreground presentation gate.
+    /// Checkpoints currently queued for this journal instance.
     private var enqueuedDeadlines: Set<JourneyDeadline> = []
+    private var deadlineRetryAt: [JourneyDeadline: Date] = [:]
+    private var foregroundDeadlines: Set<JourneyDeadline> = []
     private var nativeRestoreRetryTasks: [String: Task<Void, Never>] = [:]
     /// Setup occurs while the host app is in its launch foreground session.
     /// Lifecycle notifications close and reopen this latch thereafter.
@@ -224,7 +225,13 @@ actor JourneyService {
     /// Advances only when admitted execution authority is explicitly revoked.
     private let executionFence: JourneyProfileFence
     private var journal: JourneyRunJournal? {
-        didSet { journalGeneration &+= 1 }
+        didSet {
+            journalGeneration &+= 1
+            enqueuedDeadlines.removeAll()
+            deadlineRetryAt.removeAll()
+            foregroundDeadlines.removeAll()
+            cancelWake()
+        }
     }
     private var journalGeneration: UInt64 = 0
     private var recoveredJournalGeneration: UInt64?
@@ -847,18 +854,21 @@ extension JourneyService {
 }
 
 extension JourneyService {
-    /// Only the serial Journey route can authorize timeout resumption.
-    /// A failed read/write leaves this route at the queue head for retry.
+    /// Controls are always consumed. Unavailable work is derived again from
+    /// the journal, without retaining a deadline at the local queue head.
     func handleJourneyDeadline(_ deadline: JourneyDeadline) async -> Bool {
+        enqueuedDeadlines.remove(deadline)
         guard initialized, deadline.distinctId == identity.getDistinctId(),
               journal?.distinctId == deadline.distinctId else { return true }
+        let generation = journalGeneration
+        deadlineRetryAt[deadline] = dateProvider.now().addingTimeInterval(1)
         do {
             try await resumeParkedRuns(event: nil, deadline: deadline)
-            return true
         } catch {
             LogWarning("JourneyService: failed to handle Journey deadline: \(error)")
-            return false
         }
+        if generation == journalGeneration { await scheduleNextWake() }
+        return true
     }
 }
 
@@ -1060,6 +1070,8 @@ extension JourneyService {
         // before invoking this callback.
         foreground = true
         enqueuedDeadlines.removeAll()
+        foregroundDeadlines.removeAll()
+        deadlineRetryAt.removeAll()
         await resetForegroundStateArmReceiptsIfNeeded()
         try? await resumeParkedRuns(event: nil)
         guard initialized, let state = currentProfileState() else { return }
@@ -1774,11 +1786,6 @@ private extension JourneyService {
                 if let nativeRetry,
                    parked.id != nativeRetry.runID || ParkCheckpoint(parked) != nativeRetry.checkpoint { continue }
                 if let deadline, self.deadline(for: parked, distinctId: journal.distinctId) != deadline { continue }
-                if let retry = nativeRestoreRetries[parked.id], retry.checkpoint == ParkCheckpoint(parked),
-                   retry.at > dateProvider.now(), event == nil {
-                    if deadline != nil { throw JourneyJournalError.invalidState }
-                    continue
-                }
                 if event == nil {
                     let nativeRetryDue = nativeRestoreRetries[parked.id].map {
                         $0.checkpoint == ParkCheckpoint(parked) && $0.at <= dateProvider.now()
@@ -1826,6 +1833,17 @@ private extension JourneyService {
                     guard let updatedPark = try await journal.appendParkedCandidate(parked.id, expectedStepId: parked.stepId,
                             expectedPark: park, event: candidate, admission: admission) else { continue }
                     parked.park = updatedPark
+                }
+                // A background deadline is consumed before native restoration.
+                // Ordinary events retain the existing pending/candidate evaluation.
+                if event == nil, !foreground, !release.descriptor.leg.screens.isEmpty {
+                    if let deadline { foregroundDeadlines.insert(deadline) }
+                    continue
+                }
+                if let retry = nativeRestoreRetries[parked.id], retry.checkpoint == ParkCheckpoint(parked),
+                   retry.at > dateProvider.now(), event == nil {
+                    if deadline != nil { throw JourneyJournalError.invalidState }
+                    continue
                 }
                 // Restore while the durable checkpoint still owns recovery.
                 // A failed file preparation must not consume the wait.
@@ -4113,19 +4131,28 @@ private extension JourneyService {
         guard schedulingGeneration == wakeGeneration,
               inspectedJournalGeneration == journalGeneration,
               isCurrentIdentity(journal: journal) else { return }
-        enqueuedDeadlines.formIntersection(Set(deadlines))
-        let pending = deadlines.filter { !enqueuedDeadlines.contains($0) }
+        let current = Set(deadlines)
+        enqueuedDeadlines.formIntersection(current)
+        foregroundDeadlines.formIntersection(current)
+        deadlineRetryAt = deadlineRetryAt.filter { current.contains($0.key) }
+        let pending = deadlines.filter { !enqueuedDeadlines.contains($0) && !foregroundDeadlines.contains($0) }
         let now = dateProvider.now()
-        let due = pending.filter { $0.wakeAt <= now }
-        // Register before the actor hop. A concurrent schedule cannot enqueue
-        // the same checkpoint, and EventLog never waits for its subscriber.
+        let dated = pending.map { deadline -> (deadline: JourneyDeadline, at: Date) in
+            let nativeRetry = nativeRestoreRetries[deadline.runId].flatMap {
+                $0.checkpoint.stepId == deadline.stepId && $0.checkpoint.anchorAt == deadline.anchorAt
+                    && $0.checkpoint.wakeAt == deadline.wakeAt ? $0.at : nil
+            }
+            return (deadline, max(deadline.wakeAt, deadlineRetryAt[deadline] ?? deadline.wakeAt,
+                                  nativeRetry ?? deadline.wakeAt))
+        }
+        let due = dated.filter { $0.at <= now }.map(\.deadline)
         enqueuedDeadlines.formUnion(due)
         for deadline in due { await events.enqueueJourneyDeadline(deadline) }
         guard schedulingGeneration == wakeGeneration,
               inspectedJournalGeneration == journalGeneration else { return }
-        guard let next = pending.filter({ $0.wakeAt > now }).map(\.wakeAt).min() else { return }
+        guard let next = dated.filter({ $0.at > now }).map(\.at).min() else { return }
         scheduleWake(generation: schedulingGeneration, at: next,
-                     deadlines: pending.filter { $0.wakeAt == next })
+                     deadlines: dated.filter { $0.at == next }.map(\.deadline))
     }
 
     private func scheduleWake(generation: UInt64, at date: Date, deadlines: [JourneyDeadline]?) {

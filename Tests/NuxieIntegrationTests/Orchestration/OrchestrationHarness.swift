@@ -25,6 +25,7 @@ final class OrchestrationStack {
         distinctId: String,
         initialFeatureAccess: [String: FeatureAccess] = [:],
         forwardingHandler: ForwardingEventHandler? = nil,
+        localDeliveryHandler: AcknowledgingCommittedEventHandler? = nil,
         productService: ProductService? = nil,
         configure: ((NuxieConfiguration) -> Void)? = nil
     ) async throws -> OrchestrationStack {
@@ -75,6 +76,10 @@ final class OrchestrationStack {
         }
         if let forwardingHandler {
             await core.eventLog.subscribeForwarding(handler: forwardingHandler)
+        }
+        if let localDeliveryHandler {
+            let reservation = core.eventLog.reserveCommittedAdmission { 1 }
+            await core.eventLog.subscribeAcknowledgingCommitted(reservation: reservation, handler: localDeliveryHandler)
         }
         try await core.eventLog.configure(configuration: core.configuration)
         await core.journeys?.initialize()

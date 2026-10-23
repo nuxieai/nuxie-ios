@@ -18,6 +18,21 @@ private actor FeatureCommandForwardingRecorder {
     func eventSnapshot() -> [NuxieEvent] { events }
 }
 
+private actor OrchestrationLocalDeliveryGate {
+    private var accepting = false
+    private(set) var refusals = 0
+    private(set) var delivered: [String] = []
+
+    func handle(_ event: NuxieEvent) -> Bool {
+        guard ["retry_head", "retry_follower"].contains(event.name) else { return true }
+        guard accepting else { refusals += 1; return false }
+        delivered.append(event.name)
+        return true
+    }
+
+    func accept() { accepting = true }
+}
+
 /// Durable Feature-command coverage over the production composition root and
 /// stores. The transport is mocked, but its accepted-then-timeout behavior
 /// models the ambiguity that requires server and client idempotency.
@@ -39,6 +54,43 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 if let storageURL {
                     try? FileManager.default.removeItem(at: storageURL)
                 }
+            }
+
+            it("automatically retries a refused local head and releases later captures without a deadline") {
+                let gate = OrchestrationLocalDeliveryGate()
+                first = try await OrchestrationStack.boot(
+                    storageURL: storageURL,
+                    api: MockNuxieApi(),
+                    dateProvider: MockDateProvider(),
+                    sleepProvider: MockSleepProvider(),
+                    distinctId: "local-retry-customer",
+                    localDeliveryHandler: { event, _ in await gate.handle(event) },
+                    configure: { $0.testingOverrides.suppressBackgroundWork = true }
+                )
+                let stack = try unwrap(first)
+                stack.eventLog.track("retry_head", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                stack.eventLog.track("retry_follower", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
+                await stack.eventLog.drain()
+                for _ in 0..<500 {
+                    if await gate.refusals >= 2 { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                let refusals = await gate.refusals
+                let blocked = await gate.delivered
+                expect(refusals).to(beGreaterThanOrEqualTo(2))
+                expect(blocked).to(beEmpty())
+                await gate.accept()
+                for _ in 0..<500 {
+                    if await gate.delivered.count == 2 { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                await stack.eventLog.drain()
+                let delivered = await gate.delivered
+                expect(delivered).to(equal(["retry_head", "retry_follower"]))
+                let drained = await stack.eventLog.drainCommittedRouting()
+                expect(drained).to(beTrue())
+                let history = await stack.eventLog.getEventsForUser("local-retry-customer", limit: 20)
+                expect(history.filter { $0.name.hasPrefix("retry_") }.count).to(equal(2))
             }
 
             it("retries an accepted timeout without overwriting a newer profile balance") {

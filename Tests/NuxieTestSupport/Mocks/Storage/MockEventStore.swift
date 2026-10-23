@@ -352,10 +352,12 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
-    public func firstPendingCommittedRoute(sessionId: String) async throws -> PendingCommittedRouteDelivery? {
+    public func firstPendingCommittedRoute(sessionId: String, afterSequence: UInt64? = nil) async throws -> PendingCommittedRouteDelivery? {
         try lock.withLock {
             if _shouldFailQuery { throw mockError(3, "Mock query error") }
-            return _committedRoutes.first { $0.admission.sessionId == sessionId }
+            return _committedRoutes.first { route in
+                route.admission.sessionId == sessionId && (afterSequence.map { route.commitSequence > $0 } ?? true)
+            }
         }
     }
 

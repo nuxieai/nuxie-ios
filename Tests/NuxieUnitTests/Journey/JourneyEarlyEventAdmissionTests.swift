@@ -128,6 +128,60 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         }
     }
 
+    func testFailedJournalInspectionRetriesWithoutAnyParkedRunOrDeadline() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inspection = FailableJourneyRead()
+        let headDeliveries = JourneyDeliveryObservation()
+        let laterDeliveries = JourneyDeliveryObservation()
+        let retries = expectation(description: "The failed head is attempted repeatedly without a deadline")
+        retries.expectedFulfillmentCount = 3
+        let laterDelivered = expectation(description: "The later event routes after the head recovers")
+        let live = try await liveTimedWait(directory: directory,
+            readJournalRuns: { journal in
+                try await inspection.attempt()
+                return try await journal.runs()
+            }, afterJourney: { event, accepted in
+                if event.name == "ordinary" {
+                    await headDeliveries.record(accepted)
+                    let attempts = await headDeliveries.values.count
+                    if !accepted, attempts <= 3 { retries.fulfill() }
+                } else if event.name == "later" {
+                    await laterDeliveries.record(accepted)
+                    laterDelivered.fulfill()
+                }
+            })
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let initial = try await journal.runs()
+        XCTAssertTrue(initial.isEmpty)
+        await inspection.setFailing(true)
+        live.events.track("ordinary")
+        live.events.track("later")
+        await live.events.drain()
+        await fulfillment(of: [retries], timeout: 5)
+        let refused = await headDeliveries.values
+        let blocked = await laterDeliveries.values
+        XCTAssertGreaterThanOrEqual(refused.count, 3)
+        XCTAssertTrue(refused.allSatisfy { !$0 })
+        XCTAssertTrue(blocked.isEmpty, "Later captures must not pass the refused event")
+        XCTAssertEqual(live.store.pendingCommittedRoutes.map(\.event.name), ["ordinary", "later"])
+
+        // No replay request, new capture, foreground callback, or Journey timer
+        // rescues this head. The same route timer keeps trying until it works.
+        await inspection.setFailing(false)
+        await fulfillment(of: [laterDelivered], timeout: 5)
+        await live.events.drain()
+        let recovered = await headDeliveries.values
+        let followed = await laterDeliveries.values
+        XCTAssertEqual(recovered.last, true)
+        XCTAssertEqual(followed, [true])
+        XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
+        let remaining = try await journal.runs()
+        XCTAssertTrue(remaining.isEmpty, "Neither event creates a timed run")
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
     func testFailedJournalInspectionKeepsAnInWindowFollowUpReplayable() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -149,7 +203,8 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         await live.events.drain()
 
         let failedDeliveries = await deliveries.values
-        XCTAssertEqual(failedDeliveries, [false])
+        XCTAssertFalse(failedDeliveries.isEmpty)
+        XCTAssertTrue(failedDeliveries.allSatisfy { !$0 })
         XCTAssertTrue(live.store.pendingCommittedRoutes.contains { $0.event.id == "replayable-follow-up" })
         let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
         let parked = try await journal.runs().first
@@ -164,7 +219,8 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         XCTAssertTrue(replayed)
         await live.events.drain()
         let recoveredDeliveries = await deliveries.values
-        XCTAssertEqual(recoveredDeliveries, [false, true])
+        XCTAssertEqual(recoveredDeliveries.last, true)
+        XCTAssertTrue(recoveredDeliveries.dropLast().allSatisfy { !$0 })
         XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
         XCTAssertFalse(live.store.pendingStableRouteIds.contains("replayable-follow-up"))
         XCTAssertEqual(completions(in: live.store), ["satisfied"])
@@ -239,17 +295,22 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testDeadlineHandlingRetriesJournalReadAndPersistenceFailures() async throws {
-        for failRead in [true, false] {
+        for failure in ["read", "write", "native"] {
             let directory = temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
             let inspection = FailableJourneyRead()
+            let nativeReads = FailableJourneyRead()
+            let deadlineDeliveries = JourneyDeliveryObservation()
             let armed = JourneyCompletionFlag()
             let failedWrite = JourneyCompletionFlag()
-            let live = try await liveTimedWait(directory: directory, readJournalRuns: { journal in
+            let live = try await liveTimedWait(directory: directory, readNativeValues: { values in
+                try await nativeReads.attempt()
+                return try await values.journeyValues()
+            }, readJournalRuns: { journal in
                 try await inspection.attempt()
                 return try await journal.runs()
             }, journalBeforePersist: {
-                if !failRead, armed.isCompleted, !failedWrite.isCompleted {
+                if failure == "write", armed.isCompleted, !failedWrite.isCompleted {
                     failedWrite.finish()
                     throw JourneyJournalError.invalidState
                 }
@@ -260,9 +321,16 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             let parkedRuns = try await journal.runs()
             let run = try XCTUnwrap(parkedRuns.first)
             let deadline = try XCTUnwrap(Self.deadline(run))
+            let service = live.service
+            await live.events.setJourneyDeadlineHandler { [weak service] deadline in
+                let accepted = await service?.handleJourneyDeadline(deadline) ?? false
+                await deadlineDeliveries.record(accepted)
+                return accepted
+            }
             // Queue a known checkpoint so scheduling cannot consume the injected
             // failure before the deadline handler reaches its journal boundary.
-            if failRead { await inspection.setFailing(true) }
+            if failure == "read" { await inspection.setFailing(true) }
+            if failure == "native" { await nativeReads.setFailing(true) }
             armed.finish()
             live.clock.advance(by: 1)
             await live.events.enqueueJourneyDeadline(deadline)
@@ -270,11 +338,19 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             XCTAssertEqual(completions(in: live.store), [])
             let retained = try await journal.runs().first
             XCTAssertEqual(retained?.park, run.park)
-            if !failRead { XCTAssertTrue(failedWrite.isCompleted) }
+            if failure == "write" { XCTAssertTrue(failedWrite.isCompleted) }
+            let accepted = await deadlineDeliveries.values
+            XCTAssertEqual(accepted, [true], "Unavailable deadline controls are acknowledged and dropped")
+            let buffered = await live.events.bufferedCommittedRouteCount
+            XCTAssertEqual(buffered, 0, "The stored park, not EventLog's head, owns the retry")
             await inspection.setFailing(false)
-            // EventLog retries the same queue head without another event,
-            // foreground callback, or manual delivery retry.
+            await nativeReads.setFailing(false)
+            // The consumed deadline is derived again from the stored park on
+            // JourneyService's retry timer, without retaining a route head.
+            let retryDelay: TimeInterval = failure == "native" ? 5 : 1
+            live.clock.advance(by: retryDelay)
             for _ in 0..<300 where completions(in: live.store).isEmpty {
+                live.sleeper.completeSleeps(withDuration: retryDelay)
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
             XCTAssertEqual(completions(in: live.store), ["timeout"])
@@ -282,6 +358,101 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             await live.events.close()
         }
     }
+
+    func testBackgroundRenderedDeadlineSkipsFailingNativeReadsAndLetsLaterEventsThrough() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let reads = FailableJourneyRead()
+        let deliveries = JourneyDeliveryObservation()
+        let live = try await liveTimedWait(directory: directory, readNativeValues: { values in
+            try await reads.attempt()
+            return try await values.journeyValues()
+        }, beforeJourney: { event, clock in
+            if event.name == "start_screenless" { clock.advance(by: 1) }
+        }, afterJourney: { event, accepted in
+            if event.name == "unrelated" { await deliveries.record(accepted) }
+        }, screens: [Self.backgroundScreen])
+        live.events.track("start_waiting")
+        await live.events.drain()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await journal.runs()
+        let deadline = try XCTUnwrap(runs.first.flatMap(Self.deadline))
+        await live.service.onAppDidEnterBackground()
+        let before = await reads.attempts
+        await reads.setFailing(true)
+        live.clock.advance(by: 1)
+        await live.events.enqueueJourneyDeadline(deadline)
+        await live.events.drain()
+        let after = await reads.attempts
+        XCTAssertEqual(after, before, "The background deadline gate precedes native restoration")
+        // Ordinary background events keep main's pending/candidate behavior.
+        live.events.track("unrelated")
+        await live.events.drain()
+        let handled = await deliveries.values
+        XCTAssertEqual(handled, [true], "The consumed deadline must not block later local events")
+        XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
+        await reads.setFailing(false)
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let screenless = replacing(try await authenticatedSnapshot(fixture), entry: Self.eventEntry("start_screenless"),
+            reentry: .init(type: .everyMatch, window: nil), completionOutputs: Self.heldWaitOutcomes,
+            entryStepId: "wait", steps: Self.waitSteps(eventName: "go", maxTimeMillis: 500), routes: [], screens: [])
+        await live.service.profileDidCommit(screenless, distinctId: "customer")
+        live.events.track("start_screenless")
+        await live.events.drain()
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), ["timeout"],
+                       "An unrelated screenless Journey must still start and finish in the background")
+        let parked = try await journal.runs().first
+        XCTAssertNotNil(parked?.park)
+        // Allow any ordinary-event native restoration backoff to elapse
+        // before checking that foregrounding recreates the deadline.
+        live.clock.advance(by: 5)
+        await live.service.onAppBecameActive()
+        await live.events.drain()
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), ["timeout", "timeout"],
+                       "Foregrounding recreates the rendered run's consumed deadline")
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    func testRecoveryFailureClearsEnqueuedDeadlinesBeforeTheJournalReopens() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let snapshot = replacing(try await authenticatedSnapshot(fixture), entry: Self.eventEntry("start_waiting"),
+            reentry: .init(type: .everyMatch, window: nil), completionOutputs: Self.heldWaitOutcomes,
+            entryStepId: "wait", steps: Self.waitSteps(eventName: "go", maxTimeMillis: 500), routes: [], screens: [])
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let queued = JourneyDeadlineRecorder()
+        let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock)
+        let routing: any EventLogProtocol = events
+        events.replayPendingRoutesHandler = {
+            await routing.setJourneyDeadlineHandler { deadline in await queued.append(deadline); return true }
+            await service.handleEvent(Self.event("start_waiting", at: clock.now().addingTimeInterval(-1)))
+            return false
+        }
+        await service.prepareForEvents()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let first = await queued.values
+        XCTAssertEqual(first.count, 1)
+        // Reopen the same checkpoint without delivering the old queue entry.
+        events.replayPendingRoutesHandler = { true }
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let reopened = await queued.values
+        XCTAssertEqual(reopened.count, 2, "The marker belongs to the dropped journal instance")
+        let deadline = try XCTUnwrap(reopened.last)
+        _ = await service.handleJourneyDeadline(deadline)
+        XCTAssertEqual(completions(in: events), ["timeout"])
+        await service.shutdown()
+    }
+
+    private static let backgroundScreen = Journey.Screen(id: "screen", defaultViewModelName: nil,
+        defaultInstanceId: nil, responseCaptures: [])
 
     func testStaleDeadlineForMovedOnCheckpointIsDropped() async throws {
         let directory = temporaryDirectory()
@@ -918,6 +1089,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
     private func liveTimedWait(directory: URL, step: Journey.Step? = nil,
         prepareNativeValues: @escaping JourneyService.NativeValuesPreparer = { _, _, _, _ in },
+        readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         readJournalRuns: @escaping JourneyService.JournalRunsReader = { try await $0.runs() },
         journalBeforePersist: (@Sendable () throws -> Void)? = nil,
         beforeJourney: @escaping @Sendable (NuxieEvent, MockDateProvider) -> Void = { _, _ in },
@@ -943,8 +1115,11 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let service = JourneyService(identity: identity, events: events, dateProvider: clock, sleepProvider: sleeper,
             journalDirectory: directory, storageScope: .testFixture,
             featureAccess: { _ in nil }, dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            prepareNativeValues: prepareNativeValues, readJournalRuns: readJournalRuns,
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            prepareNativeValues: prepareNativeValues, readNativeValues: readNativeValues, readJournalRuns: readJournalRuns,
+            pinnedReleaseAuthenticator: { _, reference in
+                guard let release = snapshot.releasesByDigest[reference.descriptorSha256] else { throw JourneyJournalError.invalidState }
+                return release
+            },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed), journalBeforePersist: journalBeforePersist)
         let reservation = events.reserveCommittedAdmission { service.eventAdmissionGeneration() }
         await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, generation in
@@ -1187,4 +1362,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }
             .compactMap { $0.properties["outcome"] as? String }
     }
+}
+
+private actor JourneyDeadlineRecorder {
+    private(set) var values: [JourneyDeadline] = []
+    func append(_ deadline: JourneyDeadline) { values.append(deadline) }
 }
