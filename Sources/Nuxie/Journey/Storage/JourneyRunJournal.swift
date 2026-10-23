@@ -1210,7 +1210,7 @@ struct JourneyRunJournal {
             // transaction. A failed write must keep the original checkpoint.
             if let advancingTo {
                 run.stepId = advancingTo.stepId
-                run.context = advancingTo.context
+                run.context = .init(event: advancingTo.context.event, responses: [:])
             }
             run.park = nil
             run.nativeSnapshot = nil
