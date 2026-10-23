@@ -10,9 +10,14 @@ enum StableEventCaptureOutcome: Sendable {
   case dropped
 }
 
+enum EventStoreAccessMode: Sendable {
+  case writer, readOnly
+}
+
 enum EventDeliveryState: Int32, Sendable {
   case pending = 0
   case delivered = 2
+  case localOnly = 3
 }
 
 struct EventHistoryPruneResult: Equatable, Sendable {
@@ -281,7 +286,7 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   // MARK: - Properties
 
-  private static let currentSchemaVersion: Int32 = 4
+  private static let currentSchemaVersion: Int32 = 5
 
   // nonisolated(unsafe): accessed from the actor's methods (isolated) and
   // from deinit, which has exclusive access to the last reference.
@@ -289,6 +294,7 @@ actor SQLiteEventStore: EventStoreProtocol {
   private(set) var dbPath: String?
   private var nextCommitSequence: UInt64 = 0
   private let conversionCaptureScope: String
+  private let accessMode: EventStoreAccessMode
 
   // MARK: - SQL Statements
 
@@ -363,13 +369,14 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   private let insertEventSQL = """
     INSERT OR IGNORE INTO events (
-      id, name, properties, timestamp, user_id, delivery_state, origin, journey_origin
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+      id, name, properties, timestamp, user_id, delivery_state, origin, journey_origin,
+      capture_scope, authority_scope, scope, accepted_at, session_id, input_kind
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """
 
   private let queryEventsSQL = """
     SELECT id, name, properties, timestamp, user_id, journey_origin
-    FROM events
+    FROM events WHERE delivery_state != 3
     ORDER BY timestamp DESC
     LIMIT ?;
     """
@@ -381,12 +388,13 @@ actor SQLiteEventStore: EventStoreProtocol {
     LIMIT 1;
     """
 
-  private let countEventsSQL = "SELECT COUNT(*) FROM events;"
+  private let countEventsSQL = "SELECT COUNT(*) FROM events WHERE delivery_state != 3;"
 
   // MARK: - Initialization
 
-  public init(conversionCaptureScope: String = "test-fixture") {
+  public init(conversionCaptureScope: String = "test-fixture", accessMode: EventStoreAccessMode = .writer) {
     self.conversionCaptureScope = "capture-" + conversionCaptureScope
+    self.accessMode = accessMode
   }
 
   deinit {
@@ -416,16 +424,20 @@ actor SQLiteEventStore: EventStoreProtocol {
       baseDir = appSupport.appendingPathComponent("nuxie", isDirectory: true)
     }
     
-    // Create directory if needed
-    try? FileManager.default.createDirectory(
-      at: baseDir, withIntermediateDirectories: true, attributes: nil)
+    guard accessMode == .readOnly || Bundle.main.infoDictionary?["NSExtension"] == nil else {
+      throw EventStorageError.databaseNotInitialized
+    }
+    if accessMode == .writer {
+      try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true, attributes: nil)
+    }
     
     // Set database path
     let dbPath = baseDir.appendingPathComponent("events.db")
     self.dbPath = dbPath.path
 
     // Open database
-    if sqlite3_open(dbPath.path, &db) != SQLITE_OK {
+    let openFlags = accessMode == .writer ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE : SQLITE_OPEN_READONLY
+    if sqlite3_open_v2(dbPath.path, &db, openFlags, nil) != SQLITE_OK {
       let errorMessage = String(cString: sqlite3_errmsg(db))
       sqlite3_close(db)
       db = nil
@@ -436,19 +448,32 @@ actor SQLiteEventStore: EventStoreProtocol {
     // Wait up to 5 seconds if database is locked
     _ = sqlite3_busy_timeout(db, 5_000)
 
+    _ = sqlite3_exec(db, "PRAGMA foreign_keys=ON;", nil, nil, nil)
+
     do {
-      try prepareCurrentSchema()
+      if accessMode == .readOnly {
+        try executeSchemaSQL("PRAGMA query_only=ON;", targetVersion: 5, operation: "open read-only store")
+        let version = try readUserVersion(targetVersion: nil)
+        guard version == Self.currentSchemaVersion else {
+          throw schemaError(targetVersion: version, operation: "open read-only store", code: SQLITE_SCHEMA)
+        }
+        try verifyCurrentSchema()
+      } else {
+        try prepareCurrentSchema()
+      }
     } catch {
       sqlite3_close(db)
       db = nil
       throw error
     }
 
+    guard accessMode == .writer else { return }
+
     // Set PRAGMAs for proper concurrency handling
     // WAL mode for better concurrent access
     _ = sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
-    // Balance between safety and performance
-    _ = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
+    // Customer progress must survive loss of power after acknowledgement.
+    _ = sqlite3_exec(db, "PRAGMA synchronous=FULL;", nil, nil, nil)
     // Ensure referential integrity
     _ = sqlite3_exec(db, "PRAGMA foreign_keys=ON;", nil, nil, nil)
 
@@ -472,21 +497,22 @@ actor SQLiteEventStore: EventStoreProtocol {
         )
       }
       try installCurrentSchema()
-      LogInfo("Event store schema v4 installed")
+      LogInfo("Event store schema v5 installed")
 
 
-    case 2, 3:
-      // Preserve ordinary event and purchase evidence; no retired Journey
-      // contracts are imported or converted into authority.
+    case 2, 3, 4:
       try verifySchemaObjects(targetVersion: version)
-      try executeSchemaSQL("BEGIN IMMEDIATE;", targetVersion: 4, operation: "begin event origin upgrade")
+      try executeSchemaSQL("BEGIN IMMEDIATE;", targetVersion: 5, operation: "begin customer store upgrade")
       do {
         if version == 2 {
-          try executeSchemaSQL(createConversionInboxSQL, targetVersion: 4, operation: "create conversion inbox")
+          try executeSchemaSQL(createConversionInboxSQL, targetVersion: 5, operation: "create conversion inbox")
         }
-        try executeSchemaSQL("ALTER TABLE events ADD COLUMN journey_origin BLOB;", targetVersion: 4, operation: "add event origin")
+        if version < 4 {
+          try executeSchemaSQL("ALTER TABLE events ADD COLUMN journey_origin BLOB;", targetVersion: 5, operation: "add event origin")
+        }
+        try installCustomerSchema()
         try verifyCurrentSchema()
-        try executeSchemaSQL("PRAGMA user_version = 4; COMMIT;", targetVersion: 4, operation: "commit event origin upgrade")
+        try executeSchemaSQL("PRAGMA user_version = 5; COMMIT;", targetVersion: 5, operation: "commit customer store upgrade")
       } catch {
         _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
         throw error
@@ -502,7 +528,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         targetVersion: version,
         operation: "validate user_version",
         code: SQLITE_SCHEMA,
-        message: "Event-store schema v\(version) is unsupported; expected v4"
+        message: "Event-store schema v\(version) is unsupported; expected v5"
       )
     }
   }
@@ -585,6 +611,7 @@ actor SQLiteEventStore: EventStoreProtocol {
         )
       }
       try executeSchemaSQL(createConversionInboxSQL, targetVersion: targetVersion, operation: "create conversion inbox")
+      try installCustomerSchema()
       try verifyCurrentSchema()
       try executeSchemaSQL(
         "PRAGMA user_version = \(targetVersion);",
@@ -614,9 +641,53 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
   }
 
+  private func installCustomerSchema() throws {
+    try executeSchemaSQL(CustomerStoreSchema.installSQL, targetVersion: 5, operation: "create customer tables")
+    for column in CustomerStoreSchema.eventColumns {
+      try executeSchemaSQL("ALTER TABLE events ADD COLUMN \(column);", targetVersion: 5, operation: "extend events")
+    }
+    try executeSchemaSQL("CREATE UNIQUE INDEX idx_events_owner_id ON events(scope,user_id,id);", targetVersion: 5, operation: "index event owners")
+    try executeSchemaSQL("UPDATE events SET capture_sequence = rowid;", targetVersion: 5, operation: "backfill capture sequence")
+    try executeSchemaSQL(CustomerStoreSchema.eventSequenceSQL, targetVersion: 5, operation: "install capture sequence")
+    for (name, columns) in CustomerStoreSchema.indexes {
+      try executeSchemaSQL("CREATE INDEX \(name) ON \(columns);", targetVersion: 5, operation: "index customer store")
+    }
+    try executeSchemaSQL(CustomerStoreSchema.historySQL, targetVersion: 5, operation: "scope history metadata")
+  }
+
+  // These synchronous helpers keep all customer commands on this actor's connection.
+  func customerStatement<T>(_ sql: String, _ body: (OpaquePointer?) throws -> T) throws -> T {
+    try withCommittedRouteStatement(sql, body)
+  }
+
+  func customerAssertWriter() throws {
+    guard accessMode == .writer else { throw CustomerStoreError.invalidRow }
+  }
+
+  func customerExecute(_ sql: String) throws {
+    guard db != nil else { throw EventStorageError.databaseNotInitialized }
+    try executeSchemaSQL(sql, targetVersion: 5, operation: "customer command")
+  }
+
   private func verifyCurrentSchema() throws {
     let version = Self.currentSchemaVersion
     try verifySchemaObjects(targetVersion: version)
+    for (name, _) in CustomerStoreSchema.tables {
+      guard try schemaObjectType(named: name, targetVersion: version) == "table" else {
+        throw schemaError(targetVersion: version, operation: "verify \(name)", code: SQLITE_SCHEMA)
+      }
+    }
+    for (name, definition) in CustomerStoreSchema.indexes {
+      let columnList = definition.split(separator: "(", maxSplits: 1)[1].dropLast()
+      let columns = columnList.split(separator: ",").map { (String($0), false) }
+      try verifyIndex(named: name, expectedColumns: columns, targetVersion: version)
+    }
+    try verifyIndex(named: "idx_events_capture_sequence", expectedColumns: [("capture_sequence", false)], targetVersion: version)
+    try verifyIndex(named: "idx_events_owner_id", expectedColumns: [("scope", false), ("user_id", false), ("id", false)], targetVersion: version)
+    let metadata = try customerMetadata()
+    guard metadata.stateVersion == "legacy" || metadata.stateVersion == CustomerStoreSchema.stateVersion else {
+      throw CustomerStoreError.unsupportedStateVersion(metadata.stateVersion)
+    }
   }
 
   private func verifySchemaObjects(targetVersion: Int32) throws {
@@ -634,18 +705,26 @@ actor SQLiteEventStore: EventStoreProtocol {
                           message: "Invalid committed route delivery queue")
       }
       try verifyIndex(named: "idx_committed_routes_session", expectedColumns: [("session_id", false), ("commit_sequence", false)], targetVersion: version)
-      let columns = try tableColumns(named: "conversion_event_inbox", targetVersion: version)
-      guard columns.count == 5, columns["scope"]?.type == "TEXT", columns["scope"]?.isNotNull == true,
-            columns["event_id"]?.primaryKeyPosition == 1,
-            columns["event_id"]?.type == "TEXT", columns["user_id"]?.type == "TEXT",
-            columns["user_id"]?.isNotNull == true, columns["payload"]?.type == "BLOB",
-            columns["payload"]?.isNotNull == true, columns["accepted_at"]?.type == "INTEGER",
-            columns["accepted_at"]?.isNotNull == true else {
-        throw schemaError(targetVersion: version, operation: "verify conversion inbox", code: SQLITE_SCHEMA,
-                          message: "Invalid durable conversion inbox")
+      let inboxPresent = try schemaObjectType(named: "conversion_event_inbox", targetVersion: version) == "table"
+      if inboxPresent || version < 5 {
+        let columns = try tableColumns(named: "conversion_event_inbox", targetVersion: version)
+        guard columns.count == 5, columns["scope"]?.type == "TEXT", columns["scope"]?.isNotNull == true,
+              columns["event_id"]?.primaryKeyPosition == 1,
+              columns["event_id"]?.type == "TEXT", columns["user_id"]?.type == "TEXT",
+              columns["user_id"]?.isNotNull == true, columns["payload"]?.type == "BLOB",
+              columns["payload"]?.isNotNull == true, columns["accepted_at"]?.type == "INTEGER",
+              columns["accepted_at"]?.isNotNull == true else {
+          throw schemaError(targetVersion: version, operation: "verify conversion inbox", code: SQLITE_SCHEMA,
+                            message: "Invalid durable conversion inbox")
+        }
+        try verifyIndex(named: "idx_conversion_inbox_user", expectedColumns: [("scope", false), ("user_id", false)], targetVersion: version)
+        try verifyIndex(named: "idx_conversion_inbox_expiry", expectedColumns: [("scope", false), ("accepted_at", false)], targetVersion: version)
+      } else {
+        let metadata = try customerMetadata()
+        guard metadata.stateVersion == CustomerStoreSchema.stateVersion else {
+          throw schemaError(targetVersion: version, operation: "verify conversion inbox", code: SQLITE_SCHEMA)
+        }
       }
-      try verifyIndex(named: "idx_conversion_inbox_user", expectedColumns: [("scope", false), ("user_id", false)], targetVersion: version)
-      try verifyIndex(named: "idx_conversion_inbox_expiry", expectedColumns: [("scope", false), ("accepted_at", false)], targetVersion: version)
       let bindings = try tableColumns(named: "conversion_scope_bindings", targetVersion: version)
       guard bindings.count == 2, bindings["capture_scope"]?.type == "TEXT",
             bindings["capture_scope"]?.primaryKeyPosition == 1,
@@ -791,7 +870,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let columns = try tableColumns(named: "events", targetVersion: targetVersion)
-    guard columns.count == (targetVersion >= 4 ? 8 : 7),
+    guard columns.count == (targetVersion >= 5 ? 20 : (targetVersion >= 4 ? 8 : 7)),
           (targetVersion < 4 || columns["journey_origin"]?.type.caseInsensitiveCompare("BLOB") == .orderedSame),
           let id = columns["id"],
           id.type.caseInsensitiveCompare("TEXT") == .orderedSame,
@@ -819,6 +898,16 @@ actor SQLiteEventStore: EventStoreProtocol {
           + "properties BLOB NOT NULL, timestamp INTEGER NOT NULL, user_id TEXT NOT NULL, "
           + "delivery_state INTEGER NOT NULL DEFAULT 2, origin TEXT NOT NULL DEFAULT 'device', and (v4+) journey_origin BLOB"
       )
+    }
+    if targetVersion >= 5 {
+      for declaration in CustomerStoreSchema.eventColumns {
+        let parts = declaration.split(separator: " ")
+        let column = columns[String(parts[0])]
+        guard column?.type == String(parts[1]),
+              !declaration.contains("NOT NULL") || column?.isNotNull == true else {
+          throw schemaError(targetVersion: targetVersion, operation: "verify events.\(parts[0])", code: SQLITE_SCHEMA)
+        }
+      }
     }
     return columns
   }
@@ -907,6 +996,14 @@ actor SQLiteEventStore: EventStoreProtocol {
       named: "event_history_metadata",
       targetVersion: targetVersion
     )
+    if targetVersion >= 5 {
+      guard columns.count == 3, columns["scope"]?.primaryKeyPosition == 1,
+            columns["user_id"]?.primaryKeyPosition == 2,
+            columns["coverage_start_ms"]?.type == "INTEGER" else {
+        throw schemaError(targetVersion: targetVersion, operation: "verify event_history_metadata", code: SQLITE_SCHEMA)
+      }
+      return
+    }
     guard columns.count == 2,
           let id = columns["id"],
           id.type.caseInsensitiveCompare("INTEGER") == .orderedSame,
@@ -1090,6 +1187,7 @@ actor SQLiteEventStore: EventStoreProtocol {
   /// Reset the database (close and delete database)
   public func reset() {
     close()
+    guard accessMode == .writer else { return }
     if let dbPath = dbPath {
       try? FileManager.default.removeItem(atPath: dbPath)
       self.dbPath = nil
@@ -1147,6 +1245,11 @@ actor SQLiteEventStore: EventStoreProtocol {
   ) throws {
     guard sequence <= UInt64(Int64.max) else { throw EventStorageError.invalidProperties }
     let bytes = try JSONEncoder().encode(admission)
+    try withCommittedRouteStatement("UPDATE events SET session_id=COALESCE(session_id,?) WHERE id=?;") { statement in
+      sqlite3_bind_text(statement, 1, admission.sessionId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_text(statement, 2, eventId, -1, SQLITE_TRANSIENT)
+      guard sqlite3_step(statement) == SQLITE_DONE else { throw EventStorageError.invalidProperties }
+    }
     try withCommittedRouteStatement("INSERT OR IGNORE INTO committed_route_deliveries(event_id, session_id, commit_sequence, admission) VALUES (?, ?, ?, ?);") { statement in
       sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
       sqlite3_bind_text(statement, 2, admission.sessionId, -1, SQLITE_TRANSIENT)
@@ -1258,6 +1361,18 @@ actor SQLiteEventStore: EventStoreProtocol {
       sqlite3_bind_null(statement, 8)
     }
 
+    sqlite3_bind_text(statement, 9, conversionCaptureScope, -1, SQLITE_TRANSIENT)
+    let eventScope = try conversionScope()
+    if eventScope.hasPrefix("authority-") {
+      sqlite3_bind_text(statement, 10, eventScope, -1, SQLITE_TRANSIENT)
+    } else {
+      sqlite3_bind_null(statement, 10)
+    }
+    sqlite3_bind_text(statement, 11, eventScope, -1, SQLITE_TRANSIENT)
+    sqlite3_bind_int64(statement, 12, try Self.historyMilliseconds(for: acceptedAt, rounding: .toNearestOrAwayFromZero))
+    sqlite3_bind_null(statement, 13)
+    sqlite3_bind_text(statement, 14, deliveryState == .localOnly ? "response_change" : "event", -1, SQLITE_TRANSIENT)
+
 
     // Execute
     if sqlite3_step(statement) != SQLITE_DONE {
@@ -1269,7 +1384,16 @@ actor SQLiteEventStore: EventStoreProtocol {
     
     let newlyDurable = sqlite3_changes(db) == 1
     if newlyDurable {
-      try stageConversionOccurrence(event, acceptedAt: acceptedAt)
+      try withCommittedRouteStatement("SELECT capture_sequence FROM events WHERE id=?;") { allocated in
+        sqlite3_bind_text(allocated, 1, event.id, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(allocated) == SQLITE_ROW, sqlite3_column_int64(allocated, 0) > 0 else {
+          throw EventStorageError.insertFailed(NSError(
+            domain: "SQLite", code: Int(SQLITE_CONSTRAINT),
+            userInfo: [NSLocalizedDescriptionKey: "Event capture sequence was not allocated"]
+          ))
+        }
+      }
+      if deliveryState != .localOnly { try stageConversionOccurrence(event, acceptedAt: acceptedAt) }
       LogDebug("Successfully inserted event into database: \(event.name)")
     } else {
       guard let stored = try queryEvent(id: event.id) else {
@@ -1336,10 +1460,14 @@ actor SQLiteEventStore: EventStoreProtocol {
       let existing = try conversionScope()
       let target = scope.conversionNamespace
       guard existing == conversionCaptureScope || existing == target else { throw EventStorageError.invalidProperties }
-      for sql in [
+      var statements = [
         "INSERT OR IGNORE INTO conversion_scope_bindings(authority_scope, capture_scope) VALUES (?1, ?2);",
-        "UPDATE conversion_event_inbox SET scope = ?1 WHERE scope = ?2;"
-      ] {
+        "UPDATE events SET authority_scope = ?1, scope = ?1 WHERE capture_scope = ?2 AND authority_scope IS NULL;"
+      ]
+      if try customerMetadata().stateVersion == "legacy" {
+        statements.append("UPDATE conversion_event_inbox SET scope = ?1 WHERE scope = ?2;")
+      }
+      for sql in statements {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw EventStorageError.invalidProperties }
@@ -1398,6 +1526,7 @@ actor SQLiteEventStore: EventStoreProtocol {
   }
 
   private func stageConversionOccurrence(_ event: StoredEvent, acceptedAt: Date) throws {
+    if try customerMetadata().stateVersion == CustomerStoreSchema.stateVersion { return }
     _ = try pruneConversionOccurrences(at: acceptedAt)
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
@@ -2146,7 +2275,7 @@ actor SQLiteEventStore: EventStoreProtocol {
   public func readOrInitializeHistoryCoverage(startingAt: Date) throws -> Date {
     guard let db else { throw EventStorageError.databaseNotInitialized }
     let startingMs = Self.coverageMilliseconds(for: startingAt)
-    let sql = "INSERT OR IGNORE INTO event_history_metadata (id, coverage_start_ms) VALUES (1, ?);"
+    let sql = "INSERT OR IGNORE INTO event_history_metadata (scope, user_id, coverage_start_ms) VALUES ('legacy-global', '', ?);"
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -2161,7 +2290,7 @@ actor SQLiteEventStore: EventStoreProtocol {
 
   public func historyCoverageStartingAt() throws -> Date {
     guard let db else { throw EventStorageError.databaseNotInitialized }
-    let sql = "SELECT coverage_start_ms FROM event_history_metadata WHERE id = 1;"
+    let sql = "SELECT coverage_start_ms FROM event_history_metadata WHERE scope = 'legacy-global' AND user_id = '';"
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -2177,9 +2306,9 @@ actor SQLiteEventStore: EventStoreProtocol {
     guard let db else { throw EventStorageError.databaseNotInitialized }
     let startingMs = Self.coverageMilliseconds(for: startingAt)
     let sql = """
-      INSERT INTO event_history_metadata (id, coverage_start_ms)
-      VALUES (1, ?)
-      ON CONFLICT(id) DO UPDATE SET
+      INSERT INTO event_history_metadata (scope, user_id, coverage_start_ms)
+      VALUES ('legacy-global', '', ?)
+      ON CONFLICT(scope,user_id) DO UPDATE SET
         coverage_start_ms = MAX(coverage_start_ms, excluded.coverage_start_ms);
       """
     var statement: OpaquePointer?
@@ -2332,7 +2461,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     let sql = """
       UPDATE event_history_metadata
       SET coverage_start_ms = MAX(coverage_start_ms, ?)
-      WHERE id = 1;
+      WHERE scope = 'legacy-global' AND user_id = '';
       """
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
@@ -2434,7 +2563,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       sql = """
         SELECT EXISTS(
             SELECT 1 FROM events
-            WHERE user_id = ? AND name = ? AND timestamp >= ?
+            WHERE delivery_state != 3 AND user_id = ? AND name = ? AND timestamp >= ?
             LIMIT 1
         );
         """
@@ -2442,7 +2571,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       sql = """
         SELECT EXISTS(
             SELECT 1 FROM events 
-            WHERE user_id = ? AND name = ?
+            WHERE delivery_state != 3 AND user_id = ? AND name = ?
             LIMIT 1
         );
         """
@@ -2492,7 +2621,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       throw EventStorageError.databaseNotInitialized
     }
 
-    var sql = "SELECT COUNT(*) FROM events WHERE user_id = ? AND name = ?"
+    var sql = "SELECT COUNT(*) FROM events WHERE delivery_state != 3 AND user_id = ? AND name = ?"
     var bindIndex: Int32 = 3
 
     if since != nil {
@@ -2552,7 +2681,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       throw EventStorageError.databaseNotInitialized
     }
 
-    var sql = "SELECT MAX(timestamp) FROM events WHERE user_id = ? AND name = ?"
+    var sql = "SELECT MAX(timestamp) FROM events WHERE delivery_state != 3 AND user_id = ? AND name = ?"
     var bindIndex: Int32 = 3
 
     if since != nil {
@@ -2627,7 +2756,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     var sql = """
       SELECT id, name, properties, timestamp, user_id, journey_origin
       FROM events
-      WHERE user_id = ? AND name = ?
+      WHERE delivery_state != 3 AND user_id = ? AND name = ?
       """
     if since != nil { sql += " AND timestamp >= ?" }
     if until != nil { sql += " AND timestamp <= ?" }
@@ -2688,7 +2817,7 @@ actor SQLiteEventStore: EventStoreProtocol {
       throw EventStorageError.databaseNotInitialized
     }
 
-    var sql = "SELECT MIN(timestamp) FROM events WHERE user_id = ? AND name = ?"
+    var sql = "SELECT MIN(timestamp) FROM events WHERE delivery_state != 3 AND user_id = ? AND name = ?"
     if since != nil { sql += " AND timestamp >= ?" }
     if until != nil { sql += " AND timestamp <= ?" }
     sql += ";"
@@ -2735,7 +2864,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     let sql = """
       SELECT id, name, properties, timestamp, user_id, journey_origin
       FROM events
-      WHERE user_id = ?
+      WHERE delivery_state != 3 AND user_id = ?
       ORDER BY timestamp DESC
       LIMIT ?;
       """
@@ -2880,7 +3009,7 @@ actor SQLiteEventStore: EventStoreProtocol {
     }
 
     let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
-    let sql = "UPDATE events SET delivery_state = \(EventDeliveryState.delivered.rawValue) WHERE id IN (\(placeholders));"
+    let sql = "UPDATE events SET delivery_state = \(EventDeliveryState.delivered.rawValue) WHERE delivery_state != 3 AND id IN (\(placeholders));"
 
     var statement: OpaquePointer?
     defer { sqlite3_finalize(statement) }
