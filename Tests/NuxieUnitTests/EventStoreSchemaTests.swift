@@ -22,13 +22,13 @@ final class EventStoreSchemaTests: XCTestCase {
     }
 
     func testVersionThreeUpgradePreservesOrdinaryPendingEvents() async throws {
-        let original = SQLiteEventStore()
-        try await original.initialize(path: temporaryRoot)
-        let event = try StoredEvent(id: "ordinary", name: "finished", properties: ["answer": 42], distinctId: "customer")
-        _ = try await original.insert(event, deliveryState: .pending, origin: .device, assigningCommitSequence: true)
-        await original.close()
         let database = try openDatabase()
-        try execute("ALTER TABLE events DROP COLUMN journey_origin; PRAGMA user_version = 3;", on: database)
+        try CustomerStoreTestDatabase.createVersion4(on: database)
+        try execute("""
+        INSERT INTO events(id,name,properties,timestamp,user_id,delivery_state) VALUES('ordinary','finished',X'7B22616E73776572223A34327D',1000,'customer',0);
+        ALTER TABLE events DROP COLUMN journey_origin;
+        PRAGMA user_version=3;
+        """, on: database)
         sqlite3_close(database)
         let upgraded = SQLiteEventStore()
         try await upgraded.initialize(path: temporaryRoot)
@@ -39,7 +39,7 @@ final class EventStoreSchemaTests: XCTestCase {
         await upgraded.close()
         let inspected = try openDatabase()
         defer { sqlite3_close(inspected) }
-        XCTAssertEqual(try userVersion(in: inspected), 4)
+        XCTAssertEqual(try userVersion(in: inspected), 5)
     }
 
     func testOriginSurvivesDatabaseReopenAndDeliveryRecovery() async throws {
@@ -227,8 +227,8 @@ final class EventStoreSchemaTests: XCTestCase {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
-        XCTAssertEqual(try userVersion(in: database), 4)
-        XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 8)
+        XCTAssertEqual(try userVersion(in: database), 5)
+        XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pragma_table_info('events');", in: database), 20)
         XCTAssertEqual(
             try scalarInt(
                 "SELECT \"notnull\" FROM pragma_table_info('events') WHERE name = 'origin';",
@@ -285,7 +285,7 @@ final class EventStoreSchemaTests: XCTestCase {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_events_%';",
                 in: database
             ),
-            6
+            12
         )
     }
 
@@ -304,7 +304,7 @@ final class EventStoreSchemaTests: XCTestCase {
 
         let reopenedDatabase = try openDatabase()
         defer { sqlite3_close(reopenedDatabase) }
-        XCTAssertEqual(try userVersion(in: reopenedDatabase), 4)
+        XCTAssertEqual(try userVersion(in: reopenedDatabase), 5)
         XCTAssertEqual(
             try scalarInt("PRAGMA schema_version;", in: reopenedDatabase),
             initialSchemaVersion
@@ -355,7 +355,7 @@ final class EventStoreSchemaTests: XCTestCase {
             """
             CREATE TABLE future_data (value TEXT NOT NULL);
             INSERT INTO future_data (value) VALUES ('keep-me');
-            PRAGMA user_version = 5;
+            PRAGMA user_version = 6;
             """,
             on: database
         )
@@ -363,11 +363,11 @@ final class EventStoreSchemaTests: XCTestCase {
         sqlite3_close(database)
 
         let store = SQLiteEventStore()
-        await assertSchemaFailure(store, targetVersion: 5, operation: "validate user_version")
+        await assertSchemaFailure(store, targetVersion: 6, operation: "validate user_version")
 
         let rejectedDatabase = try openDatabase()
         defer { sqlite3_close(rejectedDatabase) }
-        XCTAssertEqual(try userVersion(in: rejectedDatabase), 5)
+        XCTAssertEqual(try userVersion(in: rejectedDatabase), 6)
         XCTAssertEqual(try scalarInt("PRAGMA schema_version;", in: rejectedDatabase), schemaVersionBefore)
         XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM future_data;", in: rejectedDatabase), 1)
     }
