@@ -342,7 +342,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         }
         let waiting = try XCTUnwrap(store.waitingInsertIds.first)
         await log.enqueueJourneyDeadline(.init(distinctId: "customer-a", runId: "run", stepId: "wait",
-            anchorAt: clock.now(), wakeAt: clock.now().addingTimeInterval(1)))
+            anchorAt: clock.now().addingTimeInterval(-1), wakeAt: clock.now()))
         log.track("later")
         store.resumeInsert(id: waiting)
         _ = await log.flushEvents()
@@ -361,10 +361,60 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         await log.close()
     }
 
+    /// A deadline waiting on its customer's watermark holds only that
+    /// customer's deadlines at or after the staged input. The customer's own
+    /// events and other Journeys' work, and another customer's events and
+    /// deadlines, keep flowing.
+    func testADeadlineWaitingOnItsWatermarkLeavesOtherWorkFlowing() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let clock = MockDateProvider()
+        let log = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: MockEventStore())
+        let observed = RecoveredRouteRecorder()
+        await log.subscribeCommitted { event in await observed.append("\(event.distinctId):\(event.name)") }
+        await log.setJourneyDeadlineHandler { deadline in
+            await observed.append("deadline:\(deadline.distinctId)")
+            return .complete
+        }
+        let configuration = NuxieConfiguration(apiKey: "watermark-isolation")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await log.configure(configuration: configuration)
+        let wakeAt = clock.now()
+        // A renderer tap of customer A at exactly the deadline is still staged.
+        log.stageJourneyInputs([.init(eventId: "tap-a", distinctId: "customer-a", occurredAt: wakeAt)])
+        await log.enqueueJourneyDeadline(.init(distinctId: "customer-a", runId: "run-a", stepId: "wait",
+            anchorAt: wakeAt.addingTimeInterval(-1), wakeAt: wakeAt))
+        log.track("a-later")
+        log.track("b-event", distinctIdOverride: "customer-b")
+        _ = await log.performJourneyWork(.init(key: .init(distinctId: "customer-a", id: "other-journey"),
+            runId: "run-other", afterFailure: false, operation: {
+                await observed.append("customer-a:other-journey")
+                return .complete
+            }))
+        await log.drain()
+        for _ in 0..<200 {
+            if await observed.snapshot().count >= 3 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let flowing = await observed.snapshot()
+        XCTAssertEqual(Set(flowing), ["customer-a:a-later", "customer-b:b-event", "customer-a:other-journey"])
+
+        identity.setDistinctId("customer-b")
+        await log.enqueueJourneyDeadline(.init(distinctId: "customer-b", runId: "run-b", stepId: "wait",
+            anchorAt: wakeAt.addingTimeInterval(-1), wakeAt: wakeAt))
+        await log.drain()
+        let afterB = await observed.snapshot()
+        XCTAssertEqual(afterB.filter { $0.hasPrefix("deadline:") }, ["deadline:customer-b"],
+                       "Customer A's staged input never holds customer B's deadline")
+        log.releaseJourneyInputs(eventIds: ["tap-a"])
+        await log.close()
+    }
+
     func testFailedDeadlineRetainsItsPositionAndRetriesWithoutAnotherCapture() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
-        let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+        let clock = MockDateProvider()
+        let log = EventLog(identity: identity, dateProvider: clock,
                            apiClient: MockNuxieApi(), store: MockEventStore())
         let observed = RecoveredRouteRecorder()
         let attempts = RecoveredRouteRecorder()
@@ -388,7 +438,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         // route timer succeeds, without a new capture or replay request.
         log.track("earlier")
         await log.enqueueJourneyDeadline(.init(distinctId: "customer-a", runId: "run", stepId: "wait",
-            anchorAt: nil, wakeAt: Date()))
+            anchorAt: nil, wakeAt: clock.now()))
         log.track("later")
         await log.drain()
         let blocked = await observed.snapshot()
@@ -405,7 +455,8 @@ final class CommittedRouteRecoveryTests: XCTestCase {
     func testUnavailableDeadlineIsRetainedWithoutBlockingUnrelatedEvents() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
-        let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+        let clock = MockDateProvider()
+        let log = EventLog(identity: identity, dateProvider: clock,
                            apiClient: MockNuxieApi(), store: MockEventStore())
         let observed = RecoveredRouteRecorder()
         await log.setJourneyDeadlineHandler { _ in
@@ -417,7 +468,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         configuration.testingOverrides.suppressBackgroundWork = true
         try await log.configure(configuration: configuration)
         await log.enqueueJourneyDeadline(.init(distinctId: "customer-a", runId: "run", stepId: "wait",
-            anchorAt: nil, wakeAt: Date()))
+            anchorAt: nil, wakeAt: clock.now()))
         log.track("later")
         await log.drain()
         let order = await observed.snapshot()
@@ -434,7 +485,8 @@ final class CommittedRouteRecoveryTests: XCTestCase {
             let store = MockEventStore()
             store.shouldFailStableRouteAcknowledgement = failStableReceipt
             store.shouldFailMarkDelivered = !failStableReceipt
-            let log = EventLog(identity: identity, dateProvider: MockDateProvider(), apiClient: MockNuxieApi(), store: store)
+            let clock = MockDateProvider()
+            let log = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: store)
             let observed = RecoveredRouteRecorder()
             await log.subscribeCommitted { event in await observed.append(event.name) }
             await log.setJourneyDeadlineHandler { _ in
@@ -453,7 +505,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
                 log.track("earlier")
             }
             await log.enqueueJourneyDeadline(.init(distinctId: "customer-a", runId: "run", stepId: "wait",
-                anchorAt: nil, wakeAt: Date()))
+                anchorAt: nil, wakeAt: clock.now()))
             log.track("later")
             await log.drain()
             let order = await observed.snapshot()

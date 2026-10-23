@@ -62,6 +62,8 @@ private struct TrackPayload: @unchecked Sendable {
   let routeToSubscribers: Bool
   /// Subscriber-specific authority captured synchronously at `track`.
   let subscriberAdmissions: [UInt64: UInt64]
+  /// Holds the customer's input watermark until the event enters the queue.
+  var watermarkToken: String? = nil
 }
 
 /// A process-local control route. Durable parks recreate these after recovery;
@@ -86,6 +88,9 @@ enum JourneyQueueResult: Sendable {
   case retry
   case continueWith(JourneyQueueOperation)
   case waiting(Set<JourneyQueueKey>, JourneyQueueOperation)
+  /// Attempt again, with no backoff, once the entries now ahead allow it: a
+  /// deadline that has let its in-window inputs go first.
+  case reattempt
 }
 
 enum JourneyQueueContext {
@@ -116,6 +121,9 @@ struct JourneyWorkRequest: Sendable {
 
 /// Capture order is the major position; work offered by that capture inherits
 /// its position. A failed lane holds its followers, not unrelated lanes.
+/// Positions are paths compared in order: a top-level entry is [major, 1], an
+/// entry offered by another sits under it, and an input admitted ahead of a
+/// deadline at [major, 1] moves to [major, 0, rank].
 actor OrderedCustomerQueue {
   static let retryInterval: TimeInterval = 1
   /// Events and deadlines keep capture order, so a routing hold holds them.
@@ -125,8 +133,9 @@ actor OrderedCustomerQueue {
     let key: JourneyQueueKey
     let kind: Kind
     let parent: JourneyQueueKey?
-    let major: UInt64
-    let minor: UInt64
+    var position: [UInt64]
+    /// When the input this entry carries happened (an event and its plan).
+    let occurredAt: Date?
     let bypassesHold: Bool
     let cancelsWithJourney: Bool
     var lane: String
@@ -140,13 +149,15 @@ actor OrderedCustomerQueue {
     var task: Task<Void, Never>?
     var refresh: JourneyQueueOperation?
     var refreshAfterFailure = false
+    var major: UInt64 { position[0] }
     var isEvent: Bool { if case .event = kind { return true }; return false }
     var isCaptureOrdered: Bool { if case .work = kind { return false }; return true }
   }
   private var entries: [JourneyQueueKey: Entry] = [:]
   private var nextPosition: UInt64 = 0
-  private var nextMinor: [UInt64: UInt64] = [:]
-  private var capturePositions: [JourneyQueueKey: (major: UInt64, minor: UInt64)] = [:]
+  private var nextChild: [[UInt64]: UInt64] = [:]
+  private var admittedRank: [UInt64: UInt64] = [:]
+  private var capturePositions: [JourneyQueueKey: [UInt64]] = [:]
   private var runJourneys: [JourneyQueueKey: String] = [:]
   private var paused = false
   private var closed = false
@@ -156,6 +167,7 @@ actor OrderedCustomerQueue {
 
   func submit(key: JourneyQueueKey, kind: Kind = .work, lane: String,
               parent: JourneyQueueKey? = nil, anchor: JourneyQueueKey? = nil,
+              occurredAt: Date? = nil,
               afterFailure: Bool = false, bypassesHold: Bool = false,
               cancelsWithJourney: Bool = true,
               waitForAttempt: Bool = true,
@@ -173,21 +185,17 @@ actor OrderedCustomerQueue {
       pump()
       return entry.complete
     }
-    let major: UInt64
-    let minor: UInt64
-    if let position = capturePositions.removeValue(forKey: key) {
-      major = position.major
-      minor = position.minor
+    let position: [UInt64]
+    if let reserved = capturePositions.removeValue(forKey: key) {
+      position = reserved
     } else if let anchor, let entry = entries[anchor] {
-      major = entry.major
-      minor = nextMinor[major, default: 0] + 1
-      nextMinor[major] = minor
+      position = childPosition(of: entry.position)
     } else {
-      major = nextPosition
+      position = [nextPosition, 1]
       nextPosition &+= 1
-      minor = 0
     }
-    entries[key] = Entry(key: key, kind: kind, parent: parent, major: major, minor: minor,
+    entries[key] = Entry(key: key, kind: kind, parent: parent, position: position,
+      occurredAt: occurredAt ?? parent.flatMap { entries[$0]?.occurredAt },
       bypassesHold: bypassesHold, cancelsWithJourney: cancelsWithJourney,
       lane: canonicalLane(lane, distinctId: key.distinctId), operation: operation,
       attempted: afterFailure,
@@ -227,9 +235,37 @@ actor OrderedCustomerQueue {
     let ack = JourneyQueueKey(distinctId: event.distinctId, id: "ack:\(event.id.dropFirst("event:".count))")
     guard entries[event] == nil, entries[ack] == nil, capturePositions[event] == nil,
           let entry = entries[work] else { return }
-    let minor = nextMinor[entry.major, default: 0] + 1
-    nextMinor[entry.major] = minor
-    capturePositions[event] = (entry.major, minor)
+    capturePositions[event] = childPosition(of: entry.position)
+  }
+
+  private func childPosition(of position: [UInt64]) -> [UInt64] {
+    let next = nextChild[position, default: 0] + 1
+    nextChild[position] = next
+    return position + [next]
+  }
+
+  /// Moves this customer's inputs that happened at or before `deadline` and
+  /// still wait behind the deadline entry `key` ahead of it, in occurrence
+  /// order: events not yet delivered, and inputs for the deadline's own
+  /// Journey. Inputs that happened after it, and other Journeys' work, keep
+  /// their places. Returns whether anything moved.
+  func admitInputs(before key: JourneyQueueKey, through deadline: Date) -> Bool {
+    guard let held = entries[key], held.position.count == 2 else { return false }
+    let inputs = entries.values.filter { entry in
+      guard entry.key.distinctId == key.distinctId, !entry.complete, !entry.running,
+            held.position.lexicographicallyPrecedes(entry.position),
+            let occurredAt = entry.occurredAt, occurredAt <= deadline else { return false }
+      return entry.isEvent ? entry.dependencies.isEmpty : entry.parent != nil && entry.lane == held.lane
+    }.sorted { first, second in
+      guard first.occurredAt == second.occurredAt else { return first.occurredAt! < second.occurredAt! }
+      return first.position.lexicographicallyPrecedes(second.position)
+    }
+    for input in inputs {
+      let rank = admittedRank[held.major, default: 0]
+      admittedRank[held.major] = rank + 1
+      entries[input.key]?.position = [held.major, 0, rank]
+    }
+    return !inputs.isEmpty
   }
 
   func releaseCapture(_ event: JourneyQueueKey) { capturePositions.removeValue(forKey: event) }
@@ -302,13 +338,15 @@ actor OrderedCustomerQueue {
   }
 
   private func ordered() -> [Entry] {
-    entries.values.sorted { ($0.major, $0.minor) < ($1.major, $1.minor) }
+    entries.values.sorted { $0.position.lexicographicallyPrecedes($1.position) }
   }
 
   private func pump() {
     guard !closed else { return }
     let now = ProcessInfo.processInfo.systemUptime
-    var occupied: Set<String> = []
+    // A lane runs one entry at a time, even after an input admitted ahead
+    // of a deadline sorts before an entry already running in its lane.
+    var occupied = Set(entries.values.filter(\.running).map { "\($0.key.distinctId)\u{0}\($0.lane)" })
     var undispatchedCustomers: Set<String> = []
     var firstAttempts: [String: UInt64] = [:]
     var nextRetry: TimeInterval?
@@ -322,7 +360,7 @@ actor OrderedCustomerQueue {
         firstAttempts[entry.key.distinctId] = min(firstAttempts[entry.key.distinctId] ?? entry.major, entry.major)
       }
       if isEvent, entry.dependencies.isEmpty { undispatchedCustomers.insert(entry.key.distinctId) }
-      guard occupied.insert(scope).inserted else { continue }
+      guard occupied.insert(scope).inserted || entry.running else { continue }
       guard !entry.running, !paused || entry.bypassesHold || !entry.isCaptureOrdered else { continue }
       // Finish offering the input plan before retrying one of its failures.
       // The initial child attempt is allowed while its caller awaits it.
@@ -386,6 +424,8 @@ actor OrderedCustomerQueue {
       entry.dependencies = dependencies
       entry.lane = "receipt:\(key.id)"
       entry.retryAt = nil
+    case .reattempt:
+      entry.retryAt = nil
     }
     entry.refresh = nil
     entries[key] = entry
@@ -395,8 +435,10 @@ actor OrderedCustomerQueue {
     } else if entry.complete, let parent = entry.parent, entries[parent] == nil {
       entries.removeValue(forKey: key)
     }
-    let positions = Set(entries.values.map(\.major)).union(capturePositions.values.map { $0.major })
-    nextMinor = nextMinor.filter { positions.contains($0.key) }
+    let positions = Set(entries.values.map(\.position)).union(capturePositions.values)
+    nextChild = nextChild.filter { positions.contains($0.key) }
+    let majors = Set(entries.values.map(\.major))
+    admittedRank = admittedRank.filter { majors.contains($0.key) }
     pump()
   }
 
@@ -720,6 +762,13 @@ protocol EventLogProtocol:
   func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async
   /// This control route belongs only to JourneyService, independent of event filters.
   func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?) async
+  /// A renderer batch's inputs hold their customer's deadlines from the tap
+  /// until they enter the ordered queue, for at most the staging bound.
+  func stageJourneyInputs(_ inputs: [StagedJourneyInput])
+  func releaseJourneyInputs(eventIds: [String])
+  /// Delivers captures accepted before this call to subscribers. Routes that
+  /// a hold keeps stay durable for the next session.
+  func deliverAcceptedCaptures() async
   func performJourneyWork(_ request: JourneyWorkRequest) async -> Bool
   func enqueueJourneyWork(_ request: JourneyWorkRequest) async
   func bindJourneyWork(runId: String) async
@@ -957,6 +1006,9 @@ actor EventLog: EventLogProtocol {
   private var routingDeferred = false
   private var journeyDeadlineHandler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?
   private let orderedRoutes = OrderedCustomerQueue()
+  /// Inputs captured but not yet in the ordered queue, and customers whose
+  /// recovery is pending. A deadline waits for its customer's watermark.
+  nonisolated let inputWatermark = CustomerInputWatermark()
   private var routingDeferralGeneration: UInt64 = 0
   private var deferredRouteCommands: [RouteCommand] = []
   private var nextRouteSequenceToDeliver: UInt64 = 0
@@ -1360,8 +1412,14 @@ actor EventLog: EventLogProtocol {
       forcedDistinctId: distinctIdOverride,
       activityIdentity: captureActivityIdentity(),
       routeToSubscribers: true,
-      subscriberAdmissions: committedAdmissionRegistry.capture()
+      subscriberAdmissions: committedAdmissionRegistry.capture(),
+      watermarkToken: "capture:\(UUID().uuidString)"
     )
+    if let token = payload.watermarkToken {
+      // Staged at the time the event itself will carry; the capture worker
+      // corrects it if `beforeSend` changes that time.
+      inputWatermark.stage(.init(eventId: token, distinctId: distinctIdOverride, occurredAt: Date()))
+    }
 
     captureContinuation.yield(.track(payload))
   }
@@ -1710,6 +1768,7 @@ actor EventLog: EventLogProtocol {
 
   public func reassignEvents(from fromUserId: String, to toUserId: String) async throws -> Int {
     await ready.wait()
+    inputWatermark.reassign(from: fromUserId, to: toUserId)
     let reassignedCount = try await store.reassignEvents(from: fromUserId, to: toUserId)
     if reassignedCount > 0 {
       LogInfo(
@@ -1776,7 +1835,13 @@ actor EventLog: EventLogProtocol {
       // beforeSend) must apply to pre-configure captures too — commands
       // buffer in the stream until the store opens.
       await ready.wait()
-      guard let finalEvent = await buildEvent(from: payload) else { return }
+      guard let finalEvent = await buildEvent(from: payload) else {
+        if let token = payload.watermarkToken { inputWatermark.release(token) }
+        return
+      }
+      if let token = payload.watermarkToken {
+        inputWatermark.rename(token, to: finalEvent.id, occurredAt: finalEvent.timestamp)
+      }
       await commit(
         finalEvent,
         routeToSubscribers: payload.routeToSubscribers,
@@ -1811,6 +1876,20 @@ actor EventLog: EventLogProtocol {
 
   func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?) async {
     journeyDeadlineHandler = handler
+  }
+
+  nonisolated func stageJourneyInputs(_ inputs: [StagedJourneyInput]) {
+    inputs.forEach(inputWatermark.stage)
+  }
+
+  nonisolated func releaseJourneyInputs(eventIds: [String]) {
+    eventIds.forEach(inputWatermark.release)
+  }
+
+  func deliverAcceptedCaptures() async {
+    guard !closeFlag.isClosed, await ready.isOpen() else { return }
+    await drainCaptureWorker()
+    _ = await drainCommittedRouting()
   }
 
   func performJourneyWork(_ request: JourneyWorkRequest) async -> Bool {
@@ -1923,11 +2002,17 @@ actor EventLog: EventLogProtocol {
     case .resumeAfterRecovery(let generation):
       guard generation == routingDeferralGeneration else { return }
       routingDeferred = false
-      await orderedRoutes.setPaused(false)
+      // Everything the hold kept joins the queue before anything held runs,
+      // so a held deadline sees the inputs committed behind it.
       await retryFailedCommittedRoutes()
       let buffered = deferredRouteCommands
       deferredRouteCommands.removeAll()
-      for command in buffered { await processRoute(command) }
+      var barriers: [RouteCommand] = []
+      for command in buffered {
+        if case .barrier = command { barriers.append(command) } else { await processRoute(command) }
+      }
+      await orderedRoutes.setPaused(false)
+      for barrier in barriers { await processRoute(barrier) }
       return
     case .releaseHold(let generation, let excluded, let completion):
       guard generation == routingDeferralGeneration else {
@@ -2030,8 +2115,10 @@ actor EventLog: EventLogProtocol {
     if let sequence = routed.commitSequence {
       enqueuedCommittedRouteSequence = max(enqueuedCommittedRouteSequence ?? sequence, sequence)
     }
+    defer { inputWatermark.release(routed.event.id) }
     return await orderedRoutes.submit(key: eventQueueKey(routed),
-      kind: .event(durable: routed.hasDurableAdmission), lane: "events", cancelsWithJourney: false,
+      kind: .event(durable: routed.hasDurableAdmission), lane: "events",
+      occurredAt: routed.event.timestamp, cancelsWithJourney: false,
       waitForAttempt: waitForAttempt) { [weak self] in
       guard let self else { return .complete }
       return await Self.$isOnCommittedRouteWorker.withValue(true) {
@@ -2150,6 +2237,15 @@ actor EventLog: EventLogProtocol {
 
   private func attemptDeadline(_ deadline: JourneyDeadline) async -> JourneyQueueResult {
     guard deadline.distinctId == identityService.getDistinctId() else { return .complete }
+    // W is worked out afresh at each ask; a deadline it has not passed waits
+    // on the one retry timer and holds only its own Journey's later inputs.
+    guard inputWatermark.hasPassed(deadline.wakeAt, distinctId: deadline.distinctId,
+            now: dateProvider.now(), readFailed: committedRouteReadFailed) else { return .retry }
+    // Committed inputs that happened at or before the deadline go first, in
+    // occurrence order, through their ordinary delivery. The answer below is
+    // final: an input committed after it is late.
+    if let key = JourneyQueueContext.key,
+       await orderedRoutes.admitInputs(before: key, through: deadline.wakeAt) { return .reattempt }
     return await journeyDeadlineHandler?(deadline) ?? .complete
   }
 
@@ -3535,6 +3631,9 @@ extension EventLog {
     distinctId: String, generation: UInt64, admissions: [UInt64: UInt64], excluding: JourneyQueueKey?
   ) async -> Bool {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+    // Until this customer's retained routes are all read, an input inside a
+    // wait may still be among them: their deadlines wait for recovery.
+    inputWatermark.beginRecovery(distinctId)
     // Recovery owns the retained prefix, but failure never strands a hold.
     // Captures accepted during recovery remain in deferredRouteCommands.
     await orderedRoutes.setPaused(false)
@@ -3558,6 +3657,7 @@ extension EventLog {
       await processRoute(.resumeAfterRecovery(generation: generation))
       await orderedRoutes.settle(excluding: excluding)
     }
+    if recovered { inputWatermark.endRecovery(distinctId) }
     return recovered
   }
 

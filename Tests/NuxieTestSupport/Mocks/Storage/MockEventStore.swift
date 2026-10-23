@@ -763,9 +763,17 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+    private var _failingReceiptChecks: Set<String> = []
+    /// The next receipt check for this event fails once, as a failed read of
+    /// one retained route during recovery.
+    public func failNextReceiptCheck(eventId: String) {
+        _ = lock.withLock { _failingReceiptChecks.insert(eventId) }
+    }
+
     public func hasPendingStableRoute(eventId: String) async throws -> Bool {
         try lock.withLock {
             if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            if _failingReceiptChecks.remove(eventId) != nil { throw mockError(3, "Mock receipt read error") }
             return _pendingStableRouteIds.contains(eventId)
         }
     }

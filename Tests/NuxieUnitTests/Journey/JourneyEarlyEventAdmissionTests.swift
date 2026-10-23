@@ -506,6 +506,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             let retried = try await journal.runs().first
             XCTAssertEqual(retried?.park, park)
             XCTAssertEqual(starts(in: live.store), 1)
+            // Let the retried restoration's own pass finish under the old
+            // clock, so the deadline cannot be queued ahead of the event.
+            await live.events.drain()
 
             live.clock.setCurrentDate(Date(timeIntervalSince1970: 1060.8))
             if step.id == "wait" {
@@ -1048,11 +1051,15 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/sdk/committed-event-timeout-order.json")
         let vectors = try JSONDecoder().decode(QueuedEventTimeoutVectors.self, from: Data(contentsOf: url))
-        XCTAssertFalse(vectors.cases.isEmpty)
+        XCTAssertEqual(Double(vectors.stagingBoundMillis), CustomerInputWatermark.stagingBound * 1000)
+        let livePreparation = vectors.cases.filter { $0.kind == "live_preparation" }
+        XCTAssertEqual(livePreparation.count, 2)
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let base = try await authenticatedSnapshot(fixture)
         let launch = Date(timeIntervalSince1970: 1_000_000)
-        for vector in vectors.cases {
+        for vector in livePreparation {
+            let handledAtMillis = try XCTUnwrap(vector.trigger.handledAtMillis)
+            let preparationFinishesAtMillis = try XCTUnwrap(vector.preparationFinishesAtMillis)
             let directory = temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
             let clock = MockDateProvider(initialDate: launch)
@@ -1082,7 +1089,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             let reservation = events.reserveCommittedAdmission { service.eventAdmissionGeneration() }
             await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, generation in
                 if event.name == vector.trigger.name {
-                    clock.setCurrentDate(launch.addingTimeInterval(Double(vector.trigger.handledAtMillis) / 1000))
+                    clock.setCurrentDate(launch.addingTimeInterval(Double(handledAtMillis) / 1000))
                 }
                 let acknowledged = await service.handleEvent(event, admittedProfileGeneration: generation)
                 if event.name == vector.trigger.name {
@@ -1134,7 +1141,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
                 XCTAssertTrue(store.pendingCommittedRoutes.contains { $0.event.name == followUp.name },
                               "The follow-up is committed and queued behind the trigger")
             }
-            clock.setCurrentDate(launch.addingTimeInterval(Double(vector.preparationFinishesAtMillis) / 1000))
+            clock.setCurrentDate(launch.addingTimeInterval(Double(preparationFinishesAtMillis) / 1000))
             await preparation.release()
             await fulfillment(of: [triggerHandled] + (followUpHandled.map { [$0] } ?? []), timeout: 3)
             // Drain the deadline accepted while the trigger was running.
@@ -1147,6 +1154,235 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             await service.shutdown()
             await events.close()
         }
+    }
+
+    /// Shutdown delivers a capture it accepted before stopping Journeys, and
+    /// the route is acknowledged rather than left for the next session.
+    func testACaptureAcceptedJustBeforeShutdownReachesJourneys() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let live = try await liveTimedWait(directory: directory)
+        live.events.track("start_waiting")
+        await live.service.shutdown()
+        XCTAssertEqual(starts(in: live.store), 1, "The accepted capture reached Journeys before shutdown")
+        XCTAssertFalse(live.store.pendingCommittedRoutes.contains { $0.event.name == "start_waiting" })
+        await live.events.close()
+    }
+
+    // MARK: - Input watermark
+
+    /// Renderer tap held with routing: it happens at 900 ms, the 1000 ms
+    /// deadline is queued at 1000 ms, and the tap commits at 1100 ms. The
+    /// deadline lets the committed in-window tap go first.
+    func testHeldRendererTapCommittedBehindTheDeadlineSatisfiesTheWait() async throws {
+        let vector = try Self.watermarkVector("held_renderer_tap")
+        let tap = try XCTUnwrap(vector.tap)
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let live = try await watermarkJourney(vector, directory: directory)
+        let t0 = live.launch
+        live.events.track(vector.trigger.name)
+        await live.events.drain()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await journal.runs()
+        let parked = try XCTUnwrap(runs.first)
+        let deadline = try XCTUnwrap(Self.deadline(parked))
+        XCTAssertEqual(deadline.wakeAt, t0.addingTimeInterval(Double(vector.waitMaxTimeMillis) / 1000))
+
+        let hold = await live.events.deferCommittedRouting()
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(tap.atMillis) / 1000))
+        live.events.stageJourneyInputs([.init(eventId: "tap", distinctId: "customer",
+            occurredAt: live.clock.now())])
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(try XCTUnwrap(vector.deadlineQueuedAtMillis)) / 1000))
+        await live.events.enqueueJourneyDeadline(deadline)
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(tap.committedAtMillis) / 1000))
+        live.times.set(t0.addingTimeInterval(Double(tap.atMillis) / 1000), for: "tap")
+        live.events.track(tap.name, eventId: "tap")
+        _ = await live.events.flushEvents()
+        live.events.releaseJourneyInputs(eventIds: ["tap"])
+        XCTAssertEqual(completions(in: live.store), [], "Routing still holds the deadline and the tap")
+
+        _ = await live.events.releaseCommittedRouting(ifGeneration: hold)
+        for _ in 0..<400 where completions(in: live.store).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), [vector.expectedOutcome])
+        XCTAssertEqual(starts(in: live.store), 1)
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    /// A tap committed after its deadline has run is late: the timeout stands.
+    func testTapCommittedAfterTheDeadlineRanLeavesTheTimeout() async throws {
+        let vector = try Self.watermarkVector("late_commit")
+        let tap = try XCTUnwrap(vector.tap)
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let live = try await watermarkJourney(vector, directory: directory)
+        let t0 = live.launch
+        live.events.track(vector.trigger.name)
+        await live.events.drain()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await journal.runs()
+        let deadline = try XCTUnwrap(runs.first.flatMap(Self.deadline))
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(try XCTUnwrap(vector.deadlineQueuedAtMillis)) / 1000))
+        await live.events.enqueueJourneyDeadline(deadline)
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), ["timeout"])
+
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(tap.committedAtMillis) / 1000))
+        live.times.set(t0.addingTimeInterval(Double(tap.atMillis) / 1000), for: "tap")
+        live.events.track(tap.name, eventId: "tap")
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), [vector.expectedOutcome])
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    /// A tap staged longer than the staging bound stops holding the deadline
+    /// and is late when it commits.
+    func testTapStagedLongerThanTheBoundIsLate() async throws {
+        let vector = try Self.watermarkVector("held_renderer_tap")
+        let tap = try XCTUnwrap(vector.tap)
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let live = try await watermarkJourney(vector, directory: directory)
+        let uptime = WatermarkUptime()
+        live.events.inputWatermark.setUptime { uptime.value }
+        let t0 = live.launch
+        live.events.track(vector.trigger.name)
+        await live.events.drain()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let runs = try await journal.runs()
+        let deadline = try XCTUnwrap(runs.first.flatMap(Self.deadline))
+
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(tap.atMillis) / 1000))
+        live.events.stageJourneyInputs([.init(eventId: "tap", distinctId: "customer",
+            occurredAt: live.clock.now())])
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(try XCTUnwrap(vector.deadlineQueuedAtMillis)) / 1000))
+        await live.events.enqueueJourneyDeadline(deadline)
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), [], "The staged tap holds the deadline")
+
+        // The tap stays staged past the bound on the monotonic clock. The
+        // queue's retry timer asks the waiting deadline again.
+        uptime.advance(by: CustomerInputWatermark.stagingBound + 0.1)
+        for _ in 0..<400 where completions(in: live.store).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(completions(in: live.store), ["timeout"])
+
+        live.clock.setCurrentDate(t0.addingTimeInterval(Double(tap.committedAtMillis) / 1000))
+        live.times.set(t0.addingTimeInterval(Double(tap.atMillis) / 1000), for: "tap")
+        live.events.track(tap.name, eventId: "tap")
+        live.events.releaseJourneyInputs(eventIds: ["tap"])
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), ["timeout"], "The late tap does not reopen the wait")
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    /// Recovery replays a trigger whose wait is already overdue, and reading
+    /// the in-window follow-up fails once. The deadline waits until a later
+    /// recovery reads it, and then the follow-up satisfies the wait.
+    func testDeadlineWaitsForRecoveryToReadAnInWindowFollowUp() async throws {
+        let vector = try Self.watermarkVector("recovery_read_failure")
+        let followUp = try XCTUnwrap(vector.followUp)
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let launch = Date(timeIntervalSince1970: 1_000_000)
+        let store = MockEventStore()
+        for (id, name, atMillis) in [("recovered-trigger", vector.trigger.name, vector.trigger.atMillis),
+                                     ("recovered-follow-up", followUp.name, followUp.atMillis)] {
+            let event = try StoredEvent(id: id, name: name, properties: [:],
+                timestamp: launch.addingTimeInterval(Double(atMillis) / 1000), distinctId: "customer")
+            _ = try await store.commitStableCaptureAndStageRoute(eventId: id, event: event,
+                recordedAt: event.timestamp, assigningCommitSequence: false, admission: nil)
+        }
+        // The first recovery delivers the trigger, whose wait is already
+        // overdue, and then fails to read the in-window follow-up.
+        XCTAssertEqual(vector.failedFollowUpReads, 1)
+        store.failNextReceiptCheck(eventId: "recovered-follow-up")
+        // The next recovery keeps its read open past a retry interval, with
+        // the journal open: a deadline that ignored pending recovery would
+        // time out meanwhile.
+        let recoveries = WatermarkUptime()
+        store.pendingStableRoutesLoaded = {
+            recoveries.advance(by: 1)
+            guard recoveries.value == 2 else { return }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+        let live = try await watermarkJourney(vector, directory: directory, store: store, launch: launch,
+            startAtMillis: try XCTUnwrap(vector.recoveryAtMillis), commitsProfileFirst: true)
+        for _ in 0..<800 where completions(in: live.store).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), [vector.expectedOutcome])
+        XCTAssertEqual(starts(in: live.store), 1)
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
+    private static func watermarkVector(_ kind: String) throws -> QueuedEventTimeoutVectors.Case {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/sdk/committed-event-timeout-order.json")
+        let vectors = try JSONDecoder().decode(QueuedEventTimeoutVectors.self, from: Data(contentsOf: url))
+        return try XCTUnwrap(vectors.cases.first { $0.kind == kind })
+    }
+
+    /// A Journey on the real EventLog that starts on the vector's trigger and
+    /// waits for its event. Event times come from `times`, by event id, or
+    /// the vector's trigger and follow-up times by name.
+    private func watermarkJourney(
+        _ vector: QueuedEventTimeoutVectors.Case, directory: URL, store: MockEventStore = MockEventStore(),
+        launch: Date = Date(timeIntervalSince1970: 1_000_000), startAtMillis: Int = 0,
+        commitsProfileFirst: Bool = false
+    ) async throws -> (service: JourneyService, events: EventLog, store: MockEventStore,
+                       clock: MockDateProvider, times: WatermarkEventTimes, launch: Date) {
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let snapshot = replacing(try await authenticatedSnapshot(fixture), entry: Self.eventEntry(vector.trigger.name),
+            reentry: .init(type: .everyMatch, window: nil), completionOutputs: Self.heldWaitOutcomes,
+            entryStepId: "wait",
+            steps: Self.waitSteps(eventName: vector.waitEventName, maxTimeMillis: vector.waitMaxTimeMillis),
+            routes: [])
+        let clock = MockDateProvider(initialDate: launch.addingTimeInterval(Double(startAtMillis) / 1000))
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: store)
+        let service = JourneyService(identity: identity, events: events, dateProvider: clock,
+            sleepProvider: MockSleepProvider(), journalDirectory: directory, storageScope: .testFixture,
+            featureAccess: { _ in nil }, dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            pinnedReleaseAuthenticator: { _, reference in
+                guard let release = snapshot.releasesByDigest[reference.descriptorSha256] else {
+                    throw JourneyJournalError.invalidState
+                }
+                return release
+            },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
+        let reservation = events.reserveCommittedAdmission { service.eventAdmissionGeneration() }
+        await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, generation in
+            await service.handleEvent(event, admittedProfileGeneration: generation)
+        }
+        await service.prepareForEvents()
+        let times = WatermarkEventTimes()
+        times.set(launch.addingTimeInterval(Double(vector.trigger.atMillis) / 1000), for: vector.trigger.name)
+        let configuration = NuxieConfiguration(apiKey: "input-watermark-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        configuration.beforeSend = { event in
+            guard let timestamp = times.time(for: event.id) ?? times.time(for: event.name) else { return event }
+            return NuxieEvent(id: event.id, name: event.name, distinctId: event.distinctId,
+                              properties: event.properties, timestamp: timestamp)
+        }
+        try await events.configure(configuration: configuration)
+        // Recovered events start Journeys only from an installed copy.
+        if commitsProfileFirst { await service.profileDidCommit(snapshot, distinctId: "customer") }
+        await service.initialize()
+        if !commitsProfileFirst { await service.profileDidCommit(snapshot, distinctId: "customer") }
+        return (service, events, store, clock, times, launch)
     }
 
     /// Both app events travel through EventLog's first-launch hold, then
@@ -1736,17 +1972,24 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             struct Trigger: Decodable, Sendable {
                 let name: String
                 let atMillis: Int
-                let handledAtMillis: Int
+                let handledAtMillis: Int?
             }
             struct Event: Decodable, Sendable { let name: String; let atMillis: Int }
+            struct Tap: Decodable, Sendable { let name: String; let atMillis: Int; let committedAtMillis: Int }
+            let kind: String
             let name: String
             let trigger: Trigger
             let followUp: Event?
+            let tap: Tap?
             let waitEventName: String
             let waitMaxTimeMillis: Int
-            let preparationFinishesAtMillis: Int
+            let preparationFinishesAtMillis: Int?
+            let deadlineQueuedAtMillis: Int?
+            let recoveryAtMillis: Int?
+            let failedFollowUpReads: Int?
             let expectedOutcome: String
         }
+        let stagingBoundMillis: Int
         let cases: [Case]
     }
 
@@ -1846,4 +2089,18 @@ private actor JourneyDeadlineRecorder {
 private actor JourneyTimedRouteObservation {
     private(set) var values: [String] = []
     func append(_ value: String) { values.append(value) }
+}
+
+private final class WatermarkEventTimes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var times: [String: Date] = [:]
+    func set(_ time: Date, for key: String) { lock.withLock { times[key] = time } }
+    func time(for key: String) -> Date? { lock.withLock { times[key] } }
+}
+
+private final class WatermarkUptime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: TimeInterval = 0
+    var value: TimeInterval { lock.withLock { current } }
+    func advance(by interval: TimeInterval) { lock.withLock { current += interval } }
 }

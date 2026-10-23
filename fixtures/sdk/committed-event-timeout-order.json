@@ -1,7 +1,9 @@
 {
-  "contract": "Before timing out a wait or delay, check whether any committed event for this customer that occurred at or before its deadline has not yet reached Journeys, whether held for a copy, replaying, or queued during live routing. If one is pending, leave the timeout due and let event delivery run the next pass without waiting for the routing queue. The current event and events already delivered to Journeys do not block a timeout while their receipts await acknowledgement. An in-window follow-up is judged by its own time and may satisfy an overdue wait. With nothing eligible pending, resolve promptly, including on background events for screenless runs. A pending-route read failure leaves the checkpoint intact and schedules a bounded retry, including in the background for screenless runs.",
+  "contract": "A wait's deadline at D runs only once its customer's input watermark W has passed D. W is worked out afresh each time a deadline asks: it is now, or just before the earliest input of that customer the device has already captured but not yet committed and readable, for example a renderer emission waiting in staging. An input at exactly D is in time, because the wait window is inclusive, so it holds D. Once W has passed D, every committed input of that customer that happened at or before D is delivered first, in occurrence order, through the ordinary event path; then the deadline runs against whatever checkpoint results, and that answer is final. Only events already committed when the deadline reaches the front of the queue count; an event committed after the deadline has run stays late and does not reopen the wait. An input the device had not captured when the deadline ran, such as a backdated event arriving afterwards, is late too. A staged input holds W for at most the staging bound, stagingBoundMillis, the renderer flush interval, timed on a monotonic clock; a tap staged longer than that is late. While the customer's recovery is pending, or a read of their committed inputs has failed, W does not advance: their deadlines wait, asked again only by the queue's one retry timer, until the read succeeds. A waiting deadline holds back only its own Journey's inputs that happened after D. Other Journeys, other customers and the customer's other entries keep flowing, and a competing trigger from another Journey is judged when it is captured. On sign-in, captured inputs move with the customer to the identified customer.",
+  "stagingBoundMillis": 1000,
   "cases": [
     {
+      "kind": "live_preparation",
       "name": "live_follow_up_queued_during_wait_preparation_beats_the_catch_up_timeout",
       "trigger": { "name": "onboarding_started", "atMillis": 0, "handledAtMillis": 800 },
       "followUp": { "name": "plan_viewed", "atMillis": 900 },
@@ -11,12 +13,44 @@
       "expectedOutcome": "satisfied"
     },
     {
+      "kind": "live_preparation",
       "name": "live_overdue_wait_times_out_promptly_when_no_follow_up_is_pending",
       "trigger": { "name": "onboarding_started", "atMillis": 0, "handledAtMillis": 800 },
       "followUp": null,
       "waitEventName": "plan_viewed",
       "waitMaxTimeMillis": 1000,
       "preparationFinishesAtMillis": 1200,
+      "expectedOutcome": "timeout"
+    },
+    {
+      "kind": "held_renderer_tap",
+      "name": "renderer_tap_held_with_routing_and_committed_after_the_deadline_was_queued_satisfies_the_wait",
+      "trigger": { "name": "onboarding_started", "atMillis": 0 },
+      "tap": { "name": "plan_viewed", "atMillis": 900, "committedAtMillis": 1100 },
+      "waitEventName": "plan_viewed",
+      "waitMaxTimeMillis": 1000,
+      "deadlineQueuedAtMillis": 1000,
+      "expectedOutcome": "satisfied"
+    },
+    {
+      "kind": "recovery_read_failure",
+      "name": "recovered_overdue_wait_waits_until_its_in_window_follow_up_can_be_read",
+      "trigger": { "name": "onboarding_started", "atMillis": 0 },
+      "followUp": { "name": "plan_viewed", "atMillis": 900 },
+      "waitEventName": "plan_viewed",
+      "waitMaxTimeMillis": 1000,
+      "recoveryAtMillis": 1200,
+      "failedFollowUpReads": 1,
+      "expectedOutcome": "satisfied"
+    },
+    {
+      "kind": "late_commit",
+      "name": "tap_committed_after_the_deadline_has_run_leaves_the_timeout",
+      "trigger": { "name": "onboarding_started", "atMillis": 0 },
+      "tap": { "name": "plan_viewed", "atMillis": 900, "committedAtMillis": 1100 },
+      "waitEventName": "plan_viewed",
+      "waitMaxTimeMillis": 1000,
+      "deadlineQueuedAtMillis": 1000,
       "expectedOutcome": "timeout"
     }
   ]

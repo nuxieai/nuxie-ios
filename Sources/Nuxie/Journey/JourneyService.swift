@@ -406,6 +406,9 @@ extension JourneyService {
 
     func shutdown() async {
         guard initialized || profileState != nil || journal != nil else { return }
+        // Captures accepted before shutdown reach Journeys while execution is
+        // still allowed; otherwise they would be acknowledged without a Journey.
+        if initialized { await events.deliverAcceptedCaptures() }
         let owner = journal?.distinctId ?? profileState?.distinctId ?? identity.getDistinctId()
         // Revoke execution before asking the shared presenter to tear down its
         // surface. Renderer callbacks emitted by teardown then fail every
@@ -3509,8 +3512,19 @@ private extension JourneyService {
                                 release: release, identityFenceToken: presentationIdentityFenceToken,
                                 executionFenceToken: executionFenceToken)
                         },
-                        onEmissionBatch: { [weak self] batch, frameSources in
+                        onEmissionBatch: { [weak self, events = self.events, owner = journal.distinctId] batch, frameSources in
                             guard let self else { return false }
+                            // From the tap until its events enter the ordered
+                            // queue, the batch holds its customer's deadlines
+                            // (for at most the watermark's staging bound).
+                            let staged = batch.emissions.compactMap { emission in
+                                JourneyPresentationEventProjector.date(emission.occurredAt).map {
+                                    StagedJourneyInput(eventId: emission.id,
+                                        distinctId: owner, occurredAt: $0)
+                                }
+                            }
+                            events.stageJourneyInputs(staged)
+                            defer { events.releaseJourneyInputs(eventIds: staged.map(\.eventId)) }
                             return await self.handlePresentationBatch(
                                 batch,
                                 eventSource: frameSources,

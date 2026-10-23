@@ -56,6 +56,17 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         guard let event = JourneyQueueContext.event, JourneyQueueContext.key == event else { return false }
         return await journeyQueue.completedPlan(for: event)
     }
+    private var _stagedJourneyInputs: [String: StagedJourneyInput] = [:]
+    public var stagedJourneyInputs: [StagedJourneyInput] { lock.withLock { Array(_stagedJourneyInputs.values) } }
+    public func stageJourneyInputs(_ inputs: [StagedJourneyInput]) {
+        lock.withLock { for input in inputs { _stagedJourneyInputs[input.eventId] = input } }
+    }
+    public func deliverAcceptedCaptures() async {
+        await journeyQueue.settle(excluding: JourneyQueueContext.key)
+    }
+    public func releaseJourneyInputs(eventIds: [String]) {
+        lock.withLock { for eventId in eventIds { _stagedJourneyInputs.removeValue(forKey: eventId) } }
+    }
     public func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?) async {
         lock.withLock { deadlineHandler = handler }
     }
