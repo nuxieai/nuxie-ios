@@ -281,6 +281,8 @@ extension JourneyTestCase {
     func makeRenderedJourneyTestContext(
         snapshot: JourneyProfileCatalog.Snapshot? = nil,
         presenterAvailable: Bool = true,
+        dateProvider: DateProviderProtocol = MockDateProvider(),
+        sleepProvider: SleepProviderProtocol = MockSleepProvider(),
         readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
         featureAccess: @escaping JourneyService.FeatureAccessLookup = { _ in nil },
         preparedTriggerBeforeSend:
@@ -313,6 +315,8 @@ extension JourneyTestCase {
                 identity: identity,
                 events: events,
                 directory: directory,
+                dateProvider: dateProvider,
+                sleepProvider: sleepProvider,
                 featureAccess: featureAccess,
                 presenter: presenter,
                 readNativeValues: readNativeValues

@@ -7,6 +7,88 @@ import XCTest
 /// dropped: it starts from the copy it is handled under, once (UNIV-4589).
 final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
+    func testFailedEventRestorationUsesTheQueueAndGatesOnlyRenderedBackgroundRetries() async throws {
+        for hasScreens in [false, true] {
+            let directory = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let reads = FailableJourneyRead()
+            let refused = expectation(description: "A failed native read leaves the matching input queued")
+            let live = try await liveTimedWait(directory: directory,
+                step: Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)[0],
+                readNativeValues: { values in
+                    try await reads.attempt()
+                    return try await values.journeyValues()
+                }, afterJourney: { event, accepted in
+                    if event.name == "go", !accepted { refused.fulfill() }
+                }, screens: hasScreens ? [Self.backgroundScreen] : [])
+            live.events.track("start_waiting")
+            await live.events.drain()
+            await live.service.onAppDidEnterBackground()
+            await reads.setFailing(true)
+            live.clock.advance(by: 0.1)
+            live.events.track("go")
+            await fulfillment(of: [refused], timeout: 5)
+            await live.events.drain()
+            let failedAt = await reads.attempts
+            let queued = await live.events.queuedJourneyRetryKeys()
+            XCTAssertEqual(queued.filter { $0.id.hasPrefix("input:") }.count, 1)
+            await reads.setFailing(false)
+            if hasScreens {
+                try await Task.sleep(nanoseconds: 1_200_000_000)
+                let backgroundReads = await reads.attempts
+                XCTAssertEqual(backgroundReads, failedAt, "The retry gate precedes native restoration")
+                XCTAssertEqual(completions(in: live.store), [])
+                await live.service.onAppBecameActive()
+            }
+            for _ in 0..<400 where completions(in: live.store).isEmpty {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(completions(in: live.store), ["satisfied"])
+            XCTAssertEqual(live.clock.now(), Date(timeIntervalSince1970: 1000.1))
+            await live.service.shutdown()
+            await live.events.close()
+        }
+    }
+
+    func testFailedReconciliationAfterRefetchSettlesRetriesWithoutLeavingRoutingHeld() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inspection = FailableJourneyRead()
+        let delivered = JourneyDeliveryObservation()
+        let live = try await liveTimedWait(directory: directory, readJournalRuns: { journal in
+            try await inspection.attempt()
+            return try await journal.runs()
+        }, afterJourney: { event, accepted in
+            if event.name == "after_refetch" { await delivered.record(accepted) }
+        })
+        await live.events.drain()
+        await live.service.profileRefetchWillBegin(distinctId: "customer")
+        await live.service.profileDidWithdraw(authority: nil, distinctId: "customer")
+        await inspection.setFailing(true)
+        let before = await inspection.attempts
+        await live.service.profileRefetchDidSettle(distinctId: "customer")
+        let failed = await inspection.attempts
+        XCTAssertGreaterThan(failed, before)
+        let pendingReconciliation = await live.events.queuedJourneyRetryKeys()
+        XCTAssertEqual(pendingReconciliation.filter { $0.id == "reconcile" }.count, 1)
+        XCTAssertTrue(live.sleeper.pendingSleepDurations.isEmpty, "No park exists and reconciliation owns no sleeper")
+        await inspection.setFailing(false)
+        // No event, lifecycle callback, deadline, or mock sleep drives this retry.
+        for _ in 0..<400 {
+            if await inspection.attempts > failed { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let retried = await inspection.attempts
+        XCTAssertGreaterThan(retried, failed, "The queue retries the failed reconciliation")
+        live.events.track("after_refetch")
+        await live.events.drain()
+        let accepted = await delivered.values
+        XCTAssertEqual(accepted, [true], "Settling the refetch releases its hold even when reconciliation fails")
+        XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
     func testHeldRoutingQueuesEveryDeadlineBeforeEventsAcceptedAfterIt() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -61,7 +143,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         await events.drain()
         await events.setJourneyDeadlineHandler { [weak service] deadline in
             await observed.append(deadline.wakeAt == launch.addingTimeInterval(10) ? "deadline10" : "deadline20")
-            return await service?.handleJourneyDeadline(deadline) ?? true
+            return await service?.handleJourneyDeadline(deadline) ?? .complete
         }
         let hold = await events.deferCommittedRouting()
         for _ in 0..<200 where !sleeper.pendingSleepDurations.contains(10) {
@@ -100,59 +182,47 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             defer { try? FileManager.default.removeItem(at: directory) }
             let preparation = FailableJourneyRead()
             await preparation.setFailing(true)
-            let retryArmed = JourneyCompletionFlag()
-            let retryReads = FailableJourneyRead()
-            let retryPass = expectation(description: "The background retry inspects and reschedules the journal: screens=\(hasScreens)")
-            retryPass.expectedFulfillmentCount = 2
             let live = try await liveTimedWait(directory: directory,
                 step: Self.waitSteps(eventName: "go", maxTimeMillis: 10_000)[0],
                 prepareNativeValues: { _, _, _, _ in try await preparation.attempt() },
-                readJournalRuns: { journal in
-                    let runs = try await journal.runs()
-                    if retryArmed.isCompleted {
-                        try await retryReads.attempt()
-                        if await retryReads.attempts <= 2 { retryPass.fulfill() }
-                    }
-                    return runs
-                }, screens: hasScreens ? [Self.backgroundScreen] : [])
+                screens: hasScreens ? [Self.backgroundScreen] : [])
             live.events.track("start_waiting")
             await live.events.drain()
             let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
             let initial = try await journal.runs()
             let park = try XCTUnwrap(initial.first?.park)
             XCTAssertEqual(park.wakeAt, Date(timeIntervalSince1970: 1010))
-            for _ in 0..<200 where !live.sleeper.pendingSleepDurations.contains(5) {
-                try await Task.sleep(nanoseconds: 10_000_000)
-            }
-            XCTAssertEqual(live.sleeper.pendingSleepDurations, [5])
+            XCTAssertFalse(live.sleeper.pendingSleepDurations.contains(5), "Restoration has no separate sleeper")
+            let nativeRetry = await live.events.queuedJourneyRetryKeys()
+            XCTAssertEqual(nativeRetry.filter { $0.id.hasPrefix("native:") }.count, 1, "One failed preparation has one queue entry and one retry owner")
             await live.service.onAppDidEnterBackground()
             let before = await preparation.attempts
             await preparation.setFailing(false)
-            live.clock.advance(by: 5)
-            retryArmed.finish()
-            live.sleeper.completeSleeps(withDuration: 5)
-            await fulfillment(of: [retryPass], timeout: 3)
-            let after = await preparation.attempts
-            XCTAssertEqual(completions(in: live.store), [])
-            let restored = try await journal.runs()
-            XCTAssertEqual(restored.first?.park, park, "Restoration preserves the original checkpoint")
             if hasScreens {
-                XCTAssertEqual(after, before, "A rendered Journey keeps restoration closed in the background")
-                XCTAssertTrue(live.sleeper.pendingSleepDurations.isEmpty)
+                // Let the queue interval elapse without driving a native timer.
+                try await Task.sleep(nanoseconds: 1_200_000_000)
+                let backgroundAttempts = await preparation.attempts
+                XCTAssertEqual(backgroundAttempts, before, "The background gate precedes native preparation")
             } else {
-                XCTAssertGreaterThan(after, before, "A screenless Journey restores before its deadline in the background")
-                for _ in 0..<200 where !live.sleeper.pendingSleepDurations.contains(5) {
+                for _ in 0..<300 {
+                    if await preparation.attempts > before { break }
                     try await Task.sleep(nanoseconds: 10_000_000)
                 }
-                XCTAssertEqual(live.sleeper.pendingSleepDurations, [5], "Restoration reinstates the original t=10 deadline")
+                let after = await preparation.attempts
+                XCTAssertGreaterThan(after, before, "The queue restores screenless work in the background")
             }
-            live.clock.advance(by: 5)
-            live.sleeper.completeSleeps(withDuration: 5)
+            XCTAssertEqual(completions(in: live.store), [])
+            let restored = try await journal.runs()
+            XCTAssertEqual(restored.first?.park, park)
+            for _ in 0..<200 where !live.sleeper.pendingSleepDurations.contains(10) {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(live.sleeper.pendingSleepDurations, [10], "Only the authored deadline uses the mock sleeper")
+            live.clock.advance(by: 10)
+            live.sleeper.completeSleeps(withDuration: 10)
             if hasScreens {
                 await live.events.drain()
                 XCTAssertEqual(completions(in: live.store), [])
-                // The expired restoration entry survives its background timer
-                // and is applied when foreground admission opens.
                 await live.service.onAppBecameActive()
             }
             // Screenless work gets no foreground callback or rescuing event.
@@ -220,7 +290,11 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         XCTAssertEqual(completions(in: live.store), [])
 
         await live.service.onAppBecameActive()
-        await live.events.drain()
+        // The gated deadline keeps its queue entry; the queue's timer, not the
+        // foreground callback, makes its next attempt.
+        for _ in 0..<400 where completions(in: live.store).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         await live.events.drain()
         XCTAssertEqual(completions(in: live.store), ["timeout"])
         await live.service.shutdown()
@@ -271,6 +345,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             XCTAssertNil(admitted.park)
             XCTAssertTrue(live.store.pendingCommittedRoutes.contains { $0.event.name == "start_waiting" })
             XCTAssertEqual(starts(in: live.store), 1)
+            let checkpointRetries = await live.events.queuedJourneyRetryKeys()
+            XCTAssertEqual(checkpointRetries.filter { $0.id.hasPrefix("start:") }.count, 1,
+                           "The failed first park remains a continuation of the original queued start")
             XCTAssertTrue(live.sleeper.pendingSleepDurations.isEmpty,
                 "The refused head must retry without a queued deadline or native-restoration timer")
 
@@ -356,6 +433,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         XCTAssertEqual(failed.first?.stepId, "delay")
         XCTAssertNil(failed.first?.park)
         XCTAssertTrue(live.store.pendingCommittedRoutes.contains { $0.event.name == "go" })
+        let checkpointRetries = await live.events.queuedJourneyRetryKeys()
+        XCTAssertEqual(checkpointRetries.filter { $0.id.hasPrefix("input:") }.count, 1,
+                       "The later park write stays in its Journey's original event-input entry")
         live.clock.advance(by: 7)
         await rejection.release()
         await fulfillment(of: [accepted], timeout: 5)
@@ -411,20 +491,16 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
             let attemptsBeforeRetry = await preparation.attempts
             XCTAssertGreaterThan(attemptsBeforeRetry, 0)
-            for _ in 0..<200 where !live.sleeper.pendingSleepDurations.contains(5) {
-                try await Task.sleep(nanoseconds: 10_000_000)
-            }
-            XCTAssertTrue(live.sleeper.pendingSleepDurations.contains(5))
+            XCTAssertFalse(live.sleeper.pendingSleepDurations.contains(5), "The queue owns restoration backoff")
             await preparation.setFailing(false)
-            live.clock.advance(by: 5)
-            live.sleeper.completeSleeps(withDuration: 5)
-            // The native retry must enter the pass while the wait itself is
-            // still in the future, then restore the original deadline timer.
-            for _ in 0..<200 {
-                if live.sleeper.pendingSleepDurations.contains(where: { abs($0 - 54.2) < 0.001 }) { break }
+            for _ in 0..<300 {
+                if await preparation.attempts > attemptsBeforeRetry { break }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
-            XCTAssertTrue(live.sleeper.pendingSleepDurations.contains { abs($0 - 54.2) < 0.001 })
+            for _ in 0..<200 where !live.sleeper.pendingSleepDurations.contains(where: { abs($0 - 59.2) < 0.001 }) {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertTrue(live.sleeper.pendingSleepDurations.contains { abs($0 - 59.2) < 0.001 })
             let attemptsAfterRetry = await preparation.attempts
             XCTAssertGreaterThan(attemptsAfterRetry, attemptsBeforeRetry)
             let retried = try await journal.runs().first
@@ -435,7 +511,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             if step.id == "wait" {
                 await live.service.handleEvent(Self.event("go", at: Date(timeIntervalSince1970: 1000.1)))
             } else {
-                await live.service.onAppBecameActive()
+                live.sleeper.completeAllSleeps()
+            }
+            for _ in 0..<300 where completions(in: live.store).isEmpty {
+                try await Task.sleep(nanoseconds: 10_000_000)
             }
             await live.events.drain()
             XCTAssertEqual(completions(in: live.store), ["satisfied"])
@@ -479,7 +558,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let service = live.service
         await live.events.setJourneyDeadlineHandler { [weak service] deadline in
             await deadlines.append(deadline)
-            return await service?.handleJourneyDeadline(deadline) ?? true
+            return await service?.handleJourneyDeadline(deadline) ?? .complete
         }
         // Foreground first confirms the saved pendingEvent, then resumeParked
         // writes its selected outlet and consumes the park. Fail that second
@@ -487,11 +566,13 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         writes.failAfterSuccessfulWrites(1)
         await live.service.onAppBecameActive()
         XCTAssertTrue(failedWrite.isCompleted)
+        let savedInputRetries = await live.events.queuedJourneyRetryKeys()
+        XCTAssertEqual(savedInputRetries.filter { $0.id.hasPrefix("resume:") }.count, 1)
         let retained = try await journal.runs()
         XCTAssertEqual(retained.first?.park, saved.park)
         XCTAssertEqual(completions(in: live.store), [])
-        XCTAssertTrue(live.sleeper.pendingSleepDurations.isEmpty,
-                      "The shared route timer owns the retry; no immediate or deadline wake is armed")
+        XCTAssertFalse(live.sleeper.pendingSleepDurations.contains { $0 <= 1 },
+                       "No retry is armed through the deadline sleeper")
 
         // The gate keeps the failed-state assertions stable if this task is
         // descheduled for longer than the timer's interval on a busy machine.
@@ -604,6 +685,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         // captured time inside the original wait's window.
         let replayed = await live.events.replayPendingStableRoutes(distinctId: "customer")
         XCTAssertTrue(replayed)
+        for _ in 0..<500 where completions(in: live.store).isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         await live.events.drain()
         let recoveredDeliveries = await deliveries.values
         XCTAssertEqual(recoveredDeliveries.last, true)
@@ -710,8 +794,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             let deadline = try XCTUnwrap(Self.deadline(run))
             let service = live.service
             await live.events.setJourneyDeadlineHandler { [weak service] deadline in
-                let accepted = await service?.handleJourneyDeadline(deadline) ?? false
-                await deadlineDeliveries.record(accepted)
+                let accepted = await service?.handleJourneyDeadline(deadline) ?? .complete
+                if case .complete = accepted { await deadlineDeliveries.record(true) }
+                else { await deadlineDeliveries.record(false) }
                 return accepted
             }
             // Queue a known checkpoint so scheduling cannot consume the injected
@@ -727,19 +812,17 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             XCTAssertEqual(retained?.park, run.park)
             if failure == "write" { XCTAssertTrue(failedWrite.isCompleted) }
             let accepted = await deadlineDeliveries.values
-            XCTAssertEqual(accepted, [true], "Unavailable deadline controls are acknowledged and dropped")
+            XCTAssertEqual(accepted, [false], "A failed deadline keeps its queue entry")
             let buffered = await live.events.bufferedCommittedRouteCount
-            XCTAssertEqual(buffered, 0, "The stored park, not EventLog's head, owns the retry")
+            XCTAssertEqual(buffered, 0, "Deadline operations do not become analytics events")
             await inspection.setFailing(false)
             await nativeReads.setFailing(false)
-            // The consumed deadline is derived again from the stored park on
-            // JourneyService's retry timer, without retaining a route head.
-            let retryDelay: TimeInterval = failure == "native" ? 5 : 1
-            live.clock.advance(by: retryDelay)
-            for _ in 0..<300 where completions(in: live.store).isEmpty {
-                live.sleeper.completeSleeps(withDuration: retryDelay)
+            // No mock sleep or clock advance rescues this operation.
+            for _ in 0..<400 where completions(in: live.store).isEmpty {
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
+            let retried = await deadlineDeliveries.values
+            XCTAssertEqual(retried, [false, true], "The same retained deadline is retried by the queue")
             XCTAssertEqual(completions(in: live.store), ["timeout"])
             await live.service.shutdown()
             await live.events.close()
@@ -776,7 +859,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         live.events.track("unrelated")
         await live.events.drain()
         let handled = await deliveries.values
-        XCTAssertEqual(handled, [true], "The consumed deadline must not block later local events")
+        XCTAssertEqual(handled, [true], "A failed Journey operation holds only its own relevant inputs")
         XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
         await reads.setFailing(false)
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -791,14 +874,13 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
                        "An unrelated screenless Journey must still start and finish in the background")
         let parked = try await journal.runs().first
         XCTAssertNotNil(parked?.park)
-        // Allow any ordinary-event native restoration backoff to elapse
-        // before checking that foregrounding recreates the deadline.
-        live.clock.advance(by: 5)
         await live.service.onAppBecameActive()
-        await live.events.drain()
+        for _ in 0..<400 where completions(in: live.store).count < 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         await live.events.drain()
         XCTAssertEqual(completions(in: live.store), ["timeout", "timeout"],
-                       "Foregrounding recreates the rendered run's consumed deadline")
+                       "The retained rendered operation succeeds after foreground admission opens")
         await live.service.shutdown()
         await live.events.close()
     }
@@ -819,18 +901,22 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock)
         let routing: any EventLogProtocol = events
         events.replayPendingRoutesHandler = {
-            await routing.setJourneyDeadlineHandler { deadline in await queued.append(deadline); return true }
+            await routing.setJourneyDeadlineHandler { deadline in await queued.append(deadline); return .complete }
             await service.handleEvent(Self.event("start_waiting", at: clock.now().addingTimeInterval(-1)))
+            // Let the deadline inspection queued by the park run under this journal.
+            await events.drain()
             return false
         }
         await service.prepareForEvents()
         await service.profileDidCommit(snapshot, distinctId: "customer")
         await service.initialize()
+        await events.drain()
         let first = await queued.values
         XCTAssertEqual(first.count, 1)
         // Reopen the same checkpoint without delivering the old queue entry.
         events.replayPendingRoutesHandler = { true }
         await service.profileDidCommit(snapshot, distinctId: "customer")
+        await events.drain()
         let reopened = await queued.values
         XCTAssertEqual(reopened.count, 2, "The marker belongs to the dropped journal instance")
         let deadline = try XCTUnwrap(reopened.last)
@@ -871,7 +957,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         await service.handleEvent(Self.event("go", at: clock.now()))
         clock.advance(by: 0.5)
         let handled = await service.handleJourneyDeadline(stale)
-        XCTAssertTrue(handled)
+        if case .complete = handled {} else { XCTFail("A stale deadline is already complete") }
         let current = try await journal.runs().first
         XCTAssertEqual(current?.stepId, "second_wait")
         XCTAssertNotNil(current?.park)
@@ -879,7 +965,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         clock.advance(by: 2)
         let next = try XCTUnwrap(current.flatMap(Self.deadline))
         let timedOut = await service.handleJourneyDeadline(next)
-        XCTAssertTrue(timedOut)
+        if case .complete = timedOut {} else { XCTFail("The next deadline completes normally") }
         XCTAssertEqual(completions(in: events), ["timeout"])
         await service.shutdown()
     }

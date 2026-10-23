@@ -44,7 +44,7 @@ struct JourneyRunExecutionCoordinator {
     /// the saved checkpoint owns the wait and later passes use the real clock.
     /// Recovery resumes only parked checkpoints, so the lag is not journaled.
     private let startingEventAt: Date?
-    private var startingLag: TimeInterval?
+    private(set) var startingLag: TimeInterval?
 
     init(
         run: JourneyRun,
@@ -55,7 +55,8 @@ struct JourneyRunExecutionCoordinator {
         journal: JourneyRunJournal,
         timezones: SignedTimezoneBundle,
         currentDeviceTimezone: TimeZone,
-        startingEventAt: Date? = nil
+        startingEventAt: Date? = nil,
+        startingLag: TimeInterval? = nil
     ) {
         self.run = run
         self.assignments = assignments
@@ -74,6 +75,7 @@ struct JourneyRunExecutionCoordinator {
         self.checkpoint = checkpoint
         self.journal = journal
         self.startingEventAt = startingEventAt
+        self.startingLag = startingLag
     }
 
     mutating func useNativeValues(

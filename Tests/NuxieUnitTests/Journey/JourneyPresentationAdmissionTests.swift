@@ -5,6 +5,65 @@ import XCTest
 
 final class JourneyPresentationAdmissionTests: JourneyTestCase {
 
+    func testDeclinedPresentationKeepsItsBackoffWhileTheClockMovesUntilTheSurfaceFrees() async throws {
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1000))
+        let sleeper = MockSleepProvider()
+        let context = try await makeRenderedJourneyTestContext(dateProvider: clock, sleepProvider: sleeper)
+        defer { removeTemporaryDirectoryIfPresent(context.directory) }
+        let trace = await MainActor.run { PresentationRetryTrace() }
+        await MainActor.run {
+            context.presenter.presentHandler = { _ in
+                trace.attempts.append(ProcessInfo.processInfo.systemUptime)
+                return trace.surfaceFree ? .shown : .declined
+            }
+        }
+        await context.service.profileDidCommit(context.snapshot, distinctId: "customer")
+        let initial = try await context.journal.runs()
+        let admitted = try XCTUnwrap(initial.first)
+        XCTAssertNotNil(admitted.park)
+        let originalKey = await context.events.queuedJourneyRetryKeys().filter { $0.id.hasPrefix("start:") }
+        XCTAssertEqual(originalKey.count, 1)
+        for _ in 0..<8 {
+            clock.advance(by: 10)
+            await context.service.onAppBecameActive()
+            await context.events.drain()
+        }
+        let immediate = await MainActor.run { trace.attempts }
+        let retainedKey = await context.events.queuedJourneyRetryKeys().filter { $0.id.hasPrefix("start:") }
+        XCTAssertEqual(retainedKey, originalKey, "Repeated declines keep their original key and position")
+        for (previous, next) in zip(immediate, immediate.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(next - previous, 0.99, "Deadline inspection and availability callbacks must not reset backoff")
+        }
+        XCTAssertTrue(sleeper.pendingSleepDurations.isEmpty, "Availability parks never arm a deadline or retry sleeper")
+        for _ in 0..<400 {
+            if await MainActor.run(body: { trace.attempts.count >= 2 }) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let declinedCount = await MainActor.run { trace.attempts.count }
+        await MainActor.run {
+            trace.surfaceFree = true
+            context.presenter.available = false
+            context.presenter.available = true
+        }
+        for _ in 0..<400 {
+            if await MainActor.run(body: { trace.attempts.count > declinedCount }) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await context.events.drain()
+        let attempts = await MainActor.run { trace.attempts }
+        XCTAssertEqual(attempts.count, declinedCount + 1)
+        for (previous, next) in zip(attempts, attempts.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(next - previous, 0.99, "One attempt per queue interval")
+        }
+        let runs = try await context.journal.runs()
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs.first?.id, admitted.id)
+        XCTAssertNil(runs.first?.park)
+        XCTAssertEqual(context.events.routedEvents.filter { $0.name == JourneyEvents.journeyStarted }.count, 1)
+        await context.service.shutdown()
+        await context.events.close()
+    }
+
 
     func testDirectRouteOwnershipSurvivesFailedSubscriberDelivery() async throws {
         let directory = temporaryDirectory()
@@ -99,6 +158,11 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         XCTAssertEqual(nativeReads.callCount, readsBeforeReplay,
                        "The publication's owning run must be excluded from replay evaluation")
         events.track("finish")
+        // The refused publication keeps its place on the queue's timer, so
+        // the later event follows it once its retry is delivered.
+        for _ in 0..<400 where !store.storedEvents.contains(where: { $0.name == JourneyEvents.journeyCompleted }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         await events.drain()
         let completion = store.storedEvents.last { $0.name == JourneyEvents.journeyCompleted }
         XCTAssertEqual(completion?.getPropertiesDict()["outcome"] as? String, "completed",
@@ -406,6 +470,13 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
 
         await service.onAppBecameActive()
 
+        // The deadline gated in the background keeps its queue entry; the
+        // queue's timer, not the foreground callback, makes the next attempt.
+        for _ in 0..<400 {
+            let count = await MainActor.run { presenter.navigationScreenIds.count }
+            if count >= 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         let navigationScreenIds = await MainActor.run {
             presenter.navigationScreenIds
         }
@@ -591,7 +662,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
             started.fulfill()
         }
         await MainActor.run { context.presenter.available = true }
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 5)
         for _ in 0..<100 {
             let presented = await MainActor.run {
                 context.presenter.request != nil
@@ -644,7 +715,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         }
         await context.service.onAppWillEnterForeground()
         await context.service.onAppBecameActive()
-        for _ in 0..<100 {
+        for _ in 0..<400 {
             let attempts = await MainActor.run {
                 context.presenter.presentationRequests.count
             }
@@ -714,4 +785,10 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         let request = await MainActor.run { context.presenter.request }
         XCTAssertEqual(request?.screenId, "screen_welcome")
     }
+}
+
+@MainActor
+private final class PresentationRetryTrace {
+    var attempts: [TimeInterval] = []
+    var surfaceFree = false
 }

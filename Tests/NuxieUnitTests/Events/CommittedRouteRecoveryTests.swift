@@ -11,6 +11,16 @@ private actor RecoveredRouteRecorder {
     func snapshot() -> [String] { ids }
 }
 
+private actor QueueAttemptRecorder {
+    private(set) var attempts: [(String, TimeInterval)] = []
+    private var failing = true
+    func recover() { failing = false }
+    func attempt(_ name: String) -> JourneyQueueResult {
+        attempts.append((name, ProcessInfo.processInfo.systemUptime))
+        return name == "head" && failing ? .retry : .complete
+    }
+}
+
 private final class RecoveryAdmission: @unchecked Sendable {
     private let lock = NSLock()
     private var generation: UInt64 = 1
@@ -50,6 +60,181 @@ private actor RecoveryResult {
 }
 
 final class CommittedRouteRecoveryTests: XCTestCase {
+
+    func testFailedCorrelatedCaptureKeepsItsPositionAheadOfItsJourneysLaterInput() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = MockEventStore()
+        let log = EventLog(identity: identity, dateProvider: MockDateProvider(), apiClient: MockNuxieApi(), store: store)
+        let sink = EventLogSystemEventSink(events: log)
+        let attempts = RecoveryAdmission()
+        let observed = RecoveredRouteRecorder()
+        await log.registerJourneyRun(runId: "run", journeyId: "journey", distinctId: "customer-a")
+        let reservation = log.reserveCommittedAdmission { 1 }
+        await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
+            if await log.completedJourneyEventPlan() { return true }
+            let run = event.name == "unrelated" ? "other-run" : "run"
+            return await log.performJourneyWork(.init(key: .init(distinctId: event.distinctId, id: "input:\(event.id)"),
+                runId: run, afterFailure: false, eventPlan: true, operation: {
+                    await observed.append(event.name)
+                    return .complete
+                }))
+        }
+        let configuration = NuxieConfiguration(apiKey: "correlated-capture-order")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        configuration.beforeSend = { event in
+            if event.name == "correlated", attempts.value == 1 {
+                attempts.advance()
+                store.shouldFailStore = true
+            }
+            return event
+        }
+        try await log.configure(configuration: configuration)
+        let captured = await sink.capture(.init(name: "correlated", properties: ["journey_id": "journey"],
+            eventId: "correlated", distinctId: "customer-a"))
+        XCTAssertFalse(captured)
+        store.shouldFailStore = false
+        log.track("later")
+        log.track("unrelated")
+        await log.drain()
+        let first = await observed.snapshot()
+        XCTAssertFalse(first.contains("later"), "Only the failing Journey's input waits behind its capture")
+        XCTAssertTrue(first.contains("unrelated"))
+        for _ in 0..<500 {
+            if await observed.snapshot().count == 3 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await log.drain()
+        let delivered = await observed.snapshot()
+        XCTAssertEqual(delivered, ["unrelated", "correlated", "later"], "The committed event inherits its retry entry's original position")
+        await log.close()
+    }
+
+    func testStableCaptureFailureUsesTheQueueTimerAndSurvivesJourneyTeardown() async throws {
+        let events = MockEventLog()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        events.identity = identity
+        events.routedCaptureFailuresRemaining = 1
+        let sink = EventLogSystemEventSink(events: events)
+        let request = StableSystemEventCaptureRequest(name: "correlated_outcome", properties: nil,
+            eventId: "correlated-outcome", distinctId: "customer-a")
+        let captured = await sink.capture(request)
+        XCTAssertFalse(captured)
+        let queued = await events.queuedJourneyRetryKeys()
+        XCTAssertEqual(queued.map(\.id), ["stable-capture:correlated-outcome"])
+        await events.cancelJourneyWork(distinctId: "customer-a")
+        for _ in 0..<400 where !events.routedEvents.contains(where: { $0.id == request.eventId }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(events.routedEvents.filter { $0.id == request.eventId }.count, 1)
+        await events.close()
+    }
+
+    func testJourneyWorkKeepsItsKeyPositionAndBackoffWithoutBlockingOtherJourneysOrCustomers() async throws {
+        // One policy: a fixed one-second interval with no attempt limit.
+        XCTAssertEqual(OrderedCustomerQueue.retryInterval, 1)
+        let queue = OrderedCustomerQueue()
+        let recorder = QueueAttemptRecorder()
+        let key = JourneyQueueKey(distinctId: "customer-a", id: "declined")
+        let operation: JourneyQueueOperation = { await recorder.attempt("head") }
+        let first = await queue.submit(key: key, lane: "run:one", operation: operation)
+        XCTAssertFalse(first)
+        for _ in 0..<10 {
+            _ = await queue.submit(key: key, lane: "run:one", waitForAttempt: false, operation: operation)
+        }
+        _ = await queue.submit(key: .init(distinctId: "customer-a", id: "follower"), lane: "run:one", waitForAttempt: false) {
+            await recorder.attempt("follower")
+        }
+        _ = await queue.submit(key: .init(distinctId: "customer-a", id: "unrelated"), lane: "run:two") {
+            await recorder.attempt("other-journey")
+        }
+        _ = await queue.submit(key: .init(distinctId: "customer-b", id: "unrelated"), lane: "run:one") {
+            await recorder.attempt("other-customer")
+        }
+        await queue.settle()
+        let initial = await recorder.attempts
+        let initialHeads = initial.filter { $0.0 == "head" }
+        for (previous, next) in zip(initialHeads, initialHeads.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(next.1 - previous.1, 0.99, "Reoffering a key never resets its backoff")
+        }
+        XCTAssertFalse(initial.contains { $0.0 == "follower" }, "A later input stays behind its Journey's failed work")
+        for name in ["other-journey", "other-customer"] { XCTAssertTrue(initial.contains { $0.0 == name }) }
+        await recorder.recover()
+        for _ in 0..<400 {
+            if await recorder.attempts.contains(where: { $0.0 == "follower" }) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let completed = await recorder.attempts
+        let heads = completed.filter { $0.0 == "head" }
+        XCTAssertGreaterThanOrEqual(heads.count, 2)
+        for (previous, next) in zip(heads, heads.dropFirst()) { XCTAssertGreaterThanOrEqual(next.1 - previous.1, 0.99) }
+        XCTAssertEqual(completed.suffix(2).map(\.0), ["head", "follower"])
+        await queue.close()
+    }
+
+    func testOnlyTheOrderedQueueArmsJourneyExecutionRetries() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        func source(_ path: String) throws -> String {
+            try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+        }
+        let eventLog = try source("Sources/Nuxie/Events/EventLog.swift")
+        let service = try source("Sources/Nuxie/Journey/JourneyService.swift")
+        let exposure = try source("Sources/Nuxie/Journey/Execution/JourneyExperimentExposureCoordinator.swift")
+        let systemEvents = try source("Sources/Nuxie/DI/RuntimeProviders.swift")
+        let queue = try XCTUnwrap(eventLog.range(of: "actor OrderedCustomerQueue"))
+        let end = try XCTUnwrap(eventLog.range(of: "private enum VolatileRoute"))
+        let queueSource = String(eventLog[queue.lowerBound..<end.lowerBound])
+        XCTAssertEqual(queueSource.components(separatedBy: "Task.sleep(").count - 1, 1)
+        XCTAssertEqual(service.components(separatedBy: "sleeper.sleep(").count - 1, 1, "The only service sleeper is the authored deadline wake")
+        XCTAssertTrue(service.contains("at date: Date, deadlines: [JourneyDeadline]"))
+        for oldOwner in ["nativeRestoreRetryTasks", "NativeRestoreRetry", "deadlineRetryAt", "foregroundDeadlines", "commerceSettlementTasks", "eventParkRetries", "RemainingEventStarts"] {
+            XCTAssertFalse(service.contains(oldOwner), "Removed retry state: \(oldOwner)")
+        }
+        XCTAssertFalse(service.contains("enqueueJourneyResumeRetry"))
+        XCTAssertFalse(eventLog.contains("journeyResumeRetryHandler"))
+        XCTAssertFalse(eventLog.contains("routeRetryTask"))
+        XCTAssertFalse(eventLog.contains("acknowledgementRetryTask"))
+        XCTAssertFalse(exposure.contains("CancellationAwareExponentialRetryLoop"))
+        XCTAssertFalse(exposure.contains("Task.sleep("))
+        XCTAssertFalse(exposure.contains("retryTasks"))
+        XCTAssertFalse(systemEvents.contains("CancellationAwareExponentialRetryLoop"))
+        XCTAssertFalse(systemEvents.contains("retryTask"))
+        XCTAssertFalse(systemEvents.contains("Task.sleep("))
+        // The other EventLog sleeper periodically flushes outbound events.
+        XCTAssertEqual(eventLog.components(separatedBy: "Task.sleep(").count - 1, 2)
+        // Response-save HTTP delivery has its own durable server-directed
+        // transport policy; it never advances a Journey or accepts an input.
+        let uploads = try source("Sources/Nuxie/Journey/Execution/JourneyResponseSaveDelivery.swift")
+        XCTAssertEqual(uploads.components(separatedBy: "sleeper.sleep(").count - 1, 1)
+    }
+
+    func testFailedRecoveryReleasesRoutingAndRetriesTheHeldPrefixWithoutAnotherCapture() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let store = MockEventStore()
+        let log = EventLog(identity: identity, dateProvider: MockDateProvider(), apiClient: MockNuxieApi(), store: store)
+        let observed = RecoveredRouteRecorder()
+        await log.subscribeCommitted { event in await observed.append(event.name) }
+        let configuration = NuxieConfiguration(apiKey: "failed-recovery-retry")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await log.configure(configuration: configuration)
+        _ = await log.deferCommittedRouting()
+        _ = await log.captureAndRouteSystemEvent(.init(name: "held", properties: nil, eventId: "held", distinctId: "customer-a"))
+        _ = await log.flushEvents()
+        store.shouldFailQuery = true
+        let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
+        XCTAssertFalse(recovered)
+        store.shouldFailQuery = false
+        for _ in 0..<400 {
+            if await observed.snapshot() == ["held"] { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let released = await observed.snapshot()
+        XCTAssertEqual(released, ["held"], "Failed recovery must release its hold; queue inspection retries its retained prefix")
+        await log.close()
+    }
     func testAcknowledgementDuringRecoveryPageDoesNotRedeliverAndStillDeliversPendingEntries() async throws {
         try await assertAcknowledgementDuringRecoveryPage(pass: 1)
     }
@@ -137,7 +322,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         await log.subscribeForwarding { event in await forwarded.append(event.event.name) }
         await log.setJourneyDeadlineHandler { _ in
             await observed.append("deadline")
-            return true
+            return .complete
         }
         let reservation = log.reserveCommittedAdmission { 1 }
         await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
@@ -185,7 +370,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         let attempts = RecoveredRouteRecorder()
         await log.setJourneyDeadlineHandler { _ in
             await observed.append("deadline")
-            return true
+            return .complete
         }
         let reservation = log.reserveCommittedAdmission { 1 }
         await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
@@ -217,7 +402,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         await log.close()
     }
 
-    func testUnavailableDeadlineIsConsumedWithoutBlockingLaterEvents() async throws {
+    func testUnavailableDeadlineIsRetainedWithoutBlockingUnrelatedEvents() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
         let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
@@ -225,7 +410,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         let observed = RecoveredRouteRecorder()
         await log.setJourneyDeadlineHandler { _ in
             await observed.append("unavailable-deadline")
-            return false
+            return .retry
         }
         await log.subscribeCommitted { event in await observed.append(event.name) }
         let configuration = NuxieConfiguration(apiKey: "deadline-consumption-test")
@@ -254,7 +439,7 @@ final class CommittedRouteRecoveryTests: XCTestCase {
             await log.subscribeCommitted { event in await observed.append(event.name) }
             await log.setJourneyDeadlineHandler { _ in
                 await observed.append("deadline")
-                return true
+                return .complete
             }
             let configuration = NuxieConfiguration(apiKey: "delivered-receipt-deadline-test")
             configuration.testingOverrides.suppressBackgroundWork = true
@@ -274,6 +459,9 @@ final class CommittedRouteRecoveryTests: XCTestCase {
             let order = await observed.snapshot()
             XCTAssertEqual(order, ["earlier", "deadline", "later"])
             XCTAssertFalse(store.pendingCommittedRoutes.isEmpty)
+            // Clearing Journey execution cannot retire EventLog's durable
+            // receipt cleanup. It keeps the same queue-owned retry entry.
+            await log.cancelJourneyWork(distinctId: "customer-a")
             store.shouldFailStableRouteAcknowledgement = false
             store.shouldFailMarkDelivered = false
             for _ in 0..<300 where !store.pendingCommittedRoutes.isEmpty {
@@ -319,15 +507,19 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         generation.advance()
         let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
         XCTAssertTrue(recovered)
+        for _ in 0..<500 {
+            if await received.snapshot().count == 4 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await log.drain()
         let delivered = await received.snapshot()
         XCTAssertEqual(delivered, ["before", "undurable-0", "undurable-1", "after"])
         XCTAssertTrue(store.pendingCommittedRoutes.isEmpty)
         await log.close()
     }
 
-    /// The owner of a hold gets control back only once what the hold kept
-    /// has reached the subscriber, after an earlier refused route is retried
-    /// first. Releasing an older hold releases nothing.
+    /// A hold releases its retained prefix without resetting an earlier
+    /// refused route's retry interval. An older hold releases nothing.
     func testReleasingAHoldReturnsOnceWhatItKeptIsDelivered() async throws {
         let identity = MockIdentityService()
         identity.setDistinctId("customer-a")
@@ -358,7 +550,12 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         XCTAssertEqual(beforeRelease, [])
 
         let released = await log.releaseCommittedRouting(ifGeneration: hold)
-        XCTAssertTrue(released)
+        if !released {
+            for _ in 0..<500 {
+                if await received.snapshot().count == 2 { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }
         let delivered = await received.snapshot()
         XCTAssertEqual(delivered, ["refused", "held"])
         await log.close()
@@ -439,6 +636,11 @@ final class CommittedRouteRecoveryTests: XCTestCase {
             generation.advance()
             let replayed = await log.replayPendingStableRoutes(distinctId: "customer-a")
             XCTAssertTrue(replayed)
+            for _ in 0..<1000 {
+                if await received.snapshot().count == expected.count { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            await log.drain()
             let delivered = await received.snapshot()
             XCTAssertEqual(delivered, expected)
             let remaining = await log.bufferedCommittedRouteCount
@@ -481,6 +683,9 @@ final class CommittedRouteRecoveryTests: XCTestCase {
         generation.advance()
         let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
         XCTAssertTrue(recovered)
+        for _ in 0..<500 where !store.pendingCommittedRoutes.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         XCTAssertTrue(store.pendingCommittedRoutes.isEmpty)
         let firstNames = await firstSubscriber.snapshot()
         let lastNames = await lastSubscriber.snapshot()

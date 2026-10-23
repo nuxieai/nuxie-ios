@@ -74,14 +74,360 @@ struct JourneyDeadline: Hashable, Sendable {
   let wakeAt: Date
 }
 
+struct JourneyQueueKey: Hashable, Sendable {
+  let distinctId: String
+  let id: String
+}
+
+typealias JourneyQueueOperation = @Sendable () async -> JourneyQueueResult
+
+enum JourneyQueueResult: Sendable {
+  case complete
+  case retry
+  case continueWith(JourneyQueueOperation)
+  case waiting(Set<JourneyQueueKey>, JourneyQueueOperation)
+}
+
+enum JourneyQueueContext {
+  @TaskLocal static var key: JourneyQueueKey?
+  @TaskLocal static var event: JourneyQueueKey?
+  @TaskLocal static var isJourneyOperation = false
+  @TaskLocal static var isRetryAttempt = false
+}
+
+struct JourneyWorkRequest: Sendable {
+  let key: JourneyQueueKey
+  let runId: String?
+  let afterFailure: Bool
+  let bypassesHold: Bool
+  let eventPlan: Bool
+  let cancelsWithJourney: Bool
+  let operation: JourneyQueueOperation
+
+  init(key: JourneyQueueKey, runId: String? = nil, afterFailure: Bool = true,
+       bypassesHold: Bool = false, eventPlan: Bool = false, cancelsWithJourney: Bool = true,
+       operation: @escaping JourneyQueueOperation) {
+    self.key = key; self.runId = runId; self.afterFailure = afterFailure
+    self.bypassesHold = bypassesHold; self.operation = operation
+    self.eventPlan = eventPlan
+    self.cancelsWithJourney = cancelsWithJourney
+  }
+}
+
+/// Capture order is the major position; work offered by that capture inherits
+/// its position. A failed lane holds its followers, not unrelated lanes.
+actor OrderedCustomerQueue {
+  static let retryInterval: TimeInterval = 1
+  /// Events and deadlines keep capture order, so a routing hold holds them.
+  /// Other Journey work does not wait for a hold.
+  enum Kind: Sendable { case event(durable: Bool), deadline, work }
+  private struct Entry: Sendable {
+    let key: JourneyQueueKey
+    let kind: Kind
+    let parent: JourneyQueueKey?
+    let major: UInt64
+    let minor: UInt64
+    let bypassesHold: Bool
+    let cancelsWithJourney: Bool
+    var lane: String
+    var operation: JourneyQueueOperation
+    var running = false
+    var complete = false
+    var attempted = false
+    var retryAt: TimeInterval?
+    var dependencies: Set<JourneyQueueKey> = []
+    var firstAttempt: CheckedContinuation<Bool, Never>?
+    var task: Task<Void, Never>?
+    var refresh: JourneyQueueOperation?
+    var refreshAfterFailure = false
+    var isEvent: Bool { if case .event = kind { return true }; return false }
+    var isCaptureOrdered: Bool { if case .work = kind { return false }; return true }
+  }
+  private var entries: [JourneyQueueKey: Entry] = [:]
+  private var nextPosition: UInt64 = 0
+  private var nextMinor: [UInt64: UInt64] = [:]
+  private var capturePositions: [JourneyQueueKey: (major: UInt64, minor: UInt64)] = [:]
+  private var runJourneys: [JourneyQueueKey: String] = [:]
+  private var paused = false
+  private var closed = false
+  private var retryTimer: Task<Void, Never>?
+  private var retryTimerAt: TimeInterval?
+  private var settlement: [(JourneyQueueKey?, CheckedContinuation<Void, Never>)] = []
+
+  func submit(key: JourneyQueueKey, kind: Kind = .work, lane: String,
+              parent: JourneyQueueKey? = nil, anchor: JourneyQueueKey? = nil,
+              afterFailure: Bool = false, bypassesHold: Bool = false,
+              cancelsWithJourney: Bool = true,
+              waitForAttempt: Bool = true,
+              operation: @escaping JourneyQueueOperation) async -> Bool {
+    guard !closed else { return true }
+    if let entry = entries[key] {
+      if !waitForAttempt, !entry.isEvent {
+        if entry.running {
+          entries[key]?.refresh = operation
+          entries[key]?.refreshAfterFailure = afterFailure
+        } else if !entry.complete {
+          entries[key]?.operation = operation
+        }
+      }
+      pump()
+      return entry.complete
+    }
+    let major: UInt64
+    let minor: UInt64
+    if let position = capturePositions.removeValue(forKey: key) {
+      major = position.major
+      minor = position.minor
+    } else if let anchor, let entry = entries[anchor] {
+      major = entry.major
+      minor = nextMinor[major, default: 0] + 1
+      nextMinor[major] = minor
+    } else {
+      major = nextPosition
+      nextPosition &+= 1
+      minor = 0
+    }
+    entries[key] = Entry(key: key, kind: kind, parent: parent, major: major, minor: minor,
+      bypassesHold: bypassesHold, cancelsWithJourney: cancelsWithJourney,
+      lane: canonicalLane(lane, distinctId: key.distinctId), operation: operation,
+      attempted: afterFailure,
+      retryAt: afterFailure ? ProcessInfo.processInfo.systemUptime + Self.retryInterval : nil)
+    if !waitForAttempt { pump(); return false }
+    return await withCheckedContinuation { continuation in
+      entries[key]?.firstAttempt = continuation
+      pump()
+      if entries[key]?.running != true {
+        entries[key]?.firstAttempt = nil
+        continuation.resume(returning: entries[key]?.complete == true)
+      }
+    }
+  }
+
+  func bind(_ key: JourneyQueueKey, runId: String) {
+    entries[key]?.lane = canonicalLane("run:\(runId)", distinctId: key.distinctId)
+  }
+
+  func registerRun(runId: String, journeyId: String, distinctId: String) {
+    guard runJourneys[.init(distinctId: distinctId, id: runId)] != journeyId else { return }
+    runJourneys[.init(distinctId: distinctId, id: runId)] = journeyId
+    runJourneys[.init(distinctId: distinctId, id: journeyId)] = journeyId
+    for key in entries.keys.filter({ $0.distinctId == distinctId }) {
+      if let lane = entries[key]?.lane { entries[key]?.lane = canonicalLane(lane, distinctId: distinctId) }
+    }
+  }
+
+  private func canonicalLane(_ lane: String, distinctId: String) -> String {
+    guard lane.hasPrefix("run:"), let journey = runJourneys[.init(distinctId: distinctId, id: String(lane.dropFirst(4)))] else { return lane }
+    return "journey:\(journey)"
+  }
+
+  /// A capture retried at an older queue position hands that position to its
+  /// committed event, including when routing is held during the commit.
+  func reserveCapture(_ event: JourneyQueueKey, from work: JourneyQueueKey) {
+    let ack = JourneyQueueKey(distinctId: event.distinctId, id: "ack:\(event.id.dropFirst("event:".count))")
+    guard entries[event] == nil, entries[ack] == nil, capturePositions[event] == nil,
+          let entry = entries[work] else { return }
+    let minor = nextMinor[entry.major, default: 0] + 1
+    nextMinor[entry.major] = minor
+    capturePositions[event] = (entry.major, minor)
+  }
+
+  func releaseCapture(_ event: JourneyQueueKey) { capturePositions.removeValue(forKey: event) }
+
+  func dependencies(of parent: JourneyQueueKey) -> Set<JourneyQueueKey> {
+    Set(entries.values.filter { $0.parent == parent && !$0.complete }.map(\.key))
+  }
+
+  func completedPlan(for parent: JourneyQueueKey) -> Bool {
+    let children = entries.values.filter { $0.parent == parent }
+    return !children.isEmpty && children.allSatisfy(\.complete)
+  }
+
+  func contains(_ key: JourneyQueueKey) -> Bool { entries[key] != nil }
+
+  func hasPendingEvents() -> Bool {
+    entries.values.contains { if case .event = $0.kind { return !$0.complete }; return false }
+  }
+
+  func bufferedEventCount() -> Int {
+    entries.values.filter {
+      guard !$0.complete, case .event(let durable) = $0.kind else { return false }
+      return !durable || $0.retryAt != nil
+    }.count
+  }
+
+  func volatileEventCount() -> Int {
+    entries.values.filter { if case .event(durable: false) = $0.kind { return !$0.complete }; return false }.count
+  }
+
+  func retryingJourneyKeys() -> [JourneyQueueKey] {
+    ordered().filter { !$0.isEvent && $0.retryAt != nil }.map(\.key)
+  }
+
+  func setPaused(_ paused: Bool) { self.paused = paused; pump() }
+  func notify() { pump() }
+
+  func settle(excluding key: JourneyQueueKey? = nil) async {
+    pump()
+    guard entries.values.contains(where: { $0.running && $0.key != key }) else { return }
+    await withCheckedContinuation { settlement.append((key, $0)) }
+  }
+
+  func cancel(distinctId: String, waitForAttempts: Bool = false) async {
+    var tasks: [Task<Void, Never>] = []
+    for key in entries.keys.filter({ $0.distinctId == distinctId && entries[$0]?.cancelsWithJourney == true }) {
+      let entry = entries.removeValue(forKey: key)
+      entry?.task?.cancel()
+      if key != JourneyQueueContext.key, let task = entry?.task { tasks.append(task) }
+      entry?.firstAttempt?.resume(returning: true)
+    }
+    runJourneys = runJourneys.filter { $0.key.distinctId != distinctId }
+    pump()
+    if waitForAttempts { for task in tasks { await task.value } }
+  }
+
+  func close() async {
+    closed = true
+    retryTimer?.cancel()
+    retryTimer = nil
+    let tasks = entries.values.filter { $0.key != JourneyQueueContext.key }.compactMap(\.task)
+    for entry in entries.values { entry.firstAttempt?.resume(returning: true) }
+    tasks.forEach { $0.cancel() }
+    entries.removeAll()
+    capturePositions.removeAll()
+    runJourneys.removeAll()
+    settlement.forEach { $0.1.resume() }
+    settlement.removeAll()
+    for task in tasks { await task.value }
+  }
+
+  private func ordered() -> [Entry] {
+    entries.values.sorted { ($0.major, $0.minor) < ($1.major, $1.minor) }
+  }
+
+  private func pump() {
+    guard !closed else { return }
+    let now = ProcessInfo.processInfo.systemUptime
+    var occupied: Set<String> = []
+    var undispatchedCustomers: Set<String> = []
+    var firstAttempts: [String: UInt64] = [:]
+    var nextRetry: TimeInterval?
+    // First attempts establish capture/deadline order before unrelated work
+    // can proceed. A refused Journey plan then holds only the lanes of its
+    // own Journeys; its event waits for those dependencies before acknowledgement.
+    for entry in ordered() where !entry.complete {
+      let scope = "\(entry.key.distinctId)\u{0}\(entry.lane)"
+      let isEvent = entry.isEvent
+      if entry.running, !entry.attempted, !entry.bypassesHold {
+        firstAttempts[entry.key.distinctId] = min(firstAttempts[entry.key.distinctId] ?? entry.major, entry.major)
+      }
+      if isEvent, entry.dependencies.isEmpty { undispatchedCustomers.insert(entry.key.distinctId) }
+      guard occupied.insert(scope).inserted else { continue }
+      guard !entry.running, !paused || entry.bypassesHold || !entry.isCaptureOrdered else { continue }
+      // Finish offering the input plan before retrying one of its failures.
+      // The initial child attempt is allowed while its caller awaits it.
+      if entry.attempted, let parent = entry.parent, entries[parent]?.running == true { continue }
+      if !entry.bypassesHold, let earlier = firstAttempts[entry.key.distinctId], earlier < entry.major { continue }
+      if !isEvent, entry.parent == nil, !entry.bypassesHold, undispatchedCustomers.contains(entry.key.distinctId) { continue }
+      guard entry.dependencies.allSatisfy({ entries[$0]?.complete != false }) else { continue }
+      if let at = entry.retryAt, at > now {
+        nextRetry = min(nextRetry ?? at, at)
+        continue
+      }
+      entries[entry.key]?.running = true
+      if !entry.attempted, !entry.bypassesHold { firstAttempts[entry.key.distinctId] = entry.major }
+      let operation = entry.operation
+      let event = isEvent ? entry.key : entry.parent
+      entries[entry.key]?.task = Task.detached { [weak self] in
+        let result = await JourneyQueueContext.$key.withValue(entry.key) {
+          await JourneyQueueContext.$event.withValue(event) {
+            await JourneyQueueContext.$isJourneyOperation.withValue(!isEvent) {
+              await JourneyQueueContext.$isRetryAttempt.withValue(entry.attempted) { await operation() }
+            }
+          }
+        }
+        await self?.finished(entry.key, result: result)
+        return ()
+      }
+    }
+    armRetry(at: nextRetry)
+    let ready = settlement.filter { excluded, _ in
+      !entries.values.contains { $0.running && $0.key != excluded }
+    }
+    settlement.removeAll { excluded, _ in ready.contains { $0.0 == excluded } }
+    ready.forEach { $0.1.resume() }
+  }
+
+  private func finished(_ key: JourneyQueueKey, result: JourneyQueueResult) {
+    guard var entry = entries[key] else { return }
+    entry.running = false
+    entry.attempted = true
+    entry.task = nil
+    let continuation = entry.firstAttempt
+    entry.firstAttempt = nil
+    switch result {
+    case .complete:
+      entry.complete = true
+      entry.retryAt = nil
+      if let refresh = entry.refresh {
+        entry.complete = false
+        entry.operation = refresh
+        entry.retryAt = entry.refreshAfterFailure ? ProcessInfo.processInfo.systemUptime + Self.retryInterval : nil
+      }
+    case .retry:
+      entry.retryAt = ProcessInfo.processInfo.systemUptime + Self.retryInterval
+    case .continueWith(let operation):
+      entry.operation = operation
+      entry.dependencies.removeAll()
+      if case .event = entry.kind { entry.lane = "events" }
+      entry.retryAt = ProcessInfo.processInfo.systemUptime + Self.retryInterval
+    case .waiting(let dependencies, let operation):
+      entry.operation = operation
+      entry.dependencies = dependencies
+      entry.lane = "receipt:\(key.id)"
+      entry.retryAt = nil
+    }
+    entry.refresh = nil
+    entries[key] = entry
+    continuation?.resume(returning: entry.complete)
+    if entry.complete, entry.parent == nil {
+      entries = entries.filter { $0.key != key && $0.value.parent != key }
+    } else if entry.complete, let parent = entry.parent, entries[parent] == nil {
+      entries.removeValue(forKey: key)
+    }
+    let positions = Set(entries.values.map(\.major)).union(capturePositions.values.map { $0.major })
+    nextMinor = nextMinor.filter { positions.contains($0.key) }
+    pump()
+  }
+
+  private func armRetry(at date: TimeInterval?) {
+    guard let date else {
+      retryTimer?.cancel(); retryTimer = nil; retryTimerAt = nil
+      return
+    }
+    if let armed = retryTimerAt, armed <= date { return }
+    retryTimer?.cancel()
+    retryTimerAt = date
+    let delay = min(Self.retryInterval, max(0.001, date - ProcessInfo.processInfo.systemUptime))
+    retryTimer = Task { [weak self] in
+      do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
+      await self?.retryReadyEntries()
+    }
+  }
+
+  private func retryReadyEntries() { retryTimer = nil; retryTimerAt = nil; pump() }
+}
+
 private enum VolatileRoute: Sendable {
   case event(RoutedCommittedEvent)
   case deadline(JourneyDeadline)
+  case work(JourneyWorkRequest)
 }
 
 private enum CaptureCommand: Sendable {
   case track(TrackPayload)
   case journeyDeadline(JourneyDeadline)
+  case journeyWork(JourneyWorkRequest)
   case flush(CheckedContinuation<Bool, Never>)
   case barrier(CheckedContinuation<Void, Never>)  // test-only: "drain until here"
   case shutdown
@@ -93,19 +439,18 @@ private enum RouteResolution: Sendable {
 }
 
 private enum RouteCommand: Sendable {
-  case retryFailedDeliveries
-  case retryJourneyResume
   case recoverStableRoutes(
     distinctId: String, generation: UInt64, admissions: [UInt64: UInt64],
-    completion: CheckedContinuation<Bool, Never>?
+    excluding: JourneyQueueKey?, completion: CheckedContinuation<Bool, Never>?
   )
   case resumeAfterRecovery(generation: UInt64)
-  case releaseHold(generation: UInt64, completion: CheckedContinuation<Bool, Never>)
+  case releaseHold(generation: UInt64, excluding: JourneyQueueKey?, completion: CheckedContinuation<Bool, Never>)
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
   case undurable(RoutedCommittedEvent)
   case journeyDeadline(JourneyDeadline)
-  case barrier(CheckedContinuation<Void, Never>)
+  case journeyWork(JourneyWorkRequest)
+  case barrier(CheckedContinuation<Void, Never>, excluding: JourneyQueueKey?)
   case shutdown
 }
 
@@ -367,16 +712,23 @@ protocol EventLogProtocol:
   /// `resumeCommittedRouting(ifGeneration:)` that returns once the routes
   /// the hold kept, including those of captures accepted before this call,
   /// have reached their subscribers. A newer hold keeps routing for its own
-  /// owner, and then this returns false at once.
+  /// owner, and then this returns false at once. Failed work retains its
+  /// backoff and returns false after current attempts settle.
   @discardableResult
   func releaseCommittedRouting(ifGeneration: UInt64) async -> Bool
   /// Enqueues behind captures already accepted, including captures still committing.
   func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async
   /// This control route belongs only to JourneyService, independent of event filters.
-  func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async
-  /// Retries saved Journey inputs on the same timer as a refused local head.
-  func setJourneyResumeRetryHandler(_ handler: (@Sendable () async -> Bool)?) async
-  func requestJourneyResumeRetry() async
+  func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?) async
+  func performJourneyWork(_ request: JourneyWorkRequest) async -> Bool
+  func enqueueJourneyWork(_ request: JourneyWorkRequest) async
+  func bindJourneyWork(runId: String) async
+  func registerJourneyRun(runId: String, journeyId: String, distinctId: String) async
+  func reserveJourneyCapturePosition(eventId: String, distinctId: String) async
+  func releaseJourneyCapturePosition(eventId: String, distinctId: String) async
+  func cancelJourneyWork(distinctId: String) async
+  func cancelJourneyWorkAndWait(distinctId: String) async
+  func completedJourneyEventPlan() async -> Bool
 
   func firstPendingStableRouteEventId(distinctId: String) async throws -> String?
 
@@ -603,12 +955,8 @@ actor EventLog: EventLogProtocol {
   private let committedRouteSessionId = UUID().uuidString
   private var routeWorker: Task<Void, Never>?
   private var routingDeferred = false
-  private var journeyDeadlineHandler: (@Sendable (JourneyDeadline) async -> Bool)?
-  private var journeyResumeRetryHandler: (@Sendable () async -> Bool)?
-  private var journeyResumeRetryPending = false
-  private var journeyResumeRetryQueued = false
-  private var routeRetryTask: Task<Void, Never>?
-  private var acknowledgementRetryTask: Task<Void, Never>?
+  private var journeyDeadlineHandler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?
+  private let orderedRoutes = OrderedCustomerQueue()
   private var routingDeferralGeneration: UInt64 = 0
   private var deferredRouteCommands: [RouteCommand] = []
   private var nextRouteSequenceToDeliver: UInt64 = 0
@@ -620,7 +968,6 @@ actor EventLog: EventLogProtocol {
   /// Subscriber delivery has completed for these routes, but retiring the
   /// durable receipt failed. Keep them active so retries only reattempt the
   /// acknowledgement instead of invoking subscribers a second time.
-  private var failedStableRouteAcknowledgementIds: Set<String> = []
   private nonisolated let forwardingContinuation:
     AsyncStream<ForwardingCommand>.Continuation
   private var forwardingWorker: Task<Void, Never>?
@@ -647,30 +994,23 @@ actor EventLog: EventLogProtocol {
     let handler: AcknowledgingCommittedEventHandler
   }
   private var subscribers: [Subscriber] = []
-  private struct FailedCommittedRoute {
-    let event: RoutedCommittedEvent
-    var subscriber: Int
-  }
-  // Durable followers remain in SQLite. Only the current subscriber retry and
-  // a bounded best-effort fallback for events that could not persist stay here.
-  private var failedCommittedRoute: FailedCommittedRoute?
-  private struct RouteAcknowledgement {
+  // Durable receipts stay in SQLite until acknowledged. The ordered queue
+  // owns subscriber progress and retains a bounded unpersisted fallback.
+  private struct RouteAcknowledgement: Sendable {
     let eventId: String
     let stableEventId: String?
     let hasDurableAdmission: Bool
   }
   private var pendingRouteAcknowledgements: [String: RouteAcknowledgement] = [:]
-  private var deliveredCommittedRouteSequence: UInt64?
+  private var enqueuedCommittedRouteSequence: UInt64?
   private var committedRouteReadFailed = false
   private var needsCommittedRouteDrain = false
   private var prefetchedCommittedRoute: (sequence: UInt64, event: RoutedCommittedEvent)?
   private var volatileRoutes: [(beforeSequence: UInt64, route: VolatileRoute)] = []
-  private var hasFailedCommittedRoutes: Bool {
-    failedCommittedRoute != nil || committedRouteReadFailed
-  }
   var bufferedCommittedRouteCount: Int {
-    (failedCommittedRoute == nil ? 0 : 1) + (prefetchedCommittedRoute == nil ? 0 : 1) + volatileRoutes.count
+    get async { await orderedRoutes.bufferedEventCount() + volatileRoutes.count }
   }
+  func queuedJourneyRetryKeys() async -> [JourneyQueueKey] { await orderedRoutes.retryingJourneyKeys() }
   private var forwardingSubscribers: [ForwardingSubscriber] = []
 
   // MARK: - Delivery (durable queue + bounded in-memory window)
@@ -745,8 +1085,8 @@ actor EventLog: EventLogProtocol {
     captureContinuation.finish()
     routeContinuation.finish()
     forwardingContinuation.finish()
-    routeRetryTask?.cancel()
-    acknowledgementRetryTask?.cancel()
+    let queue = orderedRoutes
+    Task { await queue.close() }
     captureWorker?.cancel()
     routeWorker?.cancel()
     forwardingWorker?.cancel()
@@ -1397,14 +1737,9 @@ actor EventLog: EventLogProtocol {
   public func close() async {
     guard closeFlag.close() else { return }
 
-    routeRetryTask?.cancel()
-    let acknowledgementRetry = acknowledgementRetryTask
-    acknowledgementRetry?.cancel()
-    routeRetryTask = nil
-    acknowledgementRetryTask = nil
-
     // Unblock any in-flight work waiting on storage init (e.g. tests that never called setup()).
     await ready.open()
+    await orderedRoutes.close()
 
     // A stable system capture may already own an in-flight store operation.
     // Settle every durable phase before closing the shared store.
@@ -1420,7 +1755,6 @@ actor EventLog: EventLogProtocol {
 
     // Join the periodic worker before closing its dependencies.
     await stopFlushTimer()
-    await acknowledgementRetry?.value
 
     // Deterministic teardown: wait for both workers to finish their queued
     // commands and exit. Without this, a test (or re-setup) can tear down
@@ -1453,6 +1787,9 @@ actor EventLog: EventLogProtocol {
     case .journeyDeadline(let deadline):
       routeContinuation.yield(.journeyDeadline(deadline))
 
+    case .journeyWork(let request):
+      routeContinuation.yield(.journeyWork(request))
+
     case .flush(let cont):
       guard await ready.isOpen() else {
         cont.resume(returning: false)
@@ -1472,19 +1809,60 @@ actor EventLog: EventLogProtocol {
     }
   }
 
-  func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async {
+  func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?) async {
     journeyDeadlineHandler = handler
   }
 
-  func setJourneyResumeRetryHandler(_ handler: (@Sendable () async -> Bool)?) async {
-    journeyResumeRetryHandler = handler
-    if handler == nil { journeyResumeRetryPending = false }
+  func performJourneyWork(_ request: JourneyWorkRequest) async -> Bool {
+    await orderedRoutes.submit(key: request.key, lane: request.runId.map { "run:\($0)" } ?? "work:\(request.key.id)",
+      parent: request.eventPlan ? JourneyQueueContext.event : nil, anchor: JourneyQueueContext.key,
+      afterFailure: request.afterFailure, bypassesHold: request.bypassesHold,
+      cancelsWithJourney: request.cancelsWithJourney, operation: request.operation)
   }
 
-  func requestJourneyResumeRetry() async {
-    guard journeyResumeRetryHandler != nil, !closeFlag.isClosed else { return }
-    journeyResumeRetryPending = true
-    scheduleRouteRetry()
+  func enqueueJourneyWork(_ request: JourneyWorkRequest) async {
+    guard !closeFlag.isClosed else { return }
+    if JourneyQueueContext.key != nil {
+      await queueJourneyWork(request, anchor: JourneyQueueContext.key)
+      return
+    }
+    await acquireStableCaptureCommit()
+    defer { releaseStableCaptureCommit() }
+    captureContinuation.yield(.journeyWork(request))
+  }
+
+  private func queueJourneyWork(_ request: JourneyWorkRequest, kind: OrderedCustomerQueue.Kind = .work,
+    anchor: JourneyQueueKey? = nil) async {
+    _ = await orderedRoutes.submit(key: request.key, kind: kind,
+      lane: request.runId.map { "run:\($0)" } ?? "work:\(request.key.id)", anchor: anchor,
+      afterFailure: request.afterFailure, bypassesHold: request.bypassesHold,
+      cancelsWithJourney: request.cancelsWithJourney,
+      waitForAttempt: false, operation: request.operation)
+  }
+
+  func bindJourneyWork(runId: String) async {
+    if let key = JourneyQueueContext.key { await orderedRoutes.bind(key, runId: runId) }
+  }
+
+  func registerJourneyRun(runId: String, journeyId: String, distinctId: String) async {
+    await orderedRoutes.registerRun(runId: runId, journeyId: journeyId, distinctId: distinctId)
+  }
+  func reserveJourneyCapturePosition(eventId: String, distinctId: String) async {
+    if let key = JourneyQueueContext.key {
+      await orderedRoutes.reserveCapture(.init(distinctId: distinctId, id: "event:\(eventId)"), from: key)
+    }
+  }
+  func releaseJourneyCapturePosition(eventId: String, distinctId: String) async {
+    await orderedRoutes.releaseCapture(.init(distinctId: distinctId, id: "event:\(eventId)"))
+  }
+
+  func cancelJourneyWork(distinctId: String) async { await orderedRoutes.cancel(distinctId: distinctId) }
+  func cancelJourneyWorkAndWait(distinctId: String) async {
+    await orderedRoutes.cancel(distinctId: distinctId, waitForAttempts: true)
+  }
+  func completedJourneyEventPlan() async -> Bool {
+    guard let event = JourneyQueueContext.event, JourneyQueueContext.key == event else { return false }
+    return await orderedRoutes.completedPlan(for: event)
   }
 
   func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async {
@@ -1504,6 +1882,7 @@ actor EventLog: EventLogProtocol {
   func deferCommittedRouting() async -> UInt64 {
     routingDeferralGeneration &+= 1
     routingDeferred = true
+    await orderedRoutes.setPaused(true)
     return routingDeferralGeneration
   }
 
@@ -1516,7 +1895,7 @@ actor EventLog: EventLogProtocol {
   func releaseCommittedRouting(ifGeneration generation: UInt64) async -> Bool {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
     // A subscriber cannot wait for the worker it runs on.
-    guard !Self.isOnCommittedRouteWorker else {
+    guard !Self.isOnCommittedRouteWorker, JourneyQueueContext.event == nil else {
       routeContinuation.yield(.resumeAfterRecovery(generation: generation))
       return false
     }
@@ -1526,7 +1905,7 @@ actor EventLog: EventLogProtocol {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
     return await withCheckedContinuation { completion in
       if case .terminated = routeContinuation.yield(
-        .releaseHold(generation: generation, completion: completion)
+        .releaseHold(generation: generation, excluding: JourneyQueueContext.key, completion: completion)
       ) {
         completion.resume(returning: false)
       }
@@ -1535,31 +1914,36 @@ actor EventLog: EventLogProtocol {
 
   private func processRoute(_ cmd: RouteCommand) async {
     switch cmd {
-    case .recoverStableRoutes(let distinctId, let generation, let admissions, let completion):
+    case .recoverStableRoutes(let distinctId, let generation, let admissions, let excluded, let completion):
       let recovered = await recoverStableRoutes(
-        distinctId: distinctId, generation: generation, admissions: admissions
+        distinctId: distinctId, generation: generation, admissions: admissions, excluding: excluded
       )
       completion?.resume(returning: recovered)
       return
     case .resumeAfterRecovery(let generation):
       guard generation == routingDeferralGeneration else { return }
       routingDeferred = false
+      await orderedRoutes.setPaused(false)
       await retryFailedCommittedRoutes()
       let buffered = deferredRouteCommands
       deferredRouteCommands.removeAll()
       for command in buffered { await processRoute(command) }
       return
-    case .releaseHold(let generation, let completion):
+    case .releaseHold(let generation, let excluded, let completion):
       guard generation == routingDeferralGeneration else {
         completion.resume(returning: false)
         return
       }
       await processRoute(.resumeAfterRecovery(generation: generation))
-      completion.resume(returning: !hasFailedCommittedRoutes)
+      await orderedRoutes.settle(excluding: excluded)
+      completion.resume(returning: !(await orderedRoutes.hasPendingEvents()) && !committedRouteReadFailed)
+      return
+    case .journeyWork(let request) where request.bypassesHold:
+      await queueJourneyWork(request)
       return
     case .shutdown:
       for command in deferredRouteCommands {
-        if case .barrier(let continuation) = command { continuation.resume() }
+        if case .barrier(let continuation, _) = command { continuation.resume() }
       }
       deferredRouteCommands.removeAll()
       return
@@ -1570,16 +1954,6 @@ actor EventLog: EventLogProtocol {
       }
     }
     switch cmd {
-    case .retryFailedDeliveries:
-      await retryFailedCommittedRoutes()
-
-    case .retryJourneyResume:
-      journeyResumeRetryPending = false
-      let resumed = await journeyResumeRetryHandler?() ?? true
-      journeyResumeRetryQueued = false
-      if !resumed { journeyResumeRetryPending = true }
-      scheduleRouteRetry()
-
     case .resumeAfterRecovery, .recoverStableRoutes, .releaseHold:
       return
 
@@ -1590,38 +1964,42 @@ actor EventLog: EventLogProtocol {
         let sequence = nextRouteSequenceToDeliver
         nextRouteSequenceToDeliver &+= 1
         if case .committed = next {
-          if !hasFailedCommittedRoutes, !needsCommittedRouteDrain,
+          if !needsCommittedRouteDrain,
              volatileRoutes.isEmpty,
              let cached = prefetchedCommittedRoute, cached.sequence == sequence {
             prefetchedCommittedRoute = nil
-            let delivered = await deliverCommittedRoute(.init(event: cached.event,
-              subscriber: 0))
-            needsCommittedRouteDrain = !delivered
+            _ = await queueEvent(cached.event)
           } else {
             needsCommittedRouteDrain = true
           }
         }
-        await drainCommittedRouteQueue(retryFailed: false)
+        await drainCommittedRouteQueue()
       }
 
     case .undurable(let routed):
       let capacity = max(1, deliveryConfig.maxQueueSize)
       let fallbackCount = volatileRoutes.filter { if case .event = $0.route { return true }; return false }.count
+        + (await orderedRoutes.volatileEventCount())
       guard fallbackCount < capacity else {
         LogWarning("EventLog: best-effort local routing queue full; dropping an unpersisted event")
         return
       }
       volatileRoutes.append((highestResolvedRouteSequence, .event(routed)))
-      await drainCommittedRouteQueue(retryFailed: false)
+      await drainCommittedRouteQueue()
 
     case .journeyDeadline(let deadline):
       volatileRoutes.append((highestResolvedRouteSequence, .deadline(deadline)))
-      await drainCommittedRouteQueue(retryFailed: false)
+      await drainCommittedRouteQueue()
 
-    case .barrier(let cont):
-      if committedRouteReadFailed {
-        await retryFailedCommittedRoutes()
-      }
+    case .journeyWork(let request):
+      if !volatileRoutes.contains(where: {
+        if case .work(let queued) = $0.route { return queued.key == request.key }
+        return false
+      }) { volatileRoutes.append((highestResolvedRouteSequence, .work(request))) }
+      await drainCommittedRouteQueue()
+
+    case .barrier(let cont, let excluded):
+      await orderedRoutes.settle(excluding: excluded)
       cont.resume()
 
     case .shutdown:
@@ -1641,204 +2019,143 @@ actor EventLog: EventLogProtocol {
     do {
       try await store.checkpointCommittedRoute(eventId: routed.event.id,
         sessionId: committedRouteSessionId, nextSubscriber: nextSubscriber)
-    } catch {
-      // The route worker still owns the exact retry position in memory.
-      LogWarning("EventLog: failed to checkpoint local subscriber delivery")
+    } catch { LogWarning("EventLog: failed to checkpoint local subscriber delivery") }
+  }
+
+  private func eventQueueKey(_ routed: RoutedCommittedEvent) -> JourneyQueueKey {
+    .init(distinctId: routed.event.distinctId, id: "event:\(routed.event.id)")
+  }
+
+  private func queueEvent(_ routed: RoutedCommittedEvent, startingAt: Int = 0, waitForAttempt: Bool = false) async -> Bool {
+    if let sequence = routed.commitSequence {
+      enqueuedCommittedRouteSequence = max(enqueuedCommittedRouteSequence ?? sequence, sequence)
+    }
+    return await orderedRoutes.submit(key: eventQueueKey(routed),
+      kind: .event(durable: routed.hasDurableAdmission), lane: "events", cancelsWithJourney: false,
+      waitForAttempt: waitForAttempt) { [weak self] in
+      guard let self else { return .complete }
+      return await Self.$isOnCommittedRouteWorker.withValue(true) {
+        await self.deliverQueuedEvent(routed, startingAt: startingAt)
+      }
     }
   }
 
-  private func acknowledgeCommittedRoute(_ receipt: RouteAcknowledgement) async -> Bool {
-    await acknowledgeStableRouteIfNeeded(receipt.stableEventId)
-    if let eventId = receipt.stableEventId,
-       failedStableRouteAcknowledgementIds.contains(eventId) {
-      return false
+  private func deliverQueuedEvent(_ routed: RoutedCommittedEvent, startingAt: Int) async -> JourneyQueueResult {
+    guard !closeFlag.isClosed else { return .complete }
+    for (index, subscriber) in subscribers.enumerated().dropFirst(startingAt) {
+      if let filter = subscriber.filter, !filter(routed.event) { continue }
+      guard await subscriber.handler(routed.event, routed.subscriberAdmissions[subscriber.identifier]) else {
+        await checkpointCommittedRoute(routed, nextSubscriber: index)
+        let dependencies = await orderedRoutes.dependencies(of: eventQueueKey(routed))
+        // The Journey subscriber's queued plan completes before it is offered
+        // this receipt again. It acknowledges that plan without applying inputs twice.
+        let resumeAt = index
+        let continuation: JourneyQueueOperation = { [weak self] in
+          guard let self else { return .complete }
+          return await Self.$isOnCommittedRouteWorker.withValue(true) {
+            await self.deliverQueuedEvent(routed, startingAt: resumeAt)
+          }
+        }
+        return dependencies.isEmpty ? .continueWith(continuation) : .waiting(dependencies, continuation)
+      }
     }
-    guard receipt.hasDurableAdmission else { return true }
+    let receipt = RouteAcknowledgement(eventId: routed.event.id,
+      stableEventId: routed.stableRouteEventId, hasDurableAdmission: routed.hasDurableAdmission)
+    await checkpointCommittedRoute(routed, nextSubscriber: subscribers.count)
+    pendingRouteAcknowledgements[receipt.eventId] = receipt
+    _ = await orderedRoutes.submit(key: .init(distinctId: routed.event.distinctId, id: "ack:\(receipt.eventId)"),
+      lane: "ack:\(receipt.eventId)", anchor: JourneyQueueContext.key, bypassesHold: true,
+      cancelsWithJourney: false,
+      waitForAttempt: false) { [weak self] in
+        guard let self else { return .complete }
+        return await self.acknowledgeQueuedRoute(receipt)
+      }
+    return .complete
+  }
+
+  private func acknowledgeQueuedRoute(_ receipt: RouteAcknowledgement) async -> JourneyQueueResult {
+    if let id = receipt.stableEventId {
+      do {
+        try await store.markStableRouteDelivered(eventId: id)
+        activeStableRouteIds.remove(id)
+      } catch {
+        return .retry
+      }
+    }
+    if receipt.hasDurableAdmission {
+      do { try await store.acknowledgeCommittedRoute(eventId: receipt.eventId, sessionId: committedRouteSessionId) }
+      catch { return .retry }
+    }
+    pendingRouteAcknowledgements.removeValue(forKey: receipt.eventId)
+    return .complete
+  }
+
+  @discardableResult
+  private func drainCommittedRouteQueue() async -> Bool {
+    guard !routingDeferred else { return true }
+    if committedRouteReadFailed, JourneyQueueContext.key?.id != "route-inspection" { return false }
     do {
-      try await store.acknowledgeCommittedRoute(eventId: receipt.eventId,
-        sessionId: committedRouteSessionId)
-      return true
-    } catch {
-      LogWarning("EventLog: failed to acknowledge local subscriber delivery")
-      return false
-    }
-  }
-
-  private func deliverOrRetainCommittedRoute(_ routed: RoutedCommittedEvent) async {
-    // Recovery visits stop at their first refusal; live durable captures use
-    // drainCommittedRouteQueue instead of retaining another event in memory.
-    guard !hasFailedCommittedRoutes else { return }
-    _ = await deliverCommittedRoute(.init(event: routed, subscriber: 0))
-  }
-
-  private func deliverCommittedRoute(_ delivery: FailedCommittedRoute) async -> Bool {
-    failedCommittedRoute = delivery
-    if let failed = await firstFailedSubscriber(delivery.event, startingAt: delivery.subscriber) {
-      failedCommittedRoute?.subscriber = failed
-      prefetchedCommittedRoute = nil
-      await checkpointCommittedRoute(delivery.event, nextSubscriber: failed)
-      scheduleRouteRetry()
-      return false
-    }
-    failedCommittedRoute?.subscriber = subscribers.count
-    let receipt = RouteAcknowledgement(eventId: delivery.event.event.id,
-      stableEventId: delivery.event.stableRouteEventId, hasDurableAdmission: delivery.event.hasDurableAdmission)
-    if !(await acknowledgeCommittedRoute(receipt)) {
-      await checkpointCommittedRoute(delivery.event, nextSubscriber: subscribers.count)
-      pendingRouteAcknowledgements[receipt.eventId] = receipt
-      scheduleAcknowledgementRetry()
-    }
-    // Subscriber completion advances routing even while receipt cleanup fails.
-    if let sequence = delivery.event.commitSequence {
-      deliveredCommittedRouteSequence = max(deliveredCommittedRouteSequence ?? sequence, sequence)
-    }
-    failedCommittedRoute = nil
-    if prefetchedCommittedRoute?.event.event.id == delivery.event.event.id {
-      prefetchedCommittedRoute = nil
-    }
-    return true
-  }
-
-  private func drainCommittedRouteQueue(retryFailed: Bool) async {
-    if let failed = failedCommittedRoute {
-      guard retryFailed, await deliverCommittedRoute(failed) else { return }
-    }
-    guard retryFailed || !committedRouteReadFailed else { return }
-    committedRouteReadFailed = false
-    guard !routingDeferred else { return }
-    do {
-      while true {
-        guard !routingDeferred else { return }
+      while !routingDeferred {
         let pending = needsCommittedRouteDrain
-          ? try await store.firstPendingCommittedRoute(sessionId: committedRouteSessionId, afterSequence: deliveredCommittedRouteSequence)
+          ? try await store.firstPendingCommittedRoute(sessionId: committedRouteSessionId, afterSequence: enqueuedCommittedRouteSequence)
           : nil
         let eligible = pending.flatMap { $0.commitSequence < nextRouteSequenceToDeliver ? $0 : nil }
         if eligible == nil { needsCommittedRouteDrain = false }
         if let fallback = volatileRoutes.first,
            fallback.beforeSequence <= nextRouteSequenceToDeliver,
            eligible == nil || fallback.beforeSequence <= eligible!.commitSequence {
+          volatileRoutes.removeFirst()
           switch fallback.route {
-          case .event(let event):
-            volatileRoutes.removeFirst()
-            guard await deliverCommittedRoute(.init(event: event, subscriber: 0)) else { return }
+          case .event(let routed): _ = await queueEvent(routed)
           case .deadline(let deadline):
-            volatileRoutes.removeFirst()
-            if deadline.distinctId == identityService.getDistinctId() {
-              // A deadline never owns queue retry. JourneyService derives any
-              // further attempt from its durable park and scheduling state.
-              _ = await journeyDeadlineHandler?(deadline)
-            }
+            await queueDeadline(deadline)
+          case .work(let request):
+            await queueJourneyWork(request)
           }
           continue
         }
-        guard let pending = eligible else { return }
+        guard let pending = eligible else { committedRouteReadFailed = false; return true }
         let stored = pending.event
         let routed = RoutedCommittedEvent(
           event: NuxieEvent(id: stored.id, name: stored.name, forwardingName: stored.name, distinctId: stored.distinctId,
             properties: stored.getPropertiesDict(), timestamp: stored.timestamp, journeyOrigin: stored.journeyOrigin),
           subscriberAdmissions: pending.admission.subscribers,
           stableRouteEventId: pending.admission.stableRouteEventId,
-          hasDurableAdmission: true,
-          commitSequence: pending.commitSequence
-        )
-        if let eventId = routed.stableRouteEventId { activeStableRouteIds.insert(eventId) }
-        guard await deliverCommittedRoute(.init(event: routed, subscriber: pending.nextSubscriber)) else { return }
+          hasDurableAdmission: true, commitSequence: pending.commitSequence)
+        if let id = routed.stableRouteEventId { activeStableRouteIds.insert(id) }
+        _ = await queueEvent(routed, startingAt: pending.nextSubscriber)
       }
+      return true
     } catch {
       committedRouteReadFailed = true
-      LogWarning("EventLog: failed to read pending local subscriber delivery")
-      scheduleRouteRetry()
+      LogWarning("EventLog: failed to inspect committed routing")
+      let key = JourneyQueueKey(distinctId: identityService.getDistinctId(), id: "route-inspection")
+      if JourneyQueueContext.key != key { await queueJourneyWork(.init(key: key,
+        bypassesHold: true, cancelsWithJourney: false, operation: { [weak self] in
+          guard let self else { return .complete }
+          return await self.drainCommittedRouteQueue() ? .complete : .retry
+        })) }
+      return false
     }
   }
 
-  private func firstFailedSubscriber(_ routed: RoutedCommittedEvent, startingAt: Int) async -> Int? {
-    for (index, subscriber) in subscribers.enumerated().dropFirst(startingAt) {
-      if let filter = subscriber.filter, !filter(routed.event) { continue }
-      guard await subscriber.handler(routed.event, routed.subscriberAdmissions[subscriber.identifier]) else {
-        return index
-      }
-    }
-    return nil
+  private func queueDeadline(_ deadline: JourneyDeadline) async {
+    let id = "deadline:\(deadline.runId):\(deadline.stepId):\(deadline.anchorAt?.timeIntervalSince1970 ?? -1):\(deadline.wakeAt.timeIntervalSince1970)"
+    await queueJourneyWork(.init(key: .init(distinctId: deadline.distinctId, id: id), runId: deadline.runId,
+      afterFailure: false, operation: { [weak self] in
+        guard let self else { return .complete }
+        return await self.attemptDeadline(deadline)
+      }), kind: .deadline)
+  }
+
+  private func attemptDeadline(_ deadline: JourneyDeadline) async -> JourneyQueueResult {
+    guard deadline.distinctId == identityService.getDistinctId() else { return .complete }
+    return await journeyDeadlineHandler?(deadline) ?? .complete
   }
 
   private func retryFailedCommittedRoutes() async {
-    await drainCommittedRouteQueue(retryFailed: true)
-  }
-
-  private func retryRouteAcknowledgements() async {
-    for receipt in Array(pendingRouteAcknowledgements.values) {
-      if await acknowledgeCommittedRoute(receipt) {
-        pendingRouteAcknowledgements.removeValue(forKey: receipt.eventId)
-      }
-    }
-    if !pendingRouteAcknowledgements.isEmpty { scheduleAcknowledgementRetry() }
-  }
-
-  private func scheduleAcknowledgementRetry() {
-    guard acknowledgementRetryTask == nil, !closeFlag.isClosed else { return }
-    acknowledgementRetryTask = Task { [weak self] in
-      do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
-      await self?.retryAcknowledgementsIndependently()
-    }
-  }
-
-  private func retryAcknowledgementsIndependently() async {
-    guard !closeFlag.isClosed else { return }
-    // This task never occupies the serial route worker. A slow or failed
-    // receipt cleanup cannot hold a deadline or a later local event behind it.
-    await retryRouteAcknowledgements()
-    acknowledgementRetryTask = nil
-    if !pendingRouteAcknowledgements.isEmpty { scheduleAcknowledgementRetry() }
-  }
-
-  private func scheduleRouteRetry() {
-    // Failed local heads and saved Journey inputs share a fixed one-second
-    // delay, without a deadline requirement or a limit on attempts.
-    guard routeRetryTask == nil, !closeFlag.isClosed,
-          hasFailedCommittedRoutes || (journeyResumeRetryPending && !journeyResumeRetryQueued) else { return }
-    routeRetryTask = Task { [weak self] in
-      do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
-      await self?.retryRouteWork()
-    }
-  }
-
-  private func retryRouteWork() {
-    routeRetryTask = nil
-    guard !closeFlag.isClosed else { return }
-    if hasFailedCommittedRoutes { routeContinuation.yield(.retryFailedDeliveries) }
-    if journeyResumeRetryPending, !journeyResumeRetryQueued {
-      journeyResumeRetryQueued = true
-      routeContinuation.yield(.retryJourneyResume)
-    }
-  }
-
-  private func acknowledgeStableRouteIfNeeded(_ eventId: String?) async {
-    guard let eventId else { return }
-    do {
-      try await store.markStableRouteDelivered(eventId: eventId)
-      failedStableRouteAcknowledgementIds.remove(eventId)
-      activeStableRouteIds.remove(eventId)
-    } catch {
-      failedStableRouteAcknowledgementIds.insert(eventId)
-      LogWarning(
-        "EventLog: failed to acknowledge stable local route \(eventId)"
-      )
-    }
-  }
-
-  private func retryFailedStableRouteAcknowledgements() async -> Bool {
-    for eventId in failedStableRouteAcknowledgementIds.sorted() {
-      do {
-        try await store.markStableRouteDelivered(eventId: eventId)
-        failedStableRouteAcknowledgementIds.remove(eventId)
-        activeStableRouteIds.remove(eventId)
-      } catch {
-        LogWarning(
-          "EventLog: failed to retry stable local route acknowledgement \(eventId)"
-        )
-      }
-    }
-    return failedStableRouteAcknowledgementIds.isEmpty
+    await orderedRoutes.notify()
+    _ = await drainCommittedRouteQueue()
   }
 
   private func processForwarding(_ command: ForwardingCommand) async {
@@ -1957,7 +2274,7 @@ actor EventLog: EventLogProtocol {
     // One ordinary capture can route from its freshly committed record even
     // when history queries are temporarily unavailable. Stable replays always
     // load their original stored admissions instead of caching retry authority.
-    if let event, stableRouteEventId == nil, !hasFailedCommittedRoutes,
+    if let event, stableRouteEventId == nil,
        prefetchedCommittedRoute == nil || commitSequence < prefetchedCommittedRoute!.sequence {
       prefetchedCommittedRoute = (commitSequence, RoutedCommittedEvent(event: event,
         subscriberAdmissions: subscriberAdmissions, hasDurableAdmission: true, commitSequence: commitSequence))
@@ -2724,7 +3041,7 @@ actor EventLog: EventLogProtocol {
 
   private func drainRouteWorker() async {
     await withCheckedContinuation { cont in
-      if case .terminated = routeContinuation.yield(.barrier(cont)) {
+      if case .terminated = routeContinuation.yield(.barrier(cont, excluding: JourneyQueueContext.key)) {
         cont.resume()
       }
     }
@@ -3144,8 +3461,8 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
   @discardableResult
   func drainCommittedRouting() async -> Bool
   /// Re-enqueues stable captures whose subscriber receipt survived a process
-  /// exit. Callers choose the customer boundary after its durable runtime
-  /// state is open, then wait for every recovered route to settle.
+  /// exit into this queue, including any refused attempt it now owns. Callers
+  /// choose the customer boundary after its durable runtime state is open.
   @discardableResult
   func replayPendingStableRoutes(distinctId: String) async -> Bool
   func captureAndRouteSystemEvent(
@@ -3215,41 +3532,40 @@ extension EventLog {
   }
 
   private func recoverStableRoutes(
-    distinctId: String, generation: UInt64, admissions: [UInt64: UInt64]
+    distinctId: String, generation: UInt64, admissions: [UInt64: UInt64], excluding: JourneyQueueKey?
   ) async -> Bool {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+    // Recovery owns the retained prefix, but failure never strands a hold.
+    // Captures accepted during recovery remain in deferredRouteCommands.
+    await orderedRoutes.setPaused(false)
+    let recovered: Bool
     do {
-      await retryFailedCommittedRoutes()
-      guard !hasFailedCommittedRoutes else { return false }
       let visited = try await store.visitPendingStableRoutes(distinctId: distinctId) { [weak self] stored in
         guard let self else { return false }
-        return await self.deliverRecoveredStableRoute(
-          stored, generation: generation, admissions: admissions
-        )
+        return await self.deliverRecoveredStableRoute(stored, generation: generation, admissions: admissions)
       }
-      guard visited, !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
-      _ = await retryFailedStableRouteAcknowledgements()
-      // The serial route worker holds subsequent commands until every page
-      // of the retained prefix has completed under the same admissions.
-      await processRoute(.resumeAfterRecovery(generation: generation))
-      guard !hasFailedCommittedRoutes else { return false }
-      // A route still pending here may have been captured by this process
-      // while recovery ran: a subscriber taking a released route (a Journey
-      // starting from a first-launch trigger) captures its own events, and
-      // they wait in this session's committed queue for the live worker.
-      // Only a route left by an earlier process must have settled.
-      return try await store.visitPendingStableRoutes(distinctId: distinctId) { [weak self] stored in
-        guard let self else { return false }
-        return await self.isQueuedInThisSession(stored)
-      }
+      if visited, !closeFlag.isClosed, generation == routingDeferralGeneration {
+        recovered = try await store.visitPendingStableRoutes(distinctId: distinctId) { [weak self] stored in
+          guard let self else { return false }
+          return await self.isQueuedInThisSession(stored)
+        }
+      } else { recovered = false }
     } catch {
       LogWarning("EventLog: failed to replay pending stable local routes")
-      return false
+      recovered = false
     }
+    if generation == routingDeferralGeneration {
+      await processRoute(.resumeAfterRecovery(generation: generation))
+      await orderedRoutes.settle(excluding: excluding)
+    }
+    return recovered
   }
 
   private func isQueuedInThisSession(_ stored: StoredEvent) async -> Bool {
-    if failedStableRouteAcknowledgementIds.contains(stored.id) { return true }
+    if activeStableRouteIds.contains(stored.id) {
+      return true
+    }
+    if await orderedRoutes.contains(.init(distinctId: stored.distinctId, id: "event:\(stored.id)")) { return true }
     do {
       if try await store.hasPendingCommittedRoute(eventId: stored.id, sessionId: committedRouteSessionId) {
         return true
@@ -3266,7 +3582,9 @@ extension EventLog {
   ) async -> Bool {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
     // Check ownership before any store await lets receipt cleanup remove it.
-    if activeStableRouteIds.contains(stored.id) { return true }
+    if activeStableRouteIds.contains(stored.id) {
+      return true
+    }
     do {
       // Captures made by this process already carry their original admissions
       // in the delivery queue. Recovery must not substitute current authority.
@@ -3278,15 +3596,19 @@ extension EventLog {
       guard try await store.hasPendingStableRoute(eventId: stored.id) else { return true }
     } catch { return false }
     guard activeStableRouteIds.insert(stored.id).inserted else { return true }
-    await deliverOrRetainCommittedRoute(RoutedCommittedEvent(
+    let routed = RoutedCommittedEvent(
       event: NuxieEvent(
         id: stored.id, name: stored.name, forwardingName: stored.name, distinctId: stored.distinctId,
         properties: stored.getPropertiesDict(), timestamp: stored.timestamp, journeyOrigin: stored.journeyOrigin
       ),
       subscriberAdmissions: admissions,
       stableRouteEventId: stored.id
-    ))
-    return !hasFailedCommittedRoutes
+    )
+    let delivered = await queueEvent(routed, waitForAttempt: true)
+    if delivered { return true }
+    // An accepted retry is owned by this queue, even when its first delivery
+    // was refused. It must not cause Journey to discard the recovering journal.
+    return await orderedRoutes.contains(eventQueueKey(routed))
   }
 
   @discardableResult
@@ -3295,12 +3617,9 @@ extension EventLog {
     // Waiting for a barrier queued behind that subscriber would deadlock the
     // worker. Any nested capture is still committed before it is enqueued and
     // will route as soon as the current subscriber returns.
-    guard !Self.isOnCommittedRouteWorker, !routingDeferred else { return false }
+    guard !Self.isOnCommittedRouteWorker, JourneyQueueContext.event == nil, !routingDeferred else { return false }
     await drainRouteWorker()
-    guard !hasFailedCommittedRoutes else { return false }
-    await retryRouteAcknowledgements()
-    let stableAcknowledged = await retryFailedStableRouteAcknowledgements()
-    return stableAcknowledged && pendingRouteAcknowledgements.isEmpty
+    return !(await orderedRoutes.hasPendingEvents()) && !committedRouteReadFailed && pendingRouteAcknowledgements.isEmpty
   }
 
   @discardableResult
@@ -3310,15 +3629,15 @@ extension EventLog {
     guard !closeFlag.isClosed else { return false }
     let generation = routingDeferralGeneration
     let admissions = committedAdmissionRegistry.capture()
-    guard !Self.isOnCommittedRouteWorker else {
+    guard !Self.isOnCommittedRouteWorker, JourneyQueueContext.event == nil else {
       routeContinuation.yield(.recoverStableRoutes(
-        distinctId: distinctId, generation: generation, admissions: admissions, completion: nil
+        distinctId: distinctId, generation: generation, admissions: admissions, excluding: JourneyQueueContext.key, completion: nil
       ))
       return false
     }
     return await withCheckedContinuation { completion in
       routeContinuation.yield(.recoverStableRoutes(
-        distinctId: distinctId, generation: generation, admissions: admissions, completion: completion
+        distinctId: distinctId, generation: generation, admissions: admissions, excluding: JourneyQueueContext.key, completion: completion
       ))
     }
   }

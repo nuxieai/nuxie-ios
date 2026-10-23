@@ -1,8 +1,8 @@
 import Foundation
 
-/// Owns exposure publication and its retry lifecycle independently of leg
-/// execution. A selected experiment becomes publishable only after the
-/// presentation layer proves that its screen was visible.
+/// Records exposure publication work in the ordered customer queue. A
+/// selected experiment becomes publishable only after the presentation
+/// layer proves that its screen was visible.
 actor JourneyExperimentExposureCoordinator {
     private struct PendingMark: Sendable {
         let runId: String
@@ -16,20 +16,12 @@ actor JourneyExperimentExposureCoordinator {
         let screenId: String
     }
 
-    private let events: any RoutedStableSystemEventCapturing
-    private let retryLoop = CancellationAwareExponentialRetryLoop(
-        initialDelayNanoseconds: 250_000_000,
-        maximumDelayNanoseconds: 2_000_000_000
-    )
-    private var retryTasks: [String: Task<Void, Never>] = [:]
+    private let events: any EventLogProtocol
+    private var generation: UInt64 = 0
     private var pendingMarks: [String: [PendingMarkKey: PendingMark]] = [:]
 
-    init(events: any RoutedStableSystemEventCapturing) {
+    init(events: any EventLogProtocol) {
         self.events = events
-    }
-
-    deinit {
-        retryTasks.values.forEach { $0.cancel() }
     }
 
     func markShown(
@@ -59,7 +51,7 @@ actor JourneyExperimentExposureCoordinator {
                 "JourneyExperimentExposureCoordinator: failed to queue shown exposure: \(error)"
             )
             retainPendingMark(mark, in: journal)
-            scheduleRetry(for: journal)
+            await scheduleRetry(for: journal)
         }
     }
 
@@ -74,47 +66,33 @@ actor JourneyExperimentExposureCoordinator {
                 events: events
             ).flushPending(admission: admission)
             if !settled {
-                scheduleRetry(for: journal)
+                await scheduleRetry(for: journal)
             }
             return settled
         } catch {
-            scheduleRetry(for: journal)
+            await scheduleRetry(for: journal)
             throw error
         }
     }
 
-    func cancelAndAwaitRetries() async {
-        let retries = Array(retryTasks.values)
-        retries.forEach { $0.cancel() }
-        for retry in retries {
-            await retry.value
-        }
-        retryTasks.removeAll()
+    func cancelPendingPublication() {
+        generation &+= 1
         pendingMarks.removeAll()
     }
 
-    private func scheduleRetry(for journal: JourneyRunJournal) {
-        let key = journal.distinctId
-        guard retryTasks[key] == nil else { return }
-        retryTasks[key] = Task { [weak self] in
-            await self?.retry(in: journal, key: key)
-        }
-    }
-
-    private func retry(
-        in journal: JourneyRunJournal,
-        key: String
-    ) async {
-        defer { retryTasks.removeValue(forKey: key) }
-        await retryLoop.run { [weak self] in
-            guard let self else { return .finished }
-            return await self.retryOnce(in: journal)
-        }
+    private func scheduleRetry(for journal: JourneyRunJournal) async {
+        let generation = generation
+        await events.enqueueJourneyWork(.init(key: .init(distinctId: journal.distinctId, id: "exposure-publication"),
+            operation: { [weak self] in
+                guard let self else { return .complete }
+                return await self.retryOnce(in: journal, generation: generation)
+            }))
     }
 
     private func retryOnce(
-        in journal: JourneyRunJournal
-    ) async -> CancellationAwareExponentialRetryLoop.IterationResult {
+        in journal: JourneyRunJournal, generation: UInt64
+    ) async -> JourneyQueueResult {
+        guard generation == self.generation else { return .complete }
         var markFailed = false
         let journalKey = journal.distinctId
         let marks = pendingMarks[journalKey].map { Array($0.values) } ?? []
@@ -143,17 +121,18 @@ actor JourneyExperimentExposureCoordinator {
                 journal: journal,
                 events: events
             ).flushPending()
-            if settled && !markFailed
+            let reportsPending = try await journal.runs().contains { !$0.startedQueued || $0.completion != nil }
+            if settled && !markFailed && !reportsPending
                     && pendingMarks[journalKey]?.isEmpty != false {
                 _ = try await journal.finalizeRevocation()
-                return .finished
+                return .complete
             }
         } catch {
             LogWarning(
                 "JourneyExperimentExposureCoordinator: exposure retry remains pending: \(error)"
             )
         }
-        return .pending
+        return .retry
     }
 
     private func retainPendingMark(

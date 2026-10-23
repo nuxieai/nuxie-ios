@@ -105,116 +105,58 @@ final class DiscardingSystemEventSink: SystemEventSink, Sendable {
     }
 }
 
-/// Keeps a live correlated commerce outcome owned after a transient EventLog
-/// failure. Stable IDs make every attempt idempotent; retries remain ordered by
-/// first admission so two outcomes cannot overtake each other locally.
+/// Retains correlated capture input until the ordered queue commits and routes
+/// it. Capture failures use the same timer and stable key as all local work.
 private actor StableSystemEventCaptureRetryQueue {
-    private struct RetryResult: Sendable {
-        let isEmpty: Bool
-        let madeProgress: Bool
+    private final class PendingCapture {
+        let request: StableSystemEventCaptureRequest
+        var localRoutePending: Bool?
+        init(_ request: StableSystemEventCaptureRequest) { self.request = request }
     }
+    private let events: any EventLogProtocol
+    private var pendingByEventId: [String: PendingCapture] = [:]
 
-    private let routedEvents: any RoutedStableSystemEventCapturing
-    private let retryLoop: CancellationAwareExponentialRetryLoop
-    private var pendingByEventId: [String: StableSystemEventCaptureRequest] = [:]
-    private var pendingOrder: [String] = []
-    private var retryTask: Task<Void, Never>?
+    init(events: any EventLogProtocol) { self.events = events }
 
-    init(
-        routedEvents: any RoutedStableSystemEventCapturing,
-        baseDelayNanoseconds: UInt64
-    ) {
-        self.routedEvents = routedEvents
-        retryLoop = CancellationAwareExponentialRetryLoop(
-            initialDelayNanoseconds: baseDelayNanoseconds,
-            maximumDelayNanoseconds: 2_000_000_000
-        )
-    }
-
-    /// Reserves retry ownership before the first suspension. A queued retry is
-    /// deliberately reported as unacknowledged until EventLog commits it, so a
-    /// durable caller keeps its own recovery evidence across process death.
-    func captureOrQueue(
-        _ request: StableSystemEventCaptureRequest
-    ) async -> Bool {
+    func captureOrQueue(_ request: StableSystemEventCaptureRequest) async -> Bool {
         if let pending = pendingByEventId[request.eventId] {
-            guard pending.name == request.name,
-                  pending.distinctId == request.distinctId else {
+            guard pending.request.name == request.name, pending.request.distinctId == request.distinctId else {
                 LogError("Stable system event retry rejected an event-id collision: \(request.eventId)")
                 return false
             }
             return false
         }
-
-        pendingByEventId[request.eventId] = request
-        pendingOrder.append(request.eventId)
-
-        guard pendingOrder.first == request.eventId else {
-            startRetryTaskIfNeeded()
-            return false
-        }
-
-        if await attempt(request) {
-            remove(request.eventId)
-            return true
-        }
-
-        LogWarning("Stable system event capture queued for retry: \(request.eventId)")
-        startRetryTaskIfNeeded()
-        return false
+        let pending = PendingCapture(request)
+        pendingByEventId[request.eventId] = pending
+        let journeyId = request.journeyOrigin?.journeyId
+            ?? (request.properties?["journey_id"] as? String)
+        let captured = await events.performJourneyWork(.init(
+            key: .init(distinctId: request.distinctId, id: "stable-capture:\(request.eventId)"),
+            runId: journeyId ?? "stable-capture:\(request.eventId)", afterFailure: false, cancelsWithJourney: false,
+            operation: { [weak self] in
+                guard let self else { return .complete }
+                return await self.attempt(eventId: request.eventId)
+            }))
+        guard captured, let localPending = pending.localRoutePending else { return false }
+        if localPending { return await events.drainCommittedRouting() }
+        return true
     }
 
-    private func attempt(
-        _ request: StableSystemEventCaptureRequest
-    ) async -> Bool {
-        guard let captured = await routedEvents.captureAndRouteSystemEvent(request) else {
-            return false
+    private func attempt(eventId: String) async -> JourneyQueueResult {
+        guard let pending = pendingByEventId[eventId] else { return .complete }
+        let request = pending.request
+        await events.reserveJourneyCapturePosition(eventId: eventId, distinctId: request.distinctId)
+        guard let captured = await events.captureAndRouteSystemEvent(request) else { return .retry }
+        pending.localRoutePending = captured.localRoutePending
+        if captured.localRoutePending {
+            // Ensure the event joins at the reserved position when routing is
+            // open. Its own entry owns delivery and receipt retries afterwards.
+            _ = await events.drainCommittedRouting()
+        } else {
+            await events.releaseJourneyCapturePosition(eventId: eventId, distinctId: request.distinctId)
         }
-        // A retry can inherit the route worker's task-local context. Once this
-        // event's durable receipt is acknowledged, draining that worker again
-        // is unnecessary and would keep later commerce outcomes queued forever.
-        guard captured.localRoutePending else { return true }
-        return await routedEvents.drainCommittedRouting()
-    }
-
-    private func remove(_ eventId: String) {
         pendingByEventId.removeValue(forKey: eventId)
-        pendingOrder.removeAll { $0 == eventId }
-    }
-
-    private func startRetryTaskIfNeeded() {
-        guard retryTask == nil, !pendingOrder.isEmpty else { return }
-        let retryLoop = retryLoop
-        retryTask = Task { [weak self, retryLoop] in
-            await retryLoop.run {
-                guard let result = await self?.retryPending() else {
-                    return .finished
-                }
-                if result.isEmpty { return .finished }
-                return result.madeProgress ? .madeProgress : .pending
-            }
-        }
-    }
-
-    private func retryPending() async -> RetryResult {
-        let eventIds = pendingOrder
-        var madeProgress = false
-        for eventId in eventIds {
-            guard let pending = pendingByEventId[eventId] else { continue }
-            if await attempt(pending) {
-                remove(eventId)
-                madeProgress = true
-            } else {
-                // A later correlated outcome must never overtake the oldest
-                // unacknowledged capture.
-                break
-            }
-        }
-        let isEmpty = pendingOrder.isEmpty
-        if isEmpty {
-            retryTask = nil
-        }
-        return RetryResult(isEmpty: isEmpty, madeProgress: madeProgress)
+        return .complete
     }
 }
 
@@ -223,15 +165,9 @@ final class EventLogSystemEventSink: SystemEventSink, @unchecked Sendable {
     private let events: any EventLogProtocol
     private let stableCaptureRetries: StableSystemEventCaptureRetryQueue
 
-    init(
-        events: any EventLogProtocol,
-        stableCaptureRetryBaseDelayNanoseconds: UInt64 = 50_000_000
-    ) {
+    init(events: any EventLogProtocol) {
         self.events = events
-        stableCaptureRetries = StableSystemEventCaptureRetryQueue(
-            routedEvents: events,
-            baseDelayNanoseconds: stableCaptureRetryBaseDelayNanoseconds
-        )
+        stableCaptureRetries = StableSystemEventCaptureRetryQueue(events: events)
     }
 
     func emit(_ name: String, properties: [String: Any]?) {

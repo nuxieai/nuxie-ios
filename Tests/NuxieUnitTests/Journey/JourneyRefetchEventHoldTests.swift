@@ -217,7 +217,10 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
 
         await service.handleEvent(NuxieEvent(name: "screen_viewed", distinctId: "customer",
                                              timestamp: capturedAt))
+        // The event's own pass queues the overdue deadline; no wake is needed.
+        await events.drain()
         XCTAssertEqual(completions(in: events), ["timed_out"])
+        XCTAssertTrue(sleeper.pendingSleepDurations.isEmpty)
         await service.shutdown()
     }
 
