@@ -98,12 +98,12 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
                         incomingOnTop: true, outgoingCompletionEventName: "exit", incomingCompletionEventName: "enter"),
                     exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false,
                     operations: .init(setInputEnabled: { inputEnabled = $0; loop.setInputEnabled($0) },
-                        prepare: {}, register: { _, _ in AsyncStream { _ in } }, insert: { _ in },
-                        phases: { _, _ in }, present: {
+                        prepare: {}, register: { _, _ in AsyncStream { _ in } }, batch: { _ in },
+                        present: {
                             loop.setTimelineActive(true)
                             try await loop.advanceZeroDelta(awaitsPresentation: true)
                         }, wait: { _, _ in XCTFail("The presentation budget has already expired") },
-                        remove: {}, hidden: {}, active: { activated = true }))
+                        hidden: {}, active: { activated = true }))
                 outcome = .success(())
             } catch { outcome = .failure(error) }
             finished.fulfill()
