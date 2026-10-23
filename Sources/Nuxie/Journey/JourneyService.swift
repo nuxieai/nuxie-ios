@@ -1803,9 +1803,9 @@ private extension JourneyService {
                    parked.id != nativeRetry.runID || ParkCheckpoint(parked) != nativeRetry.checkpoint { continue }
                 if let deadline, self.deadline(for: parked, distinctId: journal.distinctId) != deadline { continue }
                 if event == nil {
+                    // The release's screen gate below decides background eligibility.
                     let nativeRetryDue = nativeRestoreRetries[parked.id].map {
                         $0.checkpoint == ParkCheckpoint(parked) && $0.at <= dateProvider.now()
-                            && foreground
                     } == true
                     guard parked.park?.pendingEvent != nil
                             || parked.park?.candidateEvents?.isEmpty == false
@@ -4207,6 +4207,10 @@ private extension JourneyService {
         let due = deadlines.filter { !enqueuedDeadlines.contains($0) }
         enqueuedDeadlines.formUnion(due)
         for deadline in due { await events.enqueueJourneyDeadline(deadline) }
+        // Enqueueing does not imply delivery: a routing hold can retain these
+        // controls while later parks still need their own queue positions.
+        guard generation == wakeGeneration else { return }
+        await scheduleNextWake()
     }
 
     private func cancelWake() {
