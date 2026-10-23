@@ -3250,21 +3250,32 @@ extension EventLog {
 
   private func isQueuedInThisSession(_ stored: StoredEvent) async -> Bool {
     if failedStableRouteAcknowledgementIds.contains(stored.id) { return true }
-    return (try? await store.hasPendingCommittedRoute(
-      eventId: stored.id, sessionId: committedRouteSessionId
-    )) ?? false
+    do {
+      if try await store.hasPendingCommittedRoute(eventId: stored.id, sessionId: committedRouteSessionId) {
+        return true
+      }
+      // Receipt cleanup can finish after this page was loaded. An entry
+      // already acknowledged is no longer recovery work and cannot fail it.
+      let pending = try await store.hasPendingStableRoute(eventId: stored.id)
+      return !pending
+    } catch { return false }
   }
 
   private func deliverRecoveredStableRoute(
     _ stored: StoredEvent, generation: UInt64, admissions: [UInt64: UInt64]
   ) async -> Bool {
     guard !closeFlag.isClosed, generation == routingDeferralGeneration else { return false }
+    // Check ownership before any store await lets receipt cleanup remove it.
+    if activeStableRouteIds.contains(stored.id) { return true }
     do {
       // Captures made by this process already carry their original admissions
       // in the delivery queue. Recovery must not substitute current authority.
       if try await store.hasPendingCommittedRoute(eventId: stored.id, sessionId: committedRouteSessionId) {
         return true
       }
+      // The page is a snapshot; independent receipt cleanup may have settled
+      // this entry and removed its active marker while an earlier entry waited.
+      guard try await store.hasPendingStableRoute(eventId: stored.id) else { return true }
     } catch { return false }
     guard activeStableRouteIds.insert(stored.id).inserted else { return true }
     await deliverOrRetainCommittedRoute(RoutedCommittedEvent(

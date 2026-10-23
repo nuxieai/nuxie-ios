@@ -18,7 +18,112 @@ private final class RecoveryAdmission: @unchecked Sendable {
     func advance() { lock.withLock { generation += 1 } }
 }
 
+private actor RecoveryPageGate {
+    private let pass: Int
+    private let onLoaded: @Sendable () -> Void
+    private var visits = 0
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(pass: Int, onLoaded: @escaping @Sendable () -> Void) {
+        self.pass = pass
+        self.onLoaded = onLoaded
+    }
+
+    func pageLoaded() async {
+        visits += 1
+        guard visits == pass, !released else { return }
+        onLoaded()
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor RecoveryResult {
+    private(set) var value: Bool?
+    func record(_ value: Bool) { self.value = value }
+}
+
 final class CommittedRouteRecoveryTests: XCTestCase {
+    func testAcknowledgementDuringRecoveryPageDoesNotRedeliverAndStillDeliversPendingEntries() async throws {
+        try await assertAcknowledgementDuringRecoveryPage(pass: 1)
+    }
+
+    func testAcknowledgementDuringFinalRecoveryPageDoesNotRejectAcknowledgedEntries() async throws {
+        try await assertAcknowledgementDuringRecoveryPage(pass: 2)
+    }
+
+    private func assertAcknowledgementDuringRecoveryPage(pass: Int) async throws {
+        let store = MockEventStore()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let clock = MockDateProvider()
+        let log = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: store)
+        let observed = RecoveredRouteRecorder()
+        await log.subscribeCommitted { event in await observed.append(event.id) }
+        let configuration = NuxieConfiguration(apiKey: "recovery-page-receipt-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await log.configure(configuration: configuration)
+        store.shouldFailStableRouteAcknowledgement = true
+        _ = await log.captureAndRouteSystemEvent(.init(name: "delivered", properties: nil,
+            eventId: "delivered", distinctId: "customer-a"))
+        await log.drain()
+        let beforeRecovery = await observed.snapshot()
+        XCTAssertEqual(beforeRecovery, ["delivered"])
+        XCTAssertEqual(store.pendingCommittedRoutes.map(\.event.id), ["delivered"])
+
+        // This retained entry has no current-session delivery. Revalidation
+        // must still recover it once while ignoring the stale delivered entry.
+        let pending = try StoredEvent(id: "pending", name: "pending", properties: [:],
+            timestamp: clock.now(), distinctId: "customer-a")
+        _ = try await store.commitStableCaptureAndStageRoute(eventId: pending.id, event: pending,
+            recordedAt: pending.timestamp, assigningCommitSequence: false, admission: nil)
+        let loaded = expectation(description: "Recovery loaded page for pass \(pass)")
+        let finished = expectation(description: "Recovery finishes after receipt cleanup")
+        let gate = RecoveryPageGate(pass: pass) { loaded.fulfill() }
+        store.pendingStableRoutesLoaded = { await gate.pageLoaded() }
+        let result = RecoveryResult()
+        let recovery = Task {
+            let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
+            await result.record(recovered)
+            finished.fulfill()
+        }
+        addTeardownBlock {
+            store.pendingStableRoutesLoaded = nil
+            await gate.release()
+            recovery.cancel()
+            await log.close()
+        }
+        await fulfillment(of: [loaded], timeout: 3)
+        store.shouldFailStableRouteAcknowledgement = false
+        // Recovery owns the route worker here. Only the independent real
+        // acknowledgement timer can clear these receipts while the page waits.
+        for _ in 0..<500 {
+            if !store.pendingStableRouteIds.contains("delivered"), store.pendingCommittedRoutes.isEmpty,
+               pass == 1 || store.pendingStableRouteIds.isEmpty { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(store.pendingStableRouteIds.contains("delivered"))
+        XCTAssertTrue(store.pendingCommittedRoutes.isEmpty)
+        if pass == 1 {
+            XCTAssertEqual(store.pendingStableRouteIds, ["pending"], "The unvisited entry is genuinely pending")
+        } else {
+            XCTAssertTrue(store.pendingStableRouteIds.isEmpty)
+        }
+        await gate.release()
+        await fulfillment(of: [finished], timeout: 5)
+        let recovered = await result.value
+        let delivered = await observed.snapshot()
+        XCTAssertEqual(recovered, true)
+        XCTAssertEqual(delivered, ["delivered", "pending"])
+        XCTAssertTrue(store.pendingStableRouteIds.isEmpty)
+    }
+
     func testDeadlineSharesCaptureOrderAndRoutingHoldWithoutBecomingAnEvent() async throws {
         let store = MockEventStore()
         let identity = MockIdentityService()

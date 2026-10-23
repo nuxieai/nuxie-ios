@@ -169,6 +169,8 @@ protocol EventStoreProtocol: ConversionOccurrenceQueue {
   func queryPendingStableRoutes(
     distinctId: String, limit: Int
   ) async throws -> [StoredEvent]
+  /// Revalidate a retained page entry against its current durable route receipt.
+  func hasPendingStableRoute(eventId: String) async throws -> Bool
   /// Visits the pending prefix present when recovery starts, loading at most
   /// one page at a time. Returning false leaves later routes pending.
   func visitPendingStableRoutes(
@@ -1825,6 +1827,18 @@ actor SQLiteEventStore: EventStoreProtocol {
   ) throws -> [StoredEvent] {
     try pendingStableRoutePage(distinctId: distinctId, after: 0, through: .max, limit: limit)
       .map(\.event)
+  }
+
+  public func hasPendingStableRoute(eventId: String) throws -> Bool {
+    try withCommittedRouteStatement("SELECT 1 FROM stable_event_routes WHERE event_id = ? AND delivery_state = ? LIMIT 1;") { statement in
+      sqlite3_bind_text(statement, 1, eventId, -1, SQLITE_TRANSIENT)
+      sqlite3_bind_int(statement, 2, EventDeliveryState.pending.rawValue)
+      switch sqlite3_step(statement) {
+      case SQLITE_ROW: return true
+      case SQLITE_DONE: return false
+      default: throw EventStorageError.invalidProperties
+      }
+    }
   }
 
   public func visitPendingStableRoutes(

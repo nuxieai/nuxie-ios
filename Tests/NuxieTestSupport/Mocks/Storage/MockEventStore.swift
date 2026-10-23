@@ -28,6 +28,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     private var _pendingStableRouteIds: [String] = []
     private var _committedRoutes: [PendingCommittedRouteDelivery] = []
     private var _deliveredStableRouteIds: Set<String> = []
+    private var _pendingStableRoutesLoaded: (@Sendable () async -> Void)?
     private var _historyCoverageStart: Date?
     private var _isInitialized = false
     private var _isClosed = false
@@ -57,6 +58,11 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
     }
     public var pendingStableRouteIds: [String] {
         lock.withLock { _pendingStableRouteIds }
+    }
+    /// Runs after recovery loads its snapshot, before any entries are visited.
+    public var pendingStableRoutesLoaded: (@Sendable () async -> Void)? {
+        get { lock.withLock { _pendingStableRoutesLoaded } }
+        set { lock.withLock { _pendingStableRoutesLoaded = newValue } }
     }
     public var pendingCommittedRoutes: [PendingCommittedRouteDelivery] {
         lock.withLock { _committedRoutes }
@@ -287,6 +293,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
             _pendingStableRouteIds.removeAll()
             _committedRoutes.removeAll()
             _deliveredStableRouteIds.removeAll()
+            _pendingStableRoutesLoaded = nil
             _historyCoverageStart = nil
             _isInitialized = false
             _isClosed = false
@@ -756,11 +763,20 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+    public func hasPendingStableRoute(eventId: String) async throws -> Bool {
+        try lock.withLock {
+            if _shouldFailQuery { throw mockError(3, "Mock query error") }
+            return _pendingStableRouteIds.contains(eventId)
+        }
+    }
+
     public func visitPendingStableRoutes(
         distinctId: String,
         visitor: @escaping @Sendable (StoredEvent) async -> Bool
     ) async throws -> Bool {
         let pending = try await queryPendingStableRoutes(distinctId: distinctId, limit: .max)
+        let onLoaded = lock.withLock { _pendingStableRoutesLoaded }
+        await onLoaded?()
         for event in pending {
             guard await visitor(event) else { return false }
         }
