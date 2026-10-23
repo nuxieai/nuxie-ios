@@ -509,7 +509,7 @@ targets:
           - Experiences/ExperienceScreenExitReasonControllerTests.swift
           - Experiences/ExperiencePreparationTestSupport.swift
           - Experiences/ExperienceLayerNavigationTests.swift
-          - Experiences/ExperienceLayerHostNavigationTests.swift
+          - Experiences/ExperiencePageHostNavigationTests.swift
           - Experiences/ExperienceTextInputSemanticsTests.swift
           - Experiences/ExperienceHardwareInputTests.swift
           - Experiences/ExperienceFitContentPresentationTests.swift

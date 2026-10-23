@@ -56,12 +56,16 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
         self.presentationIsSupported = presentationIsSupported
     }
 
-    init(raw: Any?) {
-        guard let record = ExperienceScreenTransitionSpec.transitionRecord(from: raw) else {
+    init(raw: Any?, sourceScreenID: String? = nil) {
+        guard var record = ExperienceScreenTransitionSpec.transitionRecord(from: raw) else {
             self = .none
             return
         }
 
+        if let ids = record["transitionIds"] as? [String: String] {
+            guard let sourceScreenID, let id = ids[sourceScreenID] else { self = .none; return }
+            record["transitionId"] = id
+        }
         let kind = ExperienceScreenTransitionSpec.kind(from: record)
         self.init(kind: kind, presentation: kind == .modal ? ExperienceLayerPresentation(
             kind: (record["present"] as? String).flatMap(ExperienceLayerPresentation.Kind.init(rawValue:)) ?? .sheet,

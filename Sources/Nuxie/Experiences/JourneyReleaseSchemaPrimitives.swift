@@ -595,21 +595,33 @@ enum JourneyReleaseSchemaPrimitives {
         let transition = try dictionary(value, path: path)
         guard let type = transition["type"] as? String else { try invalid("\(path).type") }
         switch type {
-        case "none", "push", "fade":
-            _ = try object(transition, required: ["type"], optional: ["transitionId"], path: path)
-            if let id = transition["transitionId"] { try identifier(id, path: "\(path).transitionId") }
+        case "none", "fade", "magic-move":
+            _ = try object(transition, required: ["type"], optional: ["transitionId", "transitionIds"], path: path)
+            if let id = transition["transitionId"] {
+                guard transition["transitionIds"] == nil else { try invalid(path) }
+                try identifier(id, path: "\(path).transitionId")
+            } else if let ids = transition["transitionIds"] {
+                let ids = try dictionary(ids, path: "\(path).transitionIds")
+                guard !ids.isEmpty else { try invalid(path) }
+                for (source, id) in ids {
+                    try identifier(source, path: "\(path).transitionIds.key")
+                    try identifier(id, path: "\(path).transitionIds.\(source)")
+                }
+            } else if type == "magic-move" { try invalid(path) }
+        case "push":
+            _ = try object(transition, required: ["type"], path: path)
         case "modal":
             _ = try object(transition, required: ["type"], optional: ["present", "height", "closedby"], path: path)
             if let value = transition["present"] {
                 try enumeration(value, values: ["sheet", "fullscreen"], path: "\(path).present")
             }
+            if transition["present"] as? String == "fullscreen", transition["height"] != nil { try invalid(path) }
             if let value = transition["height"] {
                 try enumeration(value, values: ["large", "medium", "fit-content"], path: "\(path).height")
             }
             if let value = transition["closedby"] {
                 try enumeration(value, values: ["any", "none"], path: "\(path).closedby")
             }
-        case "custom", "magic-move": _ = try object(transition, required: ["type", "transitionId"], path: path); try identifier(transition["transitionId"], path: "\(path).transitionId")
         default: try invalid("\(path).type")
         }
     }
@@ -863,12 +875,8 @@ enum JourneyReleaseSchemaPrimitives {
             try invalid("render.renderer")
         }
         let sceneKey = "nux"
-        let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], optional: ["videoElements", "layerHost"], path: "render")
-        if let value = render["layerHost"] {
-            let host = try object(value, required: ["artboardName", "list"], path: "render.layerHost")
-            try boundedString(host["artboardName"], minimum: 1, maximumUTF16: 256, path: "render.layerHost.artboardName")
-            try enumeration(host["list"], values: ["screens"], path: "render.layerHost.list")
-        }
+        let render = try object(value, required: ["renderer", sceneKey, "screens", "transitions", "textInputs", "assets"], optional: ["videoElements"], path: "render")
+
         if let value = render["videoElements"] {
             let elements = try array(value, path: "render.videoElements")
             guard elements.count <= JourneyReleaseLimits.videoElementCount else { try invalid("render.videoElements") }
@@ -926,38 +934,48 @@ enum JourneyReleaseSchemaPrimitives {
         let screenIDSet = Set(screenIDs)
         let transitions = try array(render["transitions"], path: "render.transitions")
         guard transitions.count <= 1_024 else { try invalid("render.transitions") }
+        var transitionIDs: Set<String> = []
+        var defaultPairs: Set<[String]> = []
         try transitions.enumerated().forEach { index, item in
             let transition = try object(
                 item,
                 required: [
                     "id", "kind", "sourceScreenId", "destinationScreenId", "durationMs",
-                    "incomingOnTop", "source", "destination",
+                    "source", "destination",
                 ],
-                optional: ["reverse", "defaultPair"],
+                optional: ["reverse", "defaultPair", "incomingKept"],
                 path: "render.transitions[\(index)]"
             )
             try identifier(transition["id"], path: "render.transitions[\(index)].id")
-            try enumeration(transition["kind"], values: ["choreographed", "layer"], path: "render.transitions[\(index)].kind")
+            let id = transition["id"] as! String
+            guard transitionIDs.insert(id).inserted else { try invalid("render.transitions.id") }
+            if transition["defaultPair"] as? Bool == true {
+                guard let from = transition["sourceScreenId"] as? String,
+                      let to = transition["destinationScreenId"] as? String,
+                      defaultPairs.insert([from, to]).inserted else { try invalid("render.transitions.defaultPair") }
+            }
+            try enumeration(transition["kind"], values: ["page"], path: "render.transitions[\(index)].kind")
             for field in ["sourceScreenId", "destinationScreenId"] {
                 try identifier(transition[field], path: "render.transitions[\(index)].\(field)")
                 guard screenIDSet.contains(transition[field] as! String) else { try invalid("render.transitions[\(index)].\(field)") }
             }
             try integer(transition["durationMs"], minimum: 0, maximum: 60_000, path: "render.transitions[\(index)].durationMs")
-            guard isJSONBoolean(transition["incomingOnTop"]) else { try invalid("render.transitions[\(index)].incomingOnTop") }
+            if let marker = transition["incomingKept"], !isJSONBoolean(marker) { try invalid("render.transitions[\(index)].incomingKept") }
             if let marker = transition["defaultPair"], !isJSONBoolean(marker) { try invalid("render.transitions[\(index)].defaultPair") }
             try validateEndpoint(transition["source"], path: "render.transitions[\(index)].source")
             try validateEndpoint(transition["destination"], path: "render.transitions[\(index)].destination")
+            guard (transition["source"] as? [String: Any])?["completeEventName"] as? String == "nx_exit_done:\(id)",
+                  (transition["destination"] as? [String: Any])?["completeEventName"] as? String == "nx_enter_done:\(id)" else { try invalid("render.transitions.events") }
             if let reverse = transition["reverse"] {
                 let reverse = try object(
                     reverse,
                     required: ["source", "destination"],
-                    optional: ["durationMs", "incomingOnTop"],
                     path: "render.transitions[\(index)].reverse"
                 )
-                if let duration = reverse["durationMs"] { try integer(duration, minimum: 0, maximum: 60_000, path: "render.transitions[\(index)].reverse.durationMs") }
-                if let incoming = reverse["incomingOnTop"], !isJSONBoolean(incoming) { try invalid("render.transitions[\(index)].reverse.incomingOnTop") }
                 try validateEndpoint(reverse["source"], path: "render.transitions[\(index)].reverse.source")
                 try validateEndpoint(reverse["destination"], path: "render.transitions[\(index)].reverse.destination")
+                guard (reverse["source"] as? [String: Any])?["completeEventName"] as? String == "nx_exit_done:\(id).reverse",
+                      (reverse["destination"] as? [String: Any])?["completeEventName"] as? String == "nx_enter_done:\(id).reverse" else { try invalid("render.transitions.reverse.events") }
             }
         }
         let textInputs = try array(render["textInputs"], path: "render.textInputs")

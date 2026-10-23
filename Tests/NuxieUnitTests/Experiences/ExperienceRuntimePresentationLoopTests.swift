@@ -93,7 +93,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         var outcome: Result<Void, Error>?
         let navigation = Task { @MainActor in
             do {
-                try await ExperienceLayerStep.perform(source: "A", target: "B", style: .fade,
+                try await ExperiencePageStep.perform(source: "A", target: "B", style: .fade,
                     isBack: false, plan: .init(transitionId: "pair", durationMilliseconds: 0,
                         incomingOnTop: true, outgoingCompletionEventName: "exit", incomingCompletionEventName: "enter"),
                     exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false,

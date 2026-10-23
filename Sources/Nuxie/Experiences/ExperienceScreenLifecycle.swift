@@ -214,7 +214,7 @@ struct ExperienceScreenCustomTransitionPlan: Equatable, Sendable {
             return nil
         }
         return ExperienceScreenCustomTransitionPlan(
-            transitionId: transitionId,
+            transitionId: declaration.kind == .page ? transitionId + ".reverse" : transitionId,
             durationMilliseconds: UInt64(max(0, reverse.durationMs ?? declaration.durationMs)),
             incomingOnTop: reverse.incomingOnTop ?? declaration.incomingOnTop,
             outgoingCompletionEventName: reverse.source.completeEventName,

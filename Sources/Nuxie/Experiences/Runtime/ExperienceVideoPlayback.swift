@@ -110,6 +110,7 @@ final class ExperienceVideoPlayback {
     private let decoderPool: ExperienceVideoDecoderPool?
     private let decoderBudget: (() -> NuxieNativeVideoDecoderBudget)?
     private var resourceBlocked: Set<Int> = []
+    private var stepRetainedVideoIDs: Set<Int> = []
     private var reconciling = false
     private let runtime: NuxieNativeRuntime
     private var viewport: CGRect
@@ -262,6 +263,10 @@ final class ExperienceVideoPlayback {
             try await runtime.videoSetCaptions(componentID: occurrence.componentID,
                 language: media.captionLanguage, cues: media.captions)
         }
+    }
+
+    func setStepInProgress(_ inProgress: Bool) {
+        stepRetainedVideoIDs = inProgress ? Set(decoders.filter { !$0.disposed }.map(\.componentID)) : []
     }
 
     private func dispose(_ decoder: Decoder) {
@@ -457,7 +462,9 @@ final class ExperienceVideoPlayback {
         let demands: [Int: ExperienceVideoDecoderPool.Request] = Dictionary(uniqueKeysWithValues: current.map { video in
             let cost = sources[video.assetID]?.media?.decodeCost ?? 0
             return (video.componentID, ExperienceVideoDecoderPool.Request(pixelsPerSecond: cost,
-                priority: video.priority, visible: visibleOccurrences.contains(video.componentID) && suspensionReasons.isEmpty && video.state != 7 && video.state != 8 && cost > 0))
+                priority: stepRetainedVideoIDs.contains(video.componentID) ? UInt32.max : video.priority,
+                visible: (stepRetainedVideoIDs.contains(video.componentID) || visibleOccurrences.contains(video.componentID))
+                    && suspensionReasons.isEmpty && video.state != 7 && video.state != 8 && cost > 0))
         })
         let choices: [NuxieNativeVideoAllocation]
         if let decoderPool {
@@ -477,6 +484,7 @@ final class ExperienceVideoPlayback {
             guard blocked || choices[index] == .platformManaged else {
                 throw ExperienceInteractiveScreenError.assetContract("AVPlayer cannot force a decoder implementation")
             }
+            if blocked && stepRetainedVideoIDs.contains(video.componentID) { continue }
             if blocked && !resourceBlocked.contains(video.componentID) {
                 if let decoder = decoders.first(where: { $0.componentID == video.componentID }) { dispose(decoder) }
                 decoders.removeAll { $0.componentID == video.componentID }

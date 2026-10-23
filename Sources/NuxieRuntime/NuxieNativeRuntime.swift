@@ -1035,6 +1035,40 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.renderer.copyDevice() }
     }
 
+    package func stepBegin(incomingScreen: String, stepName: String?) async throws {
+        let state = try requireState()
+        try await executor.call { try state.player.stepBegin(incomingScreen: incomingScreen, stepName: stepName) }
+    }
+
+    package func stepEnd(incomingScreen: String, stepName: String?) async throws {
+        let state = try requireState()
+        try await executor.call { try state.player.stepEnd(incomingScreen: incomingScreen, stepName: stepName) }
+    }
+
+    package func setRowCollapsed(list: String, index: Int, collapsed: Bool) async throws {
+        guard let row = UInt32(exactly: index) else {
+            throw NuxieNativeRuntimeError.invalidNativeValue("row index is outside uint32")
+        }
+        let state = try requireState()
+        try await executor.call { try state.player.setRowCollapsed(list: list, index: row, collapsed: collapsed) }
+    }
+
+    /// Discover the schema from the Screen's mapped artboard, never a guessed type name.
+    package func defaultSchema(artboardName: String) async throws -> Int {
+        let state = try requireState()
+        return try await executor.call {
+            let artboard = try state.file.makeArtboard(named: artboardName)
+            defer { try? artboard.close() }
+            let model = try artboard.makeDefaultViewModel()
+            defer { try? model.close() }
+            let snapshot = try model.snapshot()
+            guard let schema = snapshot.instances.first(where: { $0.id == snapshot.rootInstanceID })?.schemaIndex else {
+                throw NuxieNativeRuntimeError.missingHandle("artboard default schema")
+            }
+            return schema
+        }
+    }
+
     package func step(
         inputs: [NuxieNativePlayerInput] = [],
         pointers: [NuxieNativePointerEvent] = [],
@@ -2803,6 +2837,35 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
             executor: executor,
             free: nux_player_free
         )
+    }
+
+    private func withStepName<T>(_ name: String?, _ body: (UnsafePointer<NuxStringView>?) throws -> T) rethrows -> T {
+        guard let name else { return try body(nil) }
+        return try withStringView(name) { view in
+            var value = view
+            return try withUnsafePointer(to: &value, body)
+        }
+    }
+
+    func stepBegin(incomingScreen: String, stepName: String?) throws {
+        let player = try owned.require()
+        try requireOK(withStringView(incomingScreen) { incoming in
+            withStepName(stepName) { nux_player_step_begin(player, incoming, $0) }
+        }, operation: "begin page step")
+    }
+
+    func stepEnd(incomingScreen: String, stepName: String?) throws {
+        let player = try owned.require()
+        try requireOK(withStringView(incomingScreen) { incoming in
+            withStepName(stepName) { nux_player_step_end(player, incoming, $0) }
+        }, operation: "end page step")
+    }
+
+    func setRowCollapsed(list: String, index: UInt32, collapsed: Bool) throws {
+        let player = try owned.require()
+        try requireOK(withStringView(list) {
+            nux_player_set_row_collapsed(player, $0, index, collapsed ? 1 : 0)
+        }, operation: "collapse page row")
     }
 
     func info() throws -> NuxieNativePlayerInfo {

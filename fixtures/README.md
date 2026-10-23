@@ -4,7 +4,7 @@ These JSON vectors define the contracts shared by SDK implementations.
 
 ## Published runtime values
 
-- `runtime/layer-host-interim/`: interim UNIV-5113 stand-in from the published custom-transition scene. `ExperienceInteractiveLayerTests` qualifies list rows, default machines, completion attribution, retained values and layout sizing.
+- `runtime/layer-host-interim/`: interim UNIV-5113 stand-in from the published custom-transition scene. `ExperienceInteractivePageTests` qualifies list rows, default machines, completion attribution, retained values and layout sizing.
 
 - `runtime/screen-exit-reason/`: published dismissed-only and field-absent scenes for optional exit-reason binding, navigation skipping, and the retained terminal pose over the default screen backing.
 - `runtime/paywall-selection/`: portable compiled product-ID tap and signed link setup, with native feedback/read-back proof.
