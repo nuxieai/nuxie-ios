@@ -27,6 +27,15 @@ actor JourneyPresentationPublicationCoordinator {
     private let events: any RoutedStableSystemEventCapturing
     private let executionFence: JourneyProfileFence
     private var directlyRoutedRunByEventId: [String: String] = [:]
+    private struct PreparedBatch {
+        let key: CustomerJourneyKey
+        let batch: ScreenEmissionBatch
+        let revision: Int64
+        let records: [StableEventCaptureRecord]
+    }
+    // The single presentation owner retains its privacy projection across a
+    // failed SQL commit. This is discarded at process break, never replayed.
+    private var preparedBatch: PreparedBatch?
 
     init(
         identity: IdentityServiceProtocol,
@@ -48,6 +57,7 @@ actor JourneyPresentationPublicationCoordinator {
 
     func clearDirectRoutes() {
         directlyRoutedRunByEventId.removeAll()
+        preparedBatch = nil
     }
 
     /// A renderer invocation publishes its privacy projection and selected cursor together.
@@ -66,13 +76,21 @@ actor JourneyPresentationPublicationCoordinator {
                     actionId: batch.source.actionId, invocationId: batch.invocationId, occurrenceId: emission.id)), occurredAt: date))
         }
         do {
-            let records = try await events.prepareCustomerEvents(items)
+            let prepared: PreparedBatch
+            if let previous = preparedBatch, previous.key == journal.key(run), previous.batch == batch {
+                prepared = previous
+            } else {
+                prepared = .init(key: journal.key(run), batch: batch, revision: run.cursorRevision,
+                    records: try await events.prepareCustomerEvents(items))
+                preparedBatch = prepared
+            }
+            let records = prepared.records
             let routed = records.compactMap(\.event).first { JourneyPresentationEventProjector.route(in: leg, eventName: $0.name, screenId: batch.source.screenId) != nil }
             let routeStep = routed.flatMap { JourneyPresentationEventProjector.route(in: leg, eventName: $0.name, screenId: batch.source.screenId) }
             let step = routeStep ?? responseAdvance?.stepId
             let control = routed.flatMap { JourneyPresentationEventProjector.controlEvent($0.customerEvent) }
             let context = ArmedJourney.Context(event: control?.properties ?? responseAdvance?.context.event ?? run.context.event, responses: run.context.responses)
-            var transition = CustomerInputTransition(key: journal.key(run), expectedRevision: run.cursorRevision, eventId: routed?.id,
+            var transition = CustomerInputTransition(key: journal.key(run), expectedRevision: prepared.revision, eventId: routed?.id,
                 targetKey: "renderer:" + batch.invocationId, stepId: step ?? run.stepId, context: context,
                 checkpoint: step == nil ? Self.controlCheckpoint(from: run.park) : nil, nativeSnapshot: run.nativeSnapshot,
                 presentationSource: batch.source, rendererInvocationId: batch.invocationId)
@@ -84,6 +102,7 @@ actor JourneyPresentationPublicationCoordinator {
             let result: CustomerExecutionResult
             do { result = try await journal.commit(.applyInput(transition), records: records, admission: admission) }
             catch { removeDirectRoutes(items, runId: run.id); throw error }
+            if preparedBatch?.batch == batch { preparedBatch = nil }
             for (record, commit) in zip(records, result.commits) {
                 if !commit.localRoutePending { removeDirectRoute(eventId: record.eventId, runId: run.id) }
             }
@@ -91,6 +110,7 @@ actor JourneyPresentationPublicationCoordinator {
             guard step != nil else { return .accepted }
             return .continueExecution(.init(run: committed, signal: .init(event: control, responsesChanged: responsesChanged), checkpoint: nil, eventID: routed?.id))
         } catch CustomerStoreError.staleRevision {
+            preparedBatch = nil
             return .accepted
         } catch {
             LogWarning("JourneyPresentationPublicationCoordinator: renderer transaction failed: \(error)")

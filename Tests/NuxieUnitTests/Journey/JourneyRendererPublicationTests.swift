@@ -322,7 +322,11 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             await service.profileDidCommit(snapshot, distinctId: "customer")
             let presentedRequest = await MainActor.run { presenter.request }
             let request = try XCTUnwrap(presentedRequest)
-            events.stableCaptureBatchFailureIndex = 0
+            let writer = await events.customerStore()
+            let sqlite = try XCTUnwrap(writer as? SQLiteEventStore)
+            await sqlite.setCustomerFaultInjector({ point in
+                if point == .afterCommit { throw CustomerExecutionTestFault.interrupted }
+            }, for: "input")
 
             let accepted = await request.onEmissionBatch(presentationBatch(
                 request: request,
@@ -355,7 +359,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             )
             let persistedRuns = try await journal.runs()
             let run = try XCTUnwrap(persistedRuns.first)
-            XCTAssertEqual(run.stepId, "present")
+            XCTAssertEqual(run.stepId, "report")
             XCTAssertTrue(run.context.responses.isEmpty)
             XCTAssertFalse(events.routedEvents.contains {
                 $0.name == "continue"
@@ -503,7 +507,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         XCTAssertEqual(
             beforeSendCalls.callCount,
             1,
-            "beforeSend must run only after the outbox owns the batch"
+            "Retrying one invocation must reuse its prepared privacy projection"
         )
         let runsAfterRetry = try await journal.runs()
         let persistedAfterRetry = try XCTUnwrap(runsAfterRetry.first)
@@ -842,10 +846,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         XCTAssertTrue(accepted)
         let persistenceObservations = await persistence.observations()
         XCTAssertEqual(persistenceObservations, [
-            "response-route-invocation",
-            "response-route-invocation",
-            "response-route-invocation",
-            "response-route-invocation",
+            "present",
+            "present",
+            "present",
+            "present",
         ])
         XCTAssertEqual(events.routedEvents.map(\.name), [
             JourneyEvents.journeyStarted,
@@ -857,5 +861,7 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
         let runs = try await journal.runs()
         let run = try XCTUnwrap(runs.first)
         XCTAssertTrue(run.context.responses.isEmpty)
+        XCTAssertEqual(run.stepId, "show_details")
+        XCTAssertEqual(run.inputEventId, "00000000-0000-7000-8000-000000000333")
     }
 }

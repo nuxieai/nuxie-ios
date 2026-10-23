@@ -27,7 +27,13 @@ public final class MockEventStore: EventStoreProtocol, CustomerStoreProviding, @
             let task = Task {
                 let writer = SQLiteEventStore()
                 try await writer.initialize(path: directory)
-                for event in captured { _ = try await writer.insert(event, deliveryState: .pending) }
+                // These are captures accepted by this build, after its startup
+                // gate. Materializing the SQL adapter must not retire them.
+                _ = try await writer.openCustomerState(cutoverAt: 0)
+                for event in captured {
+                    _ = try await writer.insert(event, deliveryState: .pending, origin: .device,
+                        assigningCommitSequence: false, acceptedAt: event.timestamp)
+                }
                 return writer
             }
             customerWriter = task

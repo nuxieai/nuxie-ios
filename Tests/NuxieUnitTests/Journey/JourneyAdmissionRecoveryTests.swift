@@ -843,6 +843,7 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let snapshot = replacing(
             try await authenticatedSnapshot(fixture),
+            reentry: .init(type: .everyMatch, window: nil),
             entryStepId: "wait",
             steps: [
                 .init(
@@ -886,21 +887,12 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         let initialRuns = try await oldJournal.runs()
         XCTAssertEqual(initialRuns.count, 1)
 
-        let root = directory.appendingPathComponent(
-            "journey-journal-v2",
-            isDirectory: true
-        )
-        let customerDigest = JourneyStorageScope.testFixture.customerDigest(
-            distinctId: "customer-a"
-        )
-        let blockedRevocationFile = root.appendingPathComponent(
-            "\(customerDigest).revoked",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: blockedRevocationFile,
-            withIntermediateDirectories: true
-        )
+        let writer = await events.customerStore()
+        let sqlite = try XCTUnwrap(writer as? SQLiteEventStore)
+        let originalScope = try await sqlite.customerScope(owner: oldJournal.owner)
+        await sqlite.setCustomerFaultInjector({ point in
+            if point == .beforeCommit { throw CustomerExecutionTestFault.interrupted }
+        }, for: "other")
 
         identity.setDistinctId("customer-b")
         await service.handleUserChange(
@@ -911,10 +903,20 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
         XCTAssertEqual(
             runsAfterFailedRevocation.count,
             1,
-            "A failed tombstone write must leave the old journal blocked in memory"
+            "A failed execution epoch write must keep the old customer blocked"
         )
 
-        try FileManager.default.removeItem(at: blockedRevocationFile)
+        let reportsWhileBlocked = events.routedEvents.filter {
+            $0.distinctId == "customer-a" && $0.name == JourneyEvents.journeyCompleted
+        }
+        XCTAssertTrue(reportsWhileBlocked.isEmpty)
+        identity.setDistinctId("customer-a")
+        await service.handleUserChange(from: "customer-b", to: "customer-a")
+        let stillBlocked = try await oldJournal.runs()
+        XCTAssertEqual(stillBlocked.map(\.id), initialRuns.map(\.id))
+        let scopeWhileBlocked = try await sqlite.customerScope(owner: oldJournal.owner)
+        XCTAssertEqual(scopeWhileBlocked?.executionEpoch, originalScope?.executionEpoch)
+        await sqlite.setCustomerFaultInjector(nil)
         identity.setDistinctId("customer-a")
         await service.handleUserChange(
             from: "customer-b",
@@ -923,6 +925,8 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         let runsAfterRetriedRevocation = try await oldJournal.runs()
         XCTAssertTrue(runsAfterRetriedRevocation.isEmpty)
+        let afterRetry = try await sqlite.customerScope(owner: oldJournal.owner)
+        XCTAssertGreaterThan(try XCTUnwrap(afterRetry?.executionEpoch), try XCTUnwrap(originalScope?.executionEpoch))
         let abandoned = try XCTUnwrap(events.routedEvents.last {
             $0.distinctId == "customer-a"
                 && $0.name == JourneyEvents.journeyCompleted
@@ -931,6 +935,13 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             abandoned.properties["outcome"] as? String,
             "abandoned"
         )
+        await service.profileDidCommit(snapshot, distinctId: "customer-a")
+        let reopenedJourneys = try await oldJournal.runs()
+        XCTAssertEqual(reopenedJourneys.count, 1)
+        XCTAssertNotEqual(reopenedJourneys.first?.id, initialRuns.first?.id)
+        let opened = await service.storeForTesting()
+        XCTAssertEqual(opened?.epoch, afterRetry?.executionEpoch)
+
     }
 
     func testIdentitySwitchRetainsRevokedJournalUntilAbandonmentCaptureIsDurable() async throws {
@@ -1173,7 +1184,11 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
             identity: identity,
             events: events,
             directory: directory,
-            dateProvider: now
+            dateProvider: now,
+            pinnedReleaseAuthenticator: { _, reference in
+                guard let retained = snapshot.releasesByDigest[reference.descriptorSha256] else { throw JourneyExecutionError.invalidState }
+                return retained
+            }
         )
 
         await service.initialize()
@@ -1181,10 +1196,13 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         let remaining = try await journal.runs()
         XCTAssertTrue(remaining.isEmpty)
-        XCTAssertEqual(events.routedEvents.map(\.name).filter {
+        let history = try await journal.store.customerLogPage(owner: journal.owner, name: nil,
+            startedAt: Int64.min, deadlineAt: nil, after: nil, limit: 100)
+        XCTAssertEqual(history.map(\.name).filter {
             $0 == JourneyEvents.journeyStarted
                 || $0 == JourneyEvents.journeyCompleted
         }, [JourneyEvents.journeyStarted, JourneyEvents.journeyCompleted])
+        XCTAssertEqual(history.first { $0.name == JourneyEvents.journeyCompleted }?.getPropertiesDict()["outcome"] as? String, "continue")
     }
 
     func testProfileReplacementResumesADueRunFromItsAuthenticatedReleasePin() async throws {

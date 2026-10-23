@@ -74,7 +74,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         addTeardownBlock { await gate.release() }
         let steps = try JSONDecoder().decode([Journey.Step].self, from: Data("""
         [
-          {"kind":"action","id":"wait","action":{"type":"wait_until","trigger":{"kind":"event","eventName":"\(eventName)"},"maxTimeMs":60000},"outlets":{"satisfied":"branch","timeout":"timeout"}},
+          {"kind":"action","id":"wait","action":{"type":"wait_until","trigger":{"kind":"event","eventName":"\(eventName)"},"condition":{"type":"Truthy","value":{"type":"Boolean","value":true}},"maxTimeMs":60000},"outlets":{"satisfied":"branch","timeout":"timeout"}},
           {"kind":"action","id":"branch","action":{"type":"condition","branches":[{"id":"yes","condition":{"type":"Compare","op":"==","left":{"type":"Response.Field","key":"answer"},"right":{"type":"Number","value":1}}}]},"outlets":{"yes":"after","default":"after"}},
           {"kind":"action","id":"after","action":{"type":"delay","durationMs":60000},"outlets":{"next":"timeout"}},
           {"kind":"action","id":"commerce","action":{"type":"\(type)","placementId":"placement"},"outlets":{"\(outlet)":"satisfied"}},
@@ -86,7 +86,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             prepareNativeValues: { _, _, _, _ in try await reads.attempt() },
             afterJourney: { event, accepted in
                 if event.name == eventName, !accepted {
-                    rejected.fulfill()
+                    if await gate.observationCount() == 0 { rejected.fulfill() }
                     await gate.intercept(event: "refused")
                 }
             })
@@ -232,11 +232,12 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
                 }, screens: hasScreens ? [Self.backgroundScreen] : [])
             live.events.track("start_waiting")
             await live.events.drain()
-            await live.service.onAppDidEnterBackground()
+            if !hasScreens { await live.service.onAppDidEnterBackground() }
             await reads.setFailing(true)
             live.clock.advance(by: 0.1)
             live.events.track("go")
             await fulfillment(of: [refused], timeout: 5)
+            if hasScreens { await live.service.onAppDidEnterBackground() }
             await live.events.drain()
             let failedAt = await reads.attempts
             let queued = await live.events.queuedJourneyRetryKeys()
@@ -307,12 +308,14 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             entryStepId: "wait", steps: Self.waitSteps(eventName: "go", maxTimeMillis: 20_000), routes: [], screens: [])
         let launch = Date(timeIntervalSince1970: 1000)
         let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
-        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
-        let pin = try XCTUnwrap(snapshot.profile.releases.first)
-        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        var retainedReleases: [String: AuthenticatedJourneyRelease] = [:]
         // Both durable twenty-second waits exist before the first wake fires.
         // Their different anchors put their deadlines at t=10 and t=20.
         for seconds in [10, 20] {
+            let independent = try replacingExperience(snapshot, experienceId: "deadline-\(seconds)")
+            let arm = try XCTUnwrap(independent.profile.armedLegs.first)
+            let pin = try XCTUnwrap(independent.profile.releases.first)
+            retainedReleases.merge(independent.releasesByDigest) { first, _ in first }
             let admitted = try await journal.admit(arm: arm, release: pin,
                 executionSnapshot: .init(delivery: snapshot.profile.delivery, assignments: snapshot.profile.facts.assignments),
                 reentry: .init(type: .everyMatch, window: nil), entryStepId: "wait",
@@ -330,6 +333,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let events = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: MockEventStore())
         let secondWakeScheduled = expectation(description: "The t=20 wake schedules again after enqueueing its deadline")
         secondWakeScheduled.assertForOverFulfill = false
+        let pinned = retainedReleases
         let service = JourneyService(identity: identity, events: events, dateProvider: clock, sleepProvider: sleeper,
             journalDirectory: directory, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
@@ -337,7 +341,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
                 let runs = try await journal.runs()
                 if clock.now() == launch.addingTimeInterval(20) { secondWakeScheduled.fulfill() }
                 return runs
-            }, pinnedReleaseAuthenticator: { _, _ in release },
+            }, pinnedReleaseAuthenticator: { _, reference in
+                guard let retained = pinned[reference.descriptorSha256] else { throw JourneyExecutionError.invalidState }
+                return retained
+            },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
         let observed = JourneyTimedRouteObservation()
         await events.subscribeCommitted { event in
@@ -773,10 +780,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             await deadlines.append(deadline)
             return await service?.handleJourneyDeadline(deadline) ?? .done
         }
-        // Foreground first confirms the saved pendingEvent, then resumeParked
-        // writes its selected outlet and consumes the park. Fail that second
-        // write exactly once, leaving the matching event durably saved.
-        writes.failAfterSuccessfulWrites(1)
+        // Wait consumption and the next cursor are one transaction. Fail that
+        // command so the committed park and its log match remain retryable.
+        writes.failNext(1)
         await live.service.onAppBecameActive()
         XCTAssertTrue(failedWrite.isCompleted)
         let savedInputRetries = await live.events.queuedJourneyRetryKeys()
@@ -1076,9 +1082,9 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty)
         await reads.setFailing(false)
         let fixture = try JourneyPlaneProfileTestFixture.load()
-        let screenless = replacing(try await authenticatedSnapshot(fixture), entry: Self.eventEntry("start_screenless"),
+        let screenless = try replacingExperience(replacing(try await authenticatedSnapshot(fixture), entry: Self.eventEntry("start_screenless"),
             reentry: .init(type: .everyMatch, window: nil), completionOutputs: Self.heldWaitOutcomes,
-            entryStepId: "wait", steps: Self.waitSteps(eventName: "go", maxTimeMillis: 500), routes: [], screens: [])
+            entryStepId: "wait", steps: Self.waitSteps(eventName: "go", maxTimeMillis: 500), routes: [], screens: []), experienceId: "screenless-experience")
         await live.service.profileDidCommit(screenless, distinctId: "customer")
         live.events.track("start_screenless")
         await live.events.drain()
@@ -1111,7 +1117,11 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let events = MockEventLog()
         events.identity = identity
         let queued = JourneyDeadlineRecorder()
-        let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock)
+        let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock,
+            pinnedReleaseAuthenticator: { _, reference in
+                guard let retained = snapshot.releasesByDigest[reference.descriptorSha256] else { throw JourneyExecutionError.invalidState }
+                return retained
+            })
         let routing: any EventLogProtocol = events
         events.replayPendingRoutesHandler = {
             await routing.setJourneyDeadlineHandler { deadline in await queued.append(deadline); return .done }
@@ -1131,6 +1141,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         await service.profileDidCommit(snapshot, distinctId: "customer")
         await events.drain()
         let reopened = await queued.values
+        // Layer 3 replaces this enqueue-count observation with a durable wait question.
         XCTAssertEqual(reopened.count, 2, "The marker belongs to the dropped journal instance")
         let deadline = try XCTUnwrap(reopened.last)
         _ = await service.handleJourneyDeadline(deadline)
@@ -1206,9 +1217,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
             // Simulate the process exiting with a durable park and an optional
             // retained event receipt. Deadline controls themselves have no row.
-            let eventDirectory = directory.appendingPathComponent("events")
+            let eventDirectory = directory
             let originalStore = SQLiteEventStore()
             try await originalStore.initialize(path: eventDirectory)
+            try await originalStore.bindConversionAuthority(.testFixture)
             if hasFollowUp {
                 let event = try StoredEvent(id: "recovered-go", name: "go", properties: [:],
                     timestamp: eventAt.addingTimeInterval(0.1), distinctId: "customer")
@@ -1872,7 +1884,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             storageScope: JourneyStorageScope(authority: fixture.deliveryAuthority),
             featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: MockEventLog()),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
+            pinnedReleaseAuthenticator: { _, reference in
+                guard let retained = savedCopy.releasesByDigest[reference.descriptorSha256] else { throw JourneyExecutionError.invalidState }
+                return retained
+            },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         await previous.initialize()
@@ -1888,7 +1903,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             dateProvider: dateProvider, sleepProvider: MockSleepProvider(),
             journalDirectory: directory, storageScope: nil, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
-            pinnedReleaseAuthenticator: { _, _ in throw JourneyExecutionError.invalidState },
+            pinnedReleaseAuthenticator: { _, reference in
+                guard let retained = savedCopy.releasesByDigest[reference.descriptorSha256] else { throw JourneyExecutionError.invalidState }
+                return retained
+            },
             timezones: try XCTUnwrap(SignedTimezoneBundle.installed)
         )
         let admission = events.reserveCommittedAdmission { service.eventAdmissionGeneration() }

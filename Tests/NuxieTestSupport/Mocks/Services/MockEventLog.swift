@@ -70,6 +70,9 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             if case .captured(let stored, let isNew) = commit.outcome {
                 lock.withLock { _stableCaptures[stored.id] = .init(event: stored.customerEvent, isNewlyCommitted: isNew) }
                 if isNew { _ = await route(stored.customerEvent) }
+                if let sqlite = store as? SQLiteEventStore {
+                    try await sqlite.markStableRouteDelivered(eventId: stored.id)
+                }
             }
         }
         return result
@@ -216,7 +219,20 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
     public func replayPendingStableRoutes(distinctId: String) async -> Bool {
         let handler = replayPendingRoutesHandler
-        return await handler?() ?? true
+        if let handler, !(await handler()) { return false }
+        guard let store = await customerStore() as? SQLiteEventStore else { return true }
+        do {
+            while true {
+                let pending = try await store.queryPendingStableRoutes(distinctId: distinctId, limit: 100)
+                if pending.isEmpty { return true }
+                for event in pending {
+                    if !lock.withLock({ _routedEvents.contains { $0.id == event.id } }) {
+                        guard await route(event.customerEvent) != nil else { return false }
+                    }
+                    try await store.markStableRouteDelivered(eventId: event.id)
+                }
+            }
+        } catch { return false }
     }
 
     public var drainHandler: (@Sendable () async -> Void)? {

@@ -189,7 +189,12 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
         configuration.testingOverrides.customStoragePath = disk.root
         configuration.testingOverrides.suppressBackgroundWork = true
         configuration.testingOverrides.flushAt = 10000
-        if drop { configuration.beforeSend = { $0.name == JourneyEvents.journeyCompleted ? nil : $0 } }
+        configuration.beforeSend = { event in
+            if drop, event.name == JourneyEvents.journeyCompleted { return nil }
+            guard event.name == "start" || event.name == "finish" else { return event }
+            return NuxieEvent(id: event.id, name: event.name, forwardingName: event.forwardingName, distinctId: event.distinctId,
+                properties: event.properties, timestamp: clock.now(), journeyOrigin: event.journeyOrigin)
+        }
         let service = JourneyService(identity: identity, events: events, dateProvider: clock, sleepProvider: MockSleepProvider(),
             journalDirectory: disk.root, storageScope: .testFixture, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),

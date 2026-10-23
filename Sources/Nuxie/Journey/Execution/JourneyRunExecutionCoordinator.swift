@@ -71,7 +71,7 @@ struct JourneyRunExecutionCoordinator {
             currentDeviceTimezone: currentDeviceTimezone,
             appDefaultTimezone: appDefaultTimezone
         )
-        if run.inputEventId != nil, run.lastConsumed?.eventId == run.inputEventId { self.signal = .init() }
+        if run.cursorRevision > 0, run.inputEventId != nil, run.lastConsumed?.eventId == run.inputEventId { self.signal = .init() }
         else { self.signal = signal }
         self.checkpoint = checkpoint
         self.journal = journal
@@ -133,6 +133,7 @@ struct JourneyRunExecutionCoordinator {
     }
 
     mutating func commit(_ command: AdvanceCommand, admission: JourneyCommitAdmission? = nil) async throws {
+        let consumedWait = steps[run.stepId]?.action.map { JourneyActionType(action: $0) == .waitUntil } ?? false
         guard try await journal.transition(
             run.id,
             stepId: command.stepId,
@@ -142,6 +143,7 @@ struct JourneyRunExecutionCoordinator {
             admission: admission
         ) else { throw JourneyExecutionError.invalidState }
         run = try await journal.current(run.id)
+        if consumedWait { signal = .init() }
         run.park = nil
         checkpoint = nil
     }

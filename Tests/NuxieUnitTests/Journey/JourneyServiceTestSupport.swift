@@ -324,7 +324,8 @@ extension JourneyTestCase {
             await service.initialize()
             let journal = try await CustomerJourneyStore(
                 directory: directory,
-                distinctId: "customer"
+                distinctId: "customer",
+                events: events
             )
             return RenderedJourneyTestContext(
                 directory: directory,
@@ -1164,6 +1165,35 @@ extension JourneyTestCase {
             profile: profile,
             releasesByDigest: [descriptorSHA256: release]
         )
+    }
+
+    func replacingExperience(_ snapshot: JourneyProfileCatalog.Snapshot, experienceId: String) throws -> JourneyProfileCatalog.Snapshot {
+        let originalArm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let original = try XCTUnwrap(snapshot.releasesByDigest[originalArm.reference.descriptorSha256])
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: ExactJSONCodec.encode(original.descriptor)) as? [String: Any])
+        var identity = try XCTUnwrap(object["identity"] as? [String: Any])
+        identity["experienceId"] = experienceId
+        object["identity"] = identity
+        let bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let descriptor = try ExactJSONCodec.decode(JourneyReleaseDescriptor.self, from: bytes)
+        let digest = SHA256Provider.hexDigest(bytes)
+        let release = AuthenticatedJourneyRelease(authenticatedKeyID: original.authenticatedKeyID,
+            exactDescriptorBytes: bytes, descriptorSHA256: digest, descriptor: descriptor,
+            publishedAtSeqToPromote: original.publishedAtSeqToPromote)
+        let originalPin = try XCTUnwrap(snapshot.profile.releases.first)
+        let locator = originalPin.locator
+        let pin = JourneyReleaseProfileEntry(locator: .init(appId: locator.appId, environment: locator.environment,
+            experienceId: experienceId, experienceVersionId: locator.experienceVersionId, versionNumber: locator.versionNumber,
+            buildId: locator.buildId, publishedAt: locator.publishedAt, publishedAtSeq: locator.publishedAtSeq, legId: locator.legId),
+            envelope: .init(mediaType: originalPin.envelope.mediaType, encoding: originalPin.envelope.encoding,
+                descriptorSha256: digest, descriptorSizeBytes: bytes.count, descriptorBytesBase64: bytes.base64EncodedString(),
+                signature: originalPin.envelope.signature))
+        let arm = ArmedJourney(reference: .init(experienceId: experienceId, versionId: originalArm.reference.versionId,
+            legId: originalArm.reference.legId, descriptorSha256: digest), binding: originalArm.binding,
+            entryCondition: originalArm.entryCondition, context: originalArm.context, conversion: originalArm.conversion)
+        let profile = snapshot.profile
+        return .init(profile: .init(schemaVersion: profile.schemaVersion, status: profile.status, delivery: profile.delivery,
+            features: profile.features, facts: profile.facts, armedLegs: [arm], releases: [pin]), releasesByDigest: [digest: release])
     }
 
     func temporaryDirectory() -> URL {

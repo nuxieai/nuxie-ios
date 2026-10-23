@@ -996,7 +996,7 @@ extension JourneyService {
             return
         }
         let sameInput = latest.inputEventId == input.signal.eventId
-        let signal = latest.inputEventId == nil ? input.signal : JourneyControlExecutor.Signal()
+        let signal = latest.inputEventId == nil || latest.cursorRevision == 0 ? input.signal : JourneyControlExecutor.Signal()
         try await execute(latest, release: input.release, executionFenceToken: input.token,
             signal: signal, checkpoint: latest.stepId == input.initialStepId ? input.checkpoint : nil,
             journal: journal, startingEventAt: sameInput ? input.startingEventAt : nil,
@@ -1366,11 +1366,18 @@ extension JourneyService {
 
     private func enqueueReconciliation(distinctId: String? = nil, afterFailure: Bool = false) async {
         let owner = distinctId ?? identity.getDistinctId()
-        _ = await events.performJourneyWork(.init(key: .init(distinctId: owner, id: "reconcile"),
-            afterFailure: afterFailure, bypassesHold: true, operation: { [weak self] in
+        let followsEvent = JourneyQueueContext.event != nil && !afterFailure
+        let request = JourneyWorkRequest(key: .init(distinctId: owner, id: "reconcile"),
+            afterFailure: afterFailure, bypassesHold: !followsEvent, operation: { [weak self] in
                 guard let self else { return .done }
                 return await self.reconcileQueuedWork(owner: owner)
-            }))
+            })
+        if followsEvent {
+            // Delivery must return before reconciliation can join that prefix.
+            await events.enqueueJourneyWork(request)
+        } else {
+            _ = await events.performJourneyWork(request)
+        }
     }
 
     private func reconcileQueuedWork(owner: String) async -> JourneyQueueResult {
@@ -1379,9 +1386,15 @@ extension JourneyService {
         guard storageScope != nil else { return .done }
         await ensureJournal(for: owner)
         guard journal?.distinctId == owner, !revokingCustomers.contains(owner) else { return .notYet }
+        // A callback inside an event cannot reconcile ahead of the remainder
+        // of that event's ordered input prefix.
+        guard JourneyQueueContext.event == nil else { return .done }
         do {
             _ = try await resumeParkedRuns(event: nil)
             await scheduleNextWake()
+            // Join the existing queue's first attempts. Its routing holds and
+            // input watermark still decide whether a due wait may time out.
+            await events.deliverAcceptedCaptures()
             return .done
         } catch { return .failed }
     }
@@ -1598,6 +1611,8 @@ private extension JourneyService {
            current.distinctId == distinctId,
            revokingCustomers.contains(distinctId) {
             guard await abandon(current) else { return false }
+            // Reopening must read the epoch just committed by revocation.
+            if journal?.distinctId == distinctId { journal = nil }
         }
         return true
     }
@@ -3102,7 +3117,6 @@ private extension JourneyService {
                     throw ExecutionRetryTiming(startingLag: coordinator.startingLag)
                 }
                 await scheduleNextWake()
-                try await resumeCommittedJourney(runId: run.id, event: nil, journal: journal, generation: journalGeneration)
                 return
 
             case .complete(let outcome):

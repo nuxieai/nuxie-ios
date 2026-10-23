@@ -185,6 +185,7 @@ struct CustomerJourneyStore: Sendable {
                       advancingTo: (stepId: String, context: ArmedJourney.Context)? = nil, eventId: String? = nil,
                       expectedRevision: Int64? = nil, evaluation: CustomerWaitEvaluation? = nil, presentAt: Date? = nil,
                       admission: JourneyCommitAdmission) async throws -> JourneyRun? {
+        guard admission.commitJournalIfCurrent({ true }) == true else { return nil }
         let journey = try await current(id)
         guard journey.stepId == expectedStepId, journey.park == expectedPark else { return nil }
         var transition = CustomerInputTransition(key: key(journey), expectedRevision: expectedRevision ?? journey.cursorRevision, eventId: eventId,

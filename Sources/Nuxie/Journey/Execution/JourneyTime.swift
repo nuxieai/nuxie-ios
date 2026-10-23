@@ -6,7 +6,9 @@ enum JourneyTime {
         guard value.isFinite,
               value >= Double(Int64.min),
               value < Double(Int64.max) else { return nil }
-        return Int64(value.rounded(.towardZero))
+        // SQL cursor clocks use the nearest millisecond. Recovering an integer
+        // through Date must not lose a millisecond to binary representation.
+        return Int64(value.rounded(.toNearestOrAwayFromZero))
     }
 
     static func date(_ milliseconds: Int64) -> Date {
