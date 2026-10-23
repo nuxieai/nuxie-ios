@@ -750,7 +750,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 }
             }, pop: {
                 while self.presentationLayer !== lower.navigationController, self.hasPresentedLayer {
-                    guard await self.performAuthoredLayerDismissal() else { throw CancellationError() }
+                    // Back owns activation after all modal dismissals and the final pop.
+                    guard await self.performAuthoredLayerDismissal(activateRevealedPage: false) else { throw CancellationError() }
                 }
                 guard let navigation = lower.navigationController else { throw CancellationError() }
                 if navigation.topViewController !== lower {
@@ -1364,7 +1365,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
     }
 
-    private func performAuthoredLayerDismissal() async -> Bool {
+    private func performAuthoredLayerDismissal(activateRevealedPage: Bool = true) async -> Bool {
         guard hasPresentedLayer, let layer = presentationLayer,
               let controller = activeController, closingLayer == nil else { return false }
         closingLayer = layer
@@ -1381,7 +1382,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         await withCheckedContinuation { continuation in
             layer.presentingViewController?.dismiss(animated: !reduceMotionEnabled) { continuation.resume() }
         }
-        await finishLayerDismissal(layer, controller: controller, alreadyDismissed: false)
+        await finishLayerDismissal(layer, controller: controller, alreadyDismissed: false,
+            activateRevealedPage: activateRevealedPage)
         closingLayer = nil
         return true
     }
@@ -1399,7 +1401,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     private func finishLayerDismissal(_ layer: UIViewController,
                                       controller: ExperienceScreenViewController,
-                                      alreadyDismissed: Bool) async {
+                                      alreadyDismissed: Bool,
+                                      activateRevealedPage: Bool = true) async {
         guard presentationLayer === layer, hasPresentedLayer else { return }
         layer.presentationController?.delegate = nil
         navigationLayers.removeLast()
@@ -1417,11 +1420,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             await onScreenHidden(controller.screenId,
                 .init(revealingScreenId: revealingController?.screenId, method: "journey"))
         }
-        revealingController?.setCoveredByLayer(false)
-        if revealingController?.isPageController == true { await revealingController?.activate(reduceMotion: reduceMotionEnabled) }
-        // The retained screen never left active. This callback restores Journey
-        // routing, without an entering edge, appearance increment or remount.
-        if let screenId = revealingController?.screenId { await onScreenActive(screenId) }
+        if activateRevealedPage {
+            revealingController?.setCoveredByLayer(false)
+            if revealingController?.isPageController == true {
+                await revealingController?.activate(reduceMotion: reduceMotionEnabled)
+            }
+            if let screenId = revealingController?.screenId { await onScreenActive(screenId) }
+        }
         var retired = Set<ObjectIdentifier>()
         for controller in cache.controllers.values where retired.insert(ObjectIdentifier(controller)).inserted {
             await controller.shutdownInteractiveScreen()
