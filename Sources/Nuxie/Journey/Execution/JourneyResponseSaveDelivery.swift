@@ -1,6 +1,7 @@
 import Foundation
 
 actor JourneyResponseSaveDelivery {
+    @TaskLocal private static var currentWorker: UUID?
     private let directory: URL
     private let transport: any JourneyResponseSaveTransport
     private let clock: any DateProviderProtocol
@@ -103,11 +104,12 @@ actor JourneyResponseSaveDelivery {
     func shutdown() async {
         active = false
         displayObserver = nil
-        let task = worker?.task
+        let departing = worker
         worker = nil
         sleeping?.cancel()
-        task?.cancel()
-        await task?.value
+        departing?.task.cancel()
+        // An observer can request shutdown from the worker delivering its reply.
+        if departing?.id != Self.currentWorker { await departing?.task.value }
     }
 
     private func currentTime() -> Date {
@@ -153,7 +155,9 @@ actor JourneyResponseSaveDelivery {
     private func kick() {
         guard active, worker == nil else { return }
         let id = UUID()
-        worker = (id, Task { await self.deliver(id: id) })
+        worker = (id, Task {
+            await Self.$currentWorker.withValue(id) { await self.deliver(id: id) }
+        })
     }
 
     private func deliver(id: UUID) async {

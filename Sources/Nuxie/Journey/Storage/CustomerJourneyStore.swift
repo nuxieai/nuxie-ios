@@ -68,22 +68,53 @@ struct CustomerJourneyStore: Sendable {
     }
 
     func command(_ mutation: CustomerExecutionCommand.Mutation, items: [RoutedStableSystemEventBatchItem] = [], admission: JourneyCommitAdmission? = nil, profileFence: JourneyProfileFence? = nil, profileToken: JourneyProfileFenceToken? = nil) async throws -> CustomerExecutionResult {
+        let command = try await prepareCommand(mutation, items: items, admission: admission,
+            profileFence: profileFence, profileToken: profileToken)
+        let result = try await execute(command)
+        await events?.publishCustomerCommand(command, result: result)
+        return result
+    }
+
+    private func prepareCommand(_ mutation: CustomerExecutionCommand.Mutation, items: [RoutedStableSystemEventBatchItem], admission: JourneyCommitAdmission? = nil, profileFence: JourneyProfileFence? = nil, profileToken: JourneyProfileFenceToken? = nil) async throws -> CustomerExecutionCommand {
         let records: [StableEventCaptureRecord]
-        if let events { records = try await events.prepareCustomerEvents(items) }
+        if items.isEmpty { records = [] }
+        else if let events { records = try await events.prepareCustomerEvents(items) }
         else {
             records = try items.map { item in
                 .init(eventId: item.request.eventId, event: try StoredEvent(id: item.request.eventId, name: item.request.name,
                     properties: item.request.properties ?? [:], timestamp: item.occurredAt, distinctId: distinctId, journeyOrigin: item.request.journeyOrigin), recordedAt: item.occurredAt)
             }
         }
-        return try await commit(mutation, records: records, admission: admission, profileFence: profileFence, profileToken: profileToken)
+        return CustomerExecutionCommand(owner: owner, epoch: epoch, mutation: mutation, events: records,
+            admission: admission, profileFence: profileFence, profileToken: profileToken)
     }
 
     func commit(_ mutation: CustomerExecutionCommand.Mutation, records: [StableEventCaptureRecord], admission: JourneyCommitAdmission? = nil, profileFence: JourneyProfileFence? = nil, profileToken: JourneyProfileFenceToken? = nil) async throws -> CustomerExecutionResult {
-        try beforePersist?()
         let command = CustomerExecutionCommand(owner: owner, epoch: epoch, mutation: mutation, events: records, admission: admission, profileFence: profileFence, profileToken: profileToken)
-        if !records.isEmpty, let events, await events.customerStore() != nil { return try await events.commitCustomerCommand(command) }
+        let result = try await execute(command)
+        await events?.publishCustomerCommand(command, result: result)
+        return result
+    }
+
+    private func execute(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
+        try beforePersist?()
+        if !command.events.isEmpty, let events, await events.customerStore() != nil {
+            return try await events.commitCustomerCommand(command)
+        }
         return try await store.executeCustomerCommand(command)
+    }
+
+    private func releasePreparedPins(_ preparation: CustomerPinPreparation) async {
+        let files = files
+        let cleanup = Task.detached {
+            do {
+                try await files.withExclusiveAccess { preparation.release() }
+            } catch {
+                // Keep the conservative reservation if collection's lock is unavailable.
+                LogWarning("CustomerJourneyStore: prepared pin cleanup remains pending: \(error)")
+            }
+        }
+        await cleanup.value
     }
 
     func runs() async throws -> [JourneyRun] { try await store.activeJourneys(owner: owner) }
@@ -121,7 +152,7 @@ struct CustomerJourneyStore: Sendable {
                 properties: item.request.properties ?? [:], timestamp: item.occurredAt, distinctId: distinctId), recordedAt: at)]
         }
         let store = self
-        let result = try await files.withExclusiveAccess {
+        let (admission, preparation) = try await files.withExclusiveAccess {
             _ = try store.files.collectOrphans(committedPaths: await store.store.committedReleasePinPaths())
             let inherited = try await store.runs().first(where: { $0.reference.descriptorSha256 == arm.reference.descriptorSha256 })?.artifactSHA256s ?? []
             let prepared = try store.pins.prepareAdmission(release: release, descriptorSHA256: arm.reference.descriptorSha256, artifactSource: artifactSource, inheritedArtifactSHA256s: inherited)
@@ -130,20 +161,31 @@ struct CustomerJourneyStore: Sendable {
             var references = [try store.files.reference(owner: store.owner, sha256: arm.reference.descriptorSha256, kind: .descriptor)]
             references += try prepared.artifactSHA256s.map { try store.files.reference(owner: store.owner, sha256: $0, kind: .artifact) }
             try store.files.synchronize(references)
-            // Keep the root lock until SQL owns these durable files. Collection
-            // uses this same lock and cannot inspect an admission in flight.
-            try await pinsPrepared?()
             let watch: JourneyConversionWatch?
             if let policy, policy.goal != nil { watch = try JourneyConversionWatch(run: journey, policy: policy, delivery: arm.conversion) }
             else { watch = nil }
             let receipt = JourneyStateArmReceipt(arm)
             let target = try Self.admissionTarget(receipt)
             var admission = CustomerAdmission(journey: journey, pins: references, watch: watch, arm: receipt, sourceEventId: sourceEventId, targetKey: target, stateLatch: stateArmReceipt != nil)
-            admission.onAdmitted = onAdmitted
             admission.policyHash = try policy.map { SHA256Provider.hexDigest(try ExactJSONCodec.encode($0)) } ?? ""
-            return try await store.commit(.admit(admission), records: records, profileFence: profileFence, profileToken: profileFenceToken).journey
+            return (admission, store.files.protectPreparedPins(references))
         }
-        return result
+        let command = CustomerExecutionCommand(owner: owner, epoch: epoch, mutation: .admit(admission),
+            events: records, profileFence: profileFence, profileToken: profileFenceToken)
+        let result: CustomerExecutionResult
+        do {
+            try await pinsPrepared?()
+            result = try await execute(command)
+        } catch {
+            await releasePreparedPins(preparation)
+            throw error
+        }
+        // Serialize reservation removal with collection's SQL snapshot as well
+        // as its deletions. Publication owns no filesystem or writer lock.
+        await releasePreparedPins(preparation)
+        if result.journey != nil { onAdmitted() }
+        await events?.publishCustomerCommand(command, result: result)
+        return result.journey
     }
 
     func beginEvaluation(_ journey: JourneyRun, at now: Date, triggeringAt: Date?) async throws -> JourneyRun {
@@ -295,20 +337,32 @@ struct CustomerJourneyStore: Sendable {
         try pins.pinnedArtifacts(sha256s: await current(id).artifactSHA256s)
     }
     func recover(at: Date, invalidPinIds: Set<String> = []) async throws -> [JourneyRun] {
+        let publication = try await recoverForOpen(at: at, invalidPinIds: invalidPinIds)
+        await publish(publication)
+        return try await runs()
+    }
+
+    func recoverForOpen(at: Date, invalidPinIds: Set<String> = []) async throws -> CustomerCommandPublication {
         let active = try await runs()
         let broken = active.filter { $0.park == nil || invalidPinIds.contains($0.id) || (try? pins.release(descriptorSHA256: $0.reference.descriptorSha256)) == nil }
-        try await recover(broken, at: at, revoke: false)
-        return try await runs()
+        return try await recover(broken, at: at, revoke: false)
     }
     func abandonAll(at: Date) async throws {
         if let scope = try await store.customerScope(owner: owner), scope.executionEpoch > epoch, scope.executionRevoked { return }
-        try await recover(try await runs(), at: at, revoke: true)
+        let publication = try await recover(try await runs(), at: at, revoke: true)
+        await publish(publication)
     }
-    private func recover(_ active: [JourneyRun], at: Date, revoke: Bool) async throws {
+    private func recover(_ active: [JourneyRun], at: Date, revoke: Bool) async throws -> CustomerCommandPublication {
         let boundaries = active.map { CustomerTerminalBoundary(key: key($0), revision: $0.cursorRevision, reportId: $0.completedEventId, at: Int64(JourneyConversionWatch.millis(at))) }
         let reports = try active.map { try JourneyReporter.completed($0, owner: distinctId, outcome: "abandoned", at: at, outputs: .init(event: $0.outputs.event, responses: $0.context.responses)) }
-        _ = try await command(.recover(boundaries, revoke: revoke), items: reports)
+        let command = try await prepareCommand(.recover(boundaries, revoke: revoke), items: reports)
+        let result = try await execute(command)
         await collectPinOrphans()
+        return .init(command: command, result: result)
+    }
+
+    func publish(_ publication: CustomerCommandPublication) async {
+        await events?.publishCustomerCommand(publication.command, result: publication.result)
     }
     func finalizeRevocation() async throws -> Bool { try await runs().isEmpty }
 

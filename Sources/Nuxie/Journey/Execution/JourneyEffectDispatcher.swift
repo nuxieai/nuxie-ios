@@ -319,17 +319,12 @@ struct JourneyEffectDispatcher {
             )
         )
         let delivered = await MainActor.run {
-            var identityDelivered = false
-            let executionDelivered = request.executionFence.publishIfCurrent(
-                request.executionFenceToken
-            ) {
-                identityDelivered = identity.publishIfCurrentIdentityFenceToken(
-                    request.identityFence
-                ) {
-                    appActionHandler(value)
-                }
-            }
-            return executionDelivered && identityDelivered
+            guard request.executionFence.isCurrent(request.executionFenceToken),
+                  identity.publishIfCurrentIdentityFenceToken(request.identityFence, {}) else { return false }
+            // The host can replace identity or profile after these checks release their locks.
+            appActionHandler(value)
+            return request.executionFence.isCurrent(request.executionFenceToken)
+                && identity.publishIfCurrentIdentityFenceToken(request.identityFence, {})
         }
         guard delivered else {
             return .failed

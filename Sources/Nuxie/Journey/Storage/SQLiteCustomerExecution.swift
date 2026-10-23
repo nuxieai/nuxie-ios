@@ -236,13 +236,7 @@ extension SQLiteEventStore {
         customerCommandActive = true
         customerStatementNumber = 0
         defer { customerCommandActive = false }
-        let operation = {
-            let result = try self.customerTransaction { try self.customerExecuteCommand(command) }
-            if case .admit(let admission) = command.mutation, result.journey != nil {
-                admission.onAdmitted?()
-            }
-            return result
-        }
+        let operation = { try self.customerTransaction { try self.customerExecuteCommand(command) } }
         let fencedOperation = {
             if let fence = command.profileFence, let token = command.profileToken {
                 guard let result = try fence.performIfCurrent(token, operation) else { throw CustomerStoreError.revoked }

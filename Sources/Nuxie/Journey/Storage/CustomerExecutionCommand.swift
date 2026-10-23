@@ -58,7 +58,6 @@ struct CustomerAdmission: Sendable {
     let targetKey: String
     let stateLatch: Bool
     var policyHash: String = ""
-    var onAdmitted: (@Sendable () -> Void)? = nil
 }
 
 /// A pure evaluator proposes this value against the cursor it read.
@@ -93,6 +92,12 @@ struct CustomerExecutionResult: Sendable {
     var response: JourneyResponseSave? = nil
     var stopped = false
     var replayed = false
+}
+
+/// Publication follows the committed SQL outcome and owns no writer or file lock.
+struct CustomerCommandPublication: Sendable {
+    let command: CustomerExecutionCommand
+    let result: CustomerExecutionResult
 }
 
 

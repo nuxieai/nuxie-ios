@@ -138,6 +138,46 @@ final class JourneyCompletionFlag: @unchecked Sendable {
 
 class JourneyTestCase: XCTestCase {}
 
+private final class JourneyTestOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<Void, Error>?
+
+    func finish(_ result: Result<Void, Error>) { lock.withLock { self.result = result } }
+    func value() -> Result<Void, Error>? { lock.withLock { result } }
+}
+
+private struct JourneyTestTimeout: Error {}
+
+extension XCTestCase {
+    func addBoundedJourneyTeardown(_ operation: @escaping () async throws -> Void) {
+        addTeardownBlock { [self] in
+            try await withBoundedJourneyWait(timeout: 5, operation)
+        }
+    }
+
+    /// An unstructured task lets a timeout fail without joining a deadlocked child.
+    func withBoundedJourneyWait(timeout: TimeInterval = 30, file: StaticString = #filePath,
+                                line: UInt = #line, _ operation: @escaping () async throws -> Void) async throws {
+        let finished = expectation(description: "Journey operation returned at \(file):\(line)")
+        let outcome = JourneyTestOutcome()
+        let task = Task {
+            do {
+                try await operation()
+                outcome.finish(.success(()))
+            } catch {
+                outcome.finish(.failure(error))
+            }
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: timeout)
+        guard let result = outcome.value() else {
+            task.cancel()
+            throw JourneyTestTimeout()
+        }
+        try result.get()
+    }
+}
+
 extension JourneyTestCase {
     func releaseProductDocument(
         id: String,

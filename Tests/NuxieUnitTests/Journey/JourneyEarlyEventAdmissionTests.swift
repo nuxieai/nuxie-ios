@@ -8,12 +8,16 @@ import XCTest
 final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
     func testEveryMatchNativeFailureResumesTheAdmittedCursorWithoutRepeatingItsEffect() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseEveryMatchNativeFailureResumesTheAdmittedCursorWithoutRepeatingItsEffect() }
+    }
+
+    private func exerciseEveryMatchNativeFailureResumesTheAdmittedCursorWithoutRepeatingItsEffect() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let reads = SelectedNativeFailures(failures: [1])
         let rejected = expectation(description: "Native preparation refused the admitted start")
         let gate = JourneyNthRoutedCaptureGate(eventName: "refused", suspendedCall: 1)
-        addTeardownBlock { await gate.release() }
+        addBoundedJourneyTeardown { await gate.release() }
         let steps = try JSONDecoder().decode([Journey.Step].self, from: Data(#"""
         [
           {"kind":"action","id":"effect","action":{"type":"send_event","eventName":"before_native"},"outlets":{"next":"branch"}},
@@ -56,11 +60,19 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testPurchaseInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() async throws {
+        try await withBoundedJourneyWait { [self] in try await exercisePurchaseInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() }
+    }
+
+    private func exercisePurchaseInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() async throws {
         try await assertCommerceInputKeepsSettlement(type: "purchase", eventName: SystemEventNames.purchaseCompleted,
             outlet: "completed")
     }
 
     func testRestoreInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRestoreInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() }
+    }
+
+    private func exerciseRestoreInputKeepsSettlementThroughNativeRestorationAndExecutionFailures() async throws {
         try await assertCommerceInputKeepsSettlement(type: "restore", eventName: SystemEventNames.restoreCompleted,
             outlet: "restored")
     }
@@ -71,7 +83,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         let reads = SelectedNativeFailures(failures: [])
         let rejected = expectation(description: "Restoration refused the terminal input")
         let gate = JourneyNthRoutedCaptureGate(eventName: "refused", suspendedCall: 1)
-        addTeardownBlock { await gate.release() }
+        addBoundedJourneyTeardown { await gate.release() }
         let steps = try JSONDecoder().decode([Journey.Step].self, from: Data("""
         [
           {"kind":"action","id":"wait","action":{"type":"wait_until","trigger":{"kind":"event","eventName":"\(eventName)"},"condition":{"type":"Truthy","value":{"type":"Boolean","value":true}},"maxTimeMs":60000},"outlets":{"satisfied":"branch","timeout":"timeout"}},
@@ -140,6 +152,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testUnavailableCustomerReadKeepsTheDeadlineEntryWithBackoff() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseUnavailableCustomerReadKeepsTheDeadlineEntryWithBackoff() }
+    }
+
+    private func exerciseUnavailableCustomerReadKeepsTheDeadlineEntryWithBackoff() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let reads = FailableJourneyRead()
@@ -217,6 +233,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testFailedEventRestorationUsesTheQueueAndGatesOnlyRenderedBackgroundRetries() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFailedEventRestorationUsesTheQueueAndGatesOnlyRenderedBackgroundRetries() }
+    }
+
+    private func exerciseFailedEventRestorationUsesTheQueueAndGatesOnlyRenderedBackgroundRetries() async throws {
         for hasScreens in [false, true] {
             let directory = temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -261,6 +281,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testFailedReconciliationAfterRefetchSettlesRetriesWithoutLeavingRoutingHeld() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFailedReconciliationAfterRefetchSettlesRetriesWithoutLeavingRoutingHeld() }
+    }
+
+    private func exerciseFailedReconciliationAfterRefetchSettlesRetriesWithoutLeavingRoutingHeld() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let inspection = FailableJourneyRead()
@@ -300,6 +324,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testHeldRoutingQueuesEveryDeadlineBeforeEventsAcceptedAfterIt() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseHeldRoutingQueuesEveryDeadlineBeforeEventsAcceptedAfterIt() }
+    }
+
+    private func exerciseHeldRoutingQueuesEveryDeadlineBeforeEventsAcceptedAfterIt() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -393,6 +421,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testNativeRestorationRetryRunsInBackgroundOnlyForScreenlessWaits() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseNativeRestorationRetryRunsInBackgroundOnlyForScreenlessWaits() }
+    }
+
+    private func exerciseNativeRestorationRetryRunsInBackgroundOnlyForScreenlessWaits() async throws {
         for hasScreens in [false, true] {
             let directory = temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -454,6 +486,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testInitiallyOverdueScreenlessWaitAndDelayCatchUpInBackgroundWhenStartedIsDropped() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseInitiallyOverdueScreenlessWaitAndDelayCatchUpInBackgroundWhenStartedIsDropped() }
+    }
+
+    private func exerciseInitiallyOverdueScreenlessWaitAndDelayCatchUpInBackgroundWhenStartedIsDropped() async throws {
         let delay = Journey.Step(kind: .action, id: "delay",
             action: ["type": .string("delay"), "durationMs": .number(500)],
             outlets: ["next": "satisfied"], outcome: nil)
@@ -478,6 +514,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testAnOverdueRunWithScreensKeepsItsCatchUpClosedInBackground() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseAnOverdueRunWithScreensKeepsItsCatchUpClosedInBackground() }
+    }
+
+    private func exerciseAnOverdueRunWithScreensKeepsItsCatchUpClosedInBackground() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let preparation = JourneyNthRoutedCaptureGate(eventName: "prepare", suspendedCall: 1)
@@ -518,6 +558,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testFailedFirstCheckpointSaveKeepsTheTriggerPendingUntilRetry() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFailedFirstCheckpointSaveKeepsTheTriggerPendingUntilRetry() }
+    }
+
+    private func exerciseFailedFirstCheckpointSaveKeepsTheTriggerPendingUntilRetry() async throws {
         for step in [Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)[0], Self.delayStep] {
             let directory = temporaryDirectory()
             let writes = JourneyJournalPersistenceFailures()
@@ -542,7 +586,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
                         await rejection.intercept(event: "rejection")
                     }
                 })
-            addTeardownBlock {
+            addBoundedJourneyTeardown {
                 await rejection.release()
                 await live.service.shutdown()
                 await live.events.close()
@@ -602,6 +646,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testFailedParkAfterAnEventResumesAWaitRetriesTheSelectedCheckpoint() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFailedParkAfterAnEventResumesAWaitRetriesTheSelectedCheckpoint() }
+    }
+
+    private func exerciseFailedParkAfterAnEventResumesAWaitRetriesTheSelectedCheckpoint() async throws {
         let directory = temporaryDirectory()
         let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
         let writes = JourneyJournalPersistenceFailures()
@@ -630,7 +678,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
                     await rejection.intercept(event: "rejection")
                 }
             })
-        addTeardownBlock {
+        addBoundedJourneyTeardown {
             await rejection.release()
             await live.service.shutdown()
             await live.events.close()
@@ -680,6 +728,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testInitialWaitAndDelaySurviveNativePreparationFailureAndRetryBeforeTheirDeadline() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseInitialWaitAndDelaySurviveNativePreparationFailureAndRetryBeforeTheirDeadline() }
+    }
+
+    private func exerciseInitialWaitAndDelaySurviveNativePreparationFailureAndRetryBeforeTheirDeadline() async throws {
         for step in [Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)[0], Self.delayStep] {
             let directory = temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -743,6 +795,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testSavedMatchingEventRetriesFailedForegroundResumeBeforeItsDeadline() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseSavedMatchingEventRetriesFailedForegroundResumeBeforeItsDeadline() }
+    }
+
+    private func exerciseSavedMatchingEventRetriesFailedForegroundResumeBeforeItsDeadline() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let writes = JourneyJournalPersistenceFailures()
@@ -816,6 +872,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testFailedJournalInspectionRetriesWithoutAnyParkedRunOrDeadline() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFailedJournalInspectionRetriesWithoutAnyParkedRunOrDeadline() }
+    }
+
+    private func exerciseFailedJournalInspectionRetriesWithoutAnyParkedRunOrDeadline() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let inspection = FailableJourneyRead()
@@ -870,6 +930,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testFailedJournalInspectionKeepsAnInWindowFollowUpReplayable() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFailedJournalInspectionKeepsAnInWindowFollowUpReplayable() }
+    }
+
+    private func exerciseFailedJournalInspectionKeepsAnInWindowFollowUpReplayable() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let inspection = FailableJourneyRead()
@@ -919,6 +983,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testEmptyRoutingHoldRetainsDeadlineUntilRelease() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseEmptyRoutingHoldRetainsDeadlineUntilRelease() }
+    }
+
+    private func exerciseEmptyRoutingHoldRetainsDeadlineUntilRelease() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let live = try await liveTimedWait(directory: directory)
@@ -940,6 +1008,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testExpiredScreenlessWaitAndDelayAdvanceOnTheNextBackgroundEvent() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseExpiredScreenlessWaitAndDelayAdvanceOnTheNextBackgroundEvent() }
+    }
+
+    private func exerciseExpiredScreenlessWaitAndDelayAdvanceOnTheNextBackgroundEvent() async throws {
         let delay = Journey.Step(kind: .action, id: "delay",
             action: ["type": .string("delay"), "durationMs": .number(500)],
             outlets: ["next": "satisfied"], outcome: nil)
@@ -964,6 +1036,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testFutureScreenlessDeadlineEnqueuesAndRunsInBackgroundWithoutAnotherEvent() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFutureScreenlessDeadlineEnqueuesAndRunsInBackgroundWithoutAnotherEvent() }
+    }
+
+    private func exerciseFutureScreenlessDeadlineEnqueuesAndRunsInBackgroundWithoutAnotherEvent() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let live = try await liveTimedWait(directory: directory, dropJourneyStarted: true)
@@ -985,6 +1061,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testDeadlineHandlingRetriesJournalReadAndPersistenceFailures() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseDeadlineHandlingRetriesJournalReadAndPersistenceFailures() }
+    }
+
+    private func exerciseDeadlineHandlingRetriesJournalReadAndPersistenceFailures() async throws {
         for failure in ["read", "write", "native"] {
             let directory = temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -1049,6 +1129,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testBackgroundRenderedDeadlineSkipsFailingNativeReadsAndLetsLaterEventsThrough() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseBackgroundRenderedDeadlineSkipsFailingNativeReadsAndLetsLaterEventsThrough() }
+    }
+
+    private func exerciseBackgroundRenderedDeadlineSkipsFailingNativeReadsAndLetsLaterEventsThrough() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let reads = FailableJourneyRead()
@@ -1105,6 +1189,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testRecoveryFailureClearsEnqueuedDeadlinesBeforeTheJournalReopens() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRecoveryFailureClearsEnqueuedDeadlinesBeforeTheJournalReopens() }
+    }
+
+    private func exerciseRecoveryFailureClearsEnqueuedDeadlinesBeforeTheJournalReopens() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -1153,6 +1241,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         defaultInstanceId: nil, responseCaptures: [])
 
     func testStaleDeadlineForMovedOnCheckpointIsDropped() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseStaleDeadlineForMovedOnCheckpointIsDropped() }
+    }
+
+    private func exerciseStaleDeadlineForMovedOnCheckpointIsDropped() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -1195,6 +1287,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testRestartRecreatesDueDeadlinesAfterRecoveryReplay() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRestartRecreatesDueDeadlinesAfterRecoveryReplay() }
+    }
+
+    private func exerciseRestartRecreatesDueDeadlinesAfterRecoveryReplay() async throws {
         for hasFollowUp in [true, false] {
             let directory = temporaryDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -1268,6 +1364,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testQueuedLiveEventTimeoutVectors() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseQueuedLiveEventTimeoutVectors() }
+    }
+
+    private func exerciseQueuedLiveEventTimeoutVectors() async throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -1381,6 +1481,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// Shutdown delivers a capture it accepted before stopping Journeys, and
     /// the route is acknowledged rather than left for the next session.
     func testACaptureAcceptedJustBeforeShutdownReachesJourneys() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseACaptureAcceptedJustBeforeShutdownReachesJourneys() }
+    }
+
+    private func exerciseACaptureAcceptedJustBeforeShutdownReachesJourneys() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let live = try await liveTimedWait(directory: directory)
@@ -1397,6 +1501,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// deadline is queued at 1000 ms, and the tap commits at 1100 ms. The
     /// deadline lets the committed in-window tap go first.
     func testHeldRendererTapCommittedBehindTheDeadlineSatisfiesTheWait() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseHeldRendererTapCommittedBehindTheDeadlineSatisfiesTheWait() }
+    }
+
+    private func exerciseHeldRendererTapCommittedBehindTheDeadlineSatisfiesTheWait() async throws {
         let vector = try Self.watermarkVector("held_renderer_tap")
         let tap = try XCTUnwrap(vector.tap)
         let directory = temporaryDirectory()
@@ -1437,6 +1545,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
     /// A tap committed after its deadline has run is late: the timeout stands.
     func testTapCommittedAfterTheDeadlineRanLeavesTheTimeout() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseTapCommittedAfterTheDeadlineRanLeavesTheTimeout() }
+    }
+
+    private func exerciseTapCommittedAfterTheDeadlineRanLeavesTheTimeout() async throws {
         let vector = try Self.watermarkVector("late_commit")
         let tap = try XCTUnwrap(vector.tap)
         let directory = temporaryDirectory()
@@ -1465,6 +1577,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// A tap staged longer than the staging bound stops holding the deadline
     /// and is late when it commits.
     func testTapStagedLongerThanTheBoundIsLate() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseTapStagedLongerThanTheBoundIsLate() }
+    }
+
+    private func exerciseTapStagedLongerThanTheBoundIsLate() async throws {
         let vector = try Self.watermarkVector("held_renderer_tap")
         let tap = try XCTUnwrap(vector.tap)
         let directory = temporaryDirectory()
@@ -1509,6 +1625,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// the in-window follow-up fails once. The deadline waits until a later
     /// recovery reads it, and then the follow-up satisfies the wait.
     func testDeadlineWaitsForRecoveryToReadAnInWindowFollowUp() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseDeadlineWaitsForRecoveryToReadAnInWindowFollowUp() }
+    }
+
+    private func exerciseDeadlineWaitsForRecoveryToReadAnInWindowFollowUp() async throws {
         let vector = try Self.watermarkVector("recovery_read_failure")
         let followUp = try XCTUnwrap(vector.followUp)
         let directory = temporaryDirectory()
@@ -1610,6 +1730,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// Both app events travel through EventLog's first-launch hold, then
     /// replay in capture order when the first authenticated copy arrives.
     func testHeldEventTimeVectors() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseHeldEventTimeVectors() }
+    }
+
+    private func exerciseHeldEventTimeVectors() async throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -1714,6 +1838,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testInitiallyOverdueDelayCatchesUpWithoutAnotherEvent() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseInitiallyOverdueDelayCatchesUpWithoutAnotherEvent() }
+    }
+
+    private func exerciseInitiallyOverdueDelayCatchesUpWithoutAnotherEvent() async throws {
         let delay = Journey.Step(kind: .action, id: "delay",
             action: ["type": .string("delay"), "durationMs": .number(500)],
             outlets: ["next": "satisfied"], outcome: nil)
@@ -1721,11 +1849,19 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testInitiallyOverdueWaitTimesOutWithoutAnotherEvent() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseInitiallyOverdueWaitTimesOutWithoutAnotherEvent() }
+    }
+
+    private func exerciseInitiallyOverdueWaitTimesOutWithoutAnotherEvent() async throws {
         try await assertInitiallyOverdueStepCatchesUp(
             Self.waitSteps(eventName: "go", maxTimeMillis: 500)[0], outcome: "timeout")
     }
 
     func testEventStartedCoordinatorLagsItsInitialClockForWaitsAndDelays() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseEventStartedCoordinatorLagsItsInitialClockForWaitsAndDelays() }
+    }
+
+    private func exerciseEventStartedCoordinatorLagsItsInitialClockForWaitsAndDelays() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let base = try await authenticatedSnapshot(fixture)
         let now = Date(timeIntervalSince1970: 1000.8)
@@ -1762,6 +1898,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     }
 
     func testRecoveredWaitKeepsItsEventAnchorAndLaterDelayUsesTheRealClock() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRecoveredWaitKeepsItsEventAnchorAndLaterDelayUsesTheRealClock() }
+    }
+
+    private func exerciseRecoveredWaitKeepsItsEventAnchorAndLaterDelayUsesTheRealClock() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -1813,6 +1953,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// Basis's first launch: setup, then an immediate trigger, before any
     /// copy of the published setup exists on the device.
     func testFirstLaunchTriggerStartsOnceTheFirstProfileArrives() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFirstLaunchTriggerStartsOnceTheFirstProfileArrives() }
+    }
+
+    private func exerciseFirstLaunchTriggerStartsOnceTheFirstProfileArrives() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -1865,6 +2009,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// before this launch's first copy exactly once, and that copy also
     /// starts its own Journey from the event once.
     func testAWaitingJourneyTakesAHeldEventOnceAndTheFirstCopyStartsFromIt() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseAWaitingJourneyTakesAHeldEventOnceAndTheFirstCopyStartsFromIt() }
+    }
+
+    private func exerciseAWaitingJourneyTakesAHeldEventOnceAndTheFirstCopyStartsFromIt() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -1939,6 +2087,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
 
     /// The shared contract, replayed operation by operation.
     func testEarlyEventAdmissionVectors() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseEarlyEventAdmissionVectors() }
+    }
+
+    private func exerciseEarlyEventAdmissionVectors() async throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -1986,6 +2138,10 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
     /// The user changes while an event of the previous user is still being
     /// routed. The new user's copy must not start a Journey from it.
     func testEventNeverStartsAnotherCustomersJourney() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseEventNeverStartsAnotherCustomersJourney() }
+    }
+
+    private func exerciseEventNeverStartsAnotherCustomersJourney() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -2021,6 +2177,86 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
             $0.name == JourneyEvents.journeyStarted && $0.distinctId == "other"
         }.count, 0)
         await service.shutdown()
+    }
+
+    func testIdentitySwitchFromCompletionSubscriberReturns() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseIdentitySwitchFromCompletionSubscriberReturns() }
+    }
+
+    private func exerciseIdentitySwitchFromCompletionSubscriberReturns() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load()
+        let waiting = try await waitingCopy(fixture, entry: "start_waiting")
+        let other = replacing(try await authenticatedSnapshot(fixture),
+            entry: Self.eventEntry("go"), reentry: .init(type: .everyMatch, window: nil))
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let clock = MockDateProvider()
+        let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock)
+        await service.initialize()
+        await service.profileDidCommit(waiting, distinctId: "customer")
+        await service.handleStoredEvent(Self.event("start_waiting", at: clock.now()))
+        let switched = JourneyCompletionFlag()
+        await events.subscribeCommitted(where: { $0.name == JourneyEvents.journeyCompleted }) { _ in
+            identity.setDistinctId("other")
+            await service.profileDidCommit(other, distinctId: "other")
+            switched.finish()
+        }
+        try await withBoundedJourneyWait(timeout: 5) {
+            await service.handleStoredEvent(Self.event("go", at: clock.now()))
+        }
+        XCTAssertTrue(switched.isCompleted, "Identity switch returned inside completion subscriber")
+        XCTAssertEqual(events.routedEvents.filter {
+            $0.name == JourneyEvents.journeyCompleted && $0.distinctId == "customer"
+        }.count, 1)
+        XCTAssertFalse(events.routedEvents.contains {
+            $0.name == JourneyEvents.journeyStarted && $0.distinctId == "other"
+        })
+        await service.shutdown()
+    }
+
+    func testIdentitySwitchFromRecoveryCompletionSubscriberReturns() async throws {
+        try await withBoundedJourneyWait(timeout: 5) { [self] in
+            let directory = temporaryDirectory()
+            defer { removeTemporaryDirectoryIfPresent(directory) }
+            let fixture = try JourneyPlaneProfileTestFixture.load()
+            let snapshot = try await waitingCopy(fixture, entry: "start_waiting")
+            let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+            let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+            let pin = try XCTUnwrap(snapshot.profile.releases.first {
+                $0.envelope.descriptorSha256 == arm.reference.descriptorSha256
+            })
+            let identity = MockIdentityService()
+            identity.setDistinctId("customer")
+            let events = MockEventLog()
+            events.identity = identity
+            let clock = MockDateProvider()
+            let store = try await CustomerJourneyStore(directory: directory, distinctId: "customer",
+                openedAt: clock.now(), events: events)
+            let admitted = try await store.admit(arm: arm, release: pin,
+                executionSnapshot: .init(delivery: snapshot.profile.delivery,
+                    assignments: snapshot.profile.facts.assignments,
+                    customer: try snapshot.profile.facts.customerValues()),
+                reentry: release.descriptor.leg.policy.entry.frequency,
+                entryStepId: release.descriptor.leg.entryStepId, at: clock.now())
+            XCTAssertNotNil(admitted)
+            let other = replacing(snapshot, entry: Self.eventEntry("go"),
+                reentry: .init(type: .everyMatch, window: nil))
+            let service = makeService(identity: identity, events: events, directory: directory, dateProvider: clock)
+            let switched = JourneyCompletionFlag()
+            await events.subscribeCommitted(where: { $0.name == JourneyEvents.journeyCompleted }) { _ in
+                identity.setDistinctId("other")
+                await service.profileDidCommit(other, distinctId: "other")
+                switched.finish()
+            }
+            await service.initialize()
+            XCTAssertTrue(switched.isCompleted, "Recovery releases its join before subscriber delivery")
+            XCTAssertEqual(events.routedEvents.filter { $0.name == JourneyEvents.journeyCompleted }.count, 1)
+            await service.shutdown()
+        }
     }
 
     // MARK: - Helpers

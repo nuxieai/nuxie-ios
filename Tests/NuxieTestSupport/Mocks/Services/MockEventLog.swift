@@ -65,17 +65,19 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
     public func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
         guard let store = await customerStore() else { throw EventStorageError.databaseNotInitialized }
-        let result = try await store.executeCustomerCommand(command)
+        return try await store.executeCustomerCommand(command)
+    }
+    public func publishCustomerCommand(_ command: CustomerExecutionCommand, result: CustomerExecutionResult) async {
+        guard let store = await customerStore() else { return }
         for commit in result.commits {
             if case .captured(let stored, let isNew) = commit.outcome {
                 lock.withLock { _stableCaptures[stored.id] = .init(event: stored.customerEvent, isNewlyCommitted: isNew) }
                 if isNew { _ = await route(stored.customerEvent) }
                 if let sqlite = store as? SQLiteEventStore {
-                    try await sqlite.markStableRouteDelivered(eventId: stored.id)
+                    try? await sqlite.markStableRouteDelivered(eventId: stored.id)
                 }
             }
         }
-        return result
     }
 
     private var deadlineHandler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?

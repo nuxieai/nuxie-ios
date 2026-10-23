@@ -6,6 +6,34 @@ import XCTest
 #endif
 
 final class JourneyResponseSaveDeliveryTests: XCTestCase {
+    func testDisplayObserverCanShutDownItsOwnDeliveryWorker() async throws {
+        try await withBoundedJourneyWait(timeout: 10) { [self] in
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let journal = try await CustomerJourneyStore(directory: directory, distinctId: "anon")
+            let journey = try await run(journal)
+            let started = expectation(description: "Queued response request started")
+            let stopped = expectation(description: "Observer shutdown returned")
+            let transport = HeldResponseSaveTransport(started: started)
+            let delivery = JourneyResponseSaveDelivery(directory: directory, transport: transport,
+                clock: MockDateProvider(), sleeper: MockSleepProvider())
+            addBoundedJourneyTeardown { await transport.release(); await delivery.shutdown() }
+            await delivery.setDisplayObserver { _, _ in
+                await delivery.shutdown()
+                stopped.fulfill()
+            }
+            await delivery.activate(scope: .testFixture, store: journal.store)
+            _ = try await delivery.enqueue(journal: journal, run: journey, formName: "feedback", answers: [:])
+            await fulfillment(of: [started], timeout: 3)
+            await transport.release()
+            await fulfillment(of: [stopped], timeout: 3)
+            let pending = try await journal.pendingResponseSaves()
+            XCTAssertTrue(pending.isEmpty)
+            let display = try await journal.responseSaveDisplays(journeyId: journey.journeyId)
+            XCTAssertEqual(display["feedback"]?.saved, true)
+        }
+    }
+
     func testWaitingReservationPrecedesSendAndObserverSeesPersistedReply() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -41,11 +41,11 @@ final class CustomerJourneyStoreTests: XCTestCase {
         let referencesBefore = try await sqlite.committedReleasePinPaths()
         XCTAssertTrue(referencesBefore.isEmpty)
         let collecting = expectation(description: "Collection requested during admission")
-        let collected = JourneyCompletionFlag()
+        let collected = expectation(description: "Collection returned with prepared files protected")
         let collection = Task {
             collecting.fulfill()
             let removed = try await files.collectOrphans(in: sqlite)
-            collected.finish()
+            collected.fulfill()
             return removed
         }
         addTeardownBlock {
@@ -53,9 +53,9 @@ final class CustomerJourneyStoreTests: XCTestCase {
             _ = try? await admission.value
             _ = try? await collection.value
         }
-        await fulfillment(of: [collecting], timeout: 5)
-        try await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertFalse(collected.isCompleted)
+        await fulfillment(of: [collecting, collected], timeout: 5)
+        let referencesDuringCollection = try await sqlite.committedReleasePinPaths()
+        XCTAssertTrue(referencesDuringCollection.isEmpty)
         XCTAssertEqual(try Data(contentsOf: path), before)
         XCTAssertEqual(try Data(contentsOf: artifactPath), artifactBytes)
         await prepared.release()
@@ -958,54 +958,37 @@ final class CustomerJourneyStoreTests: XCTestCase {
         XCTAssertNotNil(retainedPark)
     }
 
-    func testAdmissionPublishesItsStateReceiptInsideTheProfileFence() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try await CustomerJourneyStore(
-            directory: directory,
-            distinctId: "customer"
-        )
-        let fence = JourneyProfileFence()
-        let token = fence.token()
-        let releaseReceipt = DispatchSemaphore(value: 0)
-        let receipt = LockedBoolean()
-        let advanceFinished = AsyncBoolean()
-        let candidate = arm()
-
-        let admission = Task {
-            try await journal.admit(
-                arm: candidate,
-                release: release(for: candidate.reference),
+    func testAdmissionCallbackCanReplaceProfileAfterDurableReceipt() async throws {
+        try await withBoundedJourneyWait(timeout: 5) { [self] in
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
+            let fence = JourneyProfileFence()
+            let token = fence.token()
+            let candidate = arm()
+            let receipt = JourneyStateArmReceipt(candidate)
+            let notified = LockedBoolean()
+            let admitted = try await journal.admit(
+                arm: candidate, release: release(for: candidate.reference),
                 executionSnapshot: testJourneyExecutionSnapshot(),
-                reentry: .init(type: .everyMatch, window: nil),
-                entryStepId: "wait",
-                at: date(100),
-                profileFence: fence,
-                profileFenceToken: token,
+                reentry: .init(type: .everyMatch, window: nil), entryStepId: "wait", at: date(100),
+                profileFence: fence, profileFenceToken: token, stateArmReceipt: receipt,
                 onAdmitted: {
-                    receipt.setTrue()
-                    releaseReceipt.wait()
-                }
-            )
+                    let replacement = DispatchSemaphore(value: 0)
+                    DispatchQueue.global().async {
+                        _ = fence.advance()
+                        replacement.signal()
+                    }
+                    if replacement.wait(timeout: .now() + 2) == .success {
+                        notified.setTrue()
+                    }
+                })
+            XCTAssertNotNil(admitted)
+            XCTAssertTrue(notified.value)
+            XCTAssertFalse(fence.isCurrent(token))
+            let receipts = try await journal.store.customerArmReceipts(owner: journal.owner)
+            XCTAssertTrue(receipts.contains(receipt), "The receipt commits before the callback replaces the profile")
         }
-        for _ in 0..<200 where !receipt.value {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        XCTAssertTrue(receipt.value)
-        let replacement = Task {
-            _ = fence.advance()
-            await advanceFinished.setTrue()
-        }
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let advancedWhilePublishing = await advanceFinished.value()
-        XCTAssertFalse(advancedWhilePublishing)
-
-        releaseReceipt.signal()
-        let admitted = try await admission.value
-        XCTAssertNotNil(admitted)
-        await replacement.value
-        XCTAssertTrue(receipt.value)
     }
 
     func testAdmissionPinsReleaseUntilTheLastReferencingRunRetires() async throws {

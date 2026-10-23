@@ -277,7 +277,12 @@ actor JourneyService {
     private var journalGeneration: UInt64 = 0
     private var processRecoveredParks: Set<String> = []
     private var recoveredJournalGeneration: UInt64?
-    private var journalRecoveryOperation: (id: UUID, task: Task<Void, Never>)?
+    private struct RecoveredCustomerState: Sendable {
+        let journal: CustomerJourneyStore
+        let generation: UInt64
+        let publication: CustomerCommandPublication
+    }
+    private var journalRecoveryOperation: (id: UUID, task: Task<RecoveredCustomerState?, Never>)?
     typealias NativeValuesPreparer = @Sendable (ExperienceRunValues, AuthenticatedJourneyRelease,
         JourneyReleaseDelivery, JourneyPinnedReleaseArtifacts?) async throws -> Void
     typealias NativeValuesReader = @Sendable (ExperienceRunValues) async throws -> ExactJSONObject<JourneyReleaseJSONValue>
@@ -1366,14 +1371,14 @@ extension JourneyService {
 
     private func enqueueReconciliation(distinctId: String? = nil, afterFailure: Bool = false) async {
         let owner = distinctId ?? identity.getDistinctId()
-        let followsEvent = JourneyQueueContext.event != nil && !afterFailure
+        let followsQueuedWork = JourneyQueueContext.key != nil && !afterFailure
         let request = JourneyWorkRequest(key: .init(distinctId: owner, id: "reconcile"),
-            afterFailure: afterFailure, bypassesHold: !followsEvent, operation: { [weak self] in
+            afterFailure: afterFailure, bypassesHold: !followsQueuedWork, operation: { [weak self] in
                 guard let self else { return .done }
                 return await self.reconcileQueuedWork(owner: owner)
             })
-        if followsEvent {
-            // Delivery must return before reconciliation can join that prefix.
+        if followsQueuedWork {
+            // A callback must return before reconciliation can join its caller.
             await events.enqueueJourneyWork(request)
         } else {
             _ = await events.performJourneyWork(request)
@@ -1506,28 +1511,42 @@ private extension JourneyService {
         if journal?.distinctId == distinctId,
            recoveredJournalGeneration == journalGeneration { return }
         let operationId = UUID()
-        let task = Task { [weak self] in
-            guard let self else { return }
-            await self.prepareAndRecoverJournal(for: distinctId)
+        let task = Task<RecoveredCustomerState?, Never> { [weak self] in
+            guard let self else { return nil }
+            return await self.prepareAndRecoverJournal(for: distinctId)
         }
         journalRecoveryOperation = (operationId, task)
-        await task.value
+        let recovered = await task.value
         if journalRecoveryOperation?.id == operationId {
             journalRecoveryOperation = nil
         }
+        // Subscriber delivery can replace the customer and open another store.
+        // It must never join the recovery task that is waiting for that delivery.
+        if let recovered {
+            await recovered.journal.publish(recovered.publication)
+            guard journalGeneration == recovered.generation,
+                  journal?.distinctId == distinctId else { return }
+            guard await events.replayPendingStableRoutes(distinctId: distinctId) else {
+                journal = nil
+                await enqueueReconciliation(distinctId: distinctId, afterFailure: true)
+                return
+            }
+            await scheduleNextWake()
+        }
     }
 
-    private func prepareAndRecoverJournal(for distinctId: String) async {
+    private func prepareAndRecoverJournal(for distinctId: String) async -> RecoveredCustomerState? {
         if journal?.distinctId != distinctId {
             await prepareJournal(for: distinctId)
         }
         guard initialized, identity.getDistinctId() == distinctId,
-              let journal, journal.distinctId == distinctId else { return }
+              let journal, journal.distinctId == distinctId else { return nil }
         let generation = journalGeneration
-        await recoverCustomerState(journal, generation: generation)
+        let publication = await recoverCustomerState(journal, generation: generation)
         if journalGeneration == generation, self.journal != nil {
             recoveredJournalGeneration = generation
         }
+        return publication.map { RecoveredCustomerState(journal: journal, generation: generation, publication: $0) }
     }
 
     private func prepareJournal(for distinctId: String) async {
@@ -1559,7 +1578,8 @@ private extension JourneyService {
         }
     }
 
-    private func recoverCustomerState(_ opened: CustomerJourneyStore, generation: UInt64) async {
+    private func recoverCustomerState(_ opened: CustomerJourneyStore, generation: UInt64) async -> CustomerCommandPublication? {
+        var committedPublication: CustomerCommandPublication?
         do {
             var invalidPins = Set<String>()
             for journey in try await opened.runs() {
@@ -1575,16 +1595,18 @@ private extension JourneyService {
                     invalidPins.insert(journey.id)
                 }
             }
-            processRecoveredParks.formUnion(try await opened.recover(at: dateProvider.now(), invalidPinIds: invalidPins).map(\.id))
+            let publication = try await opened.recoverForOpen(at: dateProvider.now(), invalidPinIds: invalidPins)
+            committedPublication = publication
+            processRecoveredParks.formUnion(try await opened.runs().map(\.id))
             guard await projectPendingMeasurements() else { throw DeferredJourneyWork.unavailable }
-            guard await events.replayPendingStableRoutes(distinctId: opened.distinctId) else { throw DeferredJourneyWork.unavailable }
-            await scheduleNextWake()
+            return publication
         } catch {
             LogError("JourneyService: customer store recovery failed: \(error)")
             if journalGeneration == generation {
                 journal = nil
                 await enqueueReconciliation(distinctId: opened.distinctId, afterFailure: true)
             }
+            return committedPublication
         }
     }
 
@@ -1761,8 +1783,9 @@ private extension JourneyService {
                         ? nil
                         : stateKey,
                     sourceEventId: event?.id,
-                    onAdmitted: { [stateArmReceipts] in
-                        guard arm.entryCondition.type != .event else { return }
+                    onAdmitted: { [stateArmReceipts, profileFence] in
+                        guard arm.entryCondition.type != .event,
+                              profileFence.isCurrent(profileFenceToken) else { return }
                         stateArmReceipts.insert(stateKey)
                     }
                 ) else { return }

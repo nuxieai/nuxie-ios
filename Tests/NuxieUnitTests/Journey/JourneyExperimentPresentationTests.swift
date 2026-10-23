@@ -5,6 +5,10 @@ import XCTest
 
 final class JourneyExperimentPresentationTests: JourneyTestCase {
     func testExperimentExposureWaitsForTheSelectedVariantToBeShown() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseExperimentExposureWaitsForTheSelectedVariantToBeShown() }
+    }
+
+    private func exerciseExperimentExposureWaitsForTheSelectedVariantToBeShown() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -17,6 +21,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         let events = MockEventLog()
         events.identity = identity
         let gate = JourneyScreenCommitGate()
+        addBoundedJourneyTeardown { await gate.release() }
         let presenter = await MainActor.run { RecordingJourneyPresenter() }
         await MainActor.run {
             presenter.automaticallyRevealsShownPresentation = false
@@ -57,7 +62,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         })
 
         await gate.release()
-        await profileCommit.value
+        try await withBoundedJourneyWait(timeout: 5) { await profileCommit.value }
 
         XCTAssertTrue(events.routedEvents.allSatisfy {
             $0.name != JourneyEvents.experimentExposure
@@ -98,6 +103,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testVisibleExposureRetriesWhenItsFirstJournalWriteFails() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseVisibleExposureRetriesWhenItsFirstJournalWriteFails() }
+    }
+
+    private func exerciseVisibleExposureRetriesWhenItsFirstJournalWriteFails() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(
@@ -157,6 +166,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testShutdownJoinsAnInFlightExperimentExposureRetry() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseShutdownJoinsAnInFlightExperimentExposureRetry() }
+    }
+
+    private func exerciseShutdownJoinsAnInFlightExperimentExposureRetry() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -172,6 +185,7 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             eventName: JourneyEvents.experimentExposure,
             suspendedCall: 2
         )
+        addBoundedJourneyTeardown { await captureGate.release() }
         events.routedCaptureHandler = { event, _ in
             await captureGate.intercept(event: event)
         }
@@ -215,11 +229,15 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
         XCTAssertFalse(completion.isCompleted)
 
         await captureGate.release()
-        await shutdown.value
+        try await withBoundedJourneyWait(timeout: 5) { await shutdown.value }
         XCTAssertTrue(completion.isCompleted)
     }
 
     func testExperimentExposureIsReportedForSameScreenAlreadyActiveNavigation() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseExperimentExposureIsReportedForSameScreenAlreadyActiveNavigation() }
+    }
+
+    private func exerciseExperimentExposureIsReportedForSameScreenAlreadyActiveNavigation() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -302,6 +320,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testNavigatedExperimentExposureWaitsForTheVisibleScreenCallback() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseNavigatedExperimentExposureWaitsForTheVisibleScreenCallback() }
+    }
+
+    private func exerciseNavigatedExperimentExposureWaitsForTheVisibleScreenCallback() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -389,6 +411,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testUnfetchedExperimentReportsFallbackOnlyAfterDefaultVariantIsShown() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseUnfetchedExperimentReportsFallbackOnlyAfterDefaultVariantIsShown() }
+    }
+
+    private func exerciseUnfetchedExperimentReportsFallbackOnlyAfterDefaultVariantIsShown() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -433,6 +459,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testHoldoutExposureTakesItsHoldoutFlagFromTheRelease() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseHoldoutExposureTakesItsHoldoutFlagFromTheRelease() }
+    }
+
+    private func exerciseHoldoutExposureTakesItsHoldoutFlagFromTheRelease() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -477,6 +507,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testFallbackExposureReportsItsVariantsHoldoutFlag() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseFallbackExposureReportsItsVariantsHoldoutFlag() }
+    }
+
+    private func exerciseFallbackExposureReportsItsVariantsHoldoutFlag() async throws {
         // Publishing never signs a holdout fallback, but the executor runs
         // one (fixtures/journeys/planes/executor-controls.json): the exposure
         // reports the holdout path the person actually took.
@@ -522,6 +556,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testDeclinedPresentationDoesNotReportExperimentExposure() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseDeclinedPresentationDoesNotReportExperimentExposure() }
+    }
+
+    private func exerciseDeclinedPresentationDoesNotReportExperimentExposure() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -551,6 +589,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testUnhandledHostDismissalCompletesTheRenderedLeg() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseUnhandledHostDismissalCompletesTheRenderedLeg() }
+    }
+
+    private func exerciseUnhandledHostDismissalCompletesTheRenderedLeg() async throws {
         let harness = try await makeRenderedJourneyHarness()
         defer { removeTemporaryDirectoryIfPresent(harness.directory) }
 
@@ -573,6 +615,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testHostDismissalRetryFlushesAnAlreadyDurableCompletion() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseHostDismissalRetryFlushesAnAlreadyDurableCompletion() }
+    }
+
+    private func exerciseHostDismissalRetryFlushesAnAlreadyDurableCompletion() async throws {
         let harness = try await makeRenderedJourneyHarness()
         defer { removeTemporaryDirectoryIfPresent(harness.directory) }
         let runs = try await harness.journal.runs()
@@ -602,6 +648,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testHandledHostDismissalClearsContextBeforeUnsupportedContinuationAbandons() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseHandledHostDismissalClearsContextBeforeUnsupportedContinuationAbandons() }
+    }
+
+    private func exerciseHandledHostDismissalClearsContextBeforeUnsupportedContinuationAbandons() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -691,6 +741,10 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
     }
 
     func testIdentityClearShutsDownTheRenderedLegSurface() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseIdentityClearShutsDownTheRenderedLegSurface() }
+    }
+
+    private func exerciseIdentityClearShutsDownTheRenderedLegSurface() async throws {
         let context = try await makeRenderedJourneyTestContext()
         defer { removeTemporaryDirectoryIfPresent(context.directory) }
         await context.service.profileDidCommit(

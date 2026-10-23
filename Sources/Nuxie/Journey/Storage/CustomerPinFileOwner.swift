@@ -13,8 +13,8 @@ struct CustomerPinFileOwner: Sendable {
         root = journalRoot.appendingPathComponent("release-pins", isDirectory: true)
     }
 
-    /// Admission holds this lock from file preparation through SQL commit.
-    /// Collection takes the same lock before reading committed references.
+    /// Preparation and collection share this lock. Prepared references stay
+    /// protected until admission commits, without holding the lock over hooks.
     func withExclusiveAccess<Value: Sendable>(
         _ operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
@@ -23,6 +23,10 @@ struct CustomerPinFileOwner: Sendable {
             to: journalRoot, lockScope: CacheFilesystemLockScope(cacheRootURL: journalRoot),
             operation: operation
         )
+    }
+
+    func protectPreparedPins(_ pins: [CustomerReleasePin]) -> CustomerPinPreparation {
+        CustomerPinPreparation(root: root, paths: Set(pins.map(\.relativePath)))
     }
 
     static func relativePath(owner: CustomerStoreOwner, sha256: String, kind: CustomerReleasePin.Kind) -> String {
@@ -63,6 +67,7 @@ struct CustomerPinFileOwner: Sendable {
     /// Call only while holding withExclusiveAccess, after reading every committed reference.
     /// A failed query never reaches deletion. Unknown files are left alone.
     func collectOrphans(committedPaths: Set<String>) throws -> [String] {
+        let committedPaths = committedPaths.union(CustomerPinPreparation.paths(in: root))
         let manager = FileManager.default
         guard manager.fileExists(atPath: root.path) else { return [] }
         var removed: [String] = []
@@ -86,6 +91,43 @@ struct CustomerPinFileOwner: Sendable {
             }
         }
         return removed.sorted()
+    }
+}
+
+/// The single customer writer can suspend admission without exposing its files
+/// to collection in this process. SQL references take over before release.
+final class CustomerPinPreparation: Sendable {
+    private final class Registry: @unchecked Sendable {
+        let lock = NSLock()
+        var entries: [String: [UUID: Set<String>]] = [:]
+    }
+
+    private static let registry = Registry()
+    private let root: String
+    private let id = UUID()
+
+    init(root: URL, paths: Set<String>) {
+        self.root = root.standardizedFileURL.resolvingSymlinksInPath().path
+        Self.registry.lock.withLock {
+            Self.registry.entries[self.root, default: [:]][id] = paths
+        }
+    }
+
+    static func paths(in root: URL) -> Set<String> {
+        let key = root.standardizedFileURL.resolvingSymlinksInPath().path
+        return registry.lock.withLock {
+            Set(registry.entries[key, default: [:]].values.flatMap { $0 })
+        }
+    }
+
+    /// The root lock also protects collection's snapshot of SQL references.
+    func release() {
+        Self.registry.lock.withLock {
+            Self.registry.entries[root]?[id] = nil
+            if Self.registry.entries[root]?.isEmpty == true {
+                Self.registry.entries[root] = nil
+            }
+        }
     }
 }
 

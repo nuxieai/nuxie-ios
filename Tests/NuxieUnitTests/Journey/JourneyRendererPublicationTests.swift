@@ -5,6 +5,10 @@ import XCTest
 
 final class JourneyRendererPublicationTests: JourneyTestCase {
     func testKilledScreenRunAbandonsOnRelaunchWithoutPresentingAgain() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseKilledScreenRunAbandonsOnRelaunchWithoutPresentingAgain() }
+    }
+
+    private func exerciseKilledScreenRunAbandonsOnRelaunchWithoutPresentingAgain() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -45,6 +49,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testRenderedArmPresentsItsAuthenticatedScreenWithoutParking() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRenderedArmPresentsItsAuthenticatedScreenWithoutParking() }
+    }
+
+    private func exerciseRenderedArmPresentsItsAuthenticatedScreenWithoutParking() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -81,6 +89,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testRenderedEmissionCommitsBeforeCompletionAndFinishesItsOwnedSurface() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRenderedEmissionCommitsBeforeCompletionAndFinishesItsOwnedSurface() }
+    }
+
+    private func exerciseRenderedEmissionCommitsBeforeCompletionAndFinishesItsOwnedSurface() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -161,6 +173,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testRenderedEmissionBatchPublishesAllEventsOrNoneBeforeRetry() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRenderedEmissionBatchPublishesAllEventsOrNoneBeforeRetry() }
+    }
+
+    private func exerciseRenderedEmissionBatchPublishesAllEventsOrNoneBeforeRetry() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -275,6 +291,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testPendingRendererPublicationAbandonsAtProcessBreak() async throws {
+        try await withBoundedJourneyWait { [self] in try await exercisePendingRendererPublicationAbandonsAtProcessBreak() }
+    }
+
+    private func exercisePendingRendererPublicationAbandonsAtProcessBreak() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -409,6 +429,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
 
 
     func testRendererBatchRemainsRejectedWhenPublicationCannotStage() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRendererBatchRemainsRejectedWhenPublicationCannotStage() }
+    }
+
+    private func exerciseRendererBatchRemainsRejectedWhenPublicationCannotStage() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
@@ -516,6 +540,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testBeforeSendDroppedRenderedEventDoesNotAdvanceItsScreenRoute() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseBeforeSendDroppedRenderedEventDoesNotAdvanceItsScreenRoute() }
+    }
+
+    private func exerciseBeforeSendDroppedRenderedEventDoesNotAdvanceItsScreenRoute() async throws {
         let harness = try await makeRenderedJourneyHarness { event in
             event.name == "continue" ? nil : event
         }
@@ -553,6 +581,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testBeforeSendRenameAwayFromRenderedRouteDoesNotAdvance() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseBeforeSendRenameAwayFromRenderedRouteDoesNotAdvance() }
+    }
+
+    private func exerciseBeforeSendRenameAwayFromRenderedRouteDoesNotAdvance() async throws {
         let harness = try await makeRenderedJourneyHarness { event in
             guard event.name == "continue" else { return event }
             return NuxieEvent(
@@ -589,6 +621,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testBeforeSendRenameIntoRenderedRouteAdvances() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseBeforeSendRenameIntoRenderedRouteAdvances() }
+    }
+
+    private func exerciseBeforeSendRenameIntoRenderedRouteAdvances() async throws {
         let harness = try await makeRenderedJourneyHarness { event in
             guard event.name == "primary_tapped" else { return event }
             return NuxieEvent(
@@ -626,6 +662,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testBeforeSendRenderedPropertyRewriteDrivesRoutedControl() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseBeforeSendRenderedPropertyRewriteDrivesRoutedControl() }
+    }
+
+    private func exerciseBeforeSendRenderedPropertyRewriteDrivesRoutedControl() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(
@@ -696,6 +736,10 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
     }
 
     func testRenderedBatchStagesStableEventsWithoutAnswersAndUsesFirstRoute() async throws {
+        try await withBoundedJourneyWait { [self] in try await exerciseRenderedBatchStagesStableEventsWithoutAnswersAndUsesFirstRoute() }
+    }
+
+    private func exerciseRenderedBatchStagesStableEventsWithoutAnswersAndUsesFirstRoute() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")

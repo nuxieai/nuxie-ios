@@ -1576,9 +1576,6 @@ actor EventLog: EventLogProtocol {
     let subscriberAdmissions = routeToSubscribers
       ? committedAdmissionRegistry.capture()
       : [:]
-    await acquireStableCaptureCommit()
-    defer { releaseStableCaptureCommit() }
-
     await ready.wait()
     guard !closeFlag.isClosed else { return nil }
     // A stable capture participates in the same commit sequence as accepted
@@ -1586,58 +1583,28 @@ actor EventLog: EventLogProtocol {
     // lane asks the store to assign its sequence.
     await drainCaptureWorker()
     guard !closeFlag.isClosed else { return nil }
-    activeDurableCommitCount += 1
-    defer { durableCommitDidFinish() }
     let attemptedTimestamp = dateProvider.now()
     do {
-      // Stable identity is policy-terminal. Replays return the canonical
-      // captured/drop outcome before enrichment or invoking a changed hook.
-      if let existing = try await store.queryStableCapture(
-        id: request.eventId
-      ) {
-        guard routeToSubscribers else {
-          return durableCapture(from: existing, request: request)
-        }
-        let forwardingAdmission = forwardingAdmission(
-          receivedAt: attemptedTimestamp,
-          activityIdentity: activityIdentity
-        )
-        let commit = try await store.commitStableCaptureAndStageRoute(
-          eventId: request.eventId,
-          event: nil,
-          recordedAt: attemptedTimestamp,
-          assigningCommitSequence: true,
-          admission: admission,
-          routeAdmission: committedRouteAdmission(subscriberAdmissions, stableEventId: request.eventId)
-        )
-        guard commit.commitSequence != nil else {
-          throw EventStorageError.insertFailed(NSError(
-            domain: "Nuxie.EventLog",
-            code: 49,
-            userInfo: [NSLocalizedDescriptionKey: "Stable route replay omitted its sequence"]
-          ))
-        }
-        let capture = durableCapture(
-          from: commit.outcome,
-          request: request,
-          localRoutePending: commit.localRoutePending
-        )
-        publishStableCapture(
-          capture,
-          commit: commit,
-          forwardingAdmission: forwardingAdmission,
-          routeToSubscribers: true,
-          subscriberAdmissions: subscriberAdmissions
-        )
-        return capture
+      // A replay uses its canonical privacy outcome without calling the host.
+      let existing = try await store.queryStableCapture(id: request.eventId)
+      if let existing, !routeToSubscribers {
+        return durableCapture(from: existing, request: request)
       }
-
-      let transformedEvent = try await prepareStableSystemEvent(
-        request,
-        occurredAt: occurredAt ?? attemptedTimestamp,
-        preservesJourneyCompletionOutputs:
-          request.name == JourneyEvents.journeyCompleted
-      )
+      let transformedEvent: NuxieEvent?
+      if existing != nil {
+        transformedEvent = nil
+      } else {
+        transformedEvent = try await prepareStableSystemEvent(
+          request, occurredAt: occurredAt ?? attemptedTimestamp,
+          preservesJourneyCompletionOutputs: request.name == JourneyEvents.journeyCompleted
+        )
+      }
+      await drainCaptureWorker()
+      await acquireStableCaptureCommit()
+      var ownsCoordinator = true
+      defer { if ownsCoordinator { releaseStableCaptureCommit() } }
+      activeDurableCommitCount += 1
+      defer { durableCommitDidFinish() }
       guard !closeFlag.isClosed else { return nil }
       let forwardingAdmission = forwardingAdmission(receivedAt: attemptedTimestamp, activityIdentity: activityIdentity)
       let storedEvent = transformedEvent.map(makeStoredEvent(from:))
@@ -1667,7 +1634,9 @@ actor EventLog: EventLogProtocol {
           userInfo: [NSLocalizedDescriptionKey: "Stable event commit omitted its sequence"]
         ))
       }
-      if transformedEvent == nil {
+      releaseStableCaptureCommit()
+      ownsCoordinator = false
+      if transformedEvent == nil && existing == nil {
         LogDebug("Event '\(request.name)' terminally dropped by beforeSend hook")
       }
       let capture = durableCapture(
@@ -3552,6 +3521,8 @@ protocol RoutedStableSystemEventCapturing: StableSystemEventCapturing {
   func customerStore() async -> (any CustomerStore)?
   func prepareCustomerEvents(_ items: [RoutedStableSystemEventBatchItem]) async throws -> [StableEventCaptureRecord]
   func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult
+  /// Publishes after the writer, capture coordinator and pin preparation have returned.
+  func publishCustomerCommand(_ command: CustomerExecutionCommand, result: CustomerExecutionResult) async
   /// Waits until every committed route enqueued before this call has reached
   /// its subscribers. In-memory test captures route inline and can use the
   /// default no-op implementation below.
@@ -3598,6 +3569,8 @@ extension RoutedStableSystemEventCapturing {
     guard let store = await customerStore() else { throw EventStorageError.databaseNotInitialized }
     return try await store.executeCustomerCommand(command)
   }
+
+  func publishCustomerCommand(_ command: CustomerExecutionCommand, result: CustomerExecutionResult) async {}
 
   @discardableResult
   func drainCommittedRouting() async -> Bool { true }
@@ -3794,8 +3767,6 @@ extension EventLog {
     guard !closeFlag.isClosed else { return nil }
     let activityIdentity = captureActivityIdentity()
     let subscriberAdmissions = committedAdmissionRegistry.capture()
-    await acquireStableCaptureCommit()
-    defer { releaseStableCaptureCommit() }
 
     await ready.wait()
     guard !closeFlag.isClosed else { return nil }
@@ -3803,8 +3774,6 @@ extension EventLog {
     // public acceptance order before assigning the batch's contiguous range.
     await drainCaptureWorker()
     guard !closeFlag.isClosed else { return nil }
-    activeDurableCommitCount += 1
-    defer { durableCommitDidFinish() }
     let attemptedTimestamp = dateProvider.now()
 
     do {
@@ -3828,6 +3797,12 @@ extension EventLog {
         }
       }
 
+      await drainCaptureWorker()
+      await acquireStableCaptureCommit()
+      var ownsCoordinator = true
+      defer { if ownsCoordinator { releaseStableCaptureCommit() } }
+      activeDurableCommitCount += 1
+      defer { durableCommitDidFinish() }
       guard !closeFlag.isClosed else { return nil }
       let forwardingAdmission = forwardingAdmission(
         receivedAt: attemptedTimestamp,
@@ -3853,6 +3828,8 @@ extension EventLog {
         return nil
       }
 
+      releaseStableCaptureCommit()
+      ownsCoordinator = false
       var capturesByEventId: [String: DurableTriggerCapture] = [:]
       capturesByEventId.reserveCapacity(items.count)
       for (value, commit) in zip(prepared, commits) {
@@ -3914,13 +3891,17 @@ extension EventLog {
 
   func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
     guard !closeFlag.isClosed, let customer = await customerStore() else { throw EventStorageError.databaseNotInitialized }
+    await drainCaptureWorker()
     await acquireStableCaptureCommit()
     defer { releaseStableCaptureCommit() }
-    await drainCaptureWorker()
     guard !closeFlag.isClosed else { throw EventStorageError.databaseNotInitialized }
     activeDurableCommitCount += 1
     defer { durableCommitDidFinish() }
-    let result = try await customer.executeCustomerCommand(command)
+    return try await customer.executeCustomerCommand(command)
+  }
+
+  func publishCustomerCommand(_ command: CustomerExecutionCommand, result: CustomerExecutionResult) async {
+    guard !closeFlag.isClosed else { return }
     if let provider = store as? any CustomerStoreProviding { await provider.customerDidCommit(command.events, commits: result.commits) }
     for (record, commit) in zip(command.events, result.commits) {
       let capture: DurableTriggerCapture?
@@ -3931,6 +3912,5 @@ extension EventLog {
         forwardingAdmission: forwardingAdmission(receivedAt: record.recordedAt, activityIdentity: captureActivityIdentity()),
         routeToSubscribers: true, subscriberAdmissions: record.routeAdmission?.subscribers ?? [:])
     }
-    return result
   }
 }
