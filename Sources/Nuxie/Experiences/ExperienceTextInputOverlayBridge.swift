@@ -709,7 +709,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private func allowsEditing(_ binding: Binding) -> Bool {
-        guard !stepInProgress, allowsInteraction(binding) else { return false }
+        guard !endingComposition, !stepInProgress, allowsInteraction(binding) else { return false }
         if binding.target.nodeID != nil, !binding.sourceReady { return false }
         guard let semanticFields else { return true }
         guard let node = semanticFields[binding.target] else { return false }
@@ -752,9 +752,25 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         surfaceView = nil
     }
 
+    /// Fence editor callbacks first, then discard unaccepted marked text while
+    /// preserving the editor and its focus across an in-page move.
+    private var endingComposition = false
+
+    private func endComposition() {
+        endingComposition = true
+        defer { endingComposition = false }
+        for binding in bindingsByTarget.values {
+            guard let editor = binding.control.view as? any UITextInput,
+                  editor.markedTextRange != nil else { continue }
+            editor.unmarkText()
+            restoreAcceptedText(binding)
+        }
+    }
+
     /// Input freezes during a move while semantic node identities keep their views and focus.
     func setStepInProgress(_ value: Bool) {
         stepInProgress = value
+        if value { endComposition() }
         for binding in bindingsByTarget.values {
             binding.control.view.isUserInteractionEnabled = !value
             binding.control.view.accessibilityElementsHidden = value
@@ -763,6 +779,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func setHidden(_ value: Bool) {
         hidden = value
+        if value { endComposition() }
         if value {
             for target in Array(bindingsByTarget.keys) where target.nodeID != nil {
                 retireNativeInput(target)

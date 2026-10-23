@@ -336,13 +336,16 @@ final class ExperienceScreenViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         controllerIsVisible = false
-        pressedHardwareKeys.removeAll()
+        clearHardwareKeys()
         updatePresentationVisibility()
     }
 
     override var canBecomeFirstResponder: Bool { true }
 
-    @objc private func clearHardwareKeys() { pressedHardwareKeys.removeAll() }
+    @objc private func clearHardwareKeys() {
+        presentationLoop?.endActiveInput()
+        pressedHardwareKeys.removeAll()
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let unhandled = routeHardwarePresses(presses, pressed: true)
@@ -386,6 +389,7 @@ final class ExperienceScreenViewController: UIViewController {
     func receiveHardwareKey(hid: Int, modifiers: UInt8, pressed: Bool, repeated: Bool) -> Bool {
         defer { if !pressed { pressedHardwareKeys.remove(hid) } }
         let isTab = hid == UIKeyboardHIDUsage.keyboardTab.rawValue
+        guard !repeated || pressedHardwareKeys.contains(hid) else { return false }
         guard !pageStepInProgress, controllerIsVisible, !coveredByLayer, isTab || !hasNativeTextFocus(view),
               hid == UIKeyboardHIDUsage.keyboardTab.rawValue || riveFocusState.hasFocus || pressedHardwareKeys.contains(hid),
               let input = ExperienceHardwareKey.input(hid: hid, modifiers: modifiers, pressed: pressed, repeated: repeated)
@@ -416,12 +420,15 @@ final class ExperienceScreenViewController: UIViewController {
     // Native-page visibility is owned here; UIKit appearance alone cannot resume
     // a retained page or distinguish it from a page beneath a sheet.
     func coverPage(reduceMotion: Bool) async {
+        presentationLoop?.setInputEnabled(false)
+        clearHardwareKeys()
         setCoveredByLayer(true)
         await hide(reduceMotion: reduceMotion)
     }
 
     func revealPage(reduceMotion: Bool) async {
         setCoveredByLayer(false)
+        presentationLoop?.setInputEnabled(true)
         presentationLoop?.setTimelineActive(true)
         await activate(reduceMotion: reduceMotion)
         updatePresentationVisibility()
