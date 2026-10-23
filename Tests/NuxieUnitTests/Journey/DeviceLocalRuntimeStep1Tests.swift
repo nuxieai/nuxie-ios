@@ -176,7 +176,8 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
         if drop { configuration.beforeSend = { $0.name == JourneyEvents.journeyCompleted ? nil : $0 } }
         try await events.configure(configuration: configuration)
         let service = JourneyService(identity: identity, events: events, dateProvider: clock, sleepProvider: MockSleepProvider(),
-            journalDirectory: disk.root, storageScope: .testFixture, dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
+            journalDirectory: disk.root, storageScope: .testFixture, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
             pinnedReleaseAuthenticator: { pin, reference in
                 guard let release = snapshot.releasesByDigest[reference.descriptorSha256],
                       pin.envelope.descriptorSha256 == reference.descriptorSha256,

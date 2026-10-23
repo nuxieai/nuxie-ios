@@ -85,7 +85,7 @@ final class CustomerStoreTransactionTests: XCTestCase {
             try StoredEvent(id: "trigger", name: "go", properties: ["different": true], timestamp: .init(timeIntervalSince1970: 100), distinctId: rig.owner.userId),
             try StoredEvent(id: "trigger", name: "go", timestamp: .init(timeIntervalSince1970: 100), distinctId: rig.owner.userId, journeyOrigin: origin),
         ] {
-            do { _ = try await rig.store.insert(event); XCTFail("A stable identity cannot change") }
+            do { _ = try await rig.store.insert(event, deliveryState: .pending); XCTFail("A stable identity cannot change") }
             catch CustomerStoreError.eventIdentityConflict { }
         }
         do {
@@ -194,11 +194,11 @@ final class CustomerStoreTransactionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: rig.disk.root) }
         for index in 0..<260 {
             _ = try await rig.store.insert(StoredEvent(id: String(format: "candidate-%03d", index), name: "go",
-                properties: ["ready": false], timestamp: .init(timeIntervalSince1970: 101.5), distinctId: rig.owner.userId))
+                properties: ["ready": false], timestamp: .init(timeIntervalSince1970: 101.5), distinctId: rig.owner.userId), deliveryState: .pending)
         }
         for id in ["z-match", "a-match"] {
             _ = try await rig.store.insert(StoredEvent(id: id, name: "go", properties: ["ready": true],
-                timestamp: .init(timeIntervalSince1970: 102), distinctId: rig.owner.userId))
+                timestamp: .init(timeIntervalSince1970: 102), distinctId: rig.owner.userId), deliveryState: .pending)
         }
         await rig.reopen()
         let executor = JourneyControlExecutor(timezones: try SignedTimezoneBundle.load(),
@@ -300,7 +300,7 @@ final class CustomerExecutionTestRig {
             _ = try await store.executeCustomerCommand(.init(owner: owner, epoch: 0, mutation: .claimEffect(key: key, revision: 0, stepId: "wait", effectId: "effect", kind: operation.rawValue)))
             _ = try await store.executeCustomerCommand(.init(owner: owner, epoch: 0, mutation: .retainCommerce(key: key, revision: 0, stepId: "wait", effectId: "effect", placementId: "placement")))
             _ = try await store.insert(StoredEvent(id: "effect", name: operation == .purchase ? SystemEventNames.purchaseCompleted : SystemEventNames.restoreCompleted,
-                properties: ["placement_id": "placement"], timestamp: .init(timeIntervalSince1970: 101), distinctId: owner.userId))
+                properties: ["placement_id": "placement"], timestamp: .init(timeIntervalSince1970: 101), distinctId: owner.userId), deliveryState: .pending)
             var resultTransition = next
             resultTransition.eventId = "effect"
             command = .init(owner: owner, epoch: 0, mutation: .settleEffect(resultTransition, effectId: "effect", stepId: "wait"))

@@ -286,15 +286,14 @@ final class JourneyExperimentPresentationTests: JourneyTestCase {
             directory: directory,
             distinctId: "customer"
         )
-        var exposureWasQueued = false
+        var exposureWasShown = false
         for _ in 0..<100 {
             let runs = try await journal.runs()
-            exposureWasQueued = runs.first?.experimentExposures.first?.shownAt != nil
-                == true
-            if exposureWasQueued { break }
+            exposureWasShown = runs.first?.experimentExposures.first?.shownAt != nil
+            if exposureWasShown { break }
             await Task.yield()
         }
-        XCTAssertTrue(exposureWasQueued)
+        XCTAssertTrue(exposureWasShown)
         let navigationScreenIds = await MainActor.run {
             presenter.navigationScreenIds
         }

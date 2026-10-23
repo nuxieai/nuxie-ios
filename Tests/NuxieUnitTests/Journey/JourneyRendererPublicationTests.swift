@@ -455,6 +455,8 @@ final class JourneyRendererPublicationTests: JourneyTestCase {
             directory: directory,
             distinctId: "customer"
         )
+        let initialRuns = try await journal.runs()
+        let initialStep = try XCTUnwrap(initialRuns.first?.stepId)
         // The outbox record owns the response and stable event IDs together.
         // If that write fails, the renderer keeps the batch and no event may
         // become visible.

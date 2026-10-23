@@ -16,7 +16,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     private var customerDatabase: Task<SQLiteEventStore, Error>?
-    func openCustomerStore(at directory: URL) async throws -> (any CustomerStore)? {
+    public func openCustomerStore(at directory: URL) async throws -> (any CustomerStore)? {
         let task = lock.withLock { () -> Task<SQLiteEventStore, Error> in
             if let customerDatabase { return customerDatabase }
             let captures = _routedEvents
@@ -36,11 +36,11 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
         return try await task.value
     }
-    func customerStore() async -> (any CustomerStore)? {
+    public func customerStore() async -> (any CustomerStore)? {
         guard let task = lock.withLock({ customerDatabase }) else { return nil }
         return try? await task.value
     }
-    func prepareCustomerEvents(_ items: [RoutedStableSystemEventBatchItem]) async throws -> [StableEventCaptureRecord] {
+    public func prepareCustomerEvents(_ items: [RoutedStableSystemEventBatchItem]) async throws -> [StableEventCaptureRecord] {
         if let before = lock.withLock({ _beforeBatchCapture }) { await before() }
         var records: [StableEventCaptureRecord] = []
         for (index, item) in items.enumerated() {
@@ -52,7 +52,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             }
             if shouldFail { throw CocoaError(.fileWriteOutOfSpace) }
             let properties = await prepareEventProperties(item.request.properties)
-            let original = NuxieEvent(id: item.request.eventId, name: item.request.name, distinctId: item.request.distinctId,
+            let original = NuxieEvent(id: item.request.eventId, name: item.request.name, forwardingName: item.request.name, distinctId: item.request.distinctId,
                 properties: properties, timestamp: item.occurredAt, journeyOrigin: item.request.journeyOrigin)
             let event: NuxieEvent?
             if case .prepared(let prepared) = item.preparation { event = prepared }
@@ -63,7 +63,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
         return records
     }
-    func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
+    public func commitCustomerCommand(_ command: CustomerExecutionCommand) async throws -> CustomerExecutionResult {
         guard let store = await customerStore() else { throw EventStorageError.databaseNotInitialized }
         let result = try await store.executeCustomerCommand(command)
         for commit in result.commits {
@@ -368,8 +368,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         subscriberAdmissions: [UInt64: UInt64]
     ) async -> NuxieEvent? {
         if let store = await customerStore() as? SQLiteEventStore {
-            do { try await store.insert(StoredEvent(id: event.id, name: event.name, properties: event.properties,
-                timestamp: event.timestamp, distinctId: event.distinctId, journeyOrigin: event.journeyOrigin)) }
+            do { _ = try await store.insert(StoredEvent(id: event.id, name: event.name, properties: event.properties,
+                timestamp: event.timestamp, distinctId: event.distinctId, journeyOrigin: event.journeyOrigin), deliveryState: .pending) }
             catch { return nil }
         }
         let handlers: [(String, (NuxieEvent) -> Void)] = lock.withLock {

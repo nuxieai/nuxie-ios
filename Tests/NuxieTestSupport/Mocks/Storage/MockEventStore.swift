@@ -20,7 +20,7 @@ public final class MockEventStore: EventStoreProtocol, CustomerStoreProviding, @
 
     private var customerWriter: Task<SQLiteEventStore, Error>?
 
-    func openCustomerStore(at directory: URL) async throws -> any CustomerStore {
+    public func openCustomerStore(at directory: URL) async throws -> any CustomerStore {
         let task = lock.withLock { () -> Task<SQLiteEventStore, Error> in
             if let customerWriter { return customerWriter }
             let captured = _storedEvents
@@ -35,11 +35,11 @@ public final class MockEventStore: EventStoreProtocol, CustomerStoreProviding, @
         }
         return try await task.value
     }
-    func customerStore() async -> (any CustomerStore)? {
+    public func customerStore() async -> (any CustomerStore)? {
         guard let task = lock.withLock({ customerWriter }) else { return nil }
         return try? await task.value
     }
-    func customerDidCommit(_ records: [StableEventCaptureRecord], commits: [StableEventCaptureCommit]) async {
+    public func customerDidCommit(_ records: [StableEventCaptureRecord], commits: [StableEventCaptureCommit]) async {
         lock.withLock {
             for (record, commit) in zip(records, commits) {
                 if let sequence = commit.commitSequence { _nextCommitSequence = max(_nextCommitSequence, sequence + 1) }

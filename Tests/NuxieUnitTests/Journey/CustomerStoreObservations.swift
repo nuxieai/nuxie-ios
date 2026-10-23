@@ -32,7 +32,7 @@ extension CustomerJourneyStore {
 
     func captureFixtureInput(id: String, name: String, at: Date, properties: [String: Any] = [:], journeyOrigin: JourneyEventOrigin? = nil) async throws {
         guard let sqlite = store as? SQLiteEventStore else { throw CustomerStoreError.invalidRow }
-        _ = try await sqlite.insert(StoredEvent(id: id, name: name, properties: properties, timestamp: at, distinctId: distinctId, journeyOrigin: journeyOrigin))
+        _ = try await sqlite.insert(StoredEvent(id: id, name: name, properties: properties, timestamp: at, distinctId: distinctId, journeyOrigin: journeyOrigin), deliveryState: .pending)
     }
 }
 
