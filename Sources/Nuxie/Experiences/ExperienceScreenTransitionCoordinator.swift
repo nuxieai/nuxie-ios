@@ -297,13 +297,23 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         await entryController.enter(reduceMotion: reduceMotionEnabled)
     }
 
+    private func coverPage(_ controller: ExperienceScreenViewController) async {
+        await controller.coverPage(reduceMotion: reduceMotionEnabled)
+    }
+
+    private func revealPage(_ controller: ExperienceScreenViewController, announce: Bool = true) async {
+        await controller.revealPage(reduceMotion: reduceMotionEnabled)
+        if announce { await onScreenActive(controller.screenId) }
+    }
+
     func activateInitialScreen() async -> String? {
         guard lifecycle == .installed,
               let activeScreenId,
               let controller = activeController else {
             return nil
         }
-        await controller.activate(reduceMotion: reduceMotionEnabled)
+        if controller.isPageController { await revealPage(controller, announce: false) }
+        else { await controller.activate(reduceMotion: reduceMotionEnabled) }
         return activeScreenId
     }
 
@@ -345,7 +355,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         } else if controller.lifecyclePhase != .exiting || controller.lifecycleExitReason != .dismissed {
             await controller.performExitHandshake(reduceMotion: reduceMotion, exitReason: .dismissed)
         }
-        await controller.hide(reduceMotion: reduceMotion)
+        if controller.isPageController { await coverPage(controller) }
+        else { await controller.hide(reduceMotion: reduceMotion) }
         await onScreenHidden(activeScreenId, .teardown(reason: reason))
     }
 
@@ -410,9 +421,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         mountingControllersByScreenId.removeAll()
         latestSnapshot = nil
         for controller in controllers {
-            // Covered layers remained active until the Experience closed.
-            // Retire them without replaying an authored exit off screen.
-            if controller.lifecyclePhase != .hidden { await controller.hide(reduceMotion: reduceMotionEnabled) }
+            // Retire retained pages without replaying an authored exit off screen.
+            if controller.isPageController { await coverPage(controller) }
+            else if controller.lifecyclePhase != .hidden { await controller.hide(reduceMotion: reduceMotionEnabled) }
             await controller.shutdownInteractiveScreen()
         }
         self.installationTask = nil
@@ -763,12 +774,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                             else { continuation.resume(throwing: CancellationError()) }
                         }) { navigation.popToViewController(lower, animated: !reduceMotion) }
                     }
-                    await leaving?.hide(reduceMotion: reduceMotion)
+                    if let leaving { await self.coverPage(leaving) }
                     if let leaving { await self.onScreenHidden(leaving.screenId, .navigation(revealingScreenId: screenID)) }
                 }
-                lower.setCoveredByLayer(false)
-                await lower.activate(reduceMotion: reduceMotion)
-                await self.onScreenActive(screenID)
+                await self.revealPage(lower)
             })
             return true
         }
@@ -806,16 +815,18 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 } catch { continuation.resume(throwing: error) }
             }
         } catch {
-            await target.hide(reduceMotion: reduceMotion)
-            await source.activate(reduceMotion: reduceMotion)
+            await coverPage(target)
+            await revealPage(source, announce: false)
             throw error
         }
-        guard completed else { await source.activate(reduceMotion: reduceMotion); return false }
-        await source.hide(reduceMotion: reduceMotion)
-        if modal { source.setCoveredByLayer(true) }
+        guard completed else {
+            await coverPage(target)
+            await revealPage(source, announce: false)
+            return false
+        }
+        await coverPage(source)
         await onScreenHidden(source.screenId, .navigation(revealingScreenId: screenID))
-        await target.activate(reduceMotion: reduceMotion)
-        await onScreenActive(screenID)
+        await revealPage(target)
         return true
     }
 
@@ -843,11 +854,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             else if self.lifecycle == .installed, !removed.isEmpty {
                 for outgoing in removed {
                     await outgoing.markExiting(reduceMotion: self.reduceMotionEnabled, exitReason: .navigation)
-                    await outgoing.hide(reduceMotion: self.reduceMotionEnabled)
+                    await self.coverPage(outgoing)
                     await self.onScreenHidden(outgoing.screenId, .navigation(revealingScreenId: page.screenId))
                 }
-                await page.activate(reduceMotion: self.reduceMotionEnabled)
-                await self.onScreenActive(page.screenId)
+                await self.revealPage(page)
             }
             for outgoing in removed { await outgoing.shutdownInteractiveScreen() }
             self.startNavigationDrainIfNeeded()
@@ -1097,6 +1107,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         if let cached = cachedControllersByScreenId[screenId] {
             return cached
         }
+        if let live = nativePages.reversed().first(where: { $0.retainedScreenIDs.contains(screenId) }) {
+            return live
+        }
         throw ExperienceScreenTransitionCoordinatorError.screenNotMounted(screenId)
     }
 
@@ -1195,7 +1208,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         if activeScreenId == screenId,
            let controller = activeController,
            controller.lifecyclePhase != .hidden {
-            await controller.hide(reduceMotion: reduceMotionEnabled)
+            if controller.isPageController { await coverPage(controller) }
+            else { await controller.hide(reduceMotion: reduceMotionEnabled) }
             await onScreenHidden(screenId, .runtimeFailure)
         }
         onRuntimeFailure(screenId, error)
@@ -1203,7 +1217,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     private func targetControllers(for screenId: String?) throws -> [ExperienceScreenViewController] {
         if let screenId {
-            guard let controller = layerCaches.reversed().lazy.compactMap({ $0.controllers[screenId] }).first else {
+            // Topmost live page containing the row wins, including duplicate Screen ids.
+            let live = nativePages.reversed().first { $0.retainedScreenIDs.contains(screenId) }
+            let legacy = layerCaches.reversed().lazy.compactMap { $0.controllers[screenId] }.first { !$0.isPageController }
+            guard let controller = live ?? legacy else {
                 throw ExperienceScreenTransitionCoordinatorError.screenNotMounted(screenId)
             }
             return [controller]
@@ -1408,27 +1425,29 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         navigationLayers.removeLast()
         shownPages.removeValue(forKey: ObjectIdentifier(layer))
         stackedSheetWindows.removeValue(forKey: ObjectIdentifier(layer))?.close()
+        let retiringPages = (layer as? UINavigationController)?.viewControllers.compactMap { $0 as? ExperienceScreenViewController } ?? []
         let cache = layerCaches.removeLast()
         let revealingController = activeController
         if alreadyDismissed {
             await controller.markExiting(reduceMotion: reduceMotionEnabled, exitReason: .dismissed)
         }
-        await controller.hide(reduceMotion: reduceMotionEnabled)
+        if controller.isPageController { await coverPage(controller) }
+        else { await controller.hide(reduceMotion: reduceMotionEnabled) }
         if alreadyDismissed {
             await onPresentedScreenDismissed(controller.screenId, revealingController?.screenId)
         } else {
             await onScreenHidden(controller.screenId,
                 .init(revealingScreenId: revealingController?.screenId, method: "journey"))
         }
-        if activateRevealedPage {
-            revealingController?.setCoveredByLayer(false)
-            if revealingController?.isPageController == true {
-                await revealingController?.activate(reduceMotion: reduceMotionEnabled)
+        if activateRevealedPage, let revealingController {
+            if revealingController.isPageController { await revealPage(revealingController) }
+            else {
+                revealingController.setCoveredByLayer(false)
+                await onScreenActive(revealingController.screenId)
             }
-            if let screenId = revealingController?.screenId { await onScreenActive(screenId) }
         }
         var retired = Set<ObjectIdentifier>()
-        for controller in cache.controllers.values where retired.insert(ObjectIdentifier(controller)).inserted {
+        for controller in retiringPages + Array(cache.controllers.values) where retired.insert(ObjectIdentifier(controller)).inserted {
             await controller.shutdownInteractiveScreen()
         }
     }
@@ -1576,8 +1595,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func completeNavigation(to screenId: String, completion: Completion) {
-        (cachedControllersByScreenId[screenId]
-            ?? navigationController?.topViewController as? ExperienceScreenViewController)?
+        (nativePages.reversed().first { $0.retainedScreenIDs.contains(screenId) }
+            ?? cachedControllersByScreenId[screenId])?
             .advance(delta: 0)
         completion(.navigated, screenId)
     }

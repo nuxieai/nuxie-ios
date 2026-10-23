@@ -413,10 +413,28 @@ final class ExperienceScreenViewController: UIViewController {
     private var availablePresentationHeight: CGFloat?
     private var coveredByLayer = false
 
+    // Native-page visibility is owned here; UIKit appearance alone cannot resume
+    // a retained page or distinguish it from a page beneath a sheet.
+    func coverPage(reduceMotion: Bool) async {
+        setCoveredByLayer(true)
+        await hide(reduceMotion: reduceMotion)
+    }
+
+    func revealPage(reduceMotion: Bool) async {
+        setCoveredByLayer(false)
+        presentationLoop?.setTimelineActive(true)
+        await activate(reduceMotion: reduceMotion)
+        updatePresentationVisibility()
+    }
+
+    var timelineElapsedSeconds: Double { presentationLoop?.timelineElapsedSeconds ?? 0 }
+
     func setCoveredByLayer(_ covered: Bool) {
         coveredByLayer = covered
         interactiveScreen?.setCoveredByLayer(covered)
-        view.isUserInteractionEnabled = !covered
+        view.isUserInteractionEnabled = !covered && !pageStepInProgress
+        textInputOverlayBridge.setHidden(contentHidden || covered)
+        if covered { view.endEditing(true) }
         updatePresentationVisibility()
     }
     private var lastPresentedHeight: CGFloat?
@@ -1691,9 +1709,11 @@ final class ExperienceScreenViewController: UIViewController {
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
-        videoCaptionOverlay.isHidden = !controllerIsVisible || contentHidden || runtimeFailure != nil
+        textInputOverlayBridge.setHidden(contentHidden || coveredByLayer || !controllerIsVisible)
+        videoCaptionOverlay.isHidden = !controllerIsVisible || coveredByLayer || contentHidden || runtimeFailure != nil
         if videoCaptionOverlay.isHidden { videoCaptionOverlay.update([]) }
-        presentationLoop?.setPresentationVisible((controllerIsVisible || coveredByLayer) && !contentHidden)
+        presentationLoop?.setPresentationVisible(
+            (isPageController ? controllerIsVisible && !coveredByLayer : controllerIsVisible || coveredByLayer) && !contentHidden)
     }
 
     private func handleTerminalFailure(_ error: Error) {

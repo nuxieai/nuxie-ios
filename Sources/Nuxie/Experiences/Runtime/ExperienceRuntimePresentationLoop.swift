@@ -866,6 +866,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         drain()
     }
 
+    private(set) var timelineElapsedSeconds: Double = 0
+
     func setPresentationVisible(_ visible: Bool) {
         guard isPresentationVisible != visible else { return }
         isPresentationVisible = visible
@@ -1120,6 +1122,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         case (.setMediaVisible(let visible), .none):
             appliedMediaVisibility = visible
         case (.step(let step), .session):
+            timelineElapsedSeconds += Double(step.elapsedSeconds)
             await result.deliver()
             if !step.pointers.isEmpty {
                 onAcceptedPointerInput(.init(eventCount: step.pointers.count))
