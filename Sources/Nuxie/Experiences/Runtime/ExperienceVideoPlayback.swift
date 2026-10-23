@@ -624,6 +624,13 @@ final class ExperienceVideoPlayback {
         _ = try await tick()
     }
 
+    /// Read-only identities let retention checks compare decoders without exposing AVPlayer controls.
+    var decoderPlayerIdentities: [Int: ObjectIdentifier] {
+        Dictionary(uniqueKeysWithValues: decoders.filter { !$0.disposed }.map {
+            ($0.componentID, ObjectIdentifier($0.player))
+        })
+    }
+
     var playbackDiagnostics: String {
         decoders.map { "id=\($0.componentID) generation=\($0.generation) time=\($0.player.currentTime().seconds) presented=\(String(describing: $0.lastPresentedTime)) rate=\($0.player.rate) seeking=\($0.seeking) wants=\($0.wantsPlay) failed=\($0.failed) suspension=\(suspensionReasons)" }.joined(separator: "; ")
     }

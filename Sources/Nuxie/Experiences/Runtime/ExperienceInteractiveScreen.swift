@@ -2029,6 +2029,14 @@ actor ExperienceInteractiveScreen {
         return try await step(elapsedSeconds: 0, confirmedResponseSave: (trigger, kept))
     }
 
+    /// Both player owners restore the confirmed values before firing the continuation.
+    func confirmedResponseSaveMutations(trigger: String, kept: [ExperienceRunSnapshot.Field])
+        async throws -> [NuxieNativeViewModelMutation] {
+        let root = try await nativeRootReference()
+        let restored = try ExperienceRunSnapshot(fields: kept).mutations(for: root)
+        return restored + [.fireTrigger(instance: root, path: trigger)]
+    }
+
     func environmentSnapshot() async throws -> NuxieNativeViewModelSnapshot? {
         guard let environmentReference else { return nil }
         let runtime = runtime
@@ -2072,9 +2080,10 @@ actor ExperienceInteractiveScreen {
         confirmedResponseSave: (trigger: String, kept: [ExperienceRunSnapshot.Field])? = nil
     ) async throws -> ExperienceInteractiveStepResult {
         if let rowStepper {
-            if let trigger = confirmedResponseSaveTrigger {
-                let root = try await nativeRootReference()
-                _ = try await runtime.mutateViewModel([.fireTrigger(instance: root, path: trigger)])
+            if let confirmed = confirmedResponseSave {
+                let mutations = try await confirmedResponseSaveMutations(trigger: confirmed.trigger, kept: confirmed.kept)
+                _ = try await runtime.mutateViewModel(mutations)
+                contentMeasurement.invalidate()
             }
             return try await rowStepper(pointers.map(Self.nativePointer), focusInputs, elapsedSeconds, correlationID, capturesTextLayout)
         }
@@ -2084,9 +2093,8 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock { [self] in
             if let failure = await takeDeferredMeasurementFailure() { throw failure }
             if let confirmed = confirmedResponseSave {
-                let root = try await nativeRootReference()
-                let restored = try ExperienceRunSnapshot(fields: confirmed.kept).mutations(for: root)
-                _ = try await runtime.mutateViewModel(restored + [.fireTrigger(instance: root, path: confirmed.trigger)])
+                let mutations = try await confirmedResponseSaveMutations(trigger: confirmed.trigger, kept: confirmed.kept)
+                _ = try await runtime.mutateViewModel(mutations)
                 contentMeasurement.invalidate()
             }
             let frame = try await runtime.stepWithSnapshot(
