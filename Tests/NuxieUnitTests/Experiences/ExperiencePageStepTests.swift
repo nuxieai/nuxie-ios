@@ -203,6 +203,39 @@ final class ExperiencePageStepTests: XCTestCase {
         }
     }
 
+    func testPageBackIgnoresAuthoredTransitionWithDiagnosticAndReversesHistory() async throws {
+        var history = ExperiencePageHistory(root: "A")
+        history.visit("B", transition: .init(kind: .fade, transitionId: "ab"))
+        for kind in ["none", "fade", "push", "modal"] {
+            var diagnostics: [String] = []
+            let spec = ExperienceScreenTransitionSpec.pageTransition(raw: ["type": kind],
+                sourceScreenID: "B", isBack: true, inferredBack: history.backTransition(steps: 1),
+                diagnostic: { diagnostics.append($0) })
+            XCTAssertEqual(spec, .init(kind: .fade, transitionId: "ab"))
+            XCTAssertEqual(diagnostics, ["Experience page: ignoring Back transition; using page history"])
+            let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: "ab",
+                sourceScreenId: "B", destinationScreenId: "A",
+                declarations: [declaration(id: "ab", from: "A", to: "B", marked: false)]))
+            let probe = PageStepProbe()
+            try await probe.perform(style: spec.kind, plan: plan, isBack: true)
+            XCTAssertTrue(probe.batches.flatMap { $0 }.contains(.begin("ab.reverse")))
+            XCTAssertTrue(probe.batches.flatMap { $0 }.contains(.end("ab.reverse")))
+        }
+    }
+
+    func testForwardFadeWithoutIDIsNilNameCutWithDiagnostic() async throws {
+        var diagnostics: [String] = []
+        let spec = ExperienceScreenTransitionSpec.pageTransition(raw: ["type": "fade"],
+            sourceScreenID: "A", isBack: false, diagnostic: { diagnostics.append($0) })
+        XCTAssertEqual(spec, .none)
+        XCTAssertEqual(diagnostics, ["Experience page: fade without a published transition ID uses a cut"])
+        let probe = PageStepProbe()
+        try await probe.perform(style: spec.kind, plan: nil, declaredExit: false)
+        XCTAssertTrue(probe.batches.flatMap { $0 }.contains(.begin(nil)))
+        XCTAssertTrue(probe.batches.flatMap { $0 }.contains(.end(nil)))
+        XCTAssertFalse(probe.order.contains("present"))
+    }
+
     func testPushHasIndependentPageHistoryAndSkippingBackTargetsLowerPage() {
         let location = ExperiencePageStack.back(steps: 2, histories: [["A", "B"], ["C"]])
         XCTAssertEqual(location, .init(page: 0, entry: 0, screenID: "A"))

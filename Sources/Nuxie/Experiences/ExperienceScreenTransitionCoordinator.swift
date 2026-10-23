@@ -24,7 +24,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         var backSteps: Int = 1
         var dismissLayer: Bool = false
         var admissionLayer: UIViewController? = nil
-        var layerTransition: ExperienceScreenTransitionSpec? = nil
     }
 
     private weak var hostViewController: UIViewController?
@@ -577,12 +576,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         navigationRequests.append(NavigationRequest(
             screenId: screenId,
-            rawTransition: transition ?? ["type": "push"],
+            rawTransition: activeController?.isPageController == true ? transition : (transition ?? ["type": "push"]),
             completion: completion,
             backLayer: layer,
-            backSteps: steps,
-            layerTransition: activeController?.isPageController == true
-                ? transition.map { ExperienceScreenTransitionSpec(raw: $0) } : nil
+            backSteps: steps
         ))
         startNavigationDrainIfNeeded()
         return true
@@ -667,10 +664,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     to: request.screenId,
                     transition: request.rawTransition,
                     isBack: request.backLayer != nil,
-                    backSteps: request.backSteps,
-                    layerSpec: request.layerTransition ?? (request.backLayer != nil && activeController?.isPageController == true
-                        ? activeController?.pageHistory.backTransition(steps: request.backSteps, target: request.screenId,
-                            declarations: artifact.renderPlan.transitions) : nil)
+                    backSteps: request.backSteps
                 )
                 if pendingModalCache != nil { await discardPendingModal() }
                 let completed = lifecycle == .installed && !Task.isCancelled
@@ -710,12 +704,15 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         to screenId: String,
         transition rawTransition: Any?,
         isBack: Bool,
-        backSteps: Int = 1,
-        layerSpec: ExperienceScreenTransitionSpec? = nil
+        backSteps: Int = 1
     ) async throws -> Bool {
         if let controller = activeController, controller.isPageController {
+            let spec = ExperienceScreenTransitionSpec.pageTransition(raw: rawTransition,
+                sourceScreenID: controller.screenId, isBack: isBack,
+                inferredBack: isBack ? controller.pageHistory.backTransition(steps: backSteps, target: screenId,
+                    declarations: artifact.renderPlan.transitions) : .none)
             return try await performPageNavigation(to: screenId, rawTransition: rawTransition,
-                spec: layerSpec ?? ExperienceScreenTransitionSpec(raw: rawTransition, sourceScreenID: controller.screenId),
+                spec: spec,
                 isBack: isBack, backSteps: backSteps)
         }
         let sourceController = activeController

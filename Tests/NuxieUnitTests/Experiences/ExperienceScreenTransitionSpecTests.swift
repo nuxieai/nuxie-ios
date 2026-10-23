@@ -2,6 +2,22 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class ExperienceScreenTransitionSpecTests: XCTestCase {
+    func testPageForwardPreservesNamedFadePushAndModalAndPlainCut() {
+        let forms: [[String: Any]] = [["type": "none"], ["type": "push"],
+            ["type": "modal", "present": "sheet"], ["type": "modal", "present": "fullscreen"],
+            ["type": "fade", "transitionId": "ab"]]
+        for raw in forms {
+            let spec = ExperienceScreenTransitionSpec.pageTransition(raw: raw, sourceScreenID: "A",
+                isBack: false, diagnostic: { XCTFail("Unexpected diagnostic: \($0)") })
+            XCTAssertEqual(spec, ExperienceScreenTransitionSpec(raw: raw))
+        }
+    }
+
+    func testPageBackWithoutOwnTransitionUsesInferredCutWithoutDiagnostic() {
+        XCTAssertEqual(ExperienceScreenTransitionSpec.pageTransition(raw: nil, sourceScreenID: "A",
+            isBack: true, inferredBack: .none, diagnostic: { XCTFail("Unexpected diagnostic: \($0)") }), .none)
+    }
+
     func testDefaultsToNoneForMissingTransition() {
         XCTAssertEqual(ExperienceScreenTransitionSpec(raw: nil), .none)
     }
