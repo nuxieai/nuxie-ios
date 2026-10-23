@@ -873,6 +873,7 @@ extension JourneyTestCase {
         presenter: (any JourneyPresenting)? = nil,
         prepareNativeValues: @escaping JourneyService.NativeValuesPreparer = { _, _, _, _ in },
         readNativeValues: @escaping JourneyService.NativeValuesReader = { try await $0.journeyValues() },
+        readJournalRuns: @escaping JourneyService.JournalRunsReader = { try await $0.runs() },
         pinnedReleaseAuthenticator: @escaping JourneyService.PinnedReleaseAuthenticator = {
             _, _ in throw JourneyJournalError.invalidState
         },
@@ -897,6 +898,7 @@ extension JourneyTestCase {
             presenter: presenter,
             prepareNativeValues: prepareNativeValues,
             readNativeValues: readNativeValues,
+            readJournalRuns: readJournalRuns,
             pinnedReleaseAuthenticator: pinnedReleaseAuthenticator,
             timezones: SignedTimezoneBundle.installed!,
             currentDeviceTimezone: TimeZone(secondsFromGMT: 0)!,

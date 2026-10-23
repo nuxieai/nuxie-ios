@@ -19,6 +19,90 @@ private final class RecoveryAdmission: @unchecked Sendable {
 }
 
 final class CommittedRouteRecoveryTests: XCTestCase {
+    func testDeadlineSharesCaptureOrderAndRoutingHoldWithoutBecomingAnEvent() async throws {
+        let store = MockEventStore()
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let clock = MockDateProvider()
+        let log = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: store)
+        let observed = RecoveredRouteRecorder()
+        let otherSubscribers = RecoveredRouteRecorder()
+        let forwarded = RecoveredRouteRecorder()
+        await log.subscribeCommitted { event in await otherSubscribers.append(event.name) }
+        await log.subscribeForwarding { event in await forwarded.append(event.event.name) }
+        await log.setJourneyDeadlineHandler { _ in
+            await observed.append("deadline")
+            return true
+        }
+        let reservation = log.reserveCommittedAdmission { 1 }
+        await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
+            await observed.append(event.name)
+            return true
+        }
+        let configuration = NuxieConfiguration(apiKey: "deadline-order-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await log.configure(configuration: configuration)
+        let generation = await log.deferCommittedRouting()
+        // No drain between acceptance and the deadline request. The deadline
+        // must follow this capture even if it has not committed yet.
+        store.suspendNextInsert()
+        log.track("in_window")
+        for _ in 0..<200 where store.waitingInsertIds.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let waiting = try XCTUnwrap(store.waitingInsertIds.first)
+        await log.enqueueJourneyDeadline(.init(distinctId: "customer-a", runId: "run", stepId: "wait",
+            anchorAt: clock.now(), wakeAt: clock.now().addingTimeInterval(1)))
+        log.track("later")
+        store.resumeInsert(id: waiting)
+        _ = await log.flushEvents()
+        let held = await observed.snapshot()
+        XCTAssertEqual(held, [])
+        let released = await log.releaseCommittedRouting(ifGeneration: generation)
+        XCTAssertTrue(released)
+        await log.drain()
+        let order = await observed.snapshot()
+        let ordinary = await otherSubscribers.snapshot()
+        let forwarding = await forwarded.snapshot()
+        XCTAssertEqual(order, ["in_window", "deadline", "later"])
+        XCTAssertEqual(ordinary, ["in_window", "later"])
+        XCTAssertEqual(forwarding, ordinary)
+        XCTAssertEqual(store.storedEvents.map(\.name), ordinary)
+        await log.close()
+    }
+
+    func testFailedDeadlineRetainsItsPositionAndRetriesWithoutAnotherCapture() async throws {
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer-a")
+        let log = EventLog(identity: identity, dateProvider: MockDateProvider(),
+                           apiClient: MockNuxieApi(), store: MockEventStore())
+        let observed = RecoveredRouteRecorder()
+        let attempts = RecoveredRouteRecorder()
+        await log.setJourneyDeadlineHandler { _ in
+            await attempts.append("attempt")
+            guard await attempts.snapshot().count > 1 else { return false }
+            await observed.append("deadline")
+            return true
+        }
+        await log.subscribeCommitted { event in await observed.append(event.name) }
+        let configuration = NuxieConfiguration(apiKey: "deadline-retry-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        try await log.configure(configuration: configuration)
+        await log.enqueueJourneyDeadline(.init(distinctId: "customer-a", runId: "run", stepId: "wait",
+            anchorAt: nil, wakeAt: Date()))
+        log.track("later")
+        await log.drain()
+        let blocked = await observed.snapshot()
+        XCTAssertEqual(blocked, [])
+        for _ in 0..<300 {
+            if await observed.snapshot().count == 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let recovered = await observed.snapshot()
+        XCTAssertEqual(recovered, ["deadline", "later"])
+        await log.close()
+    }
+
     func testBestEffortFallbackIsBoundedAndKeepsItsPlaceBetweenDurableCaptures() async throws {
         let store = MockEventStore()
         let identity = MockIdentityService()

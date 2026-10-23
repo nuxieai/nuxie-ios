@@ -1,0 +1,23 @@
+{
+  "contract": "Before timing out a wait or delay, check whether any committed event for this customer that occurred at or before its deadline has not yet reached Journeys, whether held for a copy, replaying, or queued during live routing. If one is pending, leave the timeout due and let event delivery run the next pass without waiting for the routing queue. The current event and events already delivered to Journeys do not block a timeout while their receipts await acknowledgement. An in-window follow-up is judged by its own time and may satisfy an overdue wait. With nothing eligible pending, resolve promptly, including on background events for screenless runs. A pending-route read failure leaves the checkpoint intact and schedules a bounded retry, including in the background for screenless runs.",
+  "cases": [
+    {
+      "name": "live_follow_up_queued_during_wait_preparation_beats_the_catch_up_timeout",
+      "trigger": { "name": "onboarding_started", "atMillis": 0, "handledAtMillis": 800 },
+      "followUp": { "name": "plan_viewed", "atMillis": 900 },
+      "waitEventName": "plan_viewed",
+      "waitMaxTimeMillis": 1000,
+      "preparationFinishesAtMillis": 1200,
+      "expectedOutcome": "satisfied"
+    },
+    {
+      "name": "live_overdue_wait_times_out_promptly_when_no_follow_up_is_pending",
+      "trigger": { "name": "onboarding_started", "atMillis": 0, "handledAtMillis": 800 },
+      "followUp": null,
+      "waitEventName": "plan_viewed",
+      "waitMaxTimeMillis": 1000,
+      "preparationFinishesAtMillis": 1200,
+      "expectedOutcome": "timeout"
+    }
+  ]
+}

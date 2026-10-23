@@ -16,6 +16,16 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     private var conversionAcknowledgements: Set<String> = []
+    private var deadlineHandler: (@Sendable (JourneyDeadline) async -> Bool)?
+    func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async {
+        lock.withLock { deadlineHandler = handler }
+    }
+    func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async {
+        // This fake routes captures inline too. Ordering and retry tests use
+        // the real EventLog and its serial capture/route workers.
+        let handler = lock.withLock { deadlineHandler }
+        _ = await handler?(deadline)
+    }
     private var boundConversionScope: JourneyStorageScope?
     public func bindConversionAuthority(_ scope: JourneyStorageScope) async throws {
         try lock.withLock {
@@ -855,6 +865,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             // `identity` is wired once by MockFactory and survives resets.
             _routedEvents.removeAll()
             conversionAcknowledgements.removeAll()
+            deadlineHandler = nil
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
             _preparedTriggerBeforeSend = nil

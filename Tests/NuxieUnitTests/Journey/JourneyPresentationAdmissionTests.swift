@@ -6,6 +6,89 @@ import XCTest
 final class JourneyPresentationAdmissionTests: JourneyTestCase {
 
 
+    func testDirectRouteOwnershipSurvivesFailedSubscriberDelivery() async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = replacing(try await authenticatedRenderedSnapshot(fixture), steps: [
+            .init(kind: .action, id: "present", action: ["type": .string("navigate"),
+                "screenId": .string("screen_welcome")], outlets: [:], outcome: nil),
+            .init(kind: .action, id: "wait", action: ["type": .string("wait_until"),
+                "trigger": .object(["kind": .string("event"), "eventName": .string("continue")]),
+                "condition": .object(["type": .string("Truthy"),
+                    "value": .object(["type": .string("Boolean"), "value": .bool(true)])]),
+                "maxTimeMs": .number(10_000)],
+                outlets: ["satisfied": "done", "timeout": "timed_out"], outcome: nil),
+            .init(kind: .complete, id: "done", action: nil, outlets: nil, outcome: "completed"),
+            .init(kind: .complete, id: "timed_out", action: nil, outlets: nil, outcome: "timed_out"),
+        ], routes: [.init(host: .init(kind: .screen, screenId: "screen_welcome"),
+                         eventName: "continue", entryStepId: "wait")])
+        let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1_000_000))
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let store = MockEventStore()
+        let events = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: store)
+        let failReads = JourneyCompletionFlag()
+        let repaired = JourneyCompletionFlag()
+        let presenter = await MainActor.run { RecordingJourneyPresenter() }
+        let service = JourneyService(identity: identity, events: events, dateProvider: clock,
+            sleepProvider: MockSleepProvider(), journalDirectory: directory, featureAccess: { _ in nil },
+            dispatcher: JourneyEffectDispatcher(identity: identity, events: events), presenter: presenter,
+            readJournalRuns: { journal in
+                if failReads.isCompleted, !repaired.isCompleted { throw JourneyJournalError.invalidState }
+                return try await journal.runs()
+            }, pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
+            timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
+        let reservation = events.reserveCommittedAdmission { service.eventAdmissionGeneration() }
+        await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, generation in
+            await service.handleEvent(event, admittedProfileGeneration: generation)
+        }
+        await service.prepareForEvents()
+        let configuration = NuxieConfiguration(apiKey: "direct-route-retry-test")
+        configuration.testingOverrides.suppressBackgroundWork = true
+        configuration.beforeSend = { event in
+            NuxieEvent(id: event.id, name: event.name, distinctId: event.distinctId,
+                       properties: event.properties, timestamp: clock.now())
+        }
+        try await events.configure(configuration: configuration)
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        await events.drain()
+        let presented = await MainActor.run { presenter.request }
+        let request = try XCTUnwrap(presented)
+        let hold = await events.deferCommittedRouting()
+        let accepted = await request.onEmissionBatch(presentationBatch(request: request,
+            invocationId: "direct-route-followed-by-wait", emissions: [.init(
+                id: "00000000-0000-7000-8000-000000000437", sequence: 0,
+                occurredAt: "1970-01-12T13:46:40Z", name: "continue", payload: [:])]), nil)
+        XCTAssertTrue(accepted)
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        for _ in 0..<200 {
+            if try await journal.runs().first?.park != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let beforeFailure = try await journal.runs().first
+        XCTAssertNotNil(beforeFailure?.park)
+        failReads.finish()
+        let released = await events.releaseCommittedRouting(ifGeneration: hold)
+        XCTAssertFalse(released, "The event remains undelivered after the journal read fails")
+        repaired.finish()
+        let replayed = await events.replayPendingStableRoutes(distinctId: "customer")
+        XCTAssertTrue(replayed)
+        await events.drain()
+        let afterReplay = try await journal.runs().first
+        XCTAssertEqual(afterReplay?.park, beforeFailure?.park,
+                       "Replay must still exclude the run that directly routed this publication")
+        XCTAssertNil(afterReplay?.completion)
+        events.track("continue")
+        await events.drain()
+        let completion = store.storedEvents.last { $0.name == JourneyEvents.journeyCompleted }
+        XCTAssertEqual(completion?.getPropertiesDict()["outcome"] as? String, "completed",
+                       "A later independent event can satisfy the wait")
+        await service.shutdown()
+        await events.close()
+    }
+
     func testDirectScreenRouteWinsItsCommittedSubscriberRace() async throws {
         let directory = temporaryDirectory()
         defer { removeTemporaryDirectoryIfPresent(directory) }

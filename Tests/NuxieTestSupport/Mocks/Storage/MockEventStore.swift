@@ -366,6 +366,7 @@ public final class MockEventStore: EventStoreProtocol, @unchecked Sendable {
         }
     }
 
+
     public func checkpointCommittedRoute(eventId: String, sessionId: String, nextSubscriber: Int) async throws {
         try lock.withLock {
             if _shouldFailStore { throw mockError(2, "Mock store error") }

@@ -45,6 +45,10 @@ actor JourneyPresentationPublicationCoordinator {
         self.executionFence = executionFence
     }
 
+    func directRoute(eventId: String) -> String? {
+        directlyRoutedRunByEventId[eventId]
+    }
+
     func consumeDirectRoute(eventId: String) -> String? {
         directlyRoutedRunByEventId.removeValue(forKey: eventId)
     }

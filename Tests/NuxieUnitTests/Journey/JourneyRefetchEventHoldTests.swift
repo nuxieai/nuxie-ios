@@ -5,8 +5,8 @@ import XCTest
 
 /// While a customer's copy of the published setup is being fetched, their
 /// events wait, then replay against the copy when it lands (UNIV-5164).
-/// Journeys already waiting take each event once, and no wait runs out for
-/// the time spent waiting.
+/// Journeys already waiting take each event once. Deadline controls share
+/// the held event queue and follow events accepted before their request.
 final class JourneyRefetchEventHoldTests: JourneyTestCase {
 
     /// identify(B) while B's copy is fetched: B's Journey left waiting by an
@@ -110,7 +110,8 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         await launch.routeWhatCanRoute()
         dateProvider.advance(by: 70)
         await launch.journeys.onAppBecameActive()
-        XCTAssertEqual(launch.outcomes(), [], "The wait stays open while its go is held")
+        await launch.routeWhatCanRoute()
+        XCTAssertEqual(launch.outcomes(), [], "The deadline is held behind the go accepted before it")
 
         // The new language's copy has the same Journey.
         await launch.journeys.profileDidCommit(savedCopy, distinctId: "customer")
@@ -192,9 +193,9 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
         await launch.close()
     }
 
-    /// An event captured before a wait's deadline but handled after it
-    /// leaves that timeout to a pass at the current time, which still runs.
-    func testALateEventDoesNotStrandAWaitThatIsDue() async throws {
+    /// With no pending event left to protect, the late event itself can
+    /// resolve the overdue checkpoint without waiting for another wake.
+    func testALateEventResolvesAnOverdueWaitWhenNothingIsPending() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try JourneyPlaneProfileTestFixture.load()
@@ -216,14 +217,6 @@ final class JourneyRefetchEventHoldTests: JourneyTestCase {
 
         await service.handleEvent(NuxieEvent(name: "screen_viewed", distinctId: "customer",
                                              timestamp: capturedAt))
-        for _ in 0..<200 where !sleeper.pendingSleepDurations.contains(0) {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        XCTAssertTrue(sleeper.pendingSleepDurations.contains(0), "A timeout pass is due at once")
-        sleeper.completeSleeps(withDuration: 0)
-        for _ in 0..<200 where completions(in: events).isEmpty {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
         XCTAssertEqual(completions(in: events), ["timed_out"])
         await service.shutdown()
     }

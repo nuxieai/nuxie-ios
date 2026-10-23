@@ -64,8 +64,24 @@ private struct TrackPayload: @unchecked Sendable {
   let subscriberAdmissions: [UInt64: UInt64]
 }
 
+/// A process-local control route. Durable parks recreate these after recovery;
+/// this is never an event, history row, forwarding item, or analytics payload.
+struct JourneyDeadline: Hashable, Sendable {
+  let distinctId: String
+  let runId: String
+  let stepId: String
+  let anchorAt: Date?
+  let wakeAt: Date
+}
+
+private enum VolatileRoute: Sendable {
+  case event(RoutedCommittedEvent)
+  case deadline(JourneyDeadline)
+}
+
 private enum CaptureCommand: Sendable {
   case track(TrackPayload)
+  case journeyDeadline(JourneyDeadline)
   case flush(CheckedContinuation<Bool, Never>)
   case barrier(CheckedContinuation<Void, Never>)  // test-only: "drain until here"
   case shutdown
@@ -87,6 +103,7 @@ private enum RouteCommand: Sendable {
   case resolved(sequence: UInt64, RouteResolution)
   /// Storage failures have no durable commit sequence to order against.
   case undurable(RoutedCommittedEvent)
+  case journeyDeadline(JourneyDeadline)
   case barrier(CheckedContinuation<Void, Never>)
   case shutdown
 }
@@ -349,6 +366,10 @@ protocol EventLogProtocol:
   /// owner, and then this returns false at once.
   @discardableResult
   func releaseCommittedRouting(ifGeneration: UInt64) async -> Bool
+  /// Enqueues behind captures already accepted, including captures still committing.
+  func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async
+  /// This control route belongs only to JourneyService, independent of event filters.
+  func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async
 
   func firstPendingStableRouteEventId(distinctId: String) async throws -> String?
 
@@ -575,6 +596,9 @@ actor EventLog: EventLogProtocol {
   private let committedRouteSessionId = UUID().uuidString
   private var routeWorker: Task<Void, Never>?
   private var routingDeferred = false
+  private var journeyDeadlineHandler: (@Sendable (JourneyDeadline) async -> Bool)?
+  private var deadlineRetryTask: Task<Void, Never>?
+  private var deadlineDeliveryFailed = false
   private var routingDeferralGeneration: UInt64 = 0
   private var deferredRouteCommands: [RouteCommand] = []
   private var nextRouteSequenceToDeliver: UInt64 = 0
@@ -624,12 +648,12 @@ actor EventLog: EventLogProtocol {
   private var committedRouteReadFailed = false
   private var needsCommittedRouteDrain = false
   private var prefetchedCommittedRoute: (sequence: UInt64, event: RoutedCommittedEvent)?
-  private var undurableCommittedRoutes: [(beforeSequence: UInt64, event: RoutedCommittedEvent)] = []
+  private var volatileRoutes: [(beforeSequence: UInt64, route: VolatileRoute)] = []
   private var hasFailedCommittedRoutes: Bool {
-    failedCommittedRoute != nil || committedRouteReadFailed
+    failedCommittedRoute != nil || committedRouteReadFailed || deadlineDeliveryFailed
   }
   var bufferedCommittedRouteCount: Int {
-    (failedCommittedRoute == nil ? 0 : 1) + (prefetchedCommittedRoute == nil ? 0 : 1) + undurableCommittedRoutes.count
+    (failedCommittedRoute == nil ? 0 : 1) + (prefetchedCommittedRoute == nil ? 0 : 1) + volatileRoutes.count
   }
   private var forwardingSubscribers: [ForwardingSubscriber] = []
 
@@ -705,6 +729,7 @@ actor EventLog: EventLogProtocol {
     captureContinuation.finish()
     routeContinuation.finish()
     forwardingContinuation.finish()
+    deadlineRetryTask?.cancel()
     captureWorker?.cancel()
     routeWorker?.cancel()
     forwardingWorker?.cancel()
@@ -1355,6 +1380,9 @@ actor EventLog: EventLogProtocol {
   public func close() async {
     guard closeFlag.close() else { return }
 
+    deadlineRetryTask?.cancel()
+    deadlineRetryTask = nil
+
     // Unblock any in-flight work waiting on storage init (e.g. tests that never called setup()).
     await ready.open()
 
@@ -1401,6 +1429,9 @@ actor EventLog: EventLogProtocol {
         activityIdentity: payload.activityIdentity
       )
 
+    case .journeyDeadline(let deadline):
+      routeContinuation.yield(.journeyDeadline(deadline))
+
     case .flush(let cont):
       guard await ready.isOpen() else {
         cont.resume(returning: false)
@@ -1418,6 +1449,21 @@ actor EventLog: EventLogProtocol {
     case .shutdown:
       LogDebug("[EventLog.capture] shutdown received")
     }
+  }
+
+  func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async {
+    journeyDeadlineHandler = handler
+  }
+
+  func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async {
+    guard !closeFlag.isClosed else { return }
+    // Stable captures serialize here and ordinary captures enter the capture
+    // stream synchronously. A later stable capture drains this command before
+    // committing. No delivery-state query or subscriber barrier is involved.
+    await acquireStableCaptureCommit()
+    defer { releaseStableCaptureCommit() }
+    guard !closeFlag.isClosed else { return }
+    captureContinuation.yield(.journeyDeadline(deadline))
   }
 
   /// Storage/capture remain available while Journey installs authenticated
@@ -1506,7 +1552,7 @@ actor EventLog: EventLogProtocol {
         nextRouteSequenceToDeliver &+= 1
         if case .committed = next {
           if !hasFailedCommittedRoutes, !needsCommittedRouteDrain,
-             undurableCommittedRoutes.isEmpty,
+             volatileRoutes.isEmpty,
              let cached = prefetchedCommittedRoute, cached.sequence == sequence {
             prefetchedCommittedRoute = nil
             let delivered = await deliverCommittedRoute(.init(event: cached.event,
@@ -1521,12 +1567,18 @@ actor EventLog: EventLogProtocol {
 
     case .undurable(let routed):
       let capacity = max(1, deliveryConfig.maxQueueSize)
-      guard undurableCommittedRoutes.count < capacity else {
+      let fallbackCount = volatileRoutes.filter { if case .event = $0.route { return true }; return false }.count
+      guard fallbackCount < capacity else {
         LogWarning("EventLog: best-effort local routing queue full; dropping an unpersisted event")
         return
       }
-      undurableCommittedRoutes.append((highestResolvedRouteSequence, routed))
+      volatileRoutes.append((highestResolvedRouteSequence, .event(routed)))
       await drainCommittedRouteQueue(retryFailed: false)
+
+    case .journeyDeadline(let deadline):
+      volatileRoutes.append((highestResolvedRouteSequence, .deadline(deadline)))
+      await drainCommittedRouteQueue(retryFailed: false)
+      if hasFailedCommittedRoutes { scheduleDeadlineRetry() }
 
     case .barrier(let cont):
       if failedCommittedRoute?.awaitingAcknowledgement == true || committedRouteReadFailed {
@@ -1606,6 +1658,8 @@ actor EventLog: EventLogProtocol {
   }
 
   private func drainCommittedRouteQueue(retryFailed: Bool) async {
+    if deadlineDeliveryFailed && !retryFailed { return }
+    deadlineDeliveryFailed = false
     if let failed = failedCommittedRoute {
       guard retryFailed, await deliverCommittedRoute(failed) else { return }
     }
@@ -1620,12 +1674,24 @@ actor EventLog: EventLogProtocol {
           : nil
         let eligible = pending.flatMap { $0.commitSequence < nextRouteSequenceToDeliver ? $0 : nil }
         if eligible == nil { needsCommittedRouteDrain = false }
-        if let fallback = undurableCommittedRoutes.first,
+        if let fallback = volatileRoutes.first,
            fallback.beforeSequence <= nextRouteSequenceToDeliver,
            eligible == nil || fallback.beforeSequence <= eligible!.commitSequence {
-          undurableCommittedRoutes.removeFirst()
-          guard await deliverCommittedRoute(.init(event: fallback.event, subscriber: 0,
-            awaitingAcknowledgement: false)) else { return }
+          switch fallback.route {
+          case .event(let event):
+            volatileRoutes.removeFirst()
+            guard await deliverCommittedRoute(.init(event: event, subscriber: 0,
+              awaitingAcknowledgement: false)) else { return }
+          case .deadline(let deadline):
+            if deadline.distinctId == identityService.getDistinctId() {
+              guard await journeyDeadlineHandler?(deadline) == true else {
+                deadlineDeliveryFailed = true
+                scheduleDeadlineRetry()
+                return
+              }
+            }
+            volatileRoutes.removeFirst()
+          }
           continue
         }
         guard let pending = eligible else { return }
@@ -1659,6 +1725,22 @@ actor EventLog: EventLogProtocol {
 
   private func retryFailedCommittedRoutes() async {
     await drainCommittedRouteQueue(retryFailed: true)
+    if hasFailedCommittedRoutes { scheduleDeadlineRetry() }
+  }
+
+  private func scheduleDeadlineRetry() {
+    guard deadlineRetryTask == nil, !closeFlag.isClosed,
+          volatileRoutes.contains(where: { if case .deadline = $0.route { return true }; return false }) else { return }
+    deadlineRetryTask = Task { [weak self] in
+      do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+      await self?.retryDeadlineRoutes()
+    }
+  }
+
+  private func retryDeadlineRoutes() {
+    deadlineRetryTask = nil
+    guard !closeFlag.isClosed else { return }
+    routeContinuation.yield(.retryFailedDeliveries)
   }
 
   private func acknowledgeStableRouteIfNeeded(_ eventId: String?) async {
