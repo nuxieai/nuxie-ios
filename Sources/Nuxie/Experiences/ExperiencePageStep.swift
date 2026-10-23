@@ -6,6 +6,8 @@ enum ExperiencePageStep {
     enum Change: Equatable, Sendable {
         case take
         case position(isBack: Bool)
+        case reconcile
+        case expand
         case phases([(String, ExperienceScreenLifecyclePhase)], String)
         case begin(String?)
         case end(String?)
@@ -13,7 +15,7 @@ enum ExperiencePageStep {
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             switch (lhs, rhs) {
-            case (.take, .take), (.retire, .retire): return true
+            case (.take, .take), (.retire, .retire), (.reconcile, .reconcile), (.expand, .expand): return true
             case let (.position(a), .position(b)): return a == b
             case let (.begin(a), .begin(b)), let (.end(a), .end(b)): return a == b
             case let (.phases(a, x), .phases(b, y)):
@@ -64,14 +66,14 @@ enum ExperiencePageStep {
             try Task.checkCancellation()
         }
 
+        let incoming: [Change] = [.take, .position(isBack: isBack), .reconcile, .expand]
         if reduceMotion {
-            try await operations.batch([leaving, entering, .take, .position(isBack: isBack), .begin(name), .end(name), .retire, hidden, active])
+            try await operations.batch(incoming + [leaving, entering, .begin(name), .end(name), .retire, hidden, active])
         } else if style != .none, let plan {
-            try await operations.batch([.take])
             let outgoing = try await operations.register(source, plan.outgoingCompletionEventName)
-            let incoming = try await operations.register(target, plan.incomingCompletionEventName)
-            try await operations.batch([.phases([(source, .exiting), (target, .entering)], transition), .position(isBack: isBack), .begin(name)])
-            try await waitForFrame([outgoing, incoming], duration: plan.watchdogMilliseconds)
+            let incomingCompletion = try await operations.register(target, plan.incomingCompletionEventName)
+            try await operations.batch(incoming + [.phases([(source, .exiting), (target, .entering)], transition), .begin(name)])
+            try await waitForFrame([outgoing, incomingCompletion], duration: plan.watchdogMilliseconds)
             try await operations.batch([.end(name), .retire, hidden, active])
         } else {
             let outgoingName = plan?.outgoingCompletionEventName ?? exit.completionEventName
@@ -80,10 +82,10 @@ enum ExperiencePageStep {
             if let outgoing {
                 try await waitForFrame([outgoing], duration: plan?.watchdogMilliseconds ?? exit.watchdogMilliseconds ?? 250)
             }
-            let incoming = try await plan.asyncMap { try await operations.register(target, $0.incomingCompletionEventName) }
-            try await operations.batch([entering, .take, .position(isBack: isBack), .begin(name), .retire, hidden])
-            if let incoming, let plan {
-                try await waitForFrame([incoming], duration: plan.watchdogMilliseconds)
+            let incomingCompletion = try await plan.asyncMap { try await operations.register(target, $0.incomingCompletionEventName) }
+            try await operations.batch(incoming + [entering, .begin(name), .retire, hidden])
+            if let incomingCompletion, let plan {
+                try await waitForFrame([incomingCompletion], duration: plan.watchdogMilliseconds)
             }
             try await operations.batch([.end(name), active])
         }
@@ -200,11 +202,15 @@ struct ExperiencePageRows {
 
     mutating func retire(active: String, reachable: Set<String>) -> [Mutation] {
         var result: [Mutation] = []
-        for id in screenIDs where id != active {
-            if reachable.contains(id), let index = screenIDs.firstIndex(of: id) {
+        // Collapse against the current runtime order before any removals change that order.
+        for id in screenIDs where id != active && reachable.contains(id) {
+            if let index = screenIDs.firstIndex(of: id) {
                 collapsed.insert(id)
                 result.append(.collapse(id, index, true))
-            } else if let removal = remove(id) { result.append(removal) }
+            }
+        }
+        for id in screenIDs where id != active && !reachable.contains(id) {
+            if let removal = remove(id) { result.append(removal) }
         }
         return result
     }
