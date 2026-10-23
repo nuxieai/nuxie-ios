@@ -202,7 +202,8 @@ final class ExperienceRuntimeSurfaceView: UIView {
                 source: ExperienceRuntimePointerSourceID(recognizer),
                 kind: kind,
                 location: recognizer.location(in: self),
-                timestampSeconds: CACurrentMediaTime()
+                timestampSeconds: CACurrentMediaTime(),
+                isHover: true
             ),
         ])
     }
