@@ -17,6 +17,27 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
     private var conversionAcknowledgements: Set<String> = []
     private var deadlineHandler: (@Sendable (JourneyDeadline) async -> Bool)?
+    private var resumeRetryHandler: (@Sendable () async -> Bool)?
+    private var _resumeRetryRequested = false
+    public var resumeRetryRequested: Bool { lock.withLock { _resumeRetryRequested } }
+    public func setJourneyResumeRetryHandler(_ handler: (@Sendable () async -> Bool)?) async {
+        lock.withLock {
+            resumeRetryHandler = handler
+            if handler == nil { _resumeRetryRequested = false }
+        }
+    }
+    public func requestJourneyResumeRetry() async {
+        lock.withLock { _resumeRetryRequested = true }
+    }
+    public func retryJourneyResume() async -> Bool {
+        let handler = lock.withLock {
+            _resumeRetryRequested = false
+            return resumeRetryHandler
+        }
+        let resumed = await handler?() ?? true
+        if !resumed { lock.withLock { _resumeRetryRequested = true } }
+        return resumed
+    }
     public func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async {
         lock.withLock { deadlineHandler = handler }
     }
@@ -866,6 +887,8 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             _routedEvents.removeAll()
             conversionAcknowledgements.removeAll()
             deadlineHandler = nil
+            resumeRetryHandler = nil
+            _resumeRetryRequested = false
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
             _preparedTriggerBeforeSend = nil

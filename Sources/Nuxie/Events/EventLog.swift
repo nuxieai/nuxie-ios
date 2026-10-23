@@ -94,6 +94,7 @@ private enum RouteResolution: Sendable {
 
 private enum RouteCommand: Sendable {
   case retryFailedDeliveries
+  case retryJourneyResume
   case recoverStableRoutes(
     distinctId: String, generation: UInt64, admissions: [UInt64: UInt64],
     completion: CheckedContinuation<Bool, Never>?
@@ -373,6 +374,9 @@ protocol EventLogProtocol:
   func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async
   /// This control route belongs only to JourneyService, independent of event filters.
   func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async
+  /// Retries saved Journey inputs on the same timer as a refused local head.
+  func setJourneyResumeRetryHandler(_ handler: (@Sendable () async -> Bool)?) async
+  func requestJourneyResumeRetry() async
 
   func firstPendingStableRouteEventId(distinctId: String) async throws -> String?
 
@@ -600,6 +604,9 @@ actor EventLog: EventLogProtocol {
   private var routeWorker: Task<Void, Never>?
   private var routingDeferred = false
   private var journeyDeadlineHandler: (@Sendable (JourneyDeadline) async -> Bool)?
+  private var journeyResumeRetryHandler: (@Sendable () async -> Bool)?
+  private var journeyResumeRetryPending = false
+  private var journeyResumeRetryQueued = false
   private var routeRetryTask: Task<Void, Never>?
   private var acknowledgementRetryTask: Task<Void, Never>?
   private var routingDeferralGeneration: UInt64 = 0
@@ -1469,6 +1476,17 @@ actor EventLog: EventLogProtocol {
     journeyDeadlineHandler = handler
   }
 
+  func setJourneyResumeRetryHandler(_ handler: (@Sendable () async -> Bool)?) async {
+    journeyResumeRetryHandler = handler
+    if handler == nil { journeyResumeRetryPending = false }
+  }
+
+  func requestJourneyResumeRetry() async {
+    guard journeyResumeRetryHandler != nil, !closeFlag.isClosed else { return }
+    journeyResumeRetryPending = true
+    scheduleRouteRetry()
+  }
+
   func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async {
     guard !closeFlag.isClosed else { return }
     // Stable captures serialize here and ordinary captures enter the capture
@@ -1554,6 +1572,13 @@ actor EventLog: EventLogProtocol {
     switch cmd {
     case .retryFailedDeliveries:
       await retryFailedCommittedRoutes()
+
+    case .retryJourneyResume:
+      journeyResumeRetryPending = false
+      let resumed = await journeyResumeRetryHandler?() ?? true
+      journeyResumeRetryQueued = false
+      if !resumed { journeyResumeRetryPending = true }
+      scheduleRouteRetry()
 
     case .resumeAfterRecovery, .recoverStableRoutes, .releaseHold:
       return
@@ -1767,9 +1792,10 @@ actor EventLog: EventLogProtocol {
   }
 
   private func scheduleRouteRetry() {
-    // Every failed local head uses this timer, whether or not a deadline is
-    // queued. A fixed one-second delay stays bounded, with no retry limit.
-    guard routeRetryTask == nil, !closeFlag.isClosed, hasFailedCommittedRoutes else { return }
+    // Failed local heads and saved Journey inputs share a fixed one-second
+    // delay, without a deadline requirement or a limit on attempts.
+    guard routeRetryTask == nil, !closeFlag.isClosed,
+          hasFailedCommittedRoutes || (journeyResumeRetryPending && !journeyResumeRetryQueued) else { return }
     routeRetryTask = Task { [weak self] in
       do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
       await self?.retryRouteWork()
@@ -1779,7 +1805,11 @@ actor EventLog: EventLogProtocol {
   private func retryRouteWork() {
     routeRetryTask = nil
     guard !closeFlag.isClosed else { return }
-    routeContinuation.yield(.retryFailedDeliveries)
+    if hasFailedCommittedRoutes { routeContinuation.yield(.retryFailedDeliveries) }
+    if journeyResumeRetryPending, !journeyResumeRetryQueued {
+      journeyResumeRetryQueued = true
+      routeContinuation.yield(.retryJourneyResume)
+    }
   }
 
   private func acknowledgeStableRouteIfNeeded(_ eventId: String?) async {

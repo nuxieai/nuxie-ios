@@ -13,8 +13,17 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         let snapshot = replacing(try await authenticatedRenderedSnapshot(fixture), steps: [
             .init(kind: .action, id: "present", action: ["type": .string("navigate"),
                 "screenId": .string("screen_welcome")], outlets: [:], outcome: nil),
-            .init(kind: .action, id: "wait", action: ["type": .string("wait_until"),
+            // The routed signal satisfies this first wait. The next wait
+            // needs a distinct event because this branch retains the signal
+            // across controls; replay exclusion is checked by native reads.
+            .init(kind: .action, id: "consume_continue", action: ["type": .string("wait_until"),
                 "trigger": .object(["kind": .string("event"), "eventName": .string("continue")]),
+                "condition": .object(["type": .string("Truthy"),
+                    "value": .object(["type": .string("Boolean"), "value": .bool(true)])]),
+                "maxTimeMs": .number(10_000)],
+                outlets: ["satisfied": "wait", "timeout": "timed_out"], outcome: nil),
+            .init(kind: .action, id: "wait", action: ["type": .string("wait_until"),
+                "trigger": .object(["kind": .string("event"), "eventName": .string("finish")]),
                 "condition": .object(["type": .string("Truthy"),
                     "value": .object(["type": .string("Boolean"), "value": .bool(true)])]),
                 "maxTimeMs": .number(10_000)],
@@ -22,7 +31,7 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
             .init(kind: .complete, id: "done", action: nil, outlets: nil, outcome: "completed"),
             .init(kind: .complete, id: "timed_out", action: nil, outlets: nil, outcome: "timed_out"),
         ], routes: [.init(host: .init(kind: .screen, screenId: "screen_welcome"),
-                         eventName: "continue", entryStepId: "wait")])
+                         eventName: "continue", entryStepId: "consume_continue")])
         let clock = MockDateProvider(initialDate: Date(timeIntervalSince1970: 1_000_000))
         let identity = MockIdentityService()
         identity.setDistinctId("customer")
@@ -30,11 +39,15 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         let events = EventLog(identity: identity, dateProvider: clock, apiClient: MockNuxieApi(), store: store)
         let failReads = JourneyCompletionFlag()
         let repaired = JourneyCompletionFlag()
+        let nativeReads = JourneyBeforeSendCallRecorder()
         let presenter = await MainActor.run { RecordingJourneyPresenter() }
         let service = JourneyService(identity: identity, events: events, dateProvider: clock,
             sleepProvider: MockSleepProvider(), journalDirectory: directory, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events), presenter: presenter,
-            readJournalRuns: { journal in
+            readNativeValues: { values in
+                nativeReads.record()
+                return try await values.journeyValues()
+            }, readJournalRuns: { journal in
                 if failReads.isCompleted, !repaired.isCompleted { throw JourneyJournalError.invalidState }
                 return try await journal.runs()
             }, pinnedReleaseAuthenticator: { _, _ in throw JourneyJournalError.invalidState },
@@ -69,10 +82,13 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         }
         let beforeFailure = try await journal.runs().first
         XCTAssertNotNil(beforeFailure?.park)
+        XCTAssertEqual(beforeFailure?.stepId, "wait")
+        XCTAssertGreaterThan(nativeReads.callCount, 0, "The owning run uses the native evaluation seam")
         failReads.finish()
         let released = await events.releaseCommittedRouting(ifGeneration: hold)
         XCTAssertFalse(released, "The event remains undelivered after the journal read fails")
         repaired.finish()
+        let readsBeforeReplay = nativeReads.callCount
         let replayed = await events.replayPendingStableRoutes(distinctId: "customer")
         XCTAssertTrue(replayed)
         await events.drain()
@@ -80,7 +96,9 @@ final class JourneyPresentationAdmissionTests: JourneyTestCase {
         XCTAssertEqual(afterReplay?.park, beforeFailure?.park,
                        "Replay must still exclude the run that directly routed this publication")
         XCTAssertNil(afterReplay?.completion)
-        events.track("continue")
+        XCTAssertEqual(nativeReads.callCount, readsBeforeReplay,
+                       "The publication's owning run must be excluded from replay evaluation")
+        events.track("finish")
         await events.drain()
         let completion = store.storedEvents.last { $0.name == JourneyEvents.journeyCompleted }
         XCTAssertEqual(completion?.getPropertiesDict()["outcome"] as? String, "completed",

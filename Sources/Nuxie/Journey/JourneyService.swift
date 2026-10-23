@@ -356,6 +356,16 @@ extension JourneyService {
         await events.setJourneyDeadlineHandler { [weak self] deadline in
             await self?.handleJourneyDeadline(deadline) ?? false
         }
+        await events.setJourneyResumeRetryHandler { [weak self] in
+            guard let self else { return true }
+            do {
+                try await self.resumeParkedRuns(event: nil)
+                return true
+            } catch {
+                LogWarning("JourneyService: saved input resume will retry: \(error)")
+                return false
+            }
+        }
         startupRoutingDeferral = await events.deferCommittedRouting()
         if startupOpensJournal(for: identity.getDistinctId()) {
             await prepareJournal(for: identity.getDistinctId())
@@ -410,6 +420,7 @@ extension JourneyService {
         foreground = false
         cancelWake()
         await events.setJourneyDeadlineHandler(nil)
+        await events.setJourneyResumeRetryHandler(nil)
         await presenter?.setJourneyPresentationAvailabilityHandler(nil)
         await profileDidClearAll()
         await experimentExposures.cancelAndAwaitRetries()
@@ -1737,6 +1748,10 @@ private extension JourneyService {
     }
 
     private func registerNativeRestoreRetry(runID: String, checkpoint: ParkCheckpoint) {
+        // Restoration owns this checkpoint's retry until it succeeds.
+        cancelWake()
+        if nativeRestoreRetries[runID]?.checkpoint == checkpoint,
+           nativeRestoreRetryTasks[runID] != nil { return }
         let retry = NativeRestoreRetry(checkpoint: checkpoint,
             at: dateProvider.now().addingTimeInterval(5))
         nativeRestoreRetries[runID] = retry
@@ -1750,8 +1765,8 @@ private extension JourneyService {
     }
 
     private func retryNativeRestoration(runID: String, checkpoint: ParkCheckpoint) async {
+        guard nativeRestoreRetries[runID]?.checkpoint == checkpoint else { return }
         nativeRestoreRetryTasks.removeValue(forKey: runID)
-        guard foreground, nativeRestoreRetries[runID]?.checkpoint == checkpoint else { return }
         // This retries native state only. Timed waits still need their queued
         // deadline or an accepted event before they can resume.
         try? await resumeParkedRuns(event: nil, nativeRetry: (runID, checkpoint))
@@ -1772,7 +1787,8 @@ private extension JourneyService {
         } catch {
             LogWarning("JourneyService: failed to inspect parked Journeys: \(error)")
             if event != nil || deadline != nil { throw error }
-            await scheduleNextWake()
+            cancelWake()
+            await events.requestJourneyResumeRetry()
             return
         }
         do {
@@ -1935,6 +1951,7 @@ private extension JourneyService {
         } catch {
             LogWarning("JourneyService: failed to resume parked Journey: \(error)")
             if event != nil || deadline != nil { throw error }
+            await events.requestJourneyResumeRetry()
         }
         await scheduleNextWake()
     }
@@ -4113,11 +4130,9 @@ private extension JourneyService {
         guard initialized, let journal, isCurrentIdentity(journal: journal) else { return }
         let schedulingGeneration = wakeGeneration
         let inspectedJournalGeneration = journalGeneration
-        let deadlines: [JourneyDeadline]
+        let runs: [JourneyRun]
         do {
-            deadlines = try await readJournalRuns(journal).compactMap {
-                deadline(for: $0, distinctId: journal.distinctId)
-            }
+            runs = try await readJournalRuns(journal)
         } catch {
             LogWarning("JourneyService: failed to inspect park points: \(error)")
             // A failed scheduling read must not lose a durable park. The next
@@ -4131,22 +4146,36 @@ private extension JourneyService {
         guard schedulingGeneration == wakeGeneration,
               inspectedJournalGeneration == journalGeneration,
               isCurrentIdentity(journal: journal) else { return }
+        let deadlines = runs.compactMap { deadline(for: $0, distinctId: journal.distinctId) }
+        let savedInputRunIds = Set(runs.filter {
+            $0.park?.pendingEvent != nil || $0.park?.candidateEvents?.isEmpty == false
+        }.map(\.id))
         let current = Set(deadlines)
         enqueuedDeadlines.formIntersection(current)
         foregroundDeadlines.formIntersection(current)
         deadlineRetryAt = deadlineRetryAt.filter { current.contains($0.key) }
-        let pending = deadlines.filter { !enqueuedDeadlines.contains($0) && !foregroundDeadlines.contains($0) }
+        var savedInputRetryNeeded = false
+        let pending = deadlines.filter { deadline in
+            let restoring = nativeRestoreRetries[deadline.runId].map {
+                $0.checkpoint.stepId == deadline.stepId && $0.checkpoint.anchorAt == deadline.anchorAt
+                    && $0.checkpoint.wakeAt == deadline.wakeAt
+            } ?? false
+            guard !restoring else { return false }
+            if foreground, savedInputRunIds.contains(deadline.runId) {
+                // Saved inputs have already reached Journeys. Retry their
+                // application through EventLog's timer before timing them out.
+                savedInputRetryNeeded = true
+                return false
+            }
+            return !enqueuedDeadlines.contains(deadline) && !foregroundDeadlines.contains(deadline)
+        }
         let now = dateProvider.now()
         let dated = pending.map { deadline -> (deadline: JourneyDeadline, at: Date) in
-            let nativeRetry = nativeRestoreRetries[deadline.runId].flatMap {
-                $0.checkpoint.stepId == deadline.stepId && $0.checkpoint.anchorAt == deadline.anchorAt
-                    && $0.checkpoint.wakeAt == deadline.wakeAt ? $0.at : nil
-            }
-            return (deadline, max(deadline.wakeAt, deadlineRetryAt[deadline] ?? deadline.wakeAt,
-                                  nativeRetry ?? deadline.wakeAt))
+            return (deadline, max(deadline.wakeAt, deadlineRetryAt[deadline] ?? deadline.wakeAt))
         }
         let due = dated.filter { $0.at <= now }.map(\.deadline)
         enqueuedDeadlines.formUnion(due)
+        if savedInputRetryNeeded { await events.requestJourneyResumeRetry() }
         for deadline in due { await events.enqueueJourneyDeadline(deadline) }
         guard schedulingGeneration == wakeGeneration,
               inspectedJournalGeneration == journalGeneration else { return }

@@ -128,6 +128,77 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         }
     }
 
+    func testSavedMatchingEventRetriesFailedForegroundResumeBeforeItsDeadline() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writes = JourneyJournalPersistenceFailures()
+        let failedWrite = JourneyCompletionFlag()
+        let retryRead = JourneyNthRoutedCaptureGate(eventName: "saved-resume", suspendedCall: 1)
+        let completed = expectation(description: "The saved match resumes on the shared route retry timer")
+        let live = try await liveTimedWait(directory: directory,
+            step: Self.waitSteps(eventName: "go", maxTimeMillis: 60_000)[0],
+            readNativeValues: { values in
+                if failedWrite.isCompleted { await retryRead.intercept(event: "saved-resume") }
+                return try await values.journeyValues()
+            }, journalBeforePersist: {
+                do { try writes.beforePersist() }
+                catch { failedWrite.finish(); throw error }
+            },
+            afterJourney: { event, _ in
+                if event.name == JourneyEvents.journeyCompleted { completed.fulfill() }
+            }, screens: [Self.backgroundScreen])
+        live.events.track("start_waiting")
+        await live.events.drain()
+        await live.service.onAppDidEnterBackground()
+        live.clock.advance(by: 0.1)
+        live.events.track("go")
+        await live.events.drain()
+        let journal = try JourneyRunJournal(directory: directory, distinctId: "customer")
+        let savedRuns = try await journal.runs()
+        let saved = try XCTUnwrap(savedRuns.first)
+        XCTAssertEqual(saved.park?.pendingEvent?.name, "go")
+        XCTAssertTrue(live.store.pendingCommittedRoutes.isEmpty,
+                      "EventLog has acknowledged the match; event delivery cannot rescue the park")
+        let deadlines = JourneyDeadlineRecorder()
+        let service = live.service
+        await live.events.setJourneyDeadlineHandler { [weak service] deadline in
+            await deadlines.append(deadline)
+            return await service?.handleJourneyDeadline(deadline) ?? true
+        }
+        // Foreground first confirms the saved pendingEvent, then resumeParked
+        // writes its selected outlet and consumes the park. Fail that second
+        // write exactly once, leaving the matching event durably saved.
+        writes.failAfterSuccessfulWrites(1)
+        await live.service.onAppBecameActive()
+        XCTAssertTrue(failedWrite.isCompleted)
+        let retained = try await journal.runs()
+        XCTAssertEqual(retained.first?.park, saved.park)
+        XCTAssertEqual(completions(in: live.store), [])
+        XCTAssertTrue(live.sleeper.pendingSleepDurations.isEmpty,
+                      "The shared route timer owns the retry; no immediate or deadline wake is armed")
+
+        // The gate keeps the failed-state assertions stable if this task is
+        // descheduled for longer than the timer's interval on a busy machine.
+        await retryRead.release()
+        // No new capture, lifecycle callback, mock sleep completion, or clock
+        // advance: the same real one-second timer used for refused heads retries.
+        await fulfillment(of: [completed], timeout: 5)
+        await live.events.drain()
+        XCTAssertEqual(completions(in: live.store), ["satisfied"])
+        XCTAssertEqual(live.clock.now(), Date(timeIntervalSince1970: 1000.1))
+        XCTAssertGreaterThan(try XCTUnwrap(saved.park?.wakeAt), live.clock.now())
+        let deliveredDeadlines = await deadlines.values
+        XCTAssertTrue(deliveredDeadlines.isEmpty, "The original deadline must not rescue the saved match")
+        live.clock.advance(by: 60)
+        live.sleeper.completeAllSleeps()
+        await live.events.drain()
+        let lateDeadlines = await deadlines.values
+        XCTAssertTrue(lateDeadlines.isEmpty, "Completing the saved match cancels its deadline")
+        XCTAssertEqual(completions(in: live.store), ["satisfied"])
+        await live.service.shutdown()
+        await live.events.close()
+    }
+
     func testFailedJournalInspectionRetriesWithoutAnyParkedRunOrDeadline() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -438,6 +509,7 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
         }
         await service.prepareForEvents()
         await service.profileDidCommit(snapshot, distinctId: "customer")
+        await service.initialize()
         let first = await queued.values
         XCTAssertEqual(first.count, 1)
         // Reopen the same checkpoint without delivering the old queue entry.
