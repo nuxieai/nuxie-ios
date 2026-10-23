@@ -263,6 +263,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"]])
             XCTAssertEqual(base.lifecyclePhase, .active)
             assertActivation(probe, screenID: "screen_1")
+            try await assertTimelineAdvances(base)
         }
     }
 
@@ -281,6 +282,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             coordinator.navigationController(navigation, didShow: base, animated: false)
             await Task.yield()
             assertActivation(probe, screenID: "screen_1")
+            try await assertTimelineAdvances(base)
             XCTAssertEqual(base.lifecyclePhase, .active)
         }
     }
@@ -308,6 +310,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             let after = try await layer.snapshot(screenID: "screen_1").rootInstanceID
             XCTAssertEqual(before, after)
             assertActivation(probe, screenID: "screen_1")
+            try await assertTimelineAdvances(base)
         }
     }
 
@@ -437,10 +440,12 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             coordinator.presentationControllerDidDismiss(presentation)
             await Task.yield()
             assertActivation(probe, screenID: "screen_2")
+            try await assertTimelineAdvances(lower)
             probe.resetActivationRecords()
             let closed = await coordinator.closeTopLayer()
             XCTAssertEqual(closed, .navigated)
             assertActivation(probe, screenID: "screen_1")
+            try await assertTimelineAdvances(base)
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"]])
         }
     }
@@ -548,6 +553,45 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             }
         }
         XCTAssertEqual(result, .navigated)
+    }
+
+    private func assertTimelineAdvances(_ controller: ExperienceScreenViewController,
+        file: StaticString = #filePath, line: UInt = #line) async throws {
+        let before = controller.timelineElapsedSeconds
+        let deadline = Date().addingTimeInterval(2)
+        while controller.timelineElapsedSeconds <= before, Date() < deadline {
+            controller.advance(delta: 1 / 60)
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertGreaterThan(controller.timelineElapsedSeconds, before, file: file, line: line)
+        XCTAssertTrue(controller.view.isUserInteractionEnabled, file: file, line: line)
+        XCTAssertEqual(controller.lifecyclePhase, .active, file: file, line: line)
+    }
+
+    func testPushingSameScreenThenPoppingKeepsScreenTargetedCommandsOnRetainedPage() async throws {
+        try await withCoordinator { coordinator, base, _, _ in
+            try await navigate(coordinator, to: "screen_1", transition: ["type": "push"])
+            XCTAssertEqual(base.navigationController?.viewControllers.count, 2)
+            try await back(coordinator, to: "screen_1")
+            XCTAssertTrue(base.navigationController?.topViewController === base)
+            XCTAssertTrue(coordinator.applyValue(path: .init(viewModelName: "Runtime", path: "keptValue"),
+                value: 73, screenId: "screen_1", instanceId: "row-a"))
+            // These return true only if the surviving controller accepts the queued command.
+            XCTAssertTrue(coordinator.applyListOperation(.clear,
+                path: .init(viewModelName: "LayerHost", path: "screens"), payload: [:],
+                screenId: "screen_1", instanceId: nil))
+            XCTAssertTrue(coordinator.fireTrigger(path: .init(viewModelName: "Runtime", path: "nuxieTrigger"),
+                screenId: "screen_1", instanceId: "row-a"))
+            let page = try XCTUnwrap(base.interactivePage)
+            var snapshot = try await page.snapshot(screenID: "screen_1")
+            let deadline = Date().addingTimeInterval(2)
+            while rootValue("keptValue", in: snapshot) != .number(73), Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+                snapshot = try await page.snapshot(screenID: "screen_1")
+            }
+            XCTAssertEqual(rootValue("keptValue", in: snapshot), .number(73))
+            try await assertTimelineAdvances(base)
+        }
     }
 
     private func assertActivation(_ probe: LayerHostProbe, screenID: String,
