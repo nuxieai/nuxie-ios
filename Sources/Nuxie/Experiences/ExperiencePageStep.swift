@@ -5,6 +5,7 @@ import Foundation
 enum ExperiencePageStep {
     enum Change: Equatable, Sendable {
         case take
+        case position(isBack: Bool)
         case phases([(String, ExperienceScreenLifecyclePhase)], String)
         case begin(String?)
         case end(String?)
@@ -13,6 +14,7 @@ enum ExperiencePageStep {
         static func == (lhs: Self, rhs: Self) -> Bool {
             switch (lhs, rhs) {
             case (.take, .take), (.retire, .retire): return true
+            case let (.position(a), .position(b)): return a == b
             case let (.begin(a), .begin(b)), let (.end(a), .end(b)): return a == b
             case let (.phases(a, x), .phases(b, y)):
                 return x == y && a.count == b.count && zip(a, b).allSatisfy { pair in pair.0.0 == pair.1.0 && pair.0.1 == pair.1.1 }
@@ -63,12 +65,12 @@ enum ExperiencePageStep {
         }
 
         if reduceMotion {
-            try await operations.batch([leaving, entering, .take, .begin(name), .end(name), .retire, hidden, active])
+            try await operations.batch([leaving, entering, .take, .position(isBack: isBack), .begin(name), .end(name), .retire, hidden, active])
         } else if style != .none, let plan {
             try await operations.batch([.take])
             let outgoing = try await operations.register(source, plan.outgoingCompletionEventName)
             let incoming = try await operations.register(target, plan.incomingCompletionEventName)
-            try await operations.batch([.phases([(source, .exiting), (target, .entering)], transition), .begin(name)])
+            try await operations.batch([.phases([(source, .exiting), (target, .entering)], transition), .position(isBack: isBack), .begin(name)])
             try await waitForFrame([outgoing, incoming], duration: plan.watchdogMilliseconds)
             try await operations.batch([.end(name), .retire, hidden, active])
         } else {
@@ -79,7 +81,7 @@ enum ExperiencePageStep {
                 try await waitForFrame([outgoing], duration: plan?.watchdogMilliseconds ?? exit.watchdogMilliseconds ?? 250)
             }
             let incoming = try await plan.asyncMap { try await operations.register(target, $0.incomingCompletionEventName) }
-            try await operations.batch([entering, .take, .begin(name), .retire, hidden])
+            try await operations.batch([entering, .take, .position(isBack: isBack), .begin(name), .retire, hidden])
             if let incoming, let plan {
                 try await waitForFrame([incoming], duration: plan.watchdogMilliseconds)
             }
@@ -154,10 +156,11 @@ struct ExperiencePageStack {
     }
 }
 
-/// Mirrors the fixed list order. A removed row's index is never reused for another kept row.
+/// Mirrors list order and sleep state, including index changes after moves and removals.
 struct ExperiencePageRows {
     enum Mutation: Equatable {
         case append(String, Int)
+        case move(String, Int, Int)
         case collapse(String, Int, Bool)
         case remove(String, Int)
     }
@@ -172,6 +175,20 @@ struct ExperiencePageRows {
         let index = screenIDs.count
         screenIDs.append(screenID)
         return .append(screenID, index)
+    }
+
+    /// Destination indexes are in the list after removing the incoming item.
+    /// Moving preserves the instance and sleep state; taking the row expands it separately.
+    mutating func position(_ screenID: String, relativeTo outgoing: String, isBack: Bool) -> Mutation? {
+        guard screenID != outgoing,
+              let from = screenIDs.firstIndex(of: screenID),
+              let outgoingIndex = screenIDs.firstIndex(of: outgoing) else { return nil }
+        let adjustedOutgoing = outgoingIndex - (from < outgoingIndex ? 1 : 0)
+        let to = adjustedOutgoing + (isBack ? 0 : 1)
+        guard from != to else { return nil }
+        screenIDs.remove(at: from)
+        screenIDs.insert(screenID, at: to)
+        return .move(screenID, from, to)
     }
 
     mutating func remove(_ screenID: String) -> Mutation? {

@@ -134,17 +134,53 @@ final class ExperienceInteractivePageTests: XCTestCase {
         }
     }
 
-    func testIncomingAlwaysAppendsOnTop() async throws {
-        for (style, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["screen_1", "screen_2"]),
+    func testNewRowsAppendOnTopEvenForBack() async throws {
+        for (_, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["screen_1", "screen_2"]),
             (.push, false, ["screen_1", "screen_2"]), (.magicMove, true, ["screen_1", "screen_2"]),
             (.fade, true, ["screen_1", "screen_2"])] {
             try await withLayer { layer, _ in
                 try await layer.insert(screenID: "screen_1", at: 0)
-                try await layer.insertIncoming(screenID: "screen_2", style: style, isBack: back)
+                try await layer.apply([.take, .phases([("screen_1", .exiting), ("screen_2", .entering)], ""),
+                    .position(isBack: back), .begin(nil)], source: "screen_1", target: "screen_2",
+                    reachable: ["screen_1", "screen_2"], reduceMotion: false)
                 _ = try await layer.step(elapsedSeconds: 0)
                 let mounted = await layer.mountedScreenIDs
                 XCTAssertEqual(mounted, expected)
             }
+        }
+    }
+
+    func testNavigateToKeptRowMovesAboveAndBackMovesBelowBeforeRemoval() async throws {
+        try await withLayer { layer, _ in
+            try await layer.insert(screenID: "screen_1", at: 0)
+            try await layer.insert(screenID: "screen_2", at: 1)
+            let original = try await layer.snapshot(screenID: "screen_1")
+            try await layer.apply([.retire], source: "screen_1", target: "screen_2",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            try await layer.apply([.take, .phases([("screen_2", .exiting), ("screen_1", .entering)], "ba"),
+                .position(isBack: false), .begin("ba")], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            let forwardOrder = await layer.mountedScreenIDs
+            XCTAssertEqual(forwardOrder, ["screen_2", "screen_1"])
+            let revisited = try await layer.snapshot(screenID: "screen_1")
+            XCTAssertEqual(revisited.rootInstanceID, original.rootInstanceID)
+            try await layer.apply([.end("ba"), .retire], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            // Set up a Back from screen_2 with the kept target still above it.
+            try await layer.setPhases([("screen_1", .hidden), ("screen_2", .active)])
+            try await layer.apply([.retire], source: "screen_1", target: "screen_2",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            try await layer.apply([.take, .phases([("screen_2", .exiting), ("screen_1", .entering)], "ab.reverse"),
+                .position(isBack: true), .begin("ab.reverse")], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1"], reduceMotion: false)
+            let backOrder = await layer.mountedScreenIDs
+            XCTAssertEqual(backOrder, ["screen_1", "screen_2"])
+            try await layer.apply([.end("ab.reverse"), .retire], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1"], reduceMotion: false)
+            let remaining = await layer.mountedScreenIDs
+            XCTAssertEqual(remaining, ["screen_1"])
+            let landed = try await layer.snapshot(screenID: "screen_1")
+            XCTAssertEqual(landed.rootInstanceID, original.rootInstanceID)
         }
     }
 

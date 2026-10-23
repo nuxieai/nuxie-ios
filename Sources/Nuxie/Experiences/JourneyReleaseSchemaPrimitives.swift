@@ -943,7 +943,7 @@ enum JourneyReleaseSchemaPrimitives {
                     "id", "kind", "sourceScreenId", "destinationScreenId", "durationMs",
                     "source", "destination",
                 ],
-                optional: ["reverse", "defaultPair", "incomingKept"],
+                optional: ["reverse", "defaultPair"],
                 path: "render.transitions[\(index)]"
             )
             try identifier(transition["id"], path: "render.transitions[\(index)].id")
@@ -960,7 +960,6 @@ enum JourneyReleaseSchemaPrimitives {
                 guard screenIDSet.contains(transition[field] as! String) else { try invalid("render.transitions[\(index)].\(field)") }
             }
             try integer(transition["durationMs"], minimum: 0, maximum: 60_000, path: "render.transitions[\(index)].durationMs")
-            if let marker = transition["incomingKept"], !isJSONBoolean(marker) { try invalid("render.transitions[\(index)].incomingKept") }
             if let marker = transition["defaultPair"], !isJSONBoolean(marker) { try invalid("render.transitions[\(index)].defaultPair") }
             try validateEndpoint(transition["source"], path: "render.transitions[\(index)].source")
             try validateEndpoint(transition["destination"], path: "render.transitions[\(index)].destination")
