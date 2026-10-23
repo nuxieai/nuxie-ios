@@ -589,15 +589,52 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var pendingFocus = ExperienceFocusInputQueue()
     private var inputEnabled = true
 
+    // Track submitted input, including the operation currently in flight. Queued
+    // downs that never reached the player need no synthetic terminal event.
+    private var submittedPointers: [Int32: ExperienceInteractivePointerEvent] = [:]
+    private var submittedKeys: [UInt16: UInt8] = [:]
+    private var pendingInputEnd: ExperienceRuntimePresentationStep?
+
+    func endActiveInput() {
+        let exits = submittedPointers.values.sorted { $0.pointerID < $1.pointerID }.map {
+            ExperienceInteractivePointerEvent(kind: .exit, x: $0.x, y: $0.y,
+                pointerID: $0.pointerID, timestamp: $0.timestamp)
+        }
+        let releases: [NuxieNativeFocusInput] = submittedKeys.keys.sorted().map {
+            .key(code: $0, modifiers: submittedKeys[$0]!, pressed: false, repeated: false)
+        }
+        if !exits.isEmpty || !releases.isEmpty {
+            pendingInputEnd = .init(elapsedSeconds: 0,
+                pointers: (pendingInputEnd?.pointers ?? []) + exits,
+                focusInputs: (pendingInputEnd?.focusInputs ?? []) + releases, requestsRender: false)
+        }
+        submittedPointers.removeAll()
+        submittedKeys.removeAll()
+        pendingPointers.removeAll()
+        pendingFocus.removeAll()
+        pointerInput.reset()
+        semanticPresentationEpoch &+= 1
+        reconcile()
+    }
+
+    private func recordSubmittedInput(_ step: ExperienceRuntimePresentationStep) {
+        for pointer in step.pointers {
+            switch pointer.kind {
+            case .down, .move: submittedPointers[pointer.pointerID] = pointer
+            case .up, .exit: submittedPointers.removeValue(forKey: pointer.pointerID)
+            }
+        }
+        for case let .key(code, modifiers, pressed, _) in step.focusInputs {
+            if pressed { submittedKeys[code] = modifiers }
+            else { submittedKeys.removeValue(forKey: code) }
+        }
+    }
+
     func setInputEnabled(_ enabled: Bool) {
         guard inputEnabled != enabled else { return }
         inputEnabled = enabled
         semanticPresentationEpoch &+= 1
-        if !enabled {
-            pendingPointers.removeAll()
-            pendingFocus = ExperienceFocusInputQueue()
-            pointerInput = ExperienceRuntimePointerInputRouter()
-        }
+        if !enabled { endActiveInput() }
     }
     private var pendingWork: [PendingWork] = []
     private var inFlightWork: PendingWork?
@@ -755,6 +792,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
         guard isStarted || operationInFlight || sessionIsOpen else { return }
         isShuttingDown = true
+        endActiveInput()
         lifecycleGeneration &+= 1
         isStarted = false
         pendingTimestamp = nil
@@ -777,6 +815,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
         if sessionIsOpen {
             do {
+                if let ending = pendingInputEnd {
+                    pendingInputEnd = nil
+                    let result = try await session.perform(.step(ending))
+                    await result.deliver()
+                }
                 _ = try await session.perform(.close)
             } catch {
                 onError(error)
@@ -871,7 +914,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setPresentationVisible(_ visible: Bool) {
         guard isPresentationVisible != visible else { return }
         isPresentationVisible = visible
-        if !visible { pendingFocus.removeAll() }
+        if !visible { endActiveInput() }
         semanticPresentationEpoch &+= 1
         if visible, isTimelineActive {
             frameClock.reset()
@@ -888,7 +931,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func setTimelineActive(_ active: Bool) {
         guard isTimelineActive != active else { return }
         isTimelineActive = active
-        if !active { pendingFocus.removeAll() }
+        if !active { endActiveInput() }
         semanticPresentationEpoch &+= 1
         pendingTimestamp = nil
         frameClock.reset()
@@ -987,6 +1030,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
               let operation = nextOperation() else { return }
 
         operationInFlight = true
+        if case .step(let step) = operation { recordSubmittedInput(step) }
         let context: (epoch: UInt64, generation: UInt64)
         if case .render = operation, let submitted = submittedPresentationContext {
             context = submitted
@@ -1016,6 +1060,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     private func nextOperation() -> ExperienceRuntimePresentationSessionOperation? {
+        // Input termination precedes lifecycle writes, row batches and rendering.
+        if let ending = pendingInputEnd {
+            pendingInputEnd = nil
+            return .step(ending)
+        }
         guard let surfaceView else {
             reportTerminal(ExperienceRuntimePresentationLoopError.disposedSurface)
             return nil
@@ -1540,7 +1589,7 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
     func runtimeSurfaceViewDidReceivePointerEvents(
         _ events: [ExperienceRuntimeViewPointerEvent]
     ) {
-        guard inputEnabled, isStarted,
+        guard inputEnabled, isPresentationVisible, isTimelineActive, isStarted,
               !isShuttingDown,
               terminalError == nil,
               let surfaceView,

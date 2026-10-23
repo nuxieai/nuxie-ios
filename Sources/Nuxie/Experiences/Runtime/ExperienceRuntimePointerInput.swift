@@ -17,17 +17,20 @@ struct ExperienceRuntimeViewPointerEvent: Equatable {
     let kind: ExperienceInteractivePointerKind
     let location: CGPoint
     let timestampSeconds: TimeInterval
+    let isHover: Bool
 
     init(
         source: ExperienceRuntimePointerSourceID,
         kind: ExperienceInteractivePointerKind,
         location: CGPoint,
-        timestampSeconds: TimeInterval = 0
+        timestampSeconds: TimeInterval = 0,
+        isHover: Bool = false
     ) {
         self.source = source
         self.kind = kind
         self.location = location
         self.timestampSeconds = timestampSeconds
+        self.isHover = isHover
     }
 }
 
@@ -63,8 +66,10 @@ struct ExperienceRuntimePointerInputRouter {
             let pointerID: Int32?
             if sample.kind.isTerminal {
                 pointerID = idsBySource.removeValue(forKey: sample.source)
-            } else {
+            } else if sample.kind == .down || sample.isHover {
                 pointerID = existingOrAllocatedID(for: sample.source)
+            } else {
+                pointerID = idsBySource[sample.source]
             }
             guard let pointerID else { continue }
             events.append(ExperienceInteractivePointerEvent(

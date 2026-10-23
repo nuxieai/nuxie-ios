@@ -7,6 +7,80 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
+    func testFreezeEndsSubmittedTouchesAndKeysBeforePageWork() async throws {
+        try await assertInputTermination(cover: false)
+    }
+
+    @MainActor
+    func testCoverEndsSubmittedTouchesAndReleasesHeldKeys() async throws {
+        try await assertInputTermination(cover: true)
+    }
+
+    @MainActor
+    private func assertInputTermination(cover: Bool) async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        try await loop.advanceZeroDelta()
+        let source = NSObject()
+        func touch(_ kind: ExperienceInteractivePointerKind) {
+            loop.runtimeSurfaceViewDidReceivePointerEvents([
+                .init(source: .init(source), kind: kind, location: CGPoint(x: 20, y: 20))
+            ])
+        }
+        touch(.down)
+        XCTAssertTrue(loop.enqueueFocus(.key(code: 65, modifiers: 0, pressed: true, repeated: false)))
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            loop.displayLinkDidFire(at: CACurrentMediaTime())
+            let steps = await recorder.steps()
+            if steps.flatMap(\.pointers).contains(where: { $0.kind == .down }),
+               steps.flatMap(\.focusInputs).contains(.key(code: 65, modifiers: 0, pressed: true, repeated: false)) { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let submitted = await recorder.steps()
+        XCTAssertEqual(submitted.flatMap(\.pointers).map(\.kind), [.down])
+        XCTAssertTrue(submitted.flatMap(\.focusInputs).contains(.key(code: 65, modifiers: 0, pressed: true, repeated: false)))
+        // Cover uses the same gate before hiding; a reduced-motion step uses it
+        // before its cut batch, just as an animated step does.
+        loop.setInputEnabled(false)
+        if cover { loop.setTimelineActive(false); loop.setPresentationVisible(false) }
+        touch(.up)
+        try await loop.advanceZeroDelta(after: .init {
+            let steps = await recorder.steps()
+            XCTAssertEqual(steps.flatMap(\.pointers).map(\.kind), [.down, .exit])
+            XCTAssertEqual(steps.flatMap(\.focusInputs), [
+                .key(code: 65, modifiers: 0, pressed: true, repeated: false),
+                .key(code: 65, modifiers: 0, pressed: false, repeated: false)
+            ])
+            return .work(requestsFrame: false)
+        })
+        loop.setInputEnabled(true)
+        loop.setPresentationVisible(true)
+        loop.setTimelineActive(true)
+        touch(.move)
+        touch(.up)
+        try await loop.advanceZeroDelta()
+        let beforeFreshTouch = await recorder.steps()
+        XCTAssertEqual(beforeFreshTouch.flatMap(\.pointers).map(\.kind), [.down, .exit])
+        touch(.down)
+        touch(.up)
+        let nextDeadline = Date().addingTimeInterval(2)
+        while Date() < nextDeadline {
+            loop.displayLinkDidFire(at: CACurrentMediaTime())
+            if await recorder.steps().flatMap(\.pointers).count == 4 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let final = await recorder.steps().flatMap(\.pointers)
+        XCTAssertEqual(final.map(\.kind), [.down, .exit, .down, .up])
+        if final.count >= 2 { XCTAssertEqual(final[0].pointerID, final[1].pointerID) }
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testLayerInputGateRejectsEditorWorkQueuedBeforeTheStep() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let recorder = PresentationSessionRecorder(device: device)

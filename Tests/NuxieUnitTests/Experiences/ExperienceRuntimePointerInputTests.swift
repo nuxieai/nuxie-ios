@@ -89,7 +89,7 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                     for: sources.map { source in
                         ExperienceRuntimeViewPointerEvent(
                             source: ExperienceRuntimePointerSourceID(source),
-                            kind: .move,
+                            kind: .down,
                             location: CGPoint(x: 20, y: 30)
                         )
                     },
@@ -184,7 +184,8 @@ final class ExperienceRuntimePointerInputTests: QuickSpec {
                         ExperienceRuntimeViewPointerEvent(
                             source: hoverSource,
                             kind: .move,
-                            location: CGPoint(x: 40, y: 50)
+                            location: CGPoint(x: 40, y: 50),
+                            isHover: true
                         ),
                         ExperienceRuntimeViewPointerEvent(
                             source: hoverSource,
