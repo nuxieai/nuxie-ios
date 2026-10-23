@@ -1,10 +1,67 @@
 import Foundation
-import Quick
 import Nimble
+import Quick
+import XCTest
 @_spi(Testing) @testable import Nuxie
 #if SWIFT_PACKAGE
 @testable import NuxieTestSupport
 #endif
+
+private struct FeatureCommandWaitTimedOut: Error, CustomStringConvertible, LocalizedError {
+    let operation: String
+    var description: String { "Timed out waiting for \(operation)" }
+    var errorDescription: String? { description }
+}
+
+/// Resume the test even if the operation ignores task cancellation. A task
+/// group would join that blocked operation after its timeout child finished.
+@MainActor
+private final class FeatureCommandWait<Value: Sendable> {
+    private var continuation: CheckedContinuation<Value, Error>?
+    var operationTask: Task<Void, Never>?
+    var timeoutTask: Task<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<Value, Error>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Result<Value, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        operationTask = nil
+        timeoutTask = nil
+        continuation.resume(with: result)
+    }
+}
+
+@MainActor
+private func featureCommandAwait<Value: Sendable>(
+    _ operationName: String,
+    timeoutNanoseconds: UInt64 = 10_000_000_000,
+    operation: @escaping @MainActor () async throws -> Value
+) async throws -> Value {
+    try Task.checkCancellation()
+    return try await withCheckedThrowingContinuation { continuation in
+        let wait = FeatureCommandWait<Value>(continuation)
+        wait.operationTask = Task { @MainActor in
+            do {
+                try Task.checkCancellation()
+                let value = try await operation()
+                try Task.checkCancellation()
+                wait.finish(.success(value))
+            } catch {
+                wait.finish(.failure(error))
+            }
+        }
+        wait.timeoutTask = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: timeoutNanoseconds) }
+            catch { return }
+            wait.finish(.failure(FeatureCommandWaitTimedOut(operation: operationName)))
+        }
+    }
+}
 
 private actor FeatureCommandForwardingRecorder {
     private var events: [NuxieEvent] = []
@@ -49,137 +106,242 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
             }
 
             afterEach {
-                await first?.shutdownForCleanup()
-                await relaunched?.shutdownForCleanup()
-                if let storageURL {
+                let stacks = [first, relaunched].compactMap { $0 }
+                first = nil
+                relaunched = nil
+                var cleaned = true
+                for (index, stack) in stacks.enumerated() {
+                    do {
+                        try await featureCommandAwait("stack \(index) teardown") {
+                            await stack.shutdownForCleanup()
+                        }
+                    } catch {
+                        cleaned = false
+                        XCTFail(String(describing: error))
+                    }
+                }
+                if cleaned, let storageURL {
                     try? FileManager.default.removeItem(at: storageURL)
+                }
+            }
+
+            it("bounds a drain behind an explicit hold and releases its suspended barrier") {
+                first = try await featureCommandAwait("boot held-drain stack") {
+                    try await OrchestrationStack.boot(
+                        storageURL: storageURL,
+                        api: MockNuxieApi(),
+                        dateProvider: MockDateProvider(),
+                        sleepProvider: MockSleepProvider(),
+                        distinctId: "held-drain-customer",
+                        configure: { $0.testingOverrides.suppressBackgroundWork = true }
+                    )
+                }
+                let stack = try unwrap(first)
+                let hold = try await featureCommandAwait("hold routing") {
+                    await stack.eventLog.deferCommittedRouting()
+                }
+                var drainStarted = false
+                do {
+                    try await featureCommandAwait("intentionally held drain", timeoutNanoseconds: 100_000_000) {
+                        drainStarted = true
+                        await stack.eventLog.drain()
+                    }
+                    XCTFail("The explicit hold must retain the drain barrier")
+                } catch let error as FeatureCommandWaitTimedOut {
+                    expect(error.operation).to(equal("intentionally held drain"))
+                }
+                expect(drainStarted).to(beTrue())
+                // The timeout cancels its task, but that task is still waiting
+                // on a continuation. Releasing the hold must settle it safely.
+                let released = try await featureCommandAwait("release held drain") {
+                    await stack.eventLog.releaseCommittedRouting(ifGeneration: hold)
+                }
+                expect(released).to(beTrue())
+                try await featureCommandAwait("drain after releasing hold") {
+                    await stack.eventLog.drain()
                 }
             }
 
             it("automatically retries a refused local head and releases later captures without a deadline") {
                 let gate = OrchestrationLocalDeliveryGate()
-                first = try await OrchestrationStack.boot(
-                    storageURL: storageURL,
-                    api: MockNuxieApi(),
-                    dateProvider: MockDateProvider(),
-                    sleepProvider: MockSleepProvider(),
-                    distinctId: "local-retry-customer",
-                    localDeliveryHandler: { event, _ in await gate.handle(event) },
-                    configure: { $0.testingOverrides.suppressBackgroundWork = true }
-                )
+                let date = MockDateProvider()
+                let originalDate = date.now()
+                let sleep = MockSleepProvider()
+                first = try await featureCommandAwait("boot orchestration stack") {
+                    try await OrchestrationStack.boot(
+                        storageURL: storageURL,
+                        api: MockNuxieApi(),
+                        dateProvider: date,
+                        sleepProvider: sleep,
+                        distinctId: "local-retry-customer",
+                        localDeliveryHandler: { event, _ in await gate.handle(event) },
+                        configure: { $0.testingOverrides.suppressBackgroundWork = true }
+                    )
+                }
                 let stack = try unwrap(first)
                 stack.eventLog.track("retry_head", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
                 stack.eventLog.track("retry_follower", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
-                await stack.eventLog.drain()
-                for _ in 0..<500 {
-                    if await gate.refusals >= 2 { break }
-                    try await Task.sleep(nanoseconds: 10_000_000)
+                try await featureCommandAwait("drain with a refused local head") {
+                    await stack.eventLog.drain()
                 }
-                let refusals = await gate.refusals
-                let blocked = await gate.delivered
+                let refusedDrain = try await featureCommandAwait("inspect the refused local head") {
+                    await stack.eventLog.drainCommittedRouting()
+                }
+                expect(refusedDrain).to(beFalse())
+                // No replay, clock advance, mock sleep completion, or new
+                // capture drives this retry: the production route timer does.
+                try await featureCommandAwait("automatic retry of the refused local head") {
+                    while await gate.refusals < 2 {
+                        try await Task.sleep(nanoseconds: 10_000_000)
+                    }
+                }
+                let refusals = try await featureCommandAwait("read local delivery refusals") {
+                    await gate.refusals
+                }
+                let blocked = try await featureCommandAwait("read local deliveries") {
+                    await gate.delivered
+                }
                 expect(refusals).to(beGreaterThanOrEqualTo(2))
                 expect(blocked).to(beEmpty())
-                await gate.accept()
-                for _ in 0..<500 {
-                    if await gate.delivered.count == 2 { break }
-                    try await Task.sleep(nanoseconds: 10_000_000)
+                try await featureCommandAwait("accept local deliveries") {
+                    await gate.accept()
                 }
-                await stack.eventLog.drain()
-                let delivered = await gate.delivered
+                try await featureCommandAwait("automatic release of the follower") {
+                    while await gate.delivered.count < 2 {
+                        try await Task.sleep(nanoseconds: 10_000_000)
+                    }
+                }
+                try await featureCommandAwait("drain local event delivery") {
+                    await stack.eventLog.drain()
+                }
+                let delivered = try await featureCommandAwait("read local deliveries") {
+                    await gate.delivered
+                }
                 expect(delivered).to(equal(["retry_head", "retry_follower"]))
-                let drained = await stack.eventLog.drainCommittedRouting()
+                let drained = try await featureCommandAwait("drain committed routing") {
+                    await stack.eventLog.drainCommittedRouting()
+                }
                 expect(drained).to(beTrue())
-                let history = await stack.eventLog.getEventsForUser("local-retry-customer", limit: 20)
+                let history = try await featureCommandAwait("read local retry history") {
+                    await stack.eventLog.getEventsForUser("local-retry-customer", limit: 20)
+                }
                 expect(history.filter { $0.name.hasPrefix("retry_") }.count).to(equal(2))
+                expect(date.now()).to(equal(originalDate))
+                expect(sleep.pendingSleepDurations).to(beEmpty())
             }
 
             it("retries an accepted timeout without overwriting a newer profile balance") {
                 let api = MockNuxieApi()
-                await api.configureTrackEventResponse(
-                    status: "ok",
-                    usage: .init(current: 6, limit: 10, remaining: 4)
-                )
-                await api.setAcceptedTrackEventTimeouts(1)
+                try await featureCommandAwait("configure feature response") {
+                    await api.configureTrackEventResponse(
+                        status: "ok",
+                        usage: .init(current: 6, limit: 10, remaining: 4)
+                    )
+                }
+                try await featureCommandAwait("configure accepted timeout") {
+                    await api.setAcceptedTrackEventTimeouts(1)
+                }
                 let date = MockDateProvider(
                     initialDate: Date(timeIntervalSince1970: 1_788_000_000)
                 )
                 let sleep = MockSleepProvider()
                 let forwarding = FeatureCommandForwardingRecorder()
-                first = try await OrchestrationStack.boot(
-                    storageURL: storageURL,
-                    api: api,
-                    dateProvider: date,
-                    sleepProvider: sleep,
-                    distinctId: "feature-customer",
-                    initialFeatureAccess: [
-                        "ai_generations": .withBalance(
-                            5,
-                            unlimited: false,
-                            type: .creditSystem
-                        )
-                    ],
-                    forwardingHandler: { event in
-                        await forwarding.record(event)
-                    }
-                )
+                first = try await featureCommandAwait("boot orchestration stack") {
+                    try await OrchestrationStack.boot(
+                        storageURL: storageURL,
+                        api: api,
+                        dateProvider: date,
+                        sleepProvider: sleep,
+                        distinctId: "feature-customer",
+                        initialFeatureAccess: [
+                            "ai_generations": .withBalance(
+                                5,
+                                unlimited: false,
+                                type: .creditSystem
+                            )
+                        ],
+                        forwardingHandler: { event in
+                            await forwarding.record(event)
+                        }
+                    )
+                }
                 let firstStack = try unwrap(first)
 
-                await expect {
-                    try await firstStack.core.featureUseCommands.use(
-                        distinctId: "feature-customer",
-                        featureId: "ai_generations",
-                        amount: 1,
-                        entityId: "project-7",
-                        setUsage: false,
-                        metadata: ["model": "study-review"]
-                    )
-                }.to(throwError(NuxieNetworkError.timeout))
+                do {
+                    _ = try await featureCommandAwait("consume feature with accepted timeout") {
+                        try await firstStack.core.featureUseCommands.use(
+                            distinctId: "feature-customer",
+                            featureId: "ai_generations",
+                            amount: 1,
+                            entityId: "project-7",
+                            setUsage: false,
+                            metadata: ["model": "study-review"]
+                        )
+                    }
+                    XCTFail("Expected the accepted request to time out")
+                } catch NuxieNetworkError.timeout {}
 
-                let firstSentEvents = await api.sentEvents
+                let firstSentEvents = try await featureCommandAwait("read API sent events") {
+                    await api.sentEvents
+                }
                 let firstWire = try unwrap(firstSentEvents.last {
                     $0.name == SystemEventNames.featureUsed
                 })
-                let firstPendingCount = try await firstStack.core.featureUseCommands.pendingCount()
+                let firstPendingCount = try await featureCommandAwait("read initial pending commands") {
+                    try await firstStack.core.featureUseCommands.pendingCount()
+                }
                 expect(firstPendingCount).to(equal(1))
-                await firstStack.kill()
+                try await featureCommandAwait("close initial event log") {
+                    await firstStack.kill()
+                }
                 first = nil
                 date.advance(by: 1)
 
-                relaunched = try await OrchestrationStack.boot(
-                    storageURL: storageURL,
-                    api: api,
-                    dateProvider: date,
-                    sleepProvider: sleep,
-                    distinctId: "feature-customer",
-                    initialFeatureAccess: [
-                        "ai_generations": .withBalance(
-                            5,
-                            unlimited: false,
-                            type: .creditSystem
-                        )
-                    ],
-                    forwardingHandler: { event in
-                        await forwarding.record(event)
-                    }
-                )
+                relaunched = try await featureCommandAwait("boot orchestration stack") {
+                    try await OrchestrationStack.boot(
+                        storageURL: storageURL,
+                        api: api,
+                        dateProvider: date,
+                        sleepProvider: sleep,
+                        distinctId: "feature-customer",
+                        initialFeatureAccess: [
+                            "ai_generations": .withBalance(
+                                5,
+                                unlimited: false,
+                                type: .creditSystem
+                            )
+                        ],
+                        forwardingHandler: { event in
+                            await forwarding.record(event)
+                        }
+                    )
+                }
                 let relaunchedStack = try unwrap(relaunched)
 
-                let featureSends = await api.sentEvents.filter {
-                    $0.name == SystemEventNames.featureUsed
+                let featureSends = try await featureCommandAwait("read API sent events") {
+                    await api.sentEvents
+                        .filter { $0.name == SystemEventNames.featureUsed }
                 }
                 expect(featureSends.map(\.id)).to(equal([firstWire.id, firstWire.id]))
-                let uniqueAcceptedCount = await api.uniqueAcceptedTrackEventCount
+                let uniqueAcceptedCount = try await featureCommandAwait("read unique accepted commands") {
+                    await api.uniqueAcceptedTrackEventCount
+                }
                 expect(uniqueAcceptedCount).to(equal(1))
-                let relaunchedPendingCount = try await relaunchedStack.core.featureUseCommands
-                    .pendingCount()
+                let relaunchedPendingCount = try await featureCommandAwait("read relaunched pending commands") {
+                    try await relaunchedStack.core.featureUseCommands.pendingCount()
+                }
                 expect(relaunchedPendingCount).to(equal(0))
 
-                let mirrored = await relaunchedStack.eventLog.getRecentEvents(limit: 20)
-                    .filter { $0.name == SystemEventNames.featureUsed }
+                let mirrored = try await featureCommandAwait("read relaunched mirrored events") {
+                    await relaunchedStack.eventLog.getRecentEvents(limit: 20)
+                        .filter { $0.name == SystemEventNames.featureUsed }
+                }
                 expect(mirrored.map(\.id)).to(equal([firstWire.id]))
-                let forwardedIds = await forwarding.snapshot()
+                let forwardedIds = try await featureCommandAwait("read forwarded event ids") {
+                    await forwarding.snapshot()
+                }
                 expect(forwardedIds).to(equal([firstWire.id]))
-                let balance = await MainActor.run {
+                let balance = try await featureCommandAwait("read feature balance") {
                     relaunchedStack.core.featureInfo.balance("ai_generations")
                 }
                 expect(balance).to(equal(5))
@@ -224,47 +386,61 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 let date = MockDateProvider(initialDate: createdAt)
                 date.advance(by: 1)
                 let forwarding = FeatureCommandForwardingRecorder()
-                relaunched = try await OrchestrationStack.boot(
-                    storageURL: storageURL,
-                    api: api,
-                    dateProvider: date,
-                    sleepProvider: MockSleepProvider(),
-                    distinctId: "feature-customer",
-                    initialFeatureAccess: [
-                        "ai_generations": .withBalance(
-                            5,
-                            unlimited: false,
-                            type: .creditSystem
-                        )
-                    ],
-                    forwardingHandler: { event in
-                        await forwarding.record(event)
-                    }
-                )
+                relaunched = try await featureCommandAwait("boot orchestration stack") {
+                    try await OrchestrationStack.boot(
+                        storageURL: storageURL,
+                        api: api,
+                        dateProvider: date,
+                        sleepProvider: MockSleepProvider(),
+                        distinctId: "feature-customer",
+                        initialFeatureAccess: [
+                            "ai_generations": .withBalance(
+                                5,
+                                unlimited: false,
+                                type: .creditSystem
+                            )
+                        ],
+                        forwardingHandler: { event in
+                            await forwarding.record(event)
+                        }
+                    )
+                }
                 let stack = try unwrap(relaunched)
 
-                let featureSends = await api.sentEvents.filter {
-                    $0.name == SystemEventNames.featureUsed
+                let featureSends = try await featureCommandAwait("read API sent events") {
+                    await api.sentEvents
+                        .filter { $0.name == SystemEventNames.featureUsed }
                 }
                 expect(featureSends).to(beEmpty())
-                let mirrored = await stack.eventLog.getRecentEvents(limit: 20)
-                    .filter { $0.name == SystemEventNames.featureUsed }
+                let mirrored = try await featureCommandAwait("read mirrored events") {
+                    await stack.eventLog.getRecentEvents(limit: 20)
+                        .filter { $0.name == SystemEventNames.featureUsed }
+                }
                 expect(mirrored.map(\.id)).to(equal([operationId]))
-                let forwardedIds = await forwarding.snapshot()
+                let forwardedIds = try await featureCommandAwait("read forwarded event ids") {
+                    await forwarding.snapshot()
+                }
                 expect(forwardedIds).to(equal([operationId]))
-                let balance = await MainActor.run {
+                let balance = try await featureCommandAwait("read feature balance") {
                     stack.core.featureInfo.balance("ai_generations")
                 }
                 expect(balance).to(equal(5))
-                let pendingCount = try await stack.core.featureUseCommands.pendingCount()
+                let pendingCount = try await featureCommandAwait("read pending commands") {
+                    try await stack.core.featureUseCommands.pendingCount()
+                }
                 expect(pendingCount).to(equal(0))
 
-                await stack.core.featureUseCommands.recover()
-                let mirroredAfterSecondRecovery = await stack.eventLog
-                    .getRecentEvents(limit: 20)
-                    .filter { $0.name == SystemEventNames.featureUsed }
+                try await featureCommandAwait("recover feature commands") {
+                    await stack.core.featureUseCommands.recover()
+                }
+                let mirroredAfterSecondRecovery = try await featureCommandAwait("read mirrored events after recovery") {
+                    await stack.eventLog.getRecentEvents(limit: 20)
+                        .filter { $0.name == SystemEventNames.featureUsed }
+                }
                 expect(mirroredAfterSecondRecovery.map(\.id)).to(equal([operationId]))
-                let forwardedAfterSecondRecovery = await forwarding.snapshot()
+                let forwardedAfterSecondRecovery = try await featureCommandAwait("read forwarded event ids") {
+                    await forwarding.snapshot()
+                }
                 expect(forwardedAfterSecondRecovery).to(equal([operationId]))
             }
 
@@ -375,53 +551,61 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
 
                 let api = MockNuxieApi()
                 let forwarding = FeatureCommandForwardingRecorder()
-                relaunched = try await OrchestrationStack.boot(
-                    storageURL: storageURL,
-                    api: api,
-                    dateProvider: MockDateProvider(),
-                    sleepProvider: MockSleepProvider(),
-                    distinctId: "current-customer",
-                    initialFeatureAccess: [
-                        "ai_generations": .withBalance(
-                            5,
-                            unlimited: false,
-                            type: .creditSystem
-                        )
-                    ],
-                    forwardingHandler: { event in
-                        await forwarding.record(event)
-                    },
-                    configure: { configuration in
-                        configuration.beforeSend = { event in
-                            var properties = event.properties
-                            properties["before_send_distinct_id"] =
-                                event.properties["$distinct_id"]
-                            properties["before_send_user_id"] = event.properties["$user_id"]
-                            properties["before_send_anonymous_id"] =
-                                event.properties["$anonymous_id"]
-                            properties["before_send_is_identified"] =
-                                event.properties["$is_identified"]
-                            return NuxieEvent(
-                                id: event.id,
-                                name: event.name,
-                                distinctId: event.distinctId,
-                                properties: properties,
-                                timestamp: event.timestamp
+                relaunched = try await featureCommandAwait("boot orchestration stack") {
+                    try await OrchestrationStack.boot(
+                        storageURL: storageURL,
+                        api: api,
+                        dateProvider: MockDateProvider(),
+                        sleepProvider: MockSleepProvider(),
+                        distinctId: "current-customer",
+                        initialFeatureAccess: [
+                            "ai_generations": .withBalance(
+                                5,
+                                unlimited: false,
+                                type: .creditSystem
                             )
+                        ],
+                        forwardingHandler: { event in
+                            await forwarding.record(event)
+                        },
+                        configure: { configuration in
+                            configuration.beforeSend = { event in
+                                var properties = event.properties
+                                properties["before_send_distinct_id"] =
+                                    event.properties["$distinct_id"]
+                                properties["before_send_user_id"] = event.properties["$user_id"]
+                                properties["before_send_anonymous_id"] =
+                                    event.properties["$anonymous_id"]
+                                properties["before_send_is_identified"] =
+                                    event.properties["$is_identified"]
+                                return NuxieEvent(
+                                    id: event.id,
+                                    name: event.name,
+                                    distinctId: event.distinctId,
+                                    properties: properties,
+                                    timestamp: event.timestamp
+                                )
+                            }
                         }
-                    }
-                )
+                    )
+                }
                 let stack = try unwrap(relaunched)
 
-                let pendingCount = try await stack.core.featureUseCommands.pendingCount()
+                let pendingCount = try await featureCommandAwait("read pending commands") {
+                    try await stack.core.featureUseCommands.pendingCount()
+                }
                 expect(pendingCount).to(equal(0))
-                let mirroredIds = await stack.eventLog.getRecentEvents(limit: 20)
-                    .filter { $0.name == SystemEventNames.featureUsed }
-                    .map(\.id)
+                let mirroredIds = try await featureCommandAwait("read mirrored events") {
+                    await stack.eventLog.getRecentEvents(limit: 20)
+                        .filter { $0.name == SystemEventNames.featureUsed }
+                        .map(\.id)
+                }
                 expect(mirroredIds.count).to(equal(2))
                 expect(Set(mirroredIds)).to(equal(Set([oldOperationId, currentOperationId])))
-                let oldMirrorCandidate = await stack.eventLog.getRecentEvents(limit: 20)
-                    .first { $0.id == oldOperationId }
+                let oldMirrorCandidate = try await featureCommandAwait("read mirrored events") {
+                    await stack.eventLog.getRecentEvents(limit: 20)
+                        .first { $0.id == oldOperationId }
+                }
                 let oldMirror = try unwrap(oldMirrorCandidate)
                 expect(oldMirror.distinctId).to(equal("old-customer"))
                 let oldMirrorProperties = oldMirror.getPropertiesDict()
@@ -436,11 +620,15 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 expect(oldMirrorProperties["before_send_anonymous_id"] as? String)
                     .to(equal("old-anonymous"))
                 expect(oldMirrorProperties["before_send_is_identified"] as? Bool).to(beTrue())
-                let forwardedIds = await forwarding.snapshot()
+                let forwardedIds = try await featureCommandAwait("read forwarded event ids") {
+                    await forwarding.snapshot()
+                }
                 expect(forwardedIds.count).to(equal(2))
                 expect(Set(forwardedIds)).to(equal(Set([oldOperationId, currentOperationId])))
-                let oldForwardedCandidate = await forwarding.eventSnapshot()
-                    .first { $0.id == oldOperationId }
+                let oldForwardedCandidate = try await featureCommandAwait("read forwarded events") {
+                    await forwarding.eventSnapshot()
+                        .first { $0.id == oldOperationId }
+                }
                 let oldForwarded = try unwrap(oldForwardedCandidate)
                 expect(oldForwarded.distinctId).to(equal("old-customer"))
                 expect(oldForwarded.properties["$distinct_id"] as? String)
@@ -456,14 +644,15 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 expect(oldForwarded.properties["before_send_anonymous_id"] as? String)
                     .to(equal("old-anonymous"))
                 expect(oldForwarded.properties["before_send_is_identified"] as? Bool).to(beTrue())
-                let balance = await MainActor.run {
+                let balance = try await featureCommandAwait("read feature balance") {
                     stack.core.featureInfo.balance("ai_generations")
                 }
                 // Both responses predate this process. The newly admitted
                 // profile balance has newer authority and must win.
                 expect(balance).to(equal(5))
-                let featureSends = await api.sentEvents.filter {
-                    $0.name == SystemEventNames.featureUsed
+                let featureSends = try await featureCommandAwait("read API sent events") {
+                    await api.sentEvents
+                        .filter { $0.name == SystemEventNames.featureUsed }
                 }
                 expect(featureSends).to(beEmpty())
             }

@@ -5,7 +5,7 @@ import Foundation
 /// A full production composition root with only transport, time, and the UI
 /// edge replaced. These tests exercise durable adjacent subsystems across
 /// process restarts while using the production Journey composition.
-final class OrchestrationStack {
+final class OrchestrationStack: Sendable {
     let core: NuxieCore
     let experienceService: MockExperienceService
 
@@ -83,6 +83,9 @@ final class OrchestrationStack {
         }
         try await core.eventLog.configure(configuration: core.configuration)
         await core.journeys?.initialize()
+        // This harness does not fetch a startup profile. Settle that phase as
+        // SDK setup does after a suppressed or failed prefetch, releasing its hold.
+        await core.journeys?.finishStartupRouting()
         await core.featureUseCommands.recover()
 
         return OrchestrationStack(
