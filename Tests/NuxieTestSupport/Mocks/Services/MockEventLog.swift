@@ -17,10 +17,10 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
 
     private var conversionAcknowledgements: Set<String> = []
     private var deadlineHandler: (@Sendable (JourneyDeadline) async -> Bool)?
-    func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async {
+    public func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> Bool)?) async {
         lock.withLock { deadlineHandler = handler }
     }
-    func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async {
+    public func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async {
         // This fake routes captures inline too. Ordering and retry tests use
         // the real EventLog and its serial capture/route workers.
         let handler = lock.withLock { deadlineHandler }
