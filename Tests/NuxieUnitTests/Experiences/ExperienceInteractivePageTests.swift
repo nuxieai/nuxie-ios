@@ -140,8 +140,8 @@ final class ExperienceInteractivePageTests: XCTestCase {
             (.fade, true, ["screen_1", "screen_2"])] {
             try await withLayer { layer, _ in
                 try await layer.insert(screenID: "screen_1", at: 0)
-                try await layer.apply([.take, .phases([("screen_1", .exiting), ("screen_2", .entering)], ""),
-                    .position(isBack: back), .begin(nil)], source: "screen_1", target: "screen_2",
+                try await layer.apply([.take, .position(isBack: back), .reconcile, .expand,
+                    .phases([("screen_1", .exiting), ("screen_2", .entering)], ""), .begin(nil)], source: "screen_1", target: "screen_2",
                     reachable: ["screen_1", "screen_2"], reduceMotion: false)
                 _ = try await layer.step(elapsedSeconds: 0)
                 let mounted = await layer.mountedScreenIDs
@@ -154,11 +154,12 @@ final class ExperienceInteractivePageTests: XCTestCase {
         try await withLayer { layer, _ in
             try await layer.insert(screenID: "screen_1", at: 0)
             try await layer.insert(screenID: "screen_2", at: 1)
+            _ = try await layer.step(elapsedSeconds: 0)
             let original = try await layer.snapshot(screenID: "screen_1")
             try await layer.apply([.retire], source: "screen_1", target: "screen_2",
                 reachable: ["screen_1", "screen_2"], reduceMotion: false)
-            try await layer.apply([.take, .phases([("screen_2", .exiting), ("screen_1", .entering)], "ba"),
-                .position(isBack: false), .begin("ba")], source: "screen_2", target: "screen_1",
+            try await layer.apply([.take, .position(isBack: false), .reconcile, .expand,
+                .phases([("screen_2", .exiting), ("screen_1", .entering)], "ba"), .begin("ba")], source: "screen_2", target: "screen_1",
                 reachable: ["screen_1", "screen_2"], reduceMotion: false)
             let forwardOrder = await layer.mountedScreenIDs
             XCTAssertEqual(forwardOrder, ["screen_2", "screen_1"])
@@ -170,8 +171,8 @@ final class ExperienceInteractivePageTests: XCTestCase {
             try await layer.setPhases([("screen_1", .hidden), ("screen_2", .active)])
             try await layer.apply([.retire], source: "screen_1", target: "screen_2",
                 reachable: ["screen_1", "screen_2"], reduceMotion: false)
-            try await layer.apply([.take, .phases([("screen_2", .exiting), ("screen_1", .entering)], "ab.reverse"),
-                .position(isBack: true), .begin("ab.reverse")], source: "screen_2", target: "screen_1",
+            try await layer.apply([.take, .position(isBack: true), .reconcile, .expand,
+                .phases([("screen_2", .exiting), ("screen_1", .entering)], "ab.reverse"), .begin("ab.reverse")], source: "screen_2", target: "screen_1",
                 reachable: ["screen_1"], reduceMotion: false)
             let backOrder = await layer.mountedScreenIDs
             XCTAssertEqual(backOrder, ["screen_1", "screen_2"])
@@ -181,6 +182,41 @@ final class ExperienceInteractivePageTests: XCTestCase {
             XCTAssertEqual(remaining, ["screen_1"])
             let landed = try await layer.snapshot(screenID: "screen_1")
             XCTAssertEqual(landed.rootInstanceID, original.rootInstanceID)
+        }
+    }
+
+    func testReconcileRequiredBeforeExpansionAndAlreadyPlacedRowSkipsStep() async throws {
+        try await withLayer { layer, _ in
+            try await layer.insert(screenID: "screen_1", at: 0)
+            _ = try await layer.step(elapsedSeconds: 0)
+            try await layer.apply([.take, .position(isBack: false)], source: "screen_1", target: "screen_2",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            do {
+                try await layer.apply([.expand], source: "screen_1", target: "screen_2",
+                    reachable: ["screen_1", "screen_2"], reduceMotion: false)
+                XCTFail("Must not call collapse before the runtime reconciles the insert")
+            } catch is ExperienceInteractiveScreenError { }
+            let first = try await layer.apply([.reconcile, .expand], source: "screen_1", target: "screen_2",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            let frame = try XCTUnwrap(first)
+            XCTAssertEqual(frame.mountedScreenIDs, ["screen_1", "screen_2"])
+            XCTAssertEqual(Set(frame.rows.keys), ["screen_1", "screen_2"])
+            let alreadyPlaced = try await layer.apply([.take, .position(isBack: false), .reconcile, .expand],
+                source: "screen_1", target: "screen_2", reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            XCTAssertNil(alreadyPlaced, "No mutation means no reconcile result to deliver again")
+            try await layer.apply([.take, .position(isBack: false)], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            do {
+                try await layer.apply([.expand], source: "screen_2", target: "screen_1",
+                    reachable: ["screen_1", "screen_2"], reduceMotion: false)
+                XCTFail("Must not call collapse before the runtime reconciles the move")
+            } catch is ExperienceInteractiveScreenError { }
+            let moved = try await layer.apply([.reconcile, .expand], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            XCTAssertEqual(moved?.mountedScreenIDs, ["screen_2", "screen_1"])
+            let repeated = try await layer.apply([.reconcile], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            XCTAssertNil(repeated)
         }
     }
 
