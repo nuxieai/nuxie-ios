@@ -1,11 +1,12 @@
 #if canImport(UIKit) && NUXIE_HOSTED_INPUT_TESTS
 import UIKit
 import XCTest
+@testable import NuxieTestSupport
 @testable import NuxieRuntime
 @_spi(Testing) @testable import Nuxie
 
 @MainActor
-final class ExperiencePageHostNavigationTests: XCTestCase {
+final class ExperiencePageHostNavigationTests: JourneyTestCase {
     func testRealCompletionsForwardBackAndRevisitUseOneControllerAndPlayer() async throws {
         try await withCoordinator { coordinator, controller, probe, preparation in
             XCTAssertTrue(controller.isPageController)
@@ -243,8 +244,49 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
         }
     }
 
+    func testJourneyBackFromOneModalAnnouncesOnlyTheDestinationOnce() async throws {
+        try await assertModalBackActivation(modalCount: 1)
+    }
+
+    func testJourneyBackAcrossTwoModalsAnnouncesOnlyTheFinalDestinationOnce() async throws {
+        try await assertModalBackActivation(modalCount: 2)
+    }
+
+    private func assertModalBackActivation(modalCount: Int) async throws {
+        try await withLifecycleCoordinator { coordinator, base, probe, _ in
+            for index in 0..<modalCount {
+                try await navigate(coordinator, to: index.isMultiple(of: 2) ? "screen_2" : "screen_1",
+                    transition: ["type": "modal", "present": "sheet"])
+            }
+            probe.resetActivationRecords()
+            try await back(coordinator, to: "screen_1", steps: modalCount)
+            XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"]])
+            XCTAssertEqual(base.lifecyclePhase, .active)
+            assertActivation(probe, screenID: "screen_1")
+        }
+    }
+
+    func testHostPopAnnouncesTheRevealedPageOnce() async throws {
+        try await withLifecycleCoordinator { coordinator, base, probe, _ in
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "push"])
+            let navigation = try XCTUnwrap(base.navigationController)
+            probe.resetActivationRecords()
+            // Exercise the delegate path used by a completed edge swipe, outside a Journey drain.
+            navigation.popViewController(animated: false)
+            let deadline = Date().addingTimeInterval(2)
+            while probe.shownScreenIDs.isEmpty, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            // A repeated UIKit completion must not announce the same pop again.
+            coordinator.navigationController(navigation, didShow: base, animated: false)
+            await Task.yield()
+            assertActivation(probe, screenID: "screen_1")
+            XCTAssertEqual(base.lifecyclePhase, .active)
+        }
+    }
+
     func testModalOwnsAnotherPlayerAndDismissalRevealsRetainedBase() async throws {
-        try await withCoordinator { coordinator, base, probe, preparation in
+        try await withLifecycleCoordinator { coordinator, base, probe, preparation in
             let layer = try XCTUnwrap(base.interactivePage)
             let before = try await layer.snapshot(screenID: "screen_1").rootInstanceID
             try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet", "closedby": "none"])
@@ -258,13 +300,14 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"]])
             let metrics = await preparation.metrics()
             XCTAssertEqual(metrics.openedSessionCount, 2)
+            probe.resetActivationRecords()
             let result = await coordinator.closeTopLayer()
             XCTAssertEqual(result, .navigated)
             XCTAssertNil(coordinator.topPresentedLayer)
             XCTAssertEqual(coordinator.activeScreenId, "screen_1")
             let after = try await layer.snapshot(screenID: "screen_1").rootInstanceID
             XCTAssertEqual(before, after)
-            XCTAssertEqual(probe.lifecycle.last, "active:screen_1")
+            assertActivation(probe, screenID: "screen_1")
         }
     }
 
@@ -371,7 +414,7 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
     }
 
     func testStackedSheetsAndSwipeDismissalKeepEachLayerIndependent() async throws {
-        try await withCoordinator { coordinator, base, _, preparation in
+        try await withLifecycleCoordinator { coordinator, base, probe, preparation in
             try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet", "height": "medium"])
             let lower = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
             try await navigate(coordinator, to: "screen_1", transition: ["type": "modal", "present": "sheet"])
@@ -381,17 +424,23 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"], ["screen_1"]])
             let metrics = await preparation.metrics()
             XCTAssertEqual(metrics.openedSessionCount, 3)
+            probe.resetActivationRecords()
             let presentation = try XCTUnwrap(upper.navigationController?.presentationController)
             await withCheckedContinuation { continuation in upper.navigationController?.dismiss(animated: false) { continuation.resume() } }
             coordinator.presentationControllerDidDismiss(presentation)
             let deadline = Date().addingTimeInterval(2)
-            while coordinator.activeScreenId != "screen_2", Date() < deadline {
+            while probe.shownScreenIDs.isEmpty, Date() < deadline {
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"]])
             XCTAssertEqual(lower.lifecyclePhase, .active)
+            coordinator.presentationControllerDidDismiss(presentation)
+            await Task.yield()
+            assertActivation(probe, screenID: "screen_2")
+            probe.resetActivationRecords()
             let closed = await coordinator.closeTopLayer()
             XCTAssertEqual(closed, .navigated)
+            assertActivation(probe, screenID: "screen_1")
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"]])
         }
     }
@@ -492,17 +541,52 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
         XCTAssertEqual(result, .navigated)
     }
 
-    private func back(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String, transition: Any? = nil) async throws {
+    private func back(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String, steps: Int = 1, transition: Any? = nil) async throws {
         let result: ExperienceScreenNavigationResult = await withCheckedContinuation { continuation in
-            if !coordinator.back(to: id, steps: 1, transition: transition, completion: { result, _ in continuation.resume(returning: result) }) {
+            if !coordinator.back(to: id, steps: steps, transition: transition, completion: { result, _ in continuation.resume(returning: result) }) {
                 continuation.resume(returning: .failed)
             }
         }
         XCTAssertEqual(result, .navigated)
     }
 
+    private func assertActivation(_ probe: LayerHostProbe, screenID: String,
+        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(probe.lifecycle.filter { $0.hasPrefix("active:") }, ["active:\(screenID)"], file: file, line: line)
+        let journeyID = screenID == "screen_1" ? "screen_welcome" : "screen_details"
+        XCTAssertEqual(probe.shownScreenIDs, [journeyID], file: file, line: line)
+    }
+
+    private func withLifecycleCoordinator(_ body: @MainActor (ExperienceScreenTransitionCoordinator,
+        ExperienceScreenViewController, LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
+        let directory = temporaryDirectory()
+        defer { removeTemporaryDirectoryIfPresent(directory) }
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let identity = MockIdentityService()
+        identity.setDistinctId("customer")
+        let events = MockEventLog()
+        events.identity = identity
+        let presenter = RecordingJourneyPresenter()
+        let service = makeService(identity: identity, events: events, directory: directory, presenter: presenter)
+        await service.initialize()
+        await service.profileDidCommit(snapshot, distinctId: "customer")
+        let request = try XCTUnwrap(presenter.request)
+        try await withCoordinator(onActive: { id in
+            // The native and Journey fixtures use different names for their two Screens.
+            let accepted = await request.onScreenChanged(id == "screen_1" ? "screen_welcome" : "screen_details")
+            XCTAssertTrue(accepted)
+        }) { coordinator, controller, probe, preparation in
+            probe.journeyEvents = events
+            try await body(coordinator, controller, probe, preparation)
+        }
+        // Keep the service alive through every callback and assertion.
+        withExtendedLifetime(service) {}
+    }
+
     private func withCoordinator(payload suppliedPayload: AuthenticatedRuntimePayload? = nil,
-        productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
+        productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil,
+        onActive: (@MainActor (String) async -> Void)? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
         let payload: AuthenticatedRuntimePayload
         if let suppliedPayload { payload = suppliedPayload }
@@ -531,7 +615,10 @@ final class ExperiencePageHostNavigationTests: XCTestCase {
             hostViewController: host, screenDelegate: probe,
             onPresentedScreenDismissed: { _, _ in },
             onScreenHidden: { id, _ in probe.lifecycle.append("hidden:\(id)") },
-            onScreenActive: { id in probe.lifecycle.append("active:\(id)") }, onProductsResolved: { probe.checkoutProducts.append($0) },
+            onScreenActive: { id in
+                probe.lifecycle.append("active:\(id)")
+                await onActive?(id)
+            }, onProductsResolved: { probe.checkoutProducts.append($0) },
             onProductsUnavailable: { _ in XCTFail("Unexpected product resolution failure") },
             onRuntimeFailure: { id, error in XCTFail("\(id): \(error)") })
         do {
@@ -559,6 +646,16 @@ private actor LayerProductResolver {
 
 @MainActor
 private final class LayerHostProbe: ExperienceScreenViewControllerDelegate {
+    var journeyEvents: MockEventLog?
+    private var shownBaseline = 0
+    var shownScreenIDs: [String] {
+        Array((journeyEvents?.routedEvents ?? []).filter { $0.name == SystemEventNames.screenShown }
+            .dropFirst(shownBaseline).compactMap { $0.properties["screen_id"] as? String })
+    }
+    func resetActivationRecords() {
+        lifecycle.removeAll()
+        shownBaseline = (journeyEvents?.routedEvents ?? []).filter { $0.name == SystemEventNames.screenShown }.count
+    }
     var checkoutProducts: [[StoreProduct]] = []
     var lifecycle: [String] = []
     var events: [String] = []
