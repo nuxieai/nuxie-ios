@@ -1031,6 +1031,39 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         }
     }
 
+    func testPageStepKeepsFieldViewAndFocusWhileBlockingTyping() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { bridge.clear(); window.isHidden = true }
+        let surface = host.view!
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false), surfaceView: surface,
+            artboardBounds: surface.bounds, semanticTextWriter: { _, _, _, done in done(.accepted) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: "kept", ownerInstanceID: 1))) })
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1] as? UITextField)
+        XCTAssertTrue(field.becomeFirstResponder())
+        bridge.setStepInProgress(true)
+        _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false, revision: 2))
+        XCTAssertTrue(field.isFirstResponder)
+        XCTAssertTrue(field.superview === surface)
+        XCTAssertFalse(bridge.textField(field, shouldChangeCharactersIn: NSRange(location: 0, length: 0), replacementString: "x"))
+        bridge.setStepInProgress(false)
+        let controls = bridge.applySemantics(try nativeCapture(ids: [1], secure: false, revision: 3))
+        XCTAssertTrue(controls[1] === field)
+        XCTAssertEqual(field.text, "kept")
+    }
+
+    func testMovedFieldIdentityUsesSemanticNodeRatherThanAuthoredInputID() {
+        let before = ExperienceTextInputOverlayBridge.InputTarget(inputID: "source", nodeID: 42)
+        let after = ExperienceTextInputOverlayBridge.InputTarget(inputID: "destination", nodeID: 42)
+        XCTAssertEqual(before, after)
+        XCTAssertEqual(Set([before, after]).count, 1)
+        XCTAssertNotEqual(before, .init(inputID: "source", nodeID: 43))
+    }
+
     func testRepeatedNativeSecureInputsReadAndWriteTheirOwnOccurrence() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))

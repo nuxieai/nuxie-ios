@@ -219,7 +219,7 @@ sdk_test_library(
     srcs = ["Tests/NuxieUnitTests/Experiences/" + name + ".swift" for name in [
         "ExperienceTextInputSemanticsTests", "ExperienceHardwareInputTests", "ExperienceTextInputTypographyTests",
         "SignedSemanticJourneyTests", "ExperienceSharedValuesTests", "ExperienceSharedValuesPresentationTests",
-        "ExperienceLayerNavigationTests", "ExperienceLayerHostNavigationTests", "ExperienceFitContentPresentationTests",
+        "ExperienceLayerNavigationTests", "ExperiencePageHostNavigationTests", "ExperienceFitContentPresentationTests",
         "ExperienceScreenExitReasonControllerTests", "ExperiencePreparationTestSupport",
     ]],
     defines = ["NUXIE_HOSTED_INPUT_TESTS"],

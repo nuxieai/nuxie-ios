@@ -129,6 +129,15 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     struct InputTarget: Hashable, Sendable {
         let inputID: String
         var nodeID: UInt32? = nil
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            if let node = lhs.nodeID { return rhs.nodeID == node }
+            return rhs.nodeID == nil && lhs.inputID == rhs.inputID
+        }
+        func hash(into hasher: inout Hasher) {
+            if let nodeID { hasher.combine(true); hasher.combine(nodeID) }
+            else { hasher.combine(false); hasher.combine(inputID) }
+        }
     }
 
     typealias SemanticTextWriter = (
@@ -345,8 +354,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private final class Binding {
-        let target: InputTarget
-        let input: NativeExperienceTextInput
+        var target: InputTarget
+        var input: NativeExperienceTextInput
         let control: Control
         var nativeGeometry: NuxieNativeTextInputGeometry?
         var readCaptureID: UUID?
@@ -377,6 +386,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var semanticTextWriter: SemanticTextWriter?
     private var semanticContentOffsetWriter: SemanticContentOffsetWriter?
     private var semanticTextReader: SemanticTextReader?
+    private var preservesPageFields = false
+    private var stepInProgress = false
     private var nativeInputs: [NativeExperienceTextInput] = []
     private var metricsSnapshot: ExperienceInteractiveViewModelSnapshot?
     private var semanticDrafts: [InputTarget: ExperienceSemanticTextDraft] = [:]
@@ -445,6 +456,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func bind(
         screenID: String,
+        preservingNativeFields: Bool = false,
         renderPlan: NativeExperienceRenderPlan,
         surfaceView: UIView,
         artboardBounds: CGRect,
@@ -457,13 +469,14 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             notifiedTextByTarget.removeAll()
             activeBuildID = renderPlan.identity.buildId
         }
-        clear()
+        if !preservingNativeFields { clear() }
+        preservesPageFields = renderPlan.pageHost != nil
         self.surfaceView = surfaceView
         self.artboardBounds = artboardBounds
         self.semanticTextWriter = semanticTextWriter
         self.semanticContentOffsetWriter = semanticContentOffsetWriter
         self.semanticTextReader = semanticTextReader
-        if semanticTextWriter != nil { semanticFields = [:] }
+        if semanticTextWriter != nil, !preservingNativeFields { semanticFields = [:] }
         fontSHA256ByUniqueName = renderPlan.fonts.reduce(into: [:]) {
             $0[$1.assetUniqueName] = $1.sha256
         }
@@ -472,11 +485,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         }
 
         let declared = renderPlan.textInputs.filter {
-            $0.screenId == screenID && $0.editable
+            (renderPlan.pageHost != nil || $0.screenId == screenID) && $0.editable
         }
         let counts = Dictionary(grouping: declared, by: \.inputId).mapValues(\.count)
-        for input in declared where counts[input.inputId] == 1 {
-            if semanticTextWriter != nil, semanticTextReader != nil { nativeInputs.append(input) }
+        if semanticTextWriter != nil, semanticTextReader != nil {
+            nativeInputs = declared.filter { renderPlan.pageHost != nil || counts[$0.inputId] == 1 }
+                .sorted { ($0.screenId == screenID ? 1 : 0) < ($1.screenId == screenID ? 1 : 0) }
         }
         installDismissTapRecognizer(on: surfaceView)
         layout()
@@ -506,6 +520,10 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     /// Captured native occurrences keep each real editor in the scene tree once.
     func applySemantics(_ capture: NuxieNativeSemanticCapture) -> [UInt32: UIView] {
         reconcileNativeInputs(capture)
+        if stepInProgress {
+            layout()
+            return [:]
+        }
         let nodes = Dictionary(uniqueKeysWithValues: capture.tree.nodes.map { ($0.id, $0) })
         let fields = bindingsByTarget.compactMapValues { binding in
             return binding.target.nodeID.flatMap { nodes[$0] }
@@ -562,6 +580,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 let binding: Binding
                 if let existing = bindingsByTarget[target] {
                     binding = existing
+                    binding.target = target
+                    binding.input = input
                 } else {
                     let control = makeControl(for: input)
                     control.text = ""
@@ -585,8 +605,10 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 }
             }
         }
-        for target in Array(bindingsByTarget.keys) where target.nodeID != nil && !presented.contains(target) {
-            retireNativeInput(target)
+        for target in Array(bindingsByTarget.keys) where !stepInProgress && target.nodeID != nil && !presented.contains(target) {
+            if preservesPageFields {
+                bindingsByTarget[target]?.control.view.isHidden = true
+            } else { retireNativeInput(target) }
         }
         invalidMetricIDs = Set(bindingsByTarget.keys).subtracting(metricsByTarget.keys)
     }
@@ -687,7 +709,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private func allowsEditing(_ binding: Binding) -> Bool {
-        guard allowsInteraction(binding) else { return false }
+        guard !stepInProgress, allowsInteraction(binding) else { return false }
         if binding.target.nodeID != nil, !binding.sourceReady { return false }
         guard let semanticFields else { return true }
         guard let node = semanticFields[binding.target] else { return false }
@@ -728,6 +750,15 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         activeEditingControl = nil
         applyKeyboardShift(0, animationDuration: 0)
         surfaceView = nil
+    }
+
+    /// Input freezes during a move while semantic node identities keep their views and focus.
+    func setStepInProgress(_ value: Bool) {
+        stepInProgress = value
+        for binding in bindingsByTarget.values {
+            binding.control.view.isUserInteractionEnabled = !value
+            binding.control.view.accessibilityElementsHidden = value
+        }
     }
 
     func setHidden(_ value: Bool) {
@@ -773,13 +804,16 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     private func layoutRuntimeField(_ binding: Binding, inputID: InputTarget,
         placement: ExperienceTextInputPlacement?) {
-        switch binding.control {
-        case .field(let field): field.isEnabled = allowsInteraction(binding) && (binding.target.nodeID == nil || binding.sourceReady)
-        case .textView(let textView):
-            textView.isEditable = allowsEditing(binding)
-            textView.isSelectable = allowsInteraction(binding)
+        if !stepInProgress {
+            switch binding.control {
+            case .field(let field): field.isEnabled = allowsInteraction(binding) && (binding.target.nodeID == nil || binding.sourceReady)
+            case .textView(let textView):
+                textView.isEditable = allowsEditing(binding)
+                textView.isSelectable = allowsInteraction(binding)
+            }
         }
         guard let placement, let metrics = metricsByTarget[inputID] else {
+            if stepInProgress { return }
             // Fence delegate callbacks before resigning a composing editor.
             binding.control.view.isHidden = true
             binding.control.view.resignFirstResponder()

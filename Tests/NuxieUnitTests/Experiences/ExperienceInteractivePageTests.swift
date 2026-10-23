@@ -4,7 +4,27 @@ import XCTest
 @testable import NuxieRuntime
 @_spi(Testing) @testable import Nuxie
 
-final class ExperienceInteractiveLayerTests: XCTestCase {
+final class ExperienceInteractivePageTests: XCTestCase {
+    func testMappedArtboardProvidesRowSchemaWithoutJourneyTypeName() async throws {
+        let base = try await interimLayerPayload()
+        let payload = AuthenticatedRuntimePayload(authenticatedKeyID: base.authenticatedKeyID,
+            renderPlan: base.renderPlan,
+            journey: JourneyDocument(screens: [JourneyScreen(id: "screen_1"), JourneyScreen(id: "screen_2")], viewModelValues: []),
+            sceneBytes: base.sceneBytes, assets: base.assets)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let page = try await preparation.openPage(pixelWidth: 390, pixelHeight: 844)
+        do {
+            _ = try await page.prepareRow(screenID: "screen_2", products: [])
+            let screen = try await page.screen(screenID: "screen_2")
+            XCTAssertEqual(screen.defaultViewModelName, "Runtime_Upsell")
+            try await page.insert(screenID: "screen_2", at: 0)
+            try await page.setPhases([("screen_2", .entering)])
+            let lifecycle = await page.lifecycle(screenID: "screen_2")
+            XCTAssertEqual(lifecycle?.appearances, 1)
+            try await page.close()
+        } catch { try? await page.close(); throw error }
+    }
+
     func testRemoveOnlyRowThenZeroTimeStep() async throws {
         try await withLayer { layer, _ in
             try await layer.insert(screenID: "screen_1", at: 0)
@@ -90,8 +110,9 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
             XCTAssertNotEqual(a.instances.first?.schemaIndex, b.instances.first?.schemaIndex)
             let both = await layer.mountedScreenIDs
             XCTAssertEqual(both, ["screen_1", "screen_2"])
-            do { try await layer.insert(screenID: "screen_2", at: 1); XCTFail("Duplicate row accepted") }
-            catch {}
+            try await layer.insert(screenID: "screen_2", at: 1)
+            let stillUnique = await layer.mountedScreenIDs
+            XCTAssertEqual(stillUnique, ["screen_1", "screen_2"])
             _ = try await layer.applyJourneyState(.value(.init(viewModelName: "Runtime_Upsell",
                 instanceID: "row-b", instanceName: nil, path: "keptValue", value: .number(42))), screenID: "screen_2")
             try await layer.remove(screenID: "screen_1")
@@ -113,8 +134,8 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
         }
     }
 
-    func testIncomingOrderUsesTheLowerRowOnlyForPushBack() async throws {
-        for (style, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["screen_2", "screen_1"]),
+    func testIncomingAlwaysAppendsOnTop() async throws {
+        for (style, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["screen_1", "screen_2"]),
             (.push, false, ["screen_1", "screen_2"]), (.magicMove, true, ["screen_1", "screen_2"]),
             (.fade, true, ["screen_1", "screen_2"])] {
             try await withLayer { layer, _ in
@@ -242,15 +263,16 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
         }
     }
 
-    func testFitContentRequiresTheActiveRowsIntrinsicHeight() async throws {
-        try await withLayer { layer, _ in
-            try await layer.insert(screenID: "screen_1", at: 0)
-            var failure: Error?
-            do { try await layer.configurePresentationHeight(fitContent: true, size: CGSize(width: 390, height: 844)) }
-            catch { failure = error }
-            XCTExpectFailure("UNIV-5113: the released ABI measures only the layer root, not the active row's intrinsic height") {
-                XCTAssertNil(failure)
-            }
+    func testFitContentDefaultsToLargeWithDiagnostic() async throws {
+        try await withLayer { page, _ in
+            try await page.insert(screenID: "screen_1", at: 0)
+            let diagnostics = PageDiagnosticRecorder()
+            try await page.configurePresentationHeight(fitContent: true, size: CGSize(width: 390, height: 844),
+                diagnostic: { await diagnostics.append($0) })
+            XCTAssertEqual(page.artboardBounds.size, CGSize(width: 390, height: 844))
+            let messages = await diagnostics.messages
+            XCTAssertEqual(messages, [ExperienceInteractivePage.fitContentDiagnostic])
+            XCTAssertTrue(messages[0].contains("fit-content defaults to large"))
         }
     }
 
@@ -295,6 +317,31 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
     }
 
     @MainActor
+    func testPageStepKeepsDecoderForStableRuntimeVideoID() async throws {
+        try await withVideoLayer { page in
+            try await page.insert(screenID: "screen", at: 0)
+            _ = try await page.step(elapsedSeconds: 0)
+            let host = await page.videoPlayback
+            let playback = try XCTUnwrap(host)
+            let before = playback.videoTestPlayers
+            XCTAssertEqual(before.count, 1)
+            let ids = try await page.runtime.videos().map(\.componentID)
+            await page.beginPresentationStep()
+            try await page.setLayoutSize(width: 1, height: 1)
+            for phase in [ExperienceScreenLifecyclePhase.exiting, .entering, .active] {
+                try await page.setPhases([("screen", phase)])
+                _ = try await page.step(elapsedSeconds: 1 / 60)
+            }
+            let after = playback.videoTestPlayers
+            try await page.setLayoutSize(width: 320, height: 640)
+            playback.setStepInProgress(false)
+            XCTAssertEqual(after.map(ObjectIdentifier.init), before.map(ObjectIdentifier.init))
+            let afterIDs = try await page.runtime.videos().map(\.componentID)
+            XCTAssertEqual(afterIDs, ids)
+        }
+    }
+
+    @MainActor
     func testExpandingLayerViewportAdmitsPreviouslyOffscreenNestedVideo() async throws {
         try await withVideoLayer(pixelWidth: 1, pixelHeight: 1) { layer in
             try await layer.insert(screenID: "screen", at: 0)
@@ -325,7 +372,7 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
 
     @MainActor
     private func withVideoLayer(pixelWidth: UInt32 = 320, pixelHeight: UInt32 = 640,
-                                _ body: (ExperienceInteractiveLayer) async throws -> Void) async throws {
+                                _ body: (ExperienceInteractivePage) async throws -> Void) async throws {
         let root = experiencePreparationRepositoryRoot()
         let scene = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/layer-host-video/layer-host.riv"))
         let mediaURL = root.appendingPathComponent("fixtures/video/greeting.mp4")
@@ -344,7 +391,7 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
             width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a", audioCodec: "mp4a.40.2", captionTracks: [], required: true)
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "video", buildId: "video", appId: "app", environment: "test"),
             scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
-            entry: .init(screenId: "screen"), layerHost: .init(artboardName: "LayerList", listPath: "screens"),
+            entry: .init(screenId: "screen"), pageHost: .init(artboardName: "LayerList", listPath: "screens"),
             screens: [.init(screenId: "screen", artboardId: "screen", artboardName: "Video Frame", width: 320, height: 640, exit: nil)],
             transitions: [], textInputs: [], images: [], fonts: [], videos: [video], videoElements: inventory.videoElements)
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
@@ -352,7 +399,7 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
             assets: [.init(kind: .video, authoredAssetID: id, assetUniqueName: uniqueName, sourceKey: key,
                 contentType: "video/mp4", sha256: digest, required: true, bytes: nil, fileURL: mediaURL)])
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
-        let layer = try await preparation.openLayer(pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+        let layer = try await preparation.openPage(pixelWidth: pixelWidth, pixelHeight: pixelHeight,
             videoDecoderPool: ExperienceVideoDecoderPool.shared)
         do { try await body(layer); try await layer.close() }
         catch { try? await layer.close(); throw error }
@@ -369,13 +416,18 @@ final class ExperienceInteractiveLayerTests: XCTestCase {
         catch { throw NSError(domain: operation, code: 1, userInfo: [NSLocalizedDescriptionKey: "\(operation): \(error)"]) }
     }
 
-    private func withLayer(_ body: (ExperienceInteractiveLayer, ExperienceInteractivePreparation) async throws -> Void) async throws {
+    private func withLayer(_ body: (ExperienceInteractivePage, ExperienceInteractivePreparation) async throws -> Void) async throws {
         let payload = try await interimLayerPayload()
         let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
-        let layer = try await preparation.openLayer(pixelWidth: 390, pixelHeight: 844)
+        let layer = try await preparation.openPage(pixelWidth: 390, pixelHeight: 844)
         do { try await body(layer, preparation); try await layer.close() }
         catch { try? await layer.close(); throw error }
     }
+}
+
+private actor PageDiagnosticRecorder {
+    private(set) var messages: [String] = []
+    func append(_ message: String) { messages.append(message) }
 }
 
 #endif

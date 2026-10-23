@@ -5,16 +5,16 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 @MainActor
-final class ExperienceLayerHostNavigationTests: XCTestCase {
+final class ExperiencePageHostNavigationTests: XCTestCase {
     func testRealCompletionsForwardBackAndRevisitUseOneControllerAndPlayer() async throws {
         try await withCoordinator { coordinator, controller, probe, preparation in
-            XCTAssertTrue(controller.isLayerController)
+            XCTAssertTrue(controller.isPageController)
             XCTAssertEqual(probe.firstPhases[ObjectIdentifier(controller)], .entering,
                 "The first row must be entering before its first advance")
-            XCTAssertFalse(controller.parent is UINavigationController)
-            let layer = try XCTUnwrap(controller.interactiveLayer)
+            XCTAssertTrue(controller.parent is UINavigationController)
+            let layer = try XCTUnwrap(controller.interactivePage)
             var completed: [String: Set<String>] = [:]
-            controller.onLayerStep = { step in
+            controller.onPageStep = { step in
                 for (id, row) in step.rows {
                     for effect in row.effects {
                         if case .reportedEvent(let event) = effect.kind, event.name.hasPrefix("nx_") {
@@ -32,7 +32,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             XCTAssertTrue(probe.events.contains("screen_1:nx_exit_done:transition.native-contract"))
             XCTAssertTrue(probe.events.contains("screen_2:nx_enter_done:transition.native-contract"))
             let mountedB = await layer.mountedScreenIDs
-            XCTAssertEqual(mountedB, ["screen_2"])
+            XCTAssertEqual(mountedB, ["screen_1", "screen_2"])
             XCTAssertTrue(coordinator.applyValue(path: VmPathRef(viewModelName: "Runtime_Upsell", path: "keptValue"),
                 value: 42, screenId: "screen_2", instanceId: "row-b"))
             try await back(coordinator, to: "screen_1")
@@ -41,7 +41,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             XCTAssertTrue(completed["screen_1"]?.contains("nx_enter_done:transition.native-contract.reverse") == true)
             let revisitedA = try await layer.snapshot(screenID: "screen_1").rootInstanceID
             XCTAssertEqual(a, revisitedA)
-            try await navigate(coordinator, to: "screen_2", transition: ["type": "push", "transitionId": "transition.native-contract"])
+            try await navigate(coordinator, to: "screen_2", transition: ["type": "none"])
             let revisitedB = try await layer.snapshot(screenID: "screen_2")
             XCTAssertTrue(revisitedB.values.contains { $0.name == "keptValue" && $0.value == .number(42) })
             let metrics = await preparation.metrics()
@@ -52,7 +52,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
 
     func testCachedSnapshotInitializesNewRowsWithoutOverwritingRevisitedValues() async throws {
         try await withCoordinator { coordinator, controller, _, _ in
-            let layer = try XCTUnwrap(controller.interactiveLayer)
+            let layer = try XCTUnwrap(controller.interactivePage)
             XCTAssertTrue(coordinator.applySnapshot(.init(values: [
                 .init(viewModelName: "Runtime", instanceId: "row-a", path: "keptValue", value: AnyCodable(7)),
                 .init(viewModelName: "Runtime_Upsell", instanceId: "row-b", path: "keptValue", value: AnyCodable(11))
@@ -82,7 +82,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
 
     func testUnqualifiedBroadcastResolvesTheDefaultViewModelOfEachRetainedRow() async throws {
         try await withCoordinator { coordinator, controller, _, _ in
-            let layer = try XCTUnwrap(controller.interactiveLayer)
+            let layer = try XCTUnwrap(controller.interactivePage)
             try await navigate(coordinator, to: "screen_2")
             XCTAssertTrue(coordinator.applyValue(path: .init(path: "keptValue"), value: 42,
                 screenId: nil, instanceId: nil))
@@ -104,21 +104,21 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
     func testCutWithPublishedHalvesEmitsItsOutgoingCompletionBeforeSwapping() async throws {
         try await withCoordinator { coordinator, controller, _, _ in
             var mountedAtExit: [String]?
-            let layer = try XCTUnwrap(controller.interactiveLayer)
-            controller.onLayerStep = { step in
+            let layer = try XCTUnwrap(controller.interactivePage)
+            controller.onPageStep = { step in
                 if step.rows["screen_1"]?.effects.contains(where: {
                     if case .reportedEvent(let event) = $0.kind {
                         return event.name == "nx_exit_done:transition.native-contract"
                     }
                     return false
                 }) == true {
-                    mountedAtExit = Array(step.rows.keys).sorted()
+                    mountedAtExit = step.mountedScreenIDs
                 }
             }
             try await navigate(coordinator, to: "screen_2", transition: ["type": "none", "transitionId": "transition.native-contract"])
             XCTAssertEqual(mountedAtExit, ["screen_1"], "The published leave must finish before insertion")
             let mounted = await layer.mountedScreenIDs
-            XCTAssertEqual(mounted, ["screen_2"])
+            XCTAssertEqual(mounted, ["screen_1", "screen_2"])
         }
     }
 
@@ -132,13 +132,13 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
 
     private func checkRowInitiatedStep(removingRequester: Bool) async throws {
         try await withCoordinator { _, controller, probe, _ in
-            let layer = try XCTUnwrap(controller.interactiveLayer)
-            try await controller.prepareLayerRow(screenID: "screen_2", products: [])
+            let layer = try XCTUnwrap(controller.interactivePage)
+            try await controller.preparePageRow(screenID: "screen_2", products: [])
             let requester = try await layer.binding(screenID: "screen_1")
             let loop = try XCTUnwrap(Mirror(reflecting: controller).children
                 .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
             var delivered: [String: [String]] = [:]
-            controller.onLayerStep = { step in
+            controller.onPageStep = { step in
                 for (id, row) in step.rows {
                     for effect in row.effects {
                         if case .reportedEvent(let event) = effect.kind {
@@ -199,18 +199,49 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
         }
     }
 
+    func testPushOpensNewPageAndSkippingBackCutsCoveredLowerPageBeforePop() async throws {
+        try await withCoordinator { coordinator, lower, _, preparation in
+            try await navigate(coordinator, to: "screen_2")
+            let navigation = try XCTUnwrap(lower.navigationController)
+            let lowerPlayer = try XCTUnwrap(lower.interactivePage)
+            try await navigate(coordinator, to: "screen_1", transition: ["type": "push"])
+            let pushed = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            XCTAssertFalse(pushed === lower)
+            XCTAssertFalse(pushed.interactivePage === lowerPlayer)
+            XCTAssertEqual(lower.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.count, 1)
+            XCTAssertEqual(pushed.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.count, 1)
+            XCTAssertEqual(lower.lifecyclePhase, .hidden)
+            XCTAssertEqual(pushed.lifecyclePhase, .active)
+            XCTAssertEqual(pushed.pageHistory.screenIDs, ["screen_1"])
+            let metrics = await preparation.metrics()
+            XCTAssertEqual(metrics.openedSessionCount, 2)
+            var cutWhileCovered = false
+            lower.onPageStep = { _ in
+                if lower.screenId == "screen_1", navigation.viewControllers.count == 2 { cutWhileCovered = true }
+            }
+            let result = await withCheckedContinuation { continuation in
+                XCTAssertTrue(coordinator.back(to: "screen_1", steps: 2) { result, _ in continuation.resume(returning: result) })
+            }
+            XCTAssertEqual(result, .navigated)
+            XCTAssertTrue(cutWhileCovered)
+            XCTAssertTrue(navigation.topViewController === lower)
+            XCTAssertEqual(lower.screenId, "screen_1")
+            XCTAssertEqual(lower.pageHistory.screenIDs, ["screen_1"])
+        }
+    }
+
     func testModalOwnsAnotherPlayerAndDismissalRevealsRetainedBase() async throws {
         try await withCoordinator { coordinator, base, probe, preparation in
-            let layer = try XCTUnwrap(base.interactiveLayer)
+            let layer = try XCTUnwrap(base.interactivePage)
             let before = try await layer.snapshot(screenID: "screen_1").rootInstanceID
             try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet", "closedby": "none"])
-            let modal = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            let modal = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
             XCTAssertFalse(modal === base)
             XCTAssertEqual(probe.firstPhases[ObjectIdentifier(modal)], .entering)
-            let firstAppearance = await modal.interactiveLayer?.lifecycle(screenID: "screen_2")
+            let firstAppearance = await modal.interactivePage?.lifecycle(screenID: "screen_2")
             XCTAssertEqual(firstAppearance?.appearances, 1)
-            XCTAssertFalse(modal.interactiveLayer === base.interactiveLayer)
-            XCTAssertTrue(modal.isModalInPresentation)
+            XCTAssertFalse(modal.interactivePage === base.interactivePage)
+            XCTAssertTrue(modal.navigationController?.isModalInPresentation == true)
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"]])
             let metrics = await preparation.metrics()
             XCTAssertEqual(metrics.openedSessionCount, 2)
@@ -227,7 +258,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
     func testTapFromActiveNestedRowKeepsItsScreenOwner() async throws {
         try await withCoordinator { coordinator, controller, _, _ in
             try await navigate(coordinator, to: "screen_2")
-            let layer = try XCTUnwrap(controller.interactiveLayer)
+            let layer = try XCTUnwrap(controller.interactivePage)
             let down = try await layer.step(pointers: [.init(kind: .down, x: 60, y: 40)], elapsedSeconds: 0)
             let up = try await layer.step(pointers: [.init(kind: .up, x: 60, y: 40)], elapsedSeconds: 0)
             XCTAssertTrue(down.rows["screen_1"] == nil)
@@ -256,7 +287,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
         let base = try SharedValuesFixture.payload(directory: PublishedInputFixture.directory, screens: ["input", "greeting"],
             scene: bytes, textInputs: inputs)
         let plan = NativeExperienceRenderPlan(identity: base.renderPlan.identity, scene: base.renderPlan.scene,
-            entry: base.renderPlan.entry, layerHost: .init(artboardName: "LayerList", listPath: "screens"),
+            entry: base.renderPlan.entry, pageHost: .init(artboardName: "LayerList", listPath: "screens"),
             screens: base.renderPlan.screens, transitions: [], textInputs: inputs, images: [], fonts: [],
             systemFonts: base.renderPlan.systemFonts)
         let payload = AuthenticatedRuntimePayload(authenticatedKeyID: base.authenticatedKeyID,
@@ -284,7 +315,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
             field.insertText("Grace")
             try await settle { field.text == "Grace" && controller.hasDeliveredLatestSemanticFrame }
-            let binding = try await XCTUnwrap(controller.interactiveLayer).binding(screenID: "input")
+            let binding = try await XCTUnwrap(controller.interactivePage).binding(screenID: "input")
             let current = try XCTUnwrap(capture)
             let node = try XCTUnwrap(current.tree.nodes.first { $0.role == NuxieNativeSemanticRole.textField.rawValue })
             let source = try await binding.readSemanticText(captureID: current.id, inputID: inputs[0].inputId, nodeID: node.id)
@@ -329,16 +360,16 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
     func testStackedSheetsAndSwipeDismissalKeepEachLayerIndependent() async throws {
         try await withCoordinator { coordinator, base, _, preparation in
             try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet", "height": "medium"])
-            let lower = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            let lower = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
             try await navigate(coordinator, to: "screen_1", transition: ["type": "modal", "present": "sheet"])
-            let upper = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
+            let upper = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
             XCTAssertFalse(upper.view.window === lower.view.window)
             XCTAssertTrue(lower.view.window === base.view.window)
             XCTAssertEqual(coordinator.layerScreenIds, [["screen_1"], ["screen_2"], ["screen_1"]])
             let metrics = await preparation.metrics()
             XCTAssertEqual(metrics.openedSessionCount, 3)
-            let presentation = try XCTUnwrap(upper.presentationController)
-            await withCheckedContinuation { continuation in upper.dismiss(animated: false) { continuation.resume() } }
+            let presentation = try XCTUnwrap(upper.navigationController?.presentationController)
+            await withCheckedContinuation { continuation in upper.navigationController?.dismiss(animated: false) { continuation.resume() } }
             coordinator.presentationControllerDidDismiss(presentation)
             let deadline = Date().addingTimeInterval(2)
             while coordinator.activeScreenId != "screen_2", Date() < deadline {
@@ -364,11 +395,11 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
     func testSwipeDuringAnUnpresentedPhaseSupersedesNavigationAndReleasesTheDrain() async throws {
         try await withCoordinator { coordinator, _, _, _ in
             try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet"])
-            let sheet = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
-            let presentation = try XCTUnwrap(sheet.presentationController)
+            let sheet = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
+            let presentation = try XCTUnwrap(sheet.navigationController?.presentationController)
             let blocked = expectation(description: "phase waiting for presentation")
             var withdrew = false
-            sheet.onLayerStep = { [weak sheet] _ in
+            sheet.onPageStep = { [weak sheet] _ in
                 guard let sheet else { return }
                 if sheet.lifecyclePhase == .exiting && !withdrew {
                     withdrew = true
@@ -387,7 +418,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             XCTAssertNil(sheetResult)
             let drain = try XCTUnwrap(Mirror(reflecting: coordinator).children
                 .first { $0.label == "navigationTask" }?.value as? Task<Void, Never>)
-            await withCheckedContinuation { continuation in sheet.dismiss(animated: false) { continuation.resume() } }
+            await withCheckedContinuation { continuation in sheet.navigationController?.dismiss(animated: false) { continuation.resume() } }
             coordinator.presentationControllerDidDismiss(presentation)
             let deadline = Date().addingTimeInterval(2)
             while coordinator.topPresentedLayer != nil, Date() < deadline {
@@ -413,7 +444,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
     func testRevisitsReuseTheRowsOriginalProductsForDisplayAndCheckout() async throws {
         let resolver = LayerProductResolver()
         try await withCoordinator(productResolver: { await resolver.resolve($0) }) { coordinator, controller, probe, _ in
-            let layer = try XCTUnwrap(controller.interactiveLayer)
+            let layer = try XCTUnwrap(controller.interactivePage)
             try await navigate(coordinator, to: "screen_2")
             let original = try await layer.products(screenID: "screen_2")
             XCTAssertEqual(original.first?.price, "screen_2:1")
@@ -423,8 +454,8 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             XCTAssertEqual(counts, ["screen_1": 1, "screen_2": 1])
             XCTAssertEqual(probe.checkoutProducts.last, original)
             try await navigate(coordinator, to: "screen_2", transition: ["type": "modal", "present": "sheet"])
-            let modal = try XCTUnwrap(coordinator.topPresentedLayer as? ExperienceScreenViewController)
-            let modalProducts = try await XCTUnwrap(modal.interactiveLayer).products(screenID: "screen_2")
+            let modal = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
+            let modalProducts = try await XCTUnwrap(modal.interactivePage).products(screenID: "screen_2")
             XCTAssertEqual(modalProducts.first?.price, "screen_2:2", "A new layer prepares its own row")
             let closed = await coordinator.closeTopLayer()
             XCTAssertEqual(closed, .navigated)
@@ -494,7 +525,7 @@ final class ExperienceLayerHostNavigationTests: XCTestCase {
             try await coordinator.install()
             coordinator.setContentHidden(false)
             _ = await coordinator.activateInitialScreen()
-            let controller = try XCTUnwrap(host.children.first as? ExperienceScreenViewController)
+            let controller = try XCTUnwrap((host.children.first as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
             try await body(coordinator, controller, probe, preparation)
             await coordinator.tearDown()
         } catch { await coordinator.tearDown(); window.isHidden = true; oldKey?.makeKey(); throw error }

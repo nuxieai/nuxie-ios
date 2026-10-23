@@ -2,15 +2,14 @@
 import Foundation
 import NuxieRuntime
 
-/// One presentation layer's clock and list. Screen bindings and routing remain
+/// One native page's clock and list. Screen bindings and routing remain
 /// on ExperienceInteractiveScreen, rooted at each retained row instance.
-actor ExperienceInteractiveLayer {
+actor ExperienceInteractivePage {
     struct Step: Equatable, Sendable {
         let native: NuxieNativePlayerStepResult
         let rows: [String: ExperienceInteractiveStepResult]
         let unattributedEvents: [NuxieNativeEvent]
-        // The current ABI supplies no source instance for script host commands.
-        var unattributedHostCommands: [NuxieNativeHostCommand] { native.hostCommands }
+        var mountedScreenIDs: [String] = []
     }
 
     struct Completion: Sendable {
@@ -33,7 +32,7 @@ actor ExperienceInteractiveLayer {
     }
 
     let runtime: NuxieNativeRuntime
-    private let contract: NativeExperienceLayerHost
+    private let contract: NativeExperiencePageHost
     private let payload: AuthenticatedRuntimePayload
     private let preparedFile: NuxieNativePreparedFile
     private let runValues: ExperienceRunValues?
@@ -42,17 +41,18 @@ actor ExperienceInteractiveLayer {
     private let gate = ExperienceInteractiveOperationGate()
     private let environment: NuxieNativeViewModelReference?
     private let environmentBindings: ExperienceEnvironmentBindings
-    private let presentationHeight = ExperiencePresentationHeight()
     private var rows: [String: Row] = [:]
-    private(set) var mountedScreenIDs: [String] = []
+    private var rowList = ExperiencePageRows()
+    var mountedScreenIDs: [String] { rowList.screenIDs }
     private var closed = false
     private var activeScreenID: String?
-    private var videoPlayback: ExperienceVideoPlayback?
+    private(set) var videoPlayback: ExperienceVideoPlayback?
     private nonisolated let layoutBounds = ExperienceLayoutBounds(.zero)
     nonisolated var artboardBounds: CGRect { layoutBounds.read() }
+    private var liveStep: (artboard: String, name: String?)?
     private var currentReduceMotion: Bool
 
-    private init(runtime: NuxieNativeRuntime, contract: NativeExperienceLayerHost,
+    private init(runtime: NuxieNativeRuntime, contract: NativeExperiencePageHost,
                  payload: AuthenticatedRuntimePayload, preparedFile: NuxieNativePreparedFile,
                  runValues: ExperienceRunValues?, imageIDsByName: [String: UInt64],
                  root: NuxieNativeViewModelReference, environment: NuxieNativeViewModelReference?,
@@ -72,12 +72,12 @@ actor ExperienceInteractiveLayer {
     static func open(payload: AuthenticatedRuntimePayload, preparedFile: NuxieNativePreparedFile,
                      runValues: ExperienceRunValues?, imageIDsByName: [String: UInt64],
                      pixelWidth: UInt32, pixelHeight: UInt32,
-                     reduceMotion: Bool, safeArea: ExperienceSafeAreaInsets?,
-                     colorScheme: ExperienceColorScheme?, videoDecoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceInteractiveLayer {
-        guard let contract = payload.renderPlan.layerHost,
-              let artboard = try await preparedFile.artboards().first(where: { $0.name == contract.artboardName }),
-              let machine = artboard.stateMachines.first else {
-            throw ExperienceInteractiveScreenError.stateContract("Layer host requires a root state machine")
+                     reduceMotion: Bool, fontScale: Double? = nil, safeArea: ExperienceSafeAreaInsets?,
+                     colorScheme: ExperienceColorScheme?, videoDecoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceInteractivePage {
+        let contract = payload.renderPlan.pageHost ?? .published
+        guard let artboard = try await preparedFile.artboards().first(where: { $0.name == contract.artboardName }),
+              let machine = artboard.stateMachines.first(where: { contract == .published ? $0 == ExperiencePageHostContract.machineName : true }) else {
+            throw ExperienceInteractiveScreenError.stateContract("Page host requires a root state machine")
         }
         let shared = try await runValues?.native(in: preparedFile)
         let runtime: NuxieNativeRuntime
@@ -95,29 +95,30 @@ actor ExperienceInteractiveLayer {
             let catalog = try await runtime.viewModelCatalog()
             let snapshot = try await runtime.snapshot()
             guard let rootSchema = snapshot.instances.first(where: { $0.id == root.rawValue })?.schemaIndex,
+                  catalog.schemas.contains(where: { $0.index == rootSchema && (contract != .published || $0.name == ExperiencePageHostContract.modelName) }),
                   catalog.properties.contains(where: {
                       $0.schemaIndex == rootSchema && $0.name == contract.listPath && $0.kind == .list
                   }) else {
-                throw ExperienceInteractiveScreenError.stateContract("Layer host requires its Screen list")
+                throw ExperienceInteractiveScreenError.stateContract("Page host requires its Screen list")
             }
             guard snapshot.values.contains(where: {
                 $0.ownerInstanceID == root.rawValue && $0.name == contract.listPath && $0.value == .list([])
             }) else {
-                throw ExperienceInteractiveScreenError.stateContract("Layer host requires an empty initial Screen list")
+                throw ExperienceInteractiveScreenError.stateContract("Page host requires an empty initial Screen list")
             }
             let environment = try await runtime.bindGlobalViewModel(named: "env", sharingAcrossSessions: false)
-            let layer = ExperienceInteractiveLayer(runtime: runtime, contract: contract,
+            let page = ExperienceInteractivePage(runtime: runtime, contract: contract,
                 payload: payload, preparedFile: preparedFile, runValues: runValues,
                 imageIDsByName: imageIDsByName, root: root, environment: environment, catalog: catalog, reduceMotion: reduceMotion)
-            try await layer.updateEnvironment(reduceMotion: reduceMotion, safeArea: safeArea, colorScheme: colorScheme)
-            try await layer.setLayoutSize(width: Float(pixelWidth), height: Float(pixelHeight))
+            try await page.updateEnvironment(reduceMotion: reduceMotion, fontScale: fontScale, safeArea: safeArea, colorScheme: colorScheme)
+            try await page.setLayoutSize(width: Float(pixelWidth), height: Float(pixelHeight))
             if !payload.renderPlan.videos.isEmpty {
                 let playback = try await ExperienceVideoPlayback.open(runtime: runtime, payload: payload,
                     artboardBounds: CGRect(x: 0, y: 0, width: Int(pixelWidth), height: Int(pixelHeight)),
                     decoderPool: videoDecoderPool)
-                await layer.setVideoPlayback(playback)
+                await page.setVideoPlayback(playback)
             }
-            return layer
+            return page
         } catch {
             try? await runtime.close()
             throw error
@@ -133,7 +134,7 @@ actor ExperienceInteractiveLayer {
     }
 
     private func incomingIndex(style: ExperienceScreenTransitionSpec.Kind, isBack: Bool) -> Int {
-        style == .push && isBack ? 0 : mountedScreenIDs.count
+        mountedScreenIDs.count
     }
 
     func insert(screenID: String, at index: Int, products: [StoreProduct] = []) async throws {
@@ -142,15 +143,13 @@ actor ExperienceInteractiveLayer {
 
     private func insertLocked(screenID: String, at index: Int, products: [StoreProduct]) async throws {
         try requireOpen()
-        guard !mountedScreenIDs.contains(screenID), mountedScreenIDs.count < 2,
-              index >= 0, index <= mountedScreenIDs.count else {
-            throw ExperienceInteractiveScreenError.stateContract("Invalid layer row insertion")
+        guard mountedScreenIDs.contains(screenID) || index == mountedScreenIDs.count else {
+            throw ExperienceInteractiveScreenError.stateContract("New page rows must append")
         }
         try await prepareRowLocked(screenID: screenID, products: products)
-        guard let row = rows[screenID] else { return }
-        _ = try await runtime.mutateViewModel([.listInsert(instance: root, path: contract.listPath,
-            index: index, value: row.reference)])
-        mountedScreenIDs.insert(screenID, at: index)
+        var next = rowList
+        try await applyRowMutation(next.take(screenID))
+        rowList = next
     }
 
     func prepareRow(screenID: String, products: [StoreProduct]) async throws -> ExperienceInteractiveScreen {
@@ -174,23 +173,24 @@ actor ExperienceInteractiveLayer {
             guard let screen = payload.journey.screens.first(where: { $0.id == screenID }) else {
                 throw ExperienceInteractiveScreenError.journeyScreenNotFound(screenID)
             }
-            let catalog = try await runtime.viewModelCatalog()
-            let selection = try ExperienceLayerHostContract.rowSelection(screen: screen, catalog: catalog)
-            // ArtboardComponentList selects the Screen by its distinct root type.
-            guard !payload.journey.screens.contains(where: {
-                $0.id != screenID && $0.defaultViewModelName == screen.defaultViewModelName
-            }) else {
-                throw ExperienceInteractiveScreenError.stateContract("Layer Screens must have distinct root types")
+            guard let mapped = payload.renderPlan.screens.first(where: { $0.screenId == screenID }) else {
+                throw ExperienceInteractiveScreenError.screenNotFound(screenID)
             }
-            let reference = try await runtime.makeViewModel(schemaIndex: selection.schemaIndex,
-                authoredInstanceIndex: selection.authoredInstanceIndex)
+            let schema = try await runtime.defaultSchema(artboardName: mapped.artboardName)
+            let catalog = try await runtime.viewModelCatalog()
+            guard let schemaName = catalog.schemas.first(where: { $0.index == schema })?.name else {
+                throw ExperienceInteractiveScreenError.stateContract("Mapped Screen artboard has no root schema")
+            }
+            let resolvedScreen = JourneyScreen(id: screenID, defaultViewModelName: schemaName,
+                defaultInstanceId: screen.defaultInstanceId)
+            let reference = try await runtime.makeViewModel(schemaIndex: schema)
             do {
                 let binding = try await ExperienceInteractiveScreen.openPrepared(payload: payload,
                     preparedFile: preparedFile, runValues: runValues, imageIDsByName: imageIDsByName,
                     screenID: screenID, products: products, player: .defaultScene,
-                    pixelWidth: 1, pixelHeight: 1, initialReduceMotion: nil, initialSafeArea: nil,
+                    pixelWidth: 1, pixelHeight: 1, initialReduceMotion: nil, initialFontScale: nil, initialSafeArea: nil,
                     initialColorScheme: nil, rowRuntime: runtime, rowReference: reference, operationGate: gate,
-                    rowVideoPlayback: videoPlayback)
+                    rowVideoPlayback: videoPlayback, rowScreen: resolvedScreen)
                 await binding.setRowStepper { [weak self] pointers, focus, elapsed, correlation, capturesText in
                     guard let self else { throw CancellationError() }
                     let step = try await self.step(pointers: pointers, focusInputs: focus,
@@ -200,10 +200,10 @@ actor ExperienceInteractiveLayer {
                         keepGoing: step.native.keepGoing || step.rows.values.contains { $0.keepGoing },
                         pointerHits: step.rows.values.first?.pointerHits ?? [],
                         focusState: step.native.focusState, effects: [])
-                    result.layerStep = step
+                    result.pageStep = step
                     return result
                 }
-                rows[screenID] = Row(screen: screen, reference: reference, binding: binding,
+                rows[screenID] = Row(screen: resolvedScreen, reference: reference, binding: binding,
                     products: products, lifecycle: .init(reduceMotion: currentReduceMotion))
             } catch {
                 try? await runtime.releaseViewModels([reference])
@@ -211,6 +211,11 @@ actor ExperienceInteractiveLayer {
             }
         }
         if activeScreenID == nil { activeScreenID = screenID }
+    }
+
+    func screen(screenID: String) throws -> JourneyScreen {
+        guard let screen = rows[screenID]?.screen else { throw ExperienceInteractiveScreenError.screenNotFound(screenID) }
+        return screen
     }
 
     func binding(screenID: String) throws -> ExperienceInteractiveScreen {
@@ -222,7 +227,7 @@ actor ExperienceInteractiveLayer {
     }
 
     func activeBinding() throws -> ExperienceInteractiveScreen {
-        guard let activeScreenID else { throw ExperienceInteractiveScreenError.stateContract("Layer has no active row") }
+        guard let activeScreenID else { throw ExperienceInteractiveScreenError.stateContract("Page has no active row") }
         return try binding(screenID: activeScreenID)
     }
 
@@ -240,31 +245,100 @@ actor ExperienceInteractiveLayer {
 
     private func setVideoPlayback(_ playback: ExperienceVideoPlayback) { videoPlayback = playback }
 
-    func configurePresentationHeight(fitContent: Bool, size: CGSize) async throws {
-        // The released ABI measures only the root, not an individual row's intrinsic height.
-        guard !fitContent else {
-            throw ExperienceInteractiveScreenError.stateContract("Active row intrinsic presentation height is unavailable")
+    func configurePresentationHeight(fitContent: Bool, size: CGSize,
+                                     diagnostic: (@Sendable (String) async -> Void)? = nil) async throws {
+        if fitContent {
+            if let diagnostic { await diagnostic(Self.fitContentDiagnostic) }
+            else { LogWarning("\(Self.fitContentDiagnostic)") }
         }
         if size.width > 0, size.height > 0 {
             try await setLayoutSize(width: Float(size.width), height: Float(size.height))
         }
     }
 
-    @discardableResult
-    func remove(screenID: String) async throws -> Step {
+    static let fitContentDiagnostic = "ExperienceInteractivePage: compiler content height is unavailable; fit-content defaults to large"
+
+    func remove(screenID: String) async throws {
         try await gate.withLock { [self] in try await removeLocked(screenID: screenID) }
     }
 
-    private func removeLocked(screenID: String) async throws -> Step {
+    private func removeLocked(screenID: String) async throws {
         try requireOpen()
-        guard let index = mountedScreenIDs.firstIndex(of: screenID) else {
-            throw ExperienceInteractiveScreenError.stateContract("Screen is absent from the layer")
+        var next = rowList
+        guard let mutation = next.remove(screenID) else {
+            throw ExperienceInteractiveScreenError.stateContract("Screen is absent from the page")
         }
-        _ = try await runtime.mutateViewModel([.listRemove(instance: root, path: contract.listPath, index: index)])
-        // https://universe.basis.dev/issue/UNIV-5186 requires settling removal before a timed advance.
-        let settled = try await stepLocked(pointers: [], elapsedSeconds: 0, correlationID: 0)
-        mountedScreenIDs.remove(at: index)
-        return settled
+        try await applyRowMutation(mutation)
+        rowList = next
+    }
+
+    /// The frame queue calls this once, so no advance can split a lifecycle batch.
+    func beginPresentationStep() async {
+        await videoPlayback?.setStepInProgress(true)
+    }
+
+    func apply(_ changes: [ExperiencePageStep.Change], source: String, target: String,
+               reachable: Set<String>, reduceMotion: Bool) async throws {
+        try await gate.withLock { [self] in
+            try await applyLocked(changes, source: source, target: target, reachable: reachable, reduceMotion: reduceMotion)
+        }
+    }
+
+    private func applyLocked(_ changes: [ExperiencePageStep.Change], source: String, target: String,
+                             reachable: Set<String>, reduceMotion: Bool) async throws {
+        guard let mapped = payload.renderPlan.screens.first(where: { $0.screenId == target }) else {
+            throw ExperienceInteractiveScreenError.screenNotFound(target)
+        }
+        for change in changes {
+            switch change {
+            case .take:
+                try await insertLocked(screenID: target, at: mountedScreenIDs.count, products: rows[target]?.products ?? [])
+            case .phases(let phases, let transition):
+                try await setPhasesLocked(phases, transition: transition, reduceMotion: reduceMotion, exitReason: .navigation)
+                if phases.contains(where: { $0.1 == .active }) { await videoPlayback?.setStepInProgress(false) }
+            case .begin(let name):
+                // Interim test scenes have no LiveStep records. Live moves require the published root.
+                if contract == .published { try await runtime.stepBegin(incomingScreen: mapped.artboardName, stepName: name) }
+                liveStep = (mapped.artboardName, name)
+            case .end(let name):
+                if contract == .published { try await runtime.stepEnd(incomingScreen: mapped.artboardName, stepName: name) }
+                liveStep = nil
+            case .retire:
+                var next = rowList
+                for mutation in next.retire(active: target, reachable: reachable) { try await applyRowMutation(mutation) }
+                rowList = next
+            }
+        }
+    }
+
+    func restoreCancelledStep(source: String, target: String, reachable: Set<String>, reduceMotion: Bool) async throws {
+        try await gate.withLock { [self] in
+            try await restoreCancelledStepLocked(source: source, target: target, reachable: reachable, reduceMotion: reduceMotion)
+        }
+    }
+
+    private func restoreCancelledStepLocked(source: String, target: String, reachable: Set<String>, reduceMotion: Bool) async throws {
+        if let liveStep {
+            if contract == .published { try await runtime.stepEnd(incomingScreen: liveStep.artboard, stepName: liveStep.name) }
+            self.liveStep = nil
+        }
+        // Bring borrowed instances home before any rollback removes their destination.
+        try await applyLocked([.take, .begin(nil), .end(nil), .retire,
+            .phases([(target, .hidden), (source, .active)], "")], source: target, target: source,
+            reachable: reachable, reduceMotion: reduceMotion)
+    }
+
+    private func applyRowMutation(_ mutation: ExperiencePageRows.Mutation) async throws {
+        switch mutation {
+        case .append(let id, let index):
+            guard let row = rows[id] else { throw ExperienceInteractiveScreenError.screenNotFound(id) }
+            _ = try await runtime.mutateViewModel([.listInsert(instance: root, path: contract.listPath,
+                index: index, value: row.reference)])
+        case .collapse(_, let index, let collapsed):
+            try await runtime.setRowCollapsed(list: contract.listPath, index: index, collapsed: collapsed)
+        case .remove(_, let index):
+            _ = try await runtime.mutateViewModel([.listRemove(instance: root, path: contract.listPath, index: index)])
+        }
     }
 
     /// Both halves commit before the next player advance.
@@ -369,10 +443,10 @@ actor ExperienceInteractiveLayer {
         try await videoPlayback?.resizeViewport(bounds: artboardBounds)
         let videoActive = try await videoPlayback?.tick() ?? false
         guard let snapshot = frame.snapshot else {
-            throw ExperienceInteractiveScreenError.stateContract("Layer step requires an event-source snapshot")
+            throw ExperienceInteractiveScreenError.stateContract("Page step requires an event-source snapshot")
         }
         var graphs: [String: NuxieNativeViewModelSnapshot] = [:]
-        for id in mountedScreenIDs {
+        for id in rows.keys.sorted() {
             guard let row = rows[id] else { continue }
             // Removal can detach a row during this advance; its final effects still belong to it.
             if let graph = snapshot.rooted(at: row.reference.rawValue) { graphs[id] = graph }
@@ -384,7 +458,7 @@ actor ExperienceInteractiveLayer {
             return matches.count == 1 ? matches.first?.key : nil
         }
         var projected: [String: ExperienceInteractiveStepResult] = [:]
-        for id in mountedScreenIDs {
+        for id in rows.keys.sorted() {
             guard let row = rows[id], let graph = graphs[id] else { continue }
             let ids = Set(graph.instances.map(\.id))
             let events: [NuxieNativeEvent] = frame.result.events.enumerated().compactMap { index, event in
@@ -399,7 +473,7 @@ actor ExperienceInteractiveLayer {
             }
             let result = NuxieNativePlayerStepResult(keepGoing: frame.result.keepGoing || videoActive,
                 pointerHits: frame.result.pointerHits, stateChanges: frame.result.stateChanges,
-                events: events, hostCommands: [],
+                events: events, hostCommands: ExperiencePageHostContract.hostCommands(frame.result.hostCommands, row: id, active: activeScreenID),
                 viewModelChanges: frame.result.viewModelChanges.filter { ids.contains($0.ownerInstanceID) },
                 textGeometry: frame.result.textGeometry, focusResults: frame.result.focusResults,
                 focusState: frame.result.focusState)
@@ -408,19 +482,19 @@ actor ExperienceInteractiveLayer {
         return Step(native: frame.result, rows: projected,
             unattributedEvents: frame.result.events.enumerated().compactMap { index, event in
                 eventOwners[index] == nil ? event : nil
-            })
+            }, mountedScreenIDs: mountedScreenIDs)
     }
 
-    func updateEnvironment(reduceMotion: Bool? = nil, safeArea: ExperienceSafeAreaInsets? = nil,
+    func updateEnvironment(reduceMotion: Bool? = nil, fontScale: Double? = nil, safeArea: ExperienceSafeAreaInsets? = nil,
                            viewport: ExperienceViewportEnvironment? = nil, fold: ExperienceFoldEnvironment? = nil,
                            colorScheme: ExperienceColorScheme? = nil) async throws {
         try await gate.withLock { [self] in
-            try await updateEnvironmentLocked(reduceMotion: reduceMotion, safeArea: safeArea,
+            try await updateEnvironmentLocked(reduceMotion: reduceMotion, fontScale: fontScale, safeArea: safeArea,
                 viewport: viewport, fold: fold, colorScheme: colorScheme)
         }
     }
 
-    private func updateEnvironmentLocked(reduceMotion: Bool?, safeArea: ExperienceSafeAreaInsets?,
+    private func updateEnvironmentLocked(reduceMotion: Bool?, fontScale: Double?, safeArea: ExperienceSafeAreaInsets?,
                                          viewport: ExperienceViewportEnvironment?, fold: ExperienceFoldEnvironment?,
                                          colorScheme: ExperienceColorScheme?) async throws {
         try requireOpen()
@@ -430,7 +504,7 @@ actor ExperienceInteractiveLayer {
         }
         if let environment {
             let mutations = environmentBindings.mutations(reference: environment,
-                reduceMotion: reduceMotion, safeArea: safeArea, viewport: viewport, fold: fold, colorScheme: colorScheme)
+                reduceMotion: reduceMotion, fontScale: fontScale, safeArea: safeArea, viewport: viewport, fold: fold, colorScheme: colorScheme)
             if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
         }
         if let colorScheme, environmentBindings.themeSelection(for: colorScheme) != nil {
@@ -441,8 +515,8 @@ actor ExperienceInteractiveLayer {
 
     func setLayoutSize(width: Float, height: Float) async throws {
         try await gate.withLock { [self] in
-            _ = try await presentationHeight.apply(to: runtime, fitContent: false, width: width, height: height)
-            try await updateEnvironmentLocked(reduceMotion: nil, safeArea: nil,
+            try await runtime.setLayoutSize(width: width, height: height)
+            try await updateEnvironmentLocked(reduceMotion: nil, fontScale: nil, safeArea: nil,
                 viewport: ExperienceViewportEnvironment(width: Double(width), height: Double(height)),
                 fold: nil, colorScheme: nil)
         }
@@ -458,12 +532,12 @@ actor ExperienceInteractiveLayer {
         for row in rows.values { for waiter in row.waiters.values { waiter.continuation.finish() } }
         await videoPlayback?.close()
         rows.removeAll()
-        mountedScreenIDs.removeAll()
+        rowList = ExperiencePageRows()
         try await runtime.close()
     }
 
     private func requireOpen() throws {
-        if closed { throw ExperienceInteractiveScreenError.stateContract("Layer is closed") }
+        if closed { throw ExperienceInteractiveScreenError.stateContract("Page is closed") }
     }
 }
 

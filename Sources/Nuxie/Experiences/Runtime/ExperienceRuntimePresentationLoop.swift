@@ -494,7 +494,7 @@ extension ExperienceInteractiveScreen {
     }
 }
 
-extension ExperienceInteractiveLayer {
+extension ExperienceInteractivePage {
     nonisolated func presentationSession(
         onSemantics: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)?,
         onTextFrame: (@MainActor @Sendable (ExperienceInteractiveTextFrame) -> Void)?,

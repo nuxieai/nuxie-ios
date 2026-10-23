@@ -247,8 +247,8 @@ struct ExperienceInteractiveStepResult: Equatable, Sendable {
     let pointerHits: [ExperienceInteractivePointerHit]
     var focusState: NuxieNativeFocusState? = nil
     let effects: [ExperienceInteractiveEffect]
-    // A row-initiated advance owns the effects of the whole layer.
-    var layerStep: ExperienceInteractiveLayer.Step? = nil
+    // A row-initiated advance owns the effects of the whole page.
+    var pageStep: ExperienceInteractivePage.Step? = nil
 }
 
 enum ExperienceInteractiveInput: Equatable, Sendable {
@@ -1492,17 +1492,20 @@ actor ExperienceInteractivePreparation {
     private let generatedInteractionStateMachineByArtboard: [String: String]
     private let imageIDsByName: [String: UInt64]
     private let inspectionCount: Int
+    nonisolated let hasPageHost: Bool
     private var openedSessionCount = 0
 
     private init(
         payload: AuthenticatedRuntimePayload,
         preparedFile: NuxieNativePreparedFile,
+        hasPageHost: Bool,
         generatedInteractionStateMachineByArtboard: [String: String],
         imageIDsByName: [String: UInt64],
         inspectionCount: Int,
         systemFontCache: ExperienceRuntimeSystemFontCache,
         systemFontLeases: [ExperienceRuntimeSystemFontCache.Lease]
     ) {
+        self.hasPageHost = hasPageHost
         self.systemFontCache = systemFontCache
         self.systemFontLeases = systemFontLeases
         self.payload = payload
@@ -1551,6 +1554,10 @@ actor ExperienceInteractivePreparation {
             throw error
         }
         let preparedArtboards = try await preparedFile.artboards()
+        if payload.renderPlan.pageHost == .published {
+            do { try ExperiencePageHostContract.requirePage(in: preparedArtboards) }
+            catch { try? await preparedFile.retire(); throw error }
+        }
         let generatedInteractionStateMachineByArtboard = Dictionary(
             uniqueKeysWithValues: preparedArtboards.compactMap { artboard in
                 Self.generatedInteractionStateMachineNames.first(where: {
@@ -1561,6 +1568,7 @@ actor ExperienceInteractivePreparation {
         return ExperienceInteractivePreparation(
             payload: payload,
             preparedFile: preparedFile,
+            hasPageHost: preparedArtboards.contains { $0.name == ExperiencePageHostContract.artboardName },
             generatedInteractionStateMachineByArtboard:
                 generatedInteractionStateMachineByArtboard,
             imageIDsByName: imageIDsByName,
@@ -1583,6 +1591,9 @@ actor ExperienceInteractivePreparation {
         initialColorScheme: ExperienceColorScheme? = nil,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil
     ) async throws -> ExperienceInteractiveScreen {
+        guard !hasPageHost, payload.renderPlan.pageHost == nil else {
+            throw ExperienceInteractiveScreenError.stateContract("A page release cannot open a per-Screen player")
+        }
         let resolvedScreenID = screenID ?? payload.renderPlan.entry.screenId
         let resolvedArtboardName = payload.renderPlan.screens.first {
             $0.screenId == resolvedScreenID
@@ -1626,13 +1637,13 @@ actor ExperienceInteractivePreparation {
         return screen
     }
 
-    func openLayer(runValues: ExperienceRunValues? = nil, pixelWidth: UInt32, pixelHeight: UInt32,
-                   reduceMotion: Bool = false, safeArea: ExperienceSafeAreaInsets? = nil,
-                   colorScheme: ExperienceColorScheme? = nil, videoDecoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceInteractiveLayer {
+    func openPage(runValues: ExperienceRunValues? = nil, pixelWidth: UInt32, pixelHeight: UInt32,
+                   reduceMotion: Bool = false, fontScale: Double? = nil, safeArea: ExperienceSafeAreaInsets? = nil,
+                   colorScheme: ExperienceColorScheme? = nil, videoDecoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceInteractivePage {
         do {
-            let layer = try await ExperienceInteractiveLayer.open(payload: payload, preparedFile: preparedFile,
+            let layer = try await ExperienceInteractivePage.open(payload: payload, preparedFile: preparedFile,
                 runValues: runValues, imageIDsByName: imageIDsByName, pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight, reduceMotion: reduceMotion, safeArea: safeArea, colorScheme: colorScheme,
+                pixelHeight: pixelHeight, reduceMotion: reduceMotion, fontScale: fontScale, safeArea: safeArea, colorScheme: colorScheme,
                 videoDecoderPool: videoDecoderPool)
             systemFontCache.didImport(systemFontLeases)
             openedSessionCount += 1
@@ -1838,7 +1849,8 @@ actor ExperienceInteractiveScreen {
         rowRuntime: NuxieNativeRuntime? = nil,
         rowReference: NuxieNativeViewModelReference? = nil,
         operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate(),
-        rowVideoPlayback: ExperienceVideoPlayback? = nil
+        rowVideoPlayback: ExperienceVideoPlayback? = nil,
+        rowScreen: JourneyScreen? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
         guard let manifestScreen = payload.renderPlan.screens.first(where: {
@@ -1853,7 +1865,7 @@ actor ExperienceInteractiveScreen {
               manifestScreen.height > 0 else {
             throw ExperienceInteractiveScreenError.invalidScreen(screenID)
         }
-        guard let journeyScreen = payload.journey.screens.first(where: {
+        guard let journeyScreen = rowScreen ?? payload.journey.screens.first(where: {
             $0.id == screenID
         }) else {
             throw ExperienceInteractiveScreenError.journeyScreenNotFound(screenID)

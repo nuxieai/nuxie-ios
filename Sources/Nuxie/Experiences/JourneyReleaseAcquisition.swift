@@ -290,7 +290,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
         let exit: Exit?
     }
 
-    typealias Transition = ExperienceLayerHostContract.Transition
+    typealias Transition = ExperiencePageHostContract.Transition
 
     struct TextInput: Decodable {
         struct Geometry: Decodable {
@@ -388,7 +388,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
     }
 
     let renderer: String
-    let layerHost: NativeExperienceLayerHost?
+    let pageHost: NativeExperiencePageHost?
     let scene: Artifact
 
     private enum CodingKeys: String, CodingKey {
@@ -397,7 +397,7 @@ private struct JourneyReleaseRenderDocument: Decodable {
 
     init(from decoder: Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
-        layerHost = try ExperienceLayerHostContract.decode(from: decoder)
+        pageHost = .published
         renderer = try fields.decode(String.self, forKey: .renderer)
         switch renderer {
         case "nux": scene = try fields.decode(Artifact.self, forKey: .nux)
@@ -1671,7 +1671,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 sizeBytes: render.scene.sizeBytes
             ),
             entry: .init(screenId: initialScreenID),
-            layerHost: render.layerHost,
+            pageHost: render.pageHost,
             screens: render.screens.map {
                 NativeExperienceScreen(
                     screenId: $0.id,
@@ -1692,18 +1692,19 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     id: $0.id,
                     kind: $0.planKind,
                     isDefaultPair: $0.isDefaultPair,
+                    isIncomingKept: $0.isIncomingKept,
                     sourceScreenId: $0.sourceScreenId,
                     destinationScreenId: $0.destinationScreenId,
                     durationMs: $0.durationMs,
-                    incomingOnTop: $0.incomingOnTop,
+                    incomingOnTop: true,
                     source: .init(completeEventName: $0.source.completeEventName),
                     destination: .init(
                         completeEventName: $0.destination.completeEventName
                     ),
                     reverse: $0.reverse.map {
                         .init(
-                            durationMs: $0.durationMs,
-                            incomingOnTop: $0.incomingOnTop,
+                            durationMs: nil,
+                            incomingOnTop: nil,
                             source: .init(
                                 completeEventName: $0.source.completeEventName
                             ),
