@@ -1311,8 +1311,8 @@ final class JourneyEarlyEventAdmissionTests: JourneyTestCase {
                             $0.name == JourneyEvents.journeyCompleted
                         }.isEmpty, "\(vector.name): the in-window follow-up is still pending")
                     }
-                    triggerHandled.fulfill()
-                } else if event.name == vector.followUp?.name {
+                    if acknowledged { triggerHandled.fulfill() }
+                } else if event.name == vector.followUp?.name, acknowledged {
                     followUpHandled?.fulfill()
                 }
                 return acknowledged

@@ -6,6 +6,70 @@ import XCTest
 #endif
 
 final class CustomerJourneyStoreTests: XCTestCase {
+    func testAdmissionRecreatesDirectoryAndProtectsPreparedPinsUntilCommit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try await CustomerJourneyStore(directory: directory, distinctId: "customer")
+        let sqlite = try XCTUnwrap(journal.store as? SQLiteEventStore)
+        let files = CustomerPinFileOwner(journalRoot: directory.appendingPathComponent("journey-journal-v2"))
+        let candidate = arm()
+        let artifactBytes = Data("prepared admission artifact".utf8)
+        let artifactSHA256 = SHA256Provider.hexDigest(artifactBytes)
+        let cache = directory.appendingPathComponent("release-cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try artifactBytes.write(to: cache.appendingPathComponent(artifactSHA256))
+        let source = JourneyReleaseArtifactSource(descriptorSHA256: candidate.reference.descriptorSha256,
+            objects: [.init(sha256: artifactSHA256, sizeBytes: artifactBytes.count, required: true)], cacheRoot: cache)
+        let prepared = JourneyScreenCommitGate()
+        let admission = Task {
+            try await journal.admit(arm: candidate, release: release(for: candidate.reference),
+                artifactSource: source,
+                executionSnapshot: testJourneyExecutionSnapshot(), reentry: .init(type: .everyMatch, window: nil),
+                entryStepId: "wait", at: date(100), pinsPrepared: { await prepared.suspend() })
+        }
+        addTeardownBlock {
+            await prepared.release()
+            _ = try? await admission.value
+            await sqlite.close()
+        }
+        await prepared.waitUntilEntered()
+        let pin = try files.reference(owner: journal.owner, sha256: candidate.reference.descriptorSha256, kind: .descriptor)
+        let path = files.root.appendingPathComponent(pin.relativePath)
+        let artifact = try files.reference(owner: journal.owner, sha256: artifactSHA256, kind: .artifact)
+        let artifactPath = files.root.appendingPathComponent(artifact.relativePath)
+        let before = try Data(contentsOf: path)
+        let referencesBefore = try await sqlite.committedReleasePinPaths()
+        XCTAssertTrue(referencesBefore.isEmpty)
+        let collecting = expectation(description: "Collection requested during admission")
+        let collected = JourneyCompletionFlag()
+        let collection = Task {
+            collecting.fulfill()
+            let removed = try await files.collectOrphans(in: sqlite)
+            collected.finish()
+            return removed
+        }
+        addTeardownBlock {
+            await prepared.release()
+            _ = try? await admission.value
+            _ = try? await collection.value
+        }
+        await fulfillment(of: [collecting], timeout: 5)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(collected.isCompleted)
+        XCTAssertEqual(try Data(contentsOf: path), before)
+        XCTAssertEqual(try Data(contentsOf: artifactPath), artifactBytes)
+        await prepared.release()
+        let admitted = try await admission.value
+        XCTAssertNotNil(admitted)
+        let removed = try await collection.value
+        XCTAssertTrue(removed.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: path), before)
+        XCTAssertEqual(try Data(contentsOf: artifactPath), artifactBytes)
+        let referencesAfter = try await sqlite.committedReleasePinPaths()
+        XCTAssertEqual(referencesAfter, [pin.relativePath, artifact.relativePath])
+        await sqlite.close()
+    }
+
     func testTimedResumePersistsOnlyEventContextBeforeRecoveryAndReporting() async throws {
         let rig = try await CustomerExecutionTestRig(.wait)
         defer { try? FileManager.default.removeItem(at: rig.disk.root) }
@@ -818,6 +882,7 @@ final class CustomerJourneyStoreTests: XCTestCase {
     func testExecutionEpochSurvivesRelaunchAndRejectsOldCallbacks() async throws {
         let rig = try await CustomerExecutionTestRig(.wait)
         defer { try? FileManager.default.removeItem(at: rig.disk.root) }
+        let originalEpoch = rig.facade.epoch
         let before = try await rig.store.customerScope(owner: rig.owner)
         try await rig.facade.abandonAll(at: date(200))
         let revoked = try await rig.store.customerScope(owner: rig.owner)
@@ -829,8 +894,8 @@ final class CustomerJourneyStoreTests: XCTestCase {
         XCTAssertEqual(reports.first?.outcome, "abandoned")
         await rig.reopen()
         let reopened = try await CustomerJourneyStore(directory: rig.disk.root, distinctId: rig.owner.userId, store: rig.store)
-        XCTAssertGreaterThan(reopened.epoch, rig.facade.epoch)
-        do { _ = try await rig.store.executeCustomerCommand(.init(owner: rig.owner, epoch: rig.facade.epoch, mutation: .compact(eventId: "trigger"))); XCTFail("An old execution epoch cannot publish") }
+        XCTAssertGreaterThan(reopened.epoch, originalEpoch)
+        do { _ = try await rig.store.executeCustomerCommand(.init(owner: rig.owner, epoch: originalEpoch, mutation: .compact(eventId: "trigger"))); XCTFail("An old execution epoch cannot publish") }
         catch CustomerStoreError.revoked { }
         let retained = try await reopened.terminalRecords()
         XCTAssertEqual(retained.map(\.id), reports.map(\.id))
@@ -1898,28 +1963,29 @@ final class CustomerJourneyStoreTests: XCTestCase {
             at: date(100)
         )
         let run = try XCTUnwrap(admitted)
-
-        try await journal.complete(
-            run.id,
-            outcome: "closed",
-            at: date(200)
-        )
-
-        let customerDigest = JourneyStorageScope.testFixture.customerDigest(
-            distinctId: "customer"
-        )
-        let customerPins = directory
+        let sqlite = try XCTUnwrap(journal.store as? SQLiteEventStore)
+        let pinRoot = directory
             .appendingPathComponent("journey-journal-v2", isDirectory: true)
             .appendingPathComponent("release-pins", isDirectory: true)
-            .appendingPathComponent(customerDigest, isDirectory: true)
-        try FileManager.default.removeItem(at: customerPins)
-        try Data("blocks-directory-enumeration".utf8).write(to: customerPins)
-
+        await sqlite.setCustomerFaultInjector({ point in
+            if point == .afterCommit {
+                try FileManager.default.removeItem(at: pinRoot)
+                try Data("blocks-directory-enumeration".utf8).write(to: pinRoot)
+            }
+        }, for: "completion")
+        try await journal.complete(run.id, outcome: "closed", at: date(200))
+        await sqlite.setCustomerFaultInjector(nil)
+        XCTAssertEqual(try Data(contentsOf: pinRoot), Data("blocks-directory-enumeration".utf8))
 
         let remainingRuns = try await journal.runs()
         XCTAssertTrue(remainingRuns.isEmpty)
         let checklist = try await journal.checkmark(experienceId: "experience")
         XCTAssertEqual(checklist?.outcome, "closed")
+        let reports = try await journal.reports()
+        XCTAssertEqual(reports.map(\.id), [run.completedEventId])
+        let pins = try await sqlite.committedReleasePinPaths()
+        XCTAssertTrue(pins.isEmpty)
+        await sqlite.close()
     }
 
     func testRecoveryReturnsPersistedAbandonmentWhenReleasePinCleanupFails() async throws {
@@ -1939,25 +2005,26 @@ final class CustomerJourneyStoreTests: XCTestCase {
         let run = try XCTUnwrap(admitted)
 
 
-        let customerDigest = JourneyStorageScope.testFixture.customerDigest(
-            distinctId: "customer"
-        )
         let customerPins = directory
             .appendingPathComponent("journey-journal-v2", isDirectory: true)
             .appendingPathComponent("release-pins", isDirectory: true)
-            .appendingPathComponent(customerDigest, isDirectory: true)
         let recoveryJournal = try await CustomerJourneyStore(
             directory: directory,
-            distinctId: "customer",
-            beforePersist: {
+            distinctId: "customer"
+        )
+        let sqlite = try XCTUnwrap(recoveryJournal.store as? SQLiteEventStore)
+        await sqlite.setCustomerFaultInjector({ point in
+            if point == .afterCommit {
                 try FileManager.default.removeItem(at: customerPins)
                 try Data("blocks-directory-enumeration".utf8).write(
                     to: customerPins
                 )
             }
-        )
+        }, for: "other")
 
         let resumable = try await recoveryJournal.recover(at: date(200))
+        await sqlite.setCustomerFaultInjector(nil)
+        XCTAssertEqual(try Data(contentsOf: customerPins), Data("blocks-directory-enumeration".utf8))
 
         try FileManager.default.removeItem(at: customerPins)
         try FileManager.default.createDirectory(
@@ -1974,6 +2041,9 @@ final class CustomerJourneyStoreTests: XCTestCase {
         XCTAssertEqual(recovered.at, date(200))
         let started = try await recoveryJournal.loggedInput(named: JourneyEvents.journeyStarted)
         XCTAssertNotNil(started)
+        let pins = try await sqlite.committedReleasePinPaths()
+        XCTAssertTrue(pins.isEmpty)
+        await sqlite.close()
     }
 
     private func eventLog(directory: URL, store: SQLiteEventStore, api: MockNuxieApiForQueue, dropEvents: Bool = false) async throws -> EventLog {

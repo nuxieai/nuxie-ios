@@ -13,6 +13,18 @@ struct CustomerPinFileOwner: Sendable {
         root = journalRoot.appendingPathComponent("release-pins", isDirectory: true)
     }
 
+    /// Admission holds this lock from file preparation through SQL commit.
+    /// Collection takes the same lock before reading committed references.
+    func withExclusiveAccess<Value: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let journalRoot = root.deletingLastPathComponent()
+        return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
+            to: journalRoot, lockScope: CacheFilesystemLockScope(cacheRootURL: journalRoot),
+            operation: operation
+        )
+    }
+
     static func relativePath(owner: CustomerStoreOwner, sha256: String, kind: CustomerReleasePin.Kind) -> String {
         let digest = owner.scope.customerDigest(distinctId: owner.userId)
         return "\(digest)/\(sha256).\(kind == .descriptor ? "json" : "artifact")"
@@ -43,15 +55,12 @@ struct CustomerPinFileOwner: Sendable {
 
     func collectOrphans(in store: SQLiteEventStore) async throws -> [String] {
         try await store.customerAssertWriter()
-        let journalRoot = root.deletingLastPathComponent()
-        return try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(
-            to: journalRoot, lockScope: CacheFilesystemLockScope(cacheRootURL: journalRoot)
-        ) {
+        return try await withExclusiveAccess {
             try await store.collectCustomerPinOrphans(files: self)
         }
     }
 
-    /// The writer calls this synchronously after reading every committed reference.
+    /// Call only while holding withExclusiveAccess, after reading every committed reference.
     /// A failed query never reaches deletion. Unknown files are left alone.
     func collectOrphans(committedPaths: Set<String>) throws -> [String] {
         let manager = FileManager.default

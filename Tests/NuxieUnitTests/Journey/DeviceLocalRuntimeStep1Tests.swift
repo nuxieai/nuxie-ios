@@ -39,13 +39,14 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
             await first.store.setCustomerFaultInjector({ try checkpoint.visit($0) }, for: "completion")
             first.clock.setCurrentDate(.init(timeIntervalSince1970: Double(vector.inputAtMillis) / 1000))
             _ = await first.events.captureAndRouteSystemEvent(.init(name: "finish", properties: ["answer": vector.expected.answer], eventId: "finish", distinctId: "customer"))
-            await fulfillment(of: [first.handled], timeout: 5)
+            await waitForInput(first)
             await first.service.stopAfterInjectedCrash()
             await first.events.close()
             XCTAssertTrue(checkpoint.interrupted)
             let reportsBefore = try disk.strings("SELECT id FROM events WHERE event_role='completed';")
             XCTAssertEqual(reportsBefore, [reservedReportId], vector.name)
             let second = try await harness(disk: disk, snapshot: snapshot)
+            second.clock.setCurrentDate(.init(timeIntervalSince1970: Double(vector.inputAtMillis) / 1000))
             _ = await second.events.captureAndRouteSystemEvent(.init(name: "finish", properties: ["answer": vector.expected.answer], eventId: "finish", distinctId: "customer"))
             await second.events.drain()
             let active = try await second.store.activeJourneys(owner: second.owner)
@@ -75,14 +76,19 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
             let sample = try await harness(disk: sampleDisk, snapshot: snapshot, drop: vector.privacyDrop)
             sample.events.track("start", properties: ["answer": 42])
             await sample.events.drain()
+            let sampleActive = try await sample.store.activeJourneys(owner: sample.owner)
+            XCTAssertEqual(sampleActive.count, 1, vector.name)
+            _ = try XCTUnwrap(sampleActive.first?.park, "The fixture must reach its wait before completion")
             await sample.store.setCustomerFaultInjector({ try count.visit($0) }, for: "completion")
             _ = await sample.events.captureAndRouteSystemEvent(.init(name: "finish", properties: ["answer": 42], eventId: "finish", distinctId: "customer"))
-            await fulfillment(of: [sample.handled], timeout: 5)
+            await waitForInput(sample)
             await sample.service.stopAfterInjectedCrash()
             await sample.events.close()
             try sampleDisk.remove()
+            let statementCount = try XCTUnwrap(count.statementCount > 0 ? count.statementCount : nil,
+                "The fixture must exercise the completion transaction")
             var points: [CustomerTransactionFaultPoint] = []
-            if vector.failurePoints.contains("each_statement") { points += (1...count.statementCount).map(CustomerTransactionFaultPoint.statement) }
+            if vector.failurePoints.contains("each_statement") { points += (1...statementCount).map(CustomerTransactionFaultPoint.statement) }
             if vector.failurePoints.contains("before_commit") { points.append(.beforeCommit) }
             if vector.failurePoints.contains("after_commit") { points.append(.afterCommit) }
             for point in points {
@@ -101,7 +107,7 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
                     } else { try fault.visit(current) }
                 }, for: "completion")
                 _ = await first.events.captureAndRouteSystemEvent(.init(name: "finish", properties: ["answer": 42], eventId: "finish", distinctId: "customer"))
-                await fulfillment(of: [first.handled], timeout: 5)
+                await waitForInput(first)
                 await first.service.stopAfterInjectedCrash()
                 await first.events.close()
                 let activeCount = try disk.integer("SELECT COUNT(*) FROM journeys;")
@@ -136,12 +142,22 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
         return try ExactJSONCodec.decode(T.self, from: Data(contentsOf: root.appendingPathComponent("fixtures/sdk/\(name).json")))
     }
 
+    private func waitForInput(_ harness: Harness, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<500 {
+            if harness.handled.isCompleted { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Fixture input did not reach its commit boundary within five seconds", file: file, line: line)
+    }
+
     private func snapshot() async throws -> JourneyProfileCatalog.Snapshot {
         let fixture = try JourneyPlaneProfileTestFixture.load()
         let base = try await authenticatedSnapshot(fixture)
         let steps = try ExactJSONCodec.decode([Journey.Step].self, from: Data(#"[{"kind":"action","id":"wait","action":{"type":"wait_until","trigger":{"kind":"event","eventName":"finish"},"condition":{"type":"Truthy","value":{"type":"Boolean","value":true}},"maxTimeMs":60000},"outlets":{"satisfied":"done","timeout":"done"}},{"kind":"complete","id":"done","outcome":"done"}]"#.utf8))
         let headless = try replacingWithHeadlessArtifacts(replacing(base, entry: .init(type: .event, eventName: "start", segmentId: nil, member: nil, condition: nil),
-            reentry: .init(type: .everyMatch, window: nil), completionOutputs: ["done": .init(eventFields: [["key": .string("answer"), "type": .string("number"), "required": .bool(true)]], responseFields: [])], entryStepId: "wait", steps: steps, screens: []))
+            reentry: .init(type: .everyMatch, window: nil),
+            inputs: .init(eventFields: [["key": .string("answer"), "type": .string("number"), "required": .bool(true)]], responseFields: []),
+            completionOutputs: ["done": .init(eventFields: [["key": .string("answer"), "type": .string("number"), "required": .bool(true)]], responseFields: [])], entryStepId: "wait", steps: steps, screens: []))
         let release = try XCTUnwrap(headless.releasesByDigest.values.first)
         let original = try XCTUnwrap(base.profile.releases.first)
         let pin = JourneyReleaseProfileEntry(locator: original.locator,
@@ -159,7 +175,7 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
         let events: EventLog
         let service: JourneyService
         let clock: MockDateProvider
-        let handled: XCTestExpectation
+        let handled: JourneyCompletionFlag
         let owner = CustomerStoreOwner(scope: .testFixture, userId: "customer")
     }
 
@@ -174,7 +190,6 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
         configuration.testingOverrides.suppressBackgroundWork = true
         configuration.testingOverrides.flushAt = 10000
         if drop { configuration.beforeSend = { $0.name == JourneyEvents.journeyCompleted ? nil : $0 } }
-        try await events.configure(configuration: configuration)
         let service = JourneyService(identity: identity, events: events, dateProvider: clock, sleepProvider: MockSleepProvider(),
             journalDirectory: disk.root, storageScope: .testFixture, featureAccess: { _ in nil },
             dispatcher: JourneyEffectDispatcher(identity: identity, events: events),
@@ -184,14 +199,15 @@ final class DeviceLocalRuntimeStep1Tests: JourneyTestCase {
                       Data(base64Encoded: pin.envelope.descriptorBytesBase64) == release.exactDescriptorBytes else { throw CustomerStoreError.invalidRow }
                 return release
             }, timezones: try XCTUnwrap(SignedTimezoneBundle.installed))
-        let handled = expectation(description: "Fixture input reached its commit boundary")
-        handled.assertForOverFulfill = false
+        let handled = JourneyCompletionFlag()
         let reservation = events.reserveCommittedAdmission { service.eventAdmissionGeneration() }
         await events.subscribeAcknowledgingCommitted(reservation: reservation) { event, generation in
             let accepted = await service.handleEvent(event, admittedProfileGeneration: generation)
-            if event.id == "finish" { handled.fulfill() }
+            if event.id == "finish" { handled.finish() }
             return accepted
         }
+        await service.prepareForEvents()
+        try await events.configure(configuration: configuration)
         await service.initialize()
         await service.profileDidCommit(snapshot, distinctId: "customer")
         return .init(store: store, events: events, service: service, clock: clock, handled: handled)

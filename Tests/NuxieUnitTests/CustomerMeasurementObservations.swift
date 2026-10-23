@@ -8,7 +8,7 @@ extension SQLiteEventStore {
     /// Measurement observations read canonical event rows, including unbound captures for storage assertions.
     func measurementInputs(distinctId: String, limit: Int = 100, throughEventId: String? = nil) throws -> [PendingConversionOccurrence] {
         let scope = try conversionScope()
-        var sql = "SELECT id,accepted_at FROM events WHERE scope=? AND user_id=? AND measurement_state='pending'"
+        var sql = "SELECT id,accepted_at FROM events WHERE scope=? AND user_id=? AND input_kind='event' AND measurement_state='pending'"
         var values: [CustomerSQLValue] = [.text(scope), .text(distinctId)]
         if let throughEventId { sql += " AND capture_sequence<=(SELECT capture_sequence FROM events WHERE id=?)"; values.append(.text(throughEventId)) }
         sql += " ORDER BY timestamp,id LIMIT ?;"

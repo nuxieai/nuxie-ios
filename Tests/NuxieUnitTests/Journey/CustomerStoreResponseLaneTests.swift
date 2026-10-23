@@ -136,6 +136,7 @@ final class CustomerStoreResponseLaneTests: XCTestCase {
 
     func testLocalOnlyInputIsExcludedFromUploadHistoryAndConversionInbox() async throws {
         try await store.initialize(path: disk.root)
+        try await store.bindConversionAuthority(owner.scope)
         let event = try StoredEvent(id: "local", name: "response", distinctId: owner.userId)
         _ = try await store.insert(event, deliveryState: .localOnly)
         let upload = try await store.queryPendingDelivery(limit: 10)
@@ -143,11 +144,13 @@ final class CustomerStoreResponseLaneTests: XCTestCase {
         let recent = try await store.queryRecentEvents(limit: 10)
         let count = try await store.countEvents(name: "response", distinctId: owner.userId, since: nil, until: nil)
         let conversions = try await store.measurementInputs(distinctId: owner.userId)
+        let projectionInputs = try await store.customerMeasurementPage(owner: owner, throughEventId: nil, limit: 10)
         XCTAssertTrue(upload.isEmpty)
         XCTAssertTrue(history.isEmpty)
         XCTAssertTrue(recent.isEmpty)
         XCTAssertEqual(count, 0)
         XCTAssertTrue(conversions.isEmpty)
+        XCTAssertTrue(projectionInputs.isEmpty)
         XCTAssertEqual(try disk.integer("SELECT delivery_state FROM events WHERE id='local';"), 3)
         XCTAssertEqual(try disk.strings("SELECT input_kind FROM events WHERE id='local';"), ["response_change"])
         await store.close()

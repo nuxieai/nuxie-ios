@@ -57,6 +57,8 @@ struct JourneyReleasePinStore: Sendable {
         artifactSource: JourneyReleaseArtifactSource?,
         inheritedArtifactSHA256s: [String]
     ) throws -> PreparedAdmission {
+        // Collection may have removed an empty customer directory.
+        try ensureCustomerDirectory()
         let releaseBytes = try ExactJSONCodec.encode(release)
         guard releaseBytes.count <= Self.maximumReleaseBytes else {
             throw JourneyExecutionError.storageLimit

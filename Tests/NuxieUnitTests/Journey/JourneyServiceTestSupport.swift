@@ -1423,26 +1423,29 @@ actor PinnedReleaseAuthenticationRecorder {
 
 actor JourneyScreenCommitGate {
     private var entered = false
-    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var released = false
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
     func suspend() async {
         entered = true
-        entryWaiters.forEach { $0.resume() }
-        entryWaiters.removeAll()
+        guard !released else { return }
         await withCheckedContinuation { continuation in
             continuations.append(continuation)
         }
     }
 
-    func waitUntilEntered() async {
-        guard !entered else { return }
-        await withCheckedContinuation { continuation in
-            entryWaiters.append(continuation)
+    func waitUntilEntered(file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<500 {
+            if entered { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
+        // Release a late arrival too, so a failed assertion cannot strand it.
+        release()
+        XCTFail("The presentation or admission did not reach its gate within five seconds", file: file, line: line)
     }
 
     func release() {
+        released = true
         continuations.forEach { $0.resume() }
         continuations.removeAll()
     }

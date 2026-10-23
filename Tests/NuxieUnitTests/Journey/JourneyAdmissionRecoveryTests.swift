@@ -19,6 +19,14 @@ final class JourneyAdmissionRecoveryTests: JourneyTestCase {
 
         await service.initialize()
 
+        let opened = await service.storeForTesting()
+        let journal = try XCTUnwrap(opened)
+        let beforeDelivery = try await journal.store.customerMeasurementPage(owner: journal.owner, throughEventId: nil, limit: 100)
+        XCTAssertTrue(beforeDelivery.isEmpty, "Measurement must wait for the earliest input's admission decisions")
+        let retained = try await events.measurementInputs(distinctId: "customer", limit: 100, throughEventId: nil)
+        XCTAssertEqual(retained.map(\.event.id), captured.map(\.id))
+        let acknowledged = await service.handleStoredEvent(captured[0], admittedProfileGeneration: service.eventAdmissionGeneration())
+        XCTAssertTrue(acknowledged)
         let pending = try await events.measurementInputs(
             distinctId: "customer", limit: 100, throughEventId: nil
         )

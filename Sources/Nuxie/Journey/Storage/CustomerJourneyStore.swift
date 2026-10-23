@@ -8,7 +8,6 @@ struct CustomerJourneyStore: Sendable {
     let events: (any RoutedStableSystemEventCapturing)?
     private let pins: JourneyReleasePinStore
     private let files: CustomerPinFileOwner
-    private let root: URL
     private let beforePersist: (@Sendable () throws -> Void)?
     var distinctId: String { owner.userId }
     var responseSaveNamespace: String { owner.authorityScope }
@@ -23,7 +22,7 @@ struct CustomerJourneyStore: Sendable {
         owner = .init(scope: storageScope, userId: distinctId)
         self.events = events
         self.beforePersist = beforePersist
-        root = directory.appendingPathComponent("journey-journal-v2", isDirectory: true)
+        let root = directory.appendingPathComponent("journey-journal-v2", isDirectory: true)
         files = .init(journalRoot: root)
         pins = .init(journalRoot: root, customerDigest: storageScope.customerDigest(distinctId: distinctId),
             budgetBytes: releasePinBudgetBytes, countLimit: releasePinCountLimit)
@@ -43,7 +42,7 @@ struct CustomerJourneyStore: Sendable {
         }
         do {
             let store = store, root = root, files = files
-            try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(to: root, lockScope: CacheFilesystemLockScope(cacheRootURL: root)) {
+            try await files.withExclusiveAccess {
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 for file in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) where metadata.legacyCleanupPending {
                     let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
@@ -98,7 +97,8 @@ struct CustomerJourneyStore: Sendable {
                executionSnapshot: JourneyRun.ExecutionSnapshot, reentry: Journey.Frequency, policy: Journey.Policy? = nil,
                entryStepId: String, at: Date, profileFence: JourneyProfileFence? = nil,
                profileFenceToken: JourneyProfileFenceToken? = nil, stateArmReceipt: JourneyStateArmReceipt? = nil,
-               sourceEventId: String? = nil, onAdmitted: @escaping @Sendable () -> Void = {}) async throws -> JourneyRun? {
+               sourceEventId: String? = nil, pinsPrepared: (@Sendable () async throws -> Void)? = nil,
+               onAdmitted: @escaping @Sendable () -> Void = {}) async throws -> JourneyRun? {
         guard release.envelope.descriptorSha256 == arm.reference.descriptorSha256,
               release.locator.experienceId == arm.reference.experienceId, release.locator.experienceVersionId == arm.reference.versionId,
               release.locator.legId == arm.reference.legId else { throw CustomerStoreError.invalidRow }
@@ -121,8 +121,7 @@ struct CustomerJourneyStore: Sendable {
                 properties: item.request.properties ?? [:], timestamp: item.occurredAt, distinctId: distinctId), recordedAt: at)]
         }
         let store = self
-        let result = try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(to: root, lockScope: CacheFilesystemLockScope(cacheRootURL: root)) {
-            try store.pins.ensureCustomerDirectory()
+        let result = try await files.withExclusiveAccess {
             _ = try store.files.collectOrphans(committedPaths: await store.store.committedReleasePinPaths())
             let inherited = try await store.runs().first(where: { $0.reference.descriptorSha256 == arm.reference.descriptorSha256 })?.artifactSHA256s ?? []
             let prepared = try store.pins.prepareAdmission(release: release, descriptorSHA256: arm.reference.descriptorSha256, artifactSource: artifactSource, inheritedArtifactSHA256s: inherited)
@@ -131,6 +130,9 @@ struct CustomerJourneyStore: Sendable {
             var references = [try store.files.reference(owner: store.owner, sha256: arm.reference.descriptorSha256, kind: .descriptor)]
             references += try prepared.artifactSHA256s.map { try store.files.reference(owner: store.owner, sha256: $0, kind: .artifact) }
             try store.files.synchronize(references)
+            // Keep the root lock until SQL owns these durable files. Collection
+            // uses this same lock and cannot inspect an admission in flight.
+            try await pinsPrepared?()
             let watch: JourneyConversionWatch?
             if let policy, policy.goal != nil { watch = try JourneyConversionWatch(run: journey, policy: policy, delivery: arm.conversion) }
             else { watch = nil }
@@ -252,15 +254,19 @@ struct CustomerJourneyStore: Sendable {
         let report = try JourneyReporter.completed(journey, owner: distinctId, outcome: outcome, at: at,
             outputs: .init(event: eventOutputs, responses: responseOutputs))
         _ = try await command(.complete(key: key(journey), revision: journey.cursorRevision, at: Int64(JourneyConversionWatch.millis(at)), reportId: journey.completedEventId), items: [report], admission: admission)
+        await collectPinOrphans()
+        return true
+    }
+
+    private func collectPinOrphans() async {
         // File maintenance follows commit and cannot change the terminal result.
         do {
             let files = files, store = store
-            _ = try await SharedCachePathCoordinator.shared.withExclusiveRootAccess(to: root, lockScope: CacheFilesystemLockScope(cacheRootURL: root)) {
+            _ = try await files.withExclusiveAccess {
                 try files.collectOrphans(committedPaths: await store.committedReleasePinPaths())
             }
         }
         catch { LogWarning("CustomerJourneyStore: pin cleanup remains pending: \(error)") }
-        return true
     }
 
     func conversionWatches() async throws -> [String: JourneyConversionWatch] { try await store.customerWatches(owner: owner) }
@@ -301,6 +307,7 @@ struct CustomerJourneyStore: Sendable {
         let boundaries = active.map { CustomerTerminalBoundary(key: key($0), revision: $0.cursorRevision, reportId: $0.completedEventId, at: Int64(JourneyConversionWatch.millis(at))) }
         let reports = try active.map { try JourneyReporter.completed($0, owner: distinctId, outcome: "abandoned", at: at, outputs: .init(event: $0.outputs.event, responses: $0.context.responses)) }
         _ = try await command(.recover(boundaries, revoke: revoke), items: reports)
+        await collectPinOrphans()
     }
     func finalizeRevocation() async throws -> Bool { try await runs().isEmpty }
 
