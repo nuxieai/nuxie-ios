@@ -253,16 +253,12 @@ extension SQLiteEventStore: CustomerStore {
               WHERE authority_scope IS NULL;
             UPDATE events SET scope=COALESCE(authority_scope,'legacy-unknown'), journey_plan_state='retired', measurement_state='done';
             """)
+            // Event bindings do not prove complete scoped history before cutover.
             try customerWrite("""
             INSERT INTO event_history_metadata(scope,user_id,coverage_start_ms)
-            SELECT scope,user_id,
-              CASE WHEN scope <> 'legacy-unknown'
-                AND EXISTS(SELECT 1 FROM conversion_scope_bindings b WHERE b.authority_scope=events.authority_scope)
-                THEN COALESCE((SELECT coverage_start_ms FROM event_history_metadata WHERE scope='legacy-global' AND user_id=''),?)
-                ELSE ? END
-            FROM events WHERE 1 GROUP BY scope,user_id
+            SELECT scope,user_id,? FROM events WHERE 1 GROUP BY scope,user_id
             ON CONFLICT(scope,user_id) DO UPDATE SET coverage_start_ms=MAX(coverage_start_ms,excluded.coverage_start_ms);
-            """, [.integer(cutoverAt), .integer(cutoverAt)])
+            """, [.integer(cutoverAt)])
             try customerExecute("DROP TABLE conversion_event_inbox;")
             try customerWrite("UPDATE customer_store_metadata SET state_version=?,cutover_sequence=next_capture_sequence-1,legacy_cleanup_pending=1 WHERE id=1;", [.text(CustomerStoreSchema.stateVersion)])
             return try customerMetadata()

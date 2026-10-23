@@ -90,11 +90,12 @@ final class CustomerStoreCutoverTests: XCTestCase {
         await store.close()
     }
 
-    func testCutoverRetainsLegacyCoverageOnlyForProvablyBoundCustomers() async throws {
+    func testCutoverFencesIncompleteScopedHistoryEvenWithProvenEvents() async throws {
         try disk.withDatabase { try CustomerStoreTestDatabase.createVersion4(on: $0) }
         let authority = CustomerStoreTestDatabase.quoted(owner.authorityScope)
         try disk.execute("""
         INSERT INTO events VALUES('proven','answer',X'7B7D',200,'customer',0,'device',NULL);
+        INSERT INTO events VALUES('delivered','purchase',X'7B7D',250,'customer',2,'device',NULL);
         INSERT INTO events VALUES('unproven','answer',X'7B7D',200,'other-customer',2,'device',NULL);
         INSERT INTO events VALUES('unproven-authority','answer',X'7B7D',200,'other-customer',2,'device',NULL);
         INSERT INTO event_history_metadata VALUES(1,100);
@@ -108,8 +109,16 @@ final class CustomerStoreCutoverTests: XCTestCase {
         store = SQLiteEventStore()
         try await store.initialize(path: disk.root)
         _ = try await store.openCustomerState(cutoverAt: 500)
-        let provenCoverage = try await store.historyCoverage(owner: owner)
-        XCTAssertEqual(provenCoverage, 100)
+        let scopedCoverage = try await store.historyCoverage(owner: owner)
+        let coverageStart = try XCTUnwrap(scopedCoverage)
+        XCTAssertEqual(coverageStart, 500)
+        let coverage = EventHistoryCoverage.retainedWindow(startingAt: Date(timeIntervalSince1970: Double(coverageStart) / 1000))
+        let querySince = Date(timeIntervalSince1970: 0.150)
+        XCTAssertFalse(coverage.contains(since: querySince), "A pre-cutover history question must remain incomplete even when individual events have proven authority")
+        XCTAssertTrue(coverage.contains(since: Date(timeIntervalSince1970: 0.500)))
+        XCTAssertEqual(try disk.integer("SELECT COUNT(*) FROM events WHERE scope=\(authority) AND user_id='customer' AND name='purchase' AND timestamp BETWEEN 150 AND 400;"), 0)
+        XCTAssertEqual(try disk.integer("SELECT COUNT(*) FROM events WHERE scope='legacy-unknown' AND user_id='customer' AND name='purchase' AND timestamp BETWEEN 150 AND 400 AND delivery_state=2;"), 1)
+        XCTAssertEqual(try disk.integer("SELECT coverage_start_ms FROM event_history_metadata WHERE scope='legacy-unknown' AND user_id='customer';"), 500)
         XCTAssertEqual(try disk.integer("SELECT coverage_start_ms FROM event_history_metadata WHERE scope='legacy-unknown' AND user_id='other-customer';"), 500)
         XCTAssertEqual(try disk.integer("SELECT coverage_start_ms FROM event_history_metadata WHERE scope='authority-unproven' AND user_id='other-customer';"), 500)
         XCTAssertEqual(try disk.integer("SELECT coverage_start_ms FROM event_history_metadata WHERE scope='legacy-global' AND user_id='';"), 100)
