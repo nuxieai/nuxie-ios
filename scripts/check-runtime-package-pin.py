@@ -156,7 +156,7 @@ def dump_package(package_path: pathlib.Path, local_selection=None) -> dict:
 
 
 def require_dump_failure(
-    package_path: pathlib.Path, local_selection: str, expected: str
+    package_path: pathlib.Path, local_selection, expected: str
 ) -> None:
     result = subprocess.run(
         package_command(package_path),
@@ -187,7 +187,7 @@ def runtime_target(manifest: dict) -> dict:
 def require_remote_target(manifest: dict) -> None:
     target = runtime_target(manifest)
     if target.get("type") != "binary" or target.get("path") is not None:
-        fail("NuxieRuntimeBinary must be a remote binary target by default")
+        fail("NUXIE_RUNTIME_USE_LOCAL=0 must select the pinned remote binary")
     if (
         target.get("url") != metadata["url"]
         or target.get("checksum") != metadata["checksum"]
@@ -196,35 +196,36 @@ def require_remote_target(manifest: dict) -> None:
 
 
 package_root = pathlib.Path(__file__).resolve().parent.parent
-require_remote_target(dump_package(package_root))
+require_remote_target(dump_package(package_root, "0"))
 
-# A pre-existing ignored cache must not select a local binary implicitly. The
-# local path is allowed only when the caller opts in explicitly.
+# Development uses the stage by default; release selection is explicit.
 with tempfile.TemporaryDirectory(prefix="nuxie-runtime-package-pin-") as temporary:
     fixture_root = pathlib.Path(temporary)
     shutil.copy2(package_root / "Package.swift", fixture_root / "Package.swift")
     local_runtime = fixture_root / ".artifacts" / "NuxieRuntime.xcframework"
     local_runtime.mkdir(parents=True)
 
-    require_remote_target(dump_package(fixture_root))
-    local_target = runtime_target(dump_package(fixture_root, "1"))
-    if local_target.get("type") != "binary" or local_target.get("url") is not None:
-        fail("explicit local runtime selection must produce a local binary target")
-    if pathlib.Path(local_target.get("path", "")).name != "NuxieRuntime.xcframework":
-        fail("explicit local runtime selection did not use the staged XCFramework")
+    require_remote_target(dump_package(fixture_root, "0"))
+    for selection in (None, "1"):
+        local_target = runtime_target(dump_package(fixture_root, selection))
+        if local_target.get("type") != "binary" or local_target.get("url") is not None:
+            fail("default and explicit local selection must produce a local binary target")
+        if pathlib.Path(local_target.get("path", "")).name != "NuxieRuntime.xcframework":
+            fail("local runtime selection did not use the staged XCFramework")
 
     require_dump_failure(
         fixture_root,
         "invalid",
-        "NUXIE_RUNTIME_USE_LOCAL must be unset or 1",
+        "NUXIE_RUNTIME_USE_LOCAL must be unset, 1 or 0",
     )
     missing_fixture = fixture_root / "missing-local"
     missing_fixture.mkdir()
     shutil.copy2(package_root / "Package.swift", missing_fixture / "Package.swift")
-    require_dump_failure(
-        missing_fixture,
-        "1",
-        "NUXIE_RUNTIME_USE_LOCAL=1 requires .artifacts/NuxieRuntime.xcframework",
-    )
+    for selection in (None, "1"):
+        require_dump_failure(
+            missing_fixture,
+            selection,
+            "stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`",
+        )
 
 print(f"Runtime package pin passed: {metadata['release']} URL and checksum are atomic")

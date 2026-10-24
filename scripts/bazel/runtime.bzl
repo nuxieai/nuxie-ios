@@ -1,4 +1,4 @@
-"""Import the SDK's checksum-pinned runtime release; never compile runtime source."""
+"""Import the staged runtime by default, or the explicit pinned release."""
 
 _BUILD = """\
 load("@rules_apple//apple:apple.bzl", "apple_static_xcframework_import")
@@ -17,13 +17,13 @@ filegroup(name = "xcframework", srcs = glob(["NuxieRuntime.xcframework/**"]))
 def _runtime_repository_impl(ctx):
     metadata_path = ctx.path(ctx.attr.metadata)
     metadata = json.decode(ctx.read(metadata_path))
-    local = ctx.getenv("NUXIE_RUNTIME_USE_LOCAL", "")
-    if local not in ["", "1"]:
-        fail("NUXIE_RUNTIME_USE_LOCAL must be unset or 1")
+    local = ctx.getenv("NUXIE_RUNTIME_USE_LOCAL", "1")
+    if local not in ["0", "1"]:
+        fail("NUXIE_RUNTIME_USE_LOCAL must be unset, 1 or 0")
     if local == "1":
         staged = metadata_path.dirname.dirname.get_child(".artifacts/NuxieRuntime.xcframework")
         if not staged.exists:
-            fail("Stage the local runtime with make stage-runtime-xcframework before opting in")
+            fail("stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`")
         ctx.watch_tree(staged)
         ctx.symlink(staged, "NuxieRuntime.xcframework")
     else:
