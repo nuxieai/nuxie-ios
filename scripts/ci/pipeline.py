@@ -52,7 +52,7 @@ def pipeline(environment=None):
     if products == '1':
         for configuration in ('Debug', 'Release'):
             document['steps'][0]['command'] += (
-                'python3 -B scripts/bazel/sdk.py prepare --configuration ' + configuration
+                'NUXIE_RUNTIME_USE_LOCAL=0 python3 -B scripts/bazel/sdk.py prepare --configuration ' + configuration
                 + ' --platform ios-device --platform ios-simulator --output output/native-products/ios/' + configuration + '\n')
         document['steps'][0]['command'] += 'mkdir -p output/pipeline/native-products\ntar -czf output/pipeline/native-products/ios-products.tar.gz -C output/native-products ios\n'
     if version == '2':

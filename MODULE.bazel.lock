@@ -280,7 +280,7 @@
   "moduleExtensions": {
     "//scripts/bazel:runtime.bzl%runtime": {
       "general": {
-        "bzlTransitiveDigest": "yulOV5ULSWPzEyn0d38SZF1HS5alnoleHpPJgy33vqw=",
+        "bzlTransitiveDigest": "YuQobMzIr1KhD7YGGx5bfAg0Rk1LGGdh2UjgU8eyy1Y=",
         "usagesDigest": "Uw+Ju5W4a5v7iiri+9i8woKbJHLn739QZ5+U2p5PrcE=",
         "recordedInputs": [],
         "generatedRepoSpecs": {

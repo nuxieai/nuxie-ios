@@ -82,8 +82,8 @@ help:
 	@echo "  fetch-runtime-xcframework - Download, checksum, verify, and stage the released runtime"
 	@echo "  fetch-runtime-xcframework-clean - Re-download and qualify without reusing a cached archive"
 	@echo "  stage-runtime-xcframework - Verify and stage NUXIE_RUNTIME_XCFRAMEWORK for local development"
-	@echo "  check-staged-runtime-xcframework - Bind the staged runtime to the release pin (or explicit local opt-in)"
-	@echo "  check-local-runtime-xcframework - Structurally validate an explicitly selected local runtime"
+	@echo "  check-staged-runtime-xcframework - Validate the stage (NUXIE_RUNTIME_USE_LOCAL=0 checks the release pin)"
+	@echo "  check-local-runtime-xcframework - Structurally validate the staged local runtime"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
 	@echo "  check-public-api    - Reject accidental changes to the supported SDK facade"
 	@echo "  check-event-catalog - Validate event catalog emitters against SDK sources"
@@ -146,15 +146,8 @@ check-runtime-consumer-boundary:
 check-runtime-package-pin:
 	@python3 scripts/check-runtime-package-pin.py Runtime/artifact.json
 
-# The currently protected reusable-workflow pin predates the macOS target's
-# binary dependency and does not stage it in that one job. Its `make generate`
-# command executes this candidate-controlled target, so bridge the pin safely
-# until the next reviewed workflow-pin advance. Other jobs already stage the
-# artifact explicitly, and local project generation remains network-free.
-generate: check-xcodegen check-privacy-manifest
-	@if [ "$${GITHUB_JOB:-}" = "macos-build" ]; then \
-		$(MAKE) fetch-runtime-xcframework; \
-	fi
+# Project generation uses the explicitly staged runtime without fetching.
+generate: check-staged-runtime-xcframework check-xcodegen check-privacy-manifest
 	@CURRENT_HASH=$$( (cat project.yml; find Sources Tests Examples -type f -print | sort) | shasum -a 256 | awk '{print $$1}' ); \
 	STORED_HASH=$$(cat "$(XCODEGEN_INPUTS)" 2>/dev/null || true); \
 	if [ -d "$(XCODEPROJ)" ] && [ "$$CURRENT_HASH" = "$$STORED_HASH" ]; then \
@@ -167,8 +160,8 @@ generate: check-xcodegen check-privacy-manifest
 	fi
 
 # XcodeGen consumes the staged path directly. Runtime contributors can point
-# this target at a local runtime build; NUXIE_RUNTIME_USE_LOCAL=1 then opts
-# SwiftPM and staged-runtime checks into that unpublished artifact.
+# this target at a local runtime build. SwiftPM and Bazel use it by default;
+# NUXIE_RUNTIME_USE_LOCAL=0 explicitly selects the pinned release.
 stage-runtime-xcframework:
 	@set -eu; \
 	source="$(NUXIE_RUNTIME_XCFRAMEWORK)"; \
@@ -217,20 +210,20 @@ verify-runtime-artifact:
 
 check-staged-runtime-xcframework:
 	@set -eu; \
-	case "$${NUXIE_RUNTIME_USE_LOCAL:-}" in \
-		"") \
+	case "$${NUXIE_RUNTIME_USE_LOCAL-1}" in \
+		0) \
 			scripts/verify-runtime-artifact.sh \
 				--metadata "$(RUNTIME_ARTIFACT_METADATA)" \
 				--archive "$(DOWNLOADED_RUNTIME_ARCHIVE)" \
 				--xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)" \
 			;; \
 		1) $(MAKE) --no-print-directory check-local-runtime-xcframework ;; \
-		*) echo "NUXIE_RUNTIME_USE_LOCAL must be unset or 1" >&2; exit 64 ;; \
+		*) echo "NUXIE_RUNTIME_USE_LOCAL must be unset, 1 or 0" >&2; exit 64 ;; \
 	esac
 
 check-local-runtime-xcframework:
 	@if [ ! -d "$(STAGED_RUNTIME_XCFRAMEWORK)" ]; then \
-		echo "Local NuxieRuntime is not staged. Run 'make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=/absolute/path/to/NuxieRuntime.xcframework'." >&2; \
+		echo 'stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`' >&2; \
 		exit 1; \
 	fi
 	@scripts/verify-runtime-artifact.sh --xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)"
