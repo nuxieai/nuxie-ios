@@ -788,7 +788,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         stepInProgress = value
         if value { endComposition() }
         for binding in bindingsByTarget.values {
-            binding.control.view.isUserInteractionEnabled = !value
+            // Disabling the UIKit view can resign first responder. Editing delegates
+            // fence writes while the page moves; retain the native field and its focus.
             binding.control.view.accessibilityElementsHidden = value
         }
     }
@@ -1026,6 +1027,16 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         emitEditingEvent(.returnPressed, for: textField)
         textField.resignFirstResponder()
         return false
+    }
+
+    func textFieldShouldBeginEditing(_ textField: UITextField) -> Bool {
+        guard !stepInProgress, let binding = binding(for: textField) else { return false }
+        return allowsInteraction(binding)
+    }
+
+    func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+        guard !stepInProgress, let binding = binding(for: textView) else { return false }
+        return allowsInteraction(binding)
     }
 
     func textFieldDidBeginEditing(_ textField: UITextField) {

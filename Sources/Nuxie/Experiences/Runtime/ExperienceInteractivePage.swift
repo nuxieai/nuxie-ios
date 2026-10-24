@@ -77,9 +77,6 @@ actor ExperienceInteractivePage {
                      reduceMotion: Bool, fontScale: Double? = nil, safeArea: ExperienceSafeAreaInsets?,
                      colorScheme: ExperienceColorScheme?, videoDecoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceInteractivePage {
         let contract = payload.renderPlan.pageHost ?? .published
-        guard contract.initialRows != .clearBeforePlayer || runValues == nil else {
-            throw ExperienceInteractiveScreenError.stateContract("Cannot clear initial rows in a shared session")
-        }
         guard let artboard = try await preparedFile.artboards().first(where: { $0.name == contract.artboardName }),
               let machine = artboard.stateMachines.first(where: { contract.machineName == nil || $0 == contract.machineName }) else {
             throw ExperienceInteractiveScreenError.stateContract("Page host requires a root state machine")
@@ -89,7 +86,7 @@ actor ExperienceInteractivePage {
         if let shared {
             runtime = try await shared.sessions.openSession(artboardName: contract.artboardName,
                 player: .stateMachine(machine), pixelWidth: pixelWidth, pixelHeight: pixelHeight,
-                bindDefaultViewModel: true)
+                bindDefaultViewModel: true, clearingDefaultList: contract.initialRows == .clearBeforePlayer ? contract.listPath : nil)
         } else {
             runtime = try await preparedFile.openSession(artboardName: contract.artboardName,
                 player: .stateMachine(machine), pixelWidth: pixelWidth, pixelHeight: pixelHeight,
@@ -327,10 +324,10 @@ actor ExperienceInteractivePage {
                     throw ExperienceInteractiveScreenError.stateContract("Page rows must reconcile before step begin")
                 }
                 // Only contracts with native live-move records can begin a step.
-                if contract.hasLiveMoves { try await runtime.stepBegin(incomingScreen: mapped.artboardName, stepName: name) }
+                if contract.hasLiveMoves { try await runtime.stepBegin(incomingScreen: mapped.artboardName, stepName: name.map { contract.stepNames[$0] ?? $0 }) }
                 liveStep = (mapped.artboardName, name)
             case .end(let name):
-                if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: mapped.artboardName, stepName: name) }
+                if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: mapped.artboardName, stepName: name.map { contract.stepNames[$0] ?? $0 }) }
                 liveStep = nil
             case .retire:
                 var next = rowList
@@ -350,7 +347,7 @@ actor ExperienceInteractivePage {
 
     private func restoreCancelledStepLocked(source: String, target: String, reachable: Set<String>, reduceMotion: Bool) async throws -> Step? {
         if let liveStep {
-            if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: liveStep.artboard, stepName: liveStep.name) }
+            if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: liveStep.artboard, stepName: liveStep.name.map { contract.stepNames[$0] ?? $0 }) }
             self.liveStep = nil
         }
         // Bring borrowed instances home before any rollback removes their destination.
@@ -391,6 +388,7 @@ actor ExperienceInteractivePage {
 
     private func setPhasesLocked(_ phases: [(String, ExperienceScreenLifecyclePhase)], transition: String,
                                  reduceMotion: Bool?, exitReason: ExperienceScreenExitReason) async throws {
+        let transition = contract.stepNames[transition] ?? transition
         try requireOpen()
         var updated: [String: ExperienceScreenLifecycleState] = [:]
         var mutations: [NuxieNativeViewModelMutation] = []
@@ -455,6 +453,11 @@ actor ExperienceInteractivePage {
         guard rows[screenID] != nil else { throw ExperienceInteractiveScreenError.screenNotFound(screenID) }
         let id = UUID()
         let pair = AsyncStream<Void>.makeStream()
+        if eventName.isEmpty {
+            pair.continuation.yield(())
+            pair.continuation.finish()
+            return Completion(id: id, events: pair.stream)
+        }
         rows[screenID]?.waiters[id] = Waiter(name: eventName, continuation: pair.continuation)
         return Completion(id: id, events: pair.stream)
     }

@@ -220,7 +220,7 @@ sdk_test_library(
         "ExperienceTextInputSemanticsTests", "ExperienceHardwareInputTests", "ExperienceTextInputTypographyTests",
         "SignedSemanticJourneyTests", "ExperienceSharedValuesTests", "ExperienceSharedValuesPresentationTests",
         "ExperienceLayerNavigationTests", "ExperiencePageHostNavigationTests", "ExperienceFitContentPresentationTests",
-        "ExperienceScreenExitReasonControllerTests", "ExperiencePreparationTestSupport",
+        "ExperienceScreenExitReasonControllerTests", "ExperiencePreparationTestSupport", "ExperiencePageHostedFixture",
     ]] + [
         "Tests/NuxieUnitTests/Journey/JourneyServiceTestSupport.swift",
         "Tests/NuxieUnitTests/Journey/JourneyPlaneProfileTestFixture.swift",
@@ -231,13 +231,14 @@ sdk_test_library(
 apple_resource_group(
     name = "experience_input_resources",
     structured_resources = glob([
+        "fixtures/runtime/page-host-live-moves/**",
         "fixtures/journeys/rendered-semantic-screen-control/**",
         "fixtures/journeys/rendered-semantic-screen-control-condition/**",
         "fixtures/journeys/rendered-semantic-screen-control-error/**",
         "fixtures/journeys/rendered-semantic-roles/**",
         "fixtures/journeys/rendered-text-input/**",
     ]),
-    strip_structured_resources_prefixes = ["fixtures/journeys"],
+    strip_structured_resources_prefixes = ["fixtures/journeys", "fixtures/runtime"],
     resources = ["Tests/NuxieUnitTests/Fixtures/semantic_text.riv", "Tests/NuxieUnitTests/Fixtures/native_input_layout.riv"],
 )
 ios_unit_test(
