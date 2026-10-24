@@ -1,5 +1,7 @@
 """Import the staged runtime by default, or the explicit pinned release."""
 
+_UNSTAGED_RUNTIME_MESSAGE = "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework. Stage one with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>`. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead."
+
 _BUILD = """\
 load("@rules_apple//apple:apple.bzl", "apple_static_xcframework_import")
 package(default_visibility = ["//visibility:public"])
@@ -23,7 +25,7 @@ def _runtime_repository_impl(ctx):
     if local == "1":
         staged = metadata_path.dirname.dirname.get_child(".artifacts/NuxieRuntime.xcframework")
         if not staged.exists:
-            fail("stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`")
+            fail(_UNSTAGED_RUNTIME_MESSAGE)
         ctx.watch_tree(staged)
         ctx.symlink(staged, "NuxieRuntime.xcframework")
     else:

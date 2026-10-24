@@ -22,6 +22,8 @@ Thank you for your interest in contributing to the Nuxie iOS SDK! We welcome con
 
 ### Building the Project
 
+SDK main uses the staged runtime and cannot be consumed from outside until the next release, so consumers stay on a tagged version.
+
 ```bash
 # Clone the repository
 git clone https://github.com/your-fork/nuxie-ios.git
