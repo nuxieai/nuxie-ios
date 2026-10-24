@@ -855,12 +855,13 @@ package actor NuxieNativeSessionGroup {
     }
 
     package func openSession(artboardName: String, player: NuxieNativePlayerSelection,
-        pixelWidth: UInt32, pixelHeight: UInt32, bindDefaultViewModel: Bool) async throws -> NuxieNativeRuntime {
+        pixelWidth: UInt32, pixelHeight: UInt32, bindDefaultViewModel: Bool,
+        clearingDefaultList: String? = nil) async throws -> NuxieNativeRuntime {
         let context = context
         let state = try await executor.call {
             try NuxieNativeRuntimeState(context: context, artboardName: artboardName,
                 selection: player, pixelWidth: pixelWidth, pixelHeight: pixelHeight,
-                bindDefaultViewModel: bindDefaultViewModel)
+                bindDefaultViewModel: bindDefaultViewModel, clearingDefaultList: clearingDefaultList)
         }
         await preparedFile.recordOpenedSession()
         return NuxieNativeRuntime(executor: executor, state: state, preparedFile: preparedFile)
@@ -1540,7 +1541,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
 
     init(context: NuxieNativeFileContext, artboardName: String,
         selection: NuxieNativePlayerSelection, pixelWidth: UInt32, pixelHeight: UInt32,
-        bindDefaultViewModel: Bool) throws {
+        bindDefaultViewModel: Bool, clearingDefaultList: String? = nil) throws {
         self.sharedContext = context
         self.file = context.file
         self.renderer = context.renderer
@@ -1552,6 +1553,11 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if bindDefaultViewModel {
                 let model = try artboard.makeDefaultViewModel()
                 root = model
+                if let path = clearingDefaultList {
+                    let reference = try model.reference()
+                    _ = try NuxieNativeViewModelHandle.mutate([.listClear(instance: reference, path: path)],
+                        correlationID: 0, resolve: { _ in model })
+                }
                 try artboard.bind(viewModel: model)
             }
             let players = try Self.makePlayers(artboard: artboard, selection: selection)

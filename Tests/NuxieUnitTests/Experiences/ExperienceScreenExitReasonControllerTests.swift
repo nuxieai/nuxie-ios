@@ -286,11 +286,8 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
         if useNativeWindow { coordinator.setContentHidden(false) }
         _ = await coordinator.activateInitialScreen()
         probe.active.removeAll()
-        // The coordinator keeps one controller cache per presentation layer; the entry screen is in the base layer.
-        let layerCaches = try field(coordinator, "layerCaches", as: [Any].self)
-        let controllers = try field(XCTUnwrap(layerCaches.first), "controllers",
-                                    as: [String: ExperienceScreenViewController].self)
-        let source = try XCTUnwrap(controllers[fixture.1.renderPlan.entry.screenId])
+        let navigation = try XCTUnwrap(host.children.first as? UINavigationController)
+        let source = try XCTUnwrap(navigation.viewControllers.first as? ExperienceScreenViewController)
         do { try await body(coordinator, source, probe) }
         catch { await coordinator.tearDown(); throw error }
         XCTAssertTrue(probe.failures.isEmpty)

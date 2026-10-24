@@ -512,6 +512,7 @@ targets:
           - Experiences/ExperiencePreparationTestSupport.swift
           - Experiences/ExperienceLayerNavigationTests.swift
           - Experiences/ExperiencePageHostNavigationTests.swift
+          - Experiences/ExperiencePageHostedFixture.swift
           - Journey/JourneyServiceTestSupport.swift
           - Journey/JourneyPlaneProfileTestFixture.swift
           - Experiences/ExperienceTextInputSemanticsTests.swift
@@ -523,6 +524,8 @@ targets:
           - Experiences/ExperienceSharedValuesPresentationTests.swift
           - Fixtures/semantic_text.riv
           - Fixtures/native_input_layout.riv
+      - path: fixtures/runtime/page-host-live-moves
+        type: folder
       - path: fixtures/journeys/rendered-semantic-screen-control
         type: folder
       - path: fixtures/journeys/rendered-semantic-screen-control-condition
