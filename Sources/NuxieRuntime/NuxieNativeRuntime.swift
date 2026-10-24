@@ -952,6 +952,7 @@ private final class NuxieNativeFileContext: @unchecked Sendable {
 }
 
 package actor NuxieNativeRuntime {
+    private var refusedRowOwners: Set<UInt64> = []
     private var removedRowSnapshots: [UInt64: NuxieNativeViewModelSnapshot] = [:]
     private var recordsRowWrites = false
     package private(set) var rowWriteLog: [UInt64] = []
@@ -1009,13 +1010,24 @@ package actor NuxieNativeRuntime {
 
     package func freezeRemovedRow(_ snapshot: NuxieNativeViewModelSnapshot) {
         for id in snapshot.rowOwnedInstanceIDs {
+            refusedRowOwners.insert(id)
             removedRowSnapshots[id] = snapshot.rooted(at: id)
         }
     }
 
+    package func endRemovedRowGeneration(_ snapshot: NuxieNativeViewModelSnapshot) {
+        for id in snapshot.rowOwnedInstanceIDs { removedRowSnapshots.removeValue(forKey: id) }
+    }
+
+    package var removedRowSnapshotIDs: Set<UInt64> { Set(removedRowSnapshots.keys) }
+
+    package func retainsViewModel(_ reference: NuxieNativeViewModelReference) async throws -> Bool {
+        let state = try requireState()
+        return try await executor.call { state.retainsViewModel(reference) }
+    }
+
     private func checkRowWrite(_ identities: [UInt64]) throws {
-        let allowed = identities.allSatisfy { removedRowSnapshots[$0] == nil }
-        assert(allowed, "R6b: write to a removed page row")
+        let allowed = identities.allSatisfy { !refusedRowOwners.contains($0) }
         guard allowed else { throw NuxieNativeRuntimeError.invalidNativeValue("R6b: removed page row") }
         if recordsRowWrites { rowWriteLog += identities }
     }
@@ -1474,6 +1486,7 @@ package actor NuxieNativeRuntime {
     }
 
     package func close() async throws {
+        removedRowSnapshots.removeAll()
         guard let state else { return }
         self.state = nil
         if preparedFile == nil {
@@ -2175,6 +2188,10 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             try? child.close()
             throw error
         }
+    }
+
+    func retainsViewModel(_ reference: NuxieNativeViewModelReference) -> Bool {
+        retainedViewModels[reference.rawValue] != nil
     }
 
     func releaseViewModels(
