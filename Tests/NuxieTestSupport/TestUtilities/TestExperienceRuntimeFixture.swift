@@ -4,11 +4,11 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 enum TestExperienceRuntimeFixture {
-    static func purchase(navigation: Bool) async throws -> (Experience, LoadedExperienceArtifact) {
+    static func purchase(navigation: Bool, absolute: Bool = false) async throws -> (Experience, LoadedExperienceArtifact) {
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(navigation ? "fixtures/journeys/rendered-purchase-navigation" : "fixtures/journeys/rendered-purchase-scopes")
+            .appendingPathComponent(navigation ? "fixtures/journeys/rendered-purchase-navigation" : absolute ? "fixtures/journeys/rendered-purchase-absolute" : "fixtures/journeys/rendered-purchase-scopes")
         let entry = try XCTUnwrap(JSONSerialization.jsonObject(with:
             Data(contentsOf: fixture.appendingPathComponent("release-entry.json"))) as? [String: Any])
         let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
@@ -96,7 +96,7 @@ enum TestExperienceRuntimeFixture {
             )
         ).snapshot
         let release = try XCTUnwrap(authenticated.releasesByDigest.values.first)
-        let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
+        let screenID = try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: release.descriptor).entry.screenId
         let presentation = try await store.preparePresentation(
             release: release,
             delivery: profile.delivery,

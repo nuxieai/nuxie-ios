@@ -260,6 +260,130 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testPushInsideFitContentSheetPublishesItsHeightAndPopRestoresLowerHeightOnce() async throws {
+        try await withCoordinator { coordinator, _, probe, _ in
+            let heights = PageSheetHeightProbe(initialHeights: [152, 400])
+            probe.onFirstAdvance = { heights.install(on: $0) }
+            try await navigate(coordinator, to: "B",
+                transition: ["type": "modal", "present": "sheet", "height": "fit-content"])
+            let navigation = try XCTUnwrap(coordinator.topPresentedLayer as? UINavigationController)
+            let lower = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            XCTAssertEqual(navigation.preferredContentSize.height, 152)
+            XCTAssertGreaterThan(heights.queryCount(for: lower), 0)
+
+            try await navigate(coordinator, to: "A", transition: ["type": "push"])
+            let pushed = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            XCTAssertFalse(pushed === lower)
+            XCTAssertFalse(pushed.interactivePage === lower.interactivePage)
+            XCTAssertEqual(navigation.preferredContentSize.height, 400)
+            XCTAssertEqual(heights.published(for: pushed, to: navigation), [400])
+            let coveredQueries = heights.queryCount(for: lower)
+            try await advanceHeightFrame(lower)
+            XCTAssertEqual(heights.queryCount(for: lower), coveredQueries)
+
+            heights.setHeight(480, for: pushed)
+            try await advanceHeightFrame(pushed)
+            XCTAssertEqual(navigation.preferredContentSize.height, 480)
+            XCTAssertEqual(heights.published(for: pushed, to: navigation), [400, 480])
+            try await advanceHeightFrame(pushed)
+            XCTAssertEqual(heights.published(for: pushed, to: navigation), [400, 480],
+                "A cached height must not publish twice")
+
+            let beforePop = heights.published(for: lower, to: navigation).count
+            try await back(coordinator, to: "B")
+            XCTAssertTrue(navigation.topViewController === lower)
+            XCTAssertEqual(navigation.preferredContentSize.height, 152)
+            XCTAssertEqual(heights.published(for: lower, to: navigation).count, beforePop + 1,
+                "Reveal must reclaim the shared sheet target once even when the lower height is unchanged")
+            try await advanceHeightFrame(lower)
+            XCTAssertEqual(heights.published(for: lower, to: navigation).count, beforePop + 1)
+        }
+    }
+
+    func testSkippingBackCutsCoveredFitContentPageBeforeRestoringItsCurrentHeight() async throws {
+        try await withCoordinator { coordinator, _, probe, _ in
+            let heights = PageSheetHeightProbe(initialHeights: [152, 400])
+            probe.onFirstAdvance = { heights.install(on: $0) }
+            try await navigate(coordinator, to: "B",
+                transition: ["type": "modal", "present": "sheet", "height": "fit-content"])
+            let navigation = try XCTUnwrap(coordinator.topPresentedLayer as? UINavigationController)
+            let lower = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            try await navigate(coordinator, to: "A")
+            XCTAssertEqual(lower.pageHistory.screenIDs, ["B", "A"])
+            try await navigate(coordinator, to: "B", transition: ["type": "push"])
+            XCTAssertEqual(navigation.preferredContentSize.height, 400)
+            let coveredQueries = heights.queryCount(for: lower)
+            let coveredPublications = heights.published(for: lower, to: navigation).count
+            heights.setHeight(230, for: lower)
+            var cutBeforePop = false
+            lower.onPageStep = { _ in
+                if lower.screenId == "B", lower.lifecyclePhase == .hidden, navigation.viewControllers.count == 2 {
+                    cutBeforePop = true
+                    XCTAssertEqual(heights.queryCount(for: lower), coveredQueries)
+                    XCTAssertEqual(heights.published(for: lower, to: navigation).count, coveredPublications)
+                    XCTAssertEqual(navigation.preferredContentSize.height, 400)
+                }
+            }
+            try await back(coordinator, to: "B", steps: 2)
+            XCTAssertTrue(cutBeforePop)
+            XCTAssertTrue(navigation.topViewController === lower)
+            XCTAssertEqual(lower.pageHistory.screenIDs, ["B"])
+            XCTAssertEqual(navigation.preferredContentSize.height, 230)
+            XCTAssertEqual(heights.published(for: lower, to: navigation).filter { $0 == 230 }, [230])
+            try await advanceHeightFrame(lower)
+            XCTAssertEqual(heights.published(for: lower, to: navigation).filter { $0 == 230 }, [230])
+        }
+    }
+
+    func testSheetOverPushedFitContentPageOwnsItsHeightAndCoveredPagesDoNotMeasure() async throws {
+        try await withCoordinator { coordinator, _, probe, _ in
+            let heights = PageSheetHeightProbe(initialHeights: [152, 400, 260])
+            probe.onFirstAdvance = { heights.install(on: $0) }
+            try await navigate(coordinator, to: "B",
+                transition: ["type": "modal", "present": "sheet", "height": "fit-content"])
+            let navigation = try XCTUnwrap(coordinator.topPresentedLayer as? UINavigationController)
+            let lower = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            try await navigate(coordinator, to: "A", transition: ["type": "push"])
+            let pushed = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            try await navigate(coordinator, to: "B",
+                transition: ["type": "modal", "present": "sheet", "height": "fit-content"])
+            let upperNavigation = try XCTUnwrap(coordinator.topPresentedLayer as? UINavigationController)
+            let upper = try XCTUnwrap(upperNavigation.topViewController as? ExperienceScreenViewController)
+            XCTAssertFalse(upperNavigation === navigation)
+            XCTAssertEqual(upperNavigation.preferredContentSize.height, 260)
+            XCTAssertEqual(navigation.preferredContentSize.height, 400)
+            let pushedQueries = heights.queryCount(for: pushed)
+            let lowerQueries = heights.queryCount(for: lower)
+            let pushedPublications = heights.published(for: pushed, to: navigation)
+            try await advanceHeightFrame(pushed)
+            try await advanceHeightFrame(lower)
+            XCTAssertEqual(heights.queryCount(for: pushed), pushedQueries)
+            XCTAssertEqual(heights.queryCount(for: lower), lowerQueries)
+            heights.setHeight(280, for: upper)
+            try await advanceHeightFrame(upper)
+            XCTAssertEqual(upperNavigation.preferredContentSize.height, 280)
+            XCTAssertEqual(heights.published(for: upper, to: upperNavigation), [260, 280])
+            XCTAssertEqual(navigation.preferredContentSize.height, 400)
+            XCTAssertEqual(heights.published(for: pushed, to: navigation), pushedPublications)
+
+            let result = await coordinator.closeTopLayer()
+            XCTAssertEqual(result, .navigated)
+            XCTAssertTrue(navigation.topViewController === pushed)
+            XCTAssertEqual(navigation.preferredContentSize.height, 400)
+            XCTAssertGreaterThan(heights.queryCount(for: pushed), pushedQueries)
+            XCTAssertEqual(heights.queryCount(for: lower), lowerQueries)
+            XCTAssertEqual(heights.published(for: pushed, to: navigation), pushedPublications,
+                "Revealing the pushed page must not republish an unchanged sheet target")
+        }
+    }
+
+    private func advanceHeightFrame(_ controller: ExperienceScreenViewController) async throws {
+        let loop = try XCTUnwrap(Mirror(reflecting: controller).children.first {
+            $0.label == "presentationLoop"
+        }?.value as? ExperienceRuntimePresentationLoop)
+        try await loop.advanceZeroDelta()
+    }
+
     func testBackThreeTrimsRepeatedLowerScreenBeforeUpperPageDismissal() async throws {
         try await withCoordinator { coordinator, lower, _, _ in
             try await navigate(coordinator, to: "B")
@@ -876,6 +1000,7 @@ private actor LayerProductResolver {
 
 @MainActor
 private final class LayerHostProbe: ExperienceScreenViewControllerDelegate {
+    var onFirstAdvance: (@MainActor (ExperienceScreenViewController) -> Void)?
     var journeyEvents: MockEventLog?
     private var shownBaseline = 0
     var shownScreenIDs: [String] {
@@ -893,6 +1018,7 @@ private final class LayerHostProbe: ExperienceScreenViewControllerDelegate {
     func experienceScreenViewControllerDidAdvance(_ controller: ExperienceScreenViewController) {
         if firstPhases[ObjectIdentifier(controller)] == nil {
             firstPhases[ObjectIdentifier(controller)] = controller.lifecyclePhase
+            onFirstAdvance?(controller)
         }
     }
     func screenEmissionRun(for controller: ExperienceScreenViewController) -> ScreenEmissionRun? { nil }
@@ -910,5 +1036,58 @@ private final class LayerHostProbe: ExperienceScreenViewControllerDelegate {
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didRequestOpenLink request: ExperienceRendererOpenLinkRequest) async {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didPresentDrawable drawable: ExperienceRuntimePresentedDrawable, frameNumber: UInt64) {}
     func experienceScreenViewController(_ controller: ExperienceScreenViewController, didAcceptPointerInput input: ExperienceRuntimeAcceptedPointerInput) {}
+}
+
+/// The A/B live-move fixture has no qualified unequal intrinsic heights.
+/// Supply heights at the ordinary query boundary and observe the actual UIKit
+/// publisher, while navigation, coverage, row cuts and detents use product code.
+@MainActor
+private final class PageSheetHeightProbe {
+    private let initialHeights: [Float]
+    private var heights: [ObjectIdentifier: Float] = [:]
+    private var queries: [ObjectIdentifier: Int] = [:]
+    private var publications: [(owner: ObjectIdentifier, target: ObjectIdentifier, height: CGFloat)] = []
+
+    init(initialHeights: [Float]) { self.initialHeights = initialHeights }
+
+    func install(on controller: ExperienceScreenViewController) {
+        let owner = ObjectIdentifier(controller)
+        guard heights[owner] == nil else { return }
+        guard initialHeights.indices.contains(heights.count) else {
+            XCTFail("Unexpected page in sheet-height scenario")
+            return
+        }
+        let height = initialHeights[heights.count]
+        heights[owner] = height
+        controller.pageContentHeightQuery = { [weak self] in
+            guard let self else { return nil }
+            self.queries[owner, default: 0] += 1
+            return self.heights[owner]
+        }
+        controller.onContentHeightPublished = { [weak self] target, height in
+            if let navigation = target as? UINavigationController {
+                XCTAssertEqual(navigation.topViewController.map { ObjectIdentifier($0) }, owner,
+                    "Only the installed top page may publish to a sheet navigation target")
+            }
+            self?.publications.append((owner, ObjectIdentifier(target), height))
+        }
+    }
+
+    func setHeight(_ height: Float, for controller: ExperienceScreenViewController) {
+        heights[ObjectIdentifier(controller)] = height
+    }
+
+    func queryCount(for controller: ExperienceScreenViewController) -> Int {
+        queries[ObjectIdentifier(controller), default: 0]
+    }
+
+    func published(for controller: ExperienceScreenViewController, to target: UIViewController) -> [CGFloat] {
+        // Initial NOT_FOUND selects the large fallback; these assertions compare
+        // the positive page heights that replace it on the shared sheet target.
+        publications.filter {
+            $0.owner == ObjectIdentifier(controller) && $0.target == ObjectIdentifier(target) && $0.height > 0
+        }
+            .map { $0.height }
+    }
 }
 #endif
