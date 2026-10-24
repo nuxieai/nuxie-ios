@@ -470,7 +470,7 @@ enum ExperienceInputFixture {
             interactivePreparation: ExperienceInteractivePreparationHandle(cache: ExperienceInteractivePreparationCache(),
                 provenance: "hosted-focus-" + UUID().uuidString, payload: payload), products: [], resourceMetrics: .zero)
         let controller = ExperienceScreenViewController(experience: experience, artifact: .init(acquired: acquired),
-            screen: try XCTUnwrap(payload.renderPlan.screens.first), reduceMotion: true,
+            screen: try XCTUnwrap(payload.renderPlan.screens.first { $0.screenId == payload.renderPlan.entry.screenId }), reduceMotion: true,
             usesSystemDisplayLink: false, acquireDrawable: acquireDrawable, delegate: probe)
         controller.onRuntimeFailure = { probe.failure = $0 }
         return controller

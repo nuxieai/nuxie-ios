@@ -155,7 +155,7 @@ final class JourneyProfileServiceTests: JourneyTestCase {
         let profile = try JourneyPlaneProfile.decode(profileBytes)
         let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
         StubURLProtocol.reset()
-        serveSignedFixtureObjects(at: fixture, host: host)
+        try serveSignedFixtureObjects(at: fixture, host: host)
         let firstEntry = try XCTUnwrap(profile.releases.first)
         let authority = ProfileDeliveryAuthority(
             appId: firstEntry.locator.appId,

@@ -156,13 +156,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/runtime/system-font-axes")
-        struct Font: Decodable { let location: String; let authoredAssetId: UInt32 }
-        struct Scene: Decodable { let name: String; let fonts: [Font]? }
-        struct Provenance: Decodable { let scenes: [Scene] }
-        let provenance = try JSONDecoder().decode(Provenance.self,
-            from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
-        let fonts = try XCTUnwrap(provenance.scenes.first { $0.name == "mixed" }?.fonts)
-        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.authoredAssetId)
+        let declarations = try FixturePageSceneDeclarations.load(at: directory)
+        let fonts = try XCTUnwrap(declarations.render["assets"] as? [[String: Any]])
+        let systemID = try XCTUnwrap(fonts.first { $0["location"] as? String == "system" }?["authoredAssetId"] as? NSNumber).uint32Value
         let bytes = try Data(contentsOf: directory.appendingPathComponent("mixed.nux"))
         let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
         XCTAssertEqual(assets.count, 2)
@@ -195,13 +191,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("fixtures/runtime/system-font-axes")
-        struct Font: Decodable { let location: String; let authoredAssetId: UInt32 }
-        struct Scene: Decodable { let name: String; let fonts: [Font]? }
-        struct Provenance: Decodable { let scenes: [Scene] }
-        let provenance = try JSONDecoder().decode(Provenance.self,
-            from: Data(contentsOf: directory.appendingPathComponent("provenance.json")))
-        let fonts = try XCTUnwrap(provenance.scenes.first { $0.name == "mixed" }?.fonts)
-        let systemID = try XCTUnwrap(fonts.first { $0.location == "system" }?.authoredAssetId)
+        let declarations = try FixturePageSceneDeclarations.load(at: directory)
+        let fonts = try XCTUnwrap(declarations.render["assets"] as? [[String: Any]])
+        let systemID = try XCTUnwrap(fonts.first { $0["location"] as? String == "system" }?["authoredAssetId"] as? NSNumber).uint32Value
         let bytes = try Data(contentsOf: directory.appendingPathComponent("mixed.nux"))
         let assets = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
         XCTAssertEqual(assets.count, 2)

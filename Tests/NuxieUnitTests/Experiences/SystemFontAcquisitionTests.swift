@@ -29,41 +29,17 @@ final class SystemFontAcquisitionTests: XCTestCase {
         var fonts = try XCTUnwrap(render["assets"] as? [[String: Any]])
         let index = try XCTUnwrap(fonts.firstIndex { $0["kind"] as? String == "font" })
         var name = try XCTUnwrap(fonts[index]["assetUniqueName"] as? String)
-        var mixedScene: Data?
-        var mixedSceneKey: String?
+        var objectDirectory = fixture
         fonts[index] = ["kind": "font", "location": "system", "family": "System", "weight": "400",
             "style": "normal", "required": true, "authoredAssetId": try XCTUnwrap(fonts[index]["authoredAssetId"]), "assetUniqueName": name]
         if mixed {
-            let candidates = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let candidates = experiencePreparationRepositoryRoot()
                 .appendingPathComponent("fixtures/runtime/system-font-axes")
-            let provenance = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf:
-                candidates.appendingPathComponent("provenance.json"))) as? [String: Any])
-            let scenes = try XCTUnwrap(provenance["scenes"] as? [[String: Any]])
-            let evidence = try XCTUnwrap(scenes.first { $0["name"] as? String == "mixed" })
-            let declarations = try XCTUnwrap(evidence["fonts"] as? [[String: Any]])
-            var system = try XCTUnwrap(declarations.first { $0["location"] as? String == "system" })
-            system["kind"] = "font"
-            name = try XCTUnwrap(system["assetUniqueName"] as? String)
-            let cdn = try XCTUnwrap(declarations.first { $0["location"] as? String == "cdn" })
-            let originalRender = try XCTUnwrap((JSONSerialization.jsonObject(with: original) as? [String: Any])?["render"] as? [String: Any])
-            var downloadable = try XCTUnwrap((originalRender["assets"] as? [[String: Any]])?.first { $0["kind"] as? String == "font" })
-            XCTAssertEqual(downloadable["sha256"] as? String, evidence["cdnFontSha256"] as? String)
-            downloadable["authoredAssetId"] = cdn["authoredAssetId"]
-            downloadable["assetUniqueName"] = cdn["assetUniqueName"]
-            fonts = [downloadable, system]
-            let sceneBytes = try Data(contentsOf: candidates.appendingPathComponent("mixed.nux"))
-            let hash = SHA256Provider.hexDigest(sceneBytes)
-            XCTAssertEqual(hash, evidence["sha256"] as? String)
-            let key = "renders/sha256/\(hash).nux"
-            mixedScene = sceneBytes
-            mixedSceneKey = key
-            render["nux"] = ["key": key, "sha256": hash, "sizeBytes": sceneBytes.count, "contentType": "application/vnd.nuxie.scene"]
-            var screens = try XCTUnwrap(render["screens"] as? [[String: Any]])
-            screens[0]["artboardName"] = "One"
-            screens[0]["width"] = 320
-            screens[0]["height"] = 640
-            render["screens"] = screens
+            root = try FixturePageSceneDeclarations.load(at: candidates).applying(to: root)
+            render = try XCTUnwrap(root["render"] as? [String: Any])
+            fonts = try XCTUnwrap(render["assets"] as? [[String: Any]])
+            name = try XCTUnwrap(fonts.first { $0["location"] as? String == "system" }?["assetUniqueName"] as? String)
+            objectDirectory = candidates
         }
         render["assets"] = fonts.sorted {
             ($0["key"] as? String ?? "system-font:\($0["assetUniqueName"]!)")
@@ -71,9 +47,8 @@ final class SystemFontAcquisitionTests: XCTestCase {
         }
         root["render"] = render
         var requirements = try XCTUnwrap(root["requirements"] as? [String: Any])
-        var capabilities = try XCTUnwrap(requirements["requiredCapabilities"] as? [String])
-        capabilities.append("system-fonts")
-        requirements["requiredCapabilities"] = capabilities.sorted()
+        let capabilities = Array(Set(try XCTUnwrap(requirements["requiredCapabilities"] as? [String]) + ["system-fonts"])).sorted()
+        requirements["requiredCapabilities"] = capabilities
         root["requirements"] = requirements
         let bytes = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 0x42, count: 32))
@@ -103,17 +78,16 @@ final class SystemFontAcquisitionTests: XCTestCase {
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: cache); StubURLProtocol.reset() }
         StubURLProtocol.reset()
+        let servedDirectory = objectDirectory
+        let downloadableKeys = Set(fonts.compactMap { $0["key"] as? String })
         StubURLProtocol.register(matcher: { _ in true }) { request in
-            let file = fixture.appendingPathComponent(String(request.url!.path.dropFirst()))
+            let file = servedDirectory.appendingPathComponent(String(request.url!.path.dropFirst()))
             let path = String(request.url!.path.dropFirst())
-            let downloadableKeys = Set(fonts.compactMap { $0["key"] as? String })
             if ["ttf", "otf"].contains(file.pathExtension) {
                 XCTAssertTrue(mixed && downloadableKeys.contains(path), "Only the authenticated CDN font may download")
                 guard mixed && downloadableKeys.contains(path) else { throw URLError(.resourceUnavailable) }
             }
-            let data: Data
-            if path == mixedSceneKey { data = try XCTUnwrap(mixedScene) }
-            else { data = try Data(contentsOf: file) }
+            let data = try Data(contentsOf: file)
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                 headerFields: ["Content-Length": String(data.count),
                     "Content-Type": file.pathExtension == "nux" ? "application/vnd.nuxie.scene" : "font/ttf"])!, data)
@@ -141,9 +115,10 @@ final class SystemFontAcquisitionTests: XCTestCase {
                 XCTAssertEqual(cdn.sha256, "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1")
             }
             let prepared = try await ExperienceInteractivePreparation.prepare(payload: acquired.payload, systemFontCache: fontCache)
-            let screen = try await prepared.openScreen(pixelWidth: 320, pixelHeight: 240)
+            let pageFixture = FixturePagePreparation(payload: acquired.payload, preparation: prepared, test: self)
+            let screen = try await pageFixture.openRow(pixelWidth: 320, pixelHeight: 240)
             _ = try await screen.step(elapsedSeconds: 0)
-            try await screen.close()
+            try await closeFixturePageRow(screen)
             let cacheIdentity = try ExperienceRuntimeSystemFontProvider.requestIdentity(weight: "400", style: "normal")
             struct CacheMiss: Error {}
             XCTAssertNoThrow(try fontCache.candidate(for: cacheIdentity) { throw CacheMiss() },

@@ -189,25 +189,21 @@ final class JourneyReleaseTests: XCTestCase {
             supportedRuntime: supported, replayPolicy: .active(minimumPublishedAtSeq: 0))
         let cache = FileManager.default.temporaryDirectory.appendingPathComponent("f5-save-\(UUID())")
         addTeardownBlock { StubURLProtocol.reset(); try? FileManager.default.removeItem(at: cache) }
-        StubURLProtocol.register(matcher: { $0.url?.host == "f5-save.nuxie.test" }) { request in
-            let url = try XCTUnwrap(request.url)
-            let data = try Data(contentsOf: directory.appendingPathComponent(String(url.path.dropFirst())))
-            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
-                headerFields: ["Content-Length": String(data.count),
-                    "Content-Type": url.pathExtension == "otf" ? "font/otf" : "application/vnd.nuxie.scene"])), data)
-        }
+        try serveSignedFixtureObjects(at: directory, host: "f5-save.nuxie.test")
         let store = JourneyReleaseAcquisitionStore(cacheDirectory: cache,
             urlSession: TestURLSessionProvider.createTestSession())
         let presentation = try await store.preparePresentation(release: release,
             delivery: .init(renderBaseUrl: "https://f5-save.nuxie.test/", assetBaseUrl: "https://f5-save.nuxie.test/"),
             productResolver: { _ in [] })
-        let artifact = try await presentation.artifactLoader(presentation.experience, nil, "scr_screens_sfeedback")
-        let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+        let plan = try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: release.descriptor)
+        let feedbackID = try FixturePageRow.screenID("feedback", in: plan)
+        let artifact = try await presentation.artifactLoader(presentation.experience, nil, feedbackID)
+        let prepared = try await prepareFixturePage(payload: artifact.payload)
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let screen = try await prepared.openScreen(screenID: "scr_screens_sfeedback", runValues: run,
+        let screen = try await prepared.openRow(screenID: feedbackID, runValues: run,
             pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await screen.close() }
+        addTeardownBlock { try await closeFixturePageRow(screen) }
         let rootReference = try await screen.rootViewModel()
         _ = try await screen.mutateState([
             .setNumber(rootReference, path: "experience/responses:feedback/stars", value: 4),
@@ -315,15 +311,15 @@ final class JourneyReleaseTests: XCTestCase {
             // Preparing F4's screens includes its System font, which the SDK provides
             // only where UIKit does (macOS refuses with unavailableFace).
             #if canImport(UIKit)
-            let prepared = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+            let prepared = try await prepareFixturePage(payload: artifact.payload)
             try await prepared.prepareRunValues(run)
             let values = try await run.journeyValues()
             XCTAssertEqual(values["trip_days"], .number(23))
             XCTAssertEqual(values["level"], .number(1))
-            let screen = try await prepared.openScreen(screenID: declared.id, runValues: run,
+            let screen = try await prepared.openRow(screenID: declared.id, runValues: run,
                 pixelWidth: 393, pixelHeight: 852)
             _ = try await screen.step(elapsedSeconds: 0)
-            try await screen.close()
+            try await closeFixturePageRow(screen)
             #endif
         }
         XCTAssertEqual(release.descriptor.state.mapValues(\.type), ["trip_days": "number", "level": "number"])

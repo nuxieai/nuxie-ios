@@ -56,7 +56,6 @@ final class ExperiencePageStepTests: XCTestCase {
             var owner = "A"
             var pending: [ExperienceInteractiveEffectKind] = []
             var delivered: [(String, ExperienceResponseSaveRequest)] = []
-            var reconcileOwners: [String] = []
             func save(_ trigger: String) -> ExperienceInteractiveEffectKind {
                 .hostCommand(name: "$nuxie.response.save", payload: .object([
                     .init(key: "form", value: .string("form")),
@@ -77,7 +76,6 @@ final class ExperiencePageStepTests: XCTestCase {
                 register: { _, _ in AsyncStream { $0.finish() } }, batch: { changes in
                     for change in changes {
                         switch change {
-                        case .reconcile: reconcileOwners.append(owner); try deliver()
                         case .end: pending.append(save("state/outgoingSaved"))
                         case .retire: if back { mounted.remove("A") }
                         default: break
@@ -94,7 +92,6 @@ final class ExperiencePageStepTests: XCTestCase {
                 plan: PageStepProbe.plan, exit: .init(declaration: nil, reduceMotion: reduced),
                 reduceMotion: reduced, coveredCut: covered, operations: operations)
             try deliver()
-            XCTAssertEqual(reconcileOwners, ["A"])
             XCTAssertEqual(delivered.map { $0.0 }, ["A", "B"])
             XCTAssertEqual(delivered.map { $0.1.answers }, [["answer": .string("outgoing")], ["answer": .string("incoming")]])
             XCTAssertEqual(delivered.map { $0.1.awaitTrigger }, ["state/outgoingSaved", "state/incomingSaved"])
@@ -107,17 +104,17 @@ final class ExperiencePageStepTests: XCTestCase {
         let probe = PageStepProbe()
         try await probe.perform(style: .none, reduced: true, coveredCut: true, isBack: true)
         XCTAssertEqual(probe.batches, [[.phases([("A", .hidden), ("B", .hidden)], ""),
-            .take, .position(isBack: true), .reconcile, .expand, .begin(nil), .end(nil), .retire]])
+            .take, .position(isBack: true), .expand, .begin(nil), .end(nil), .retire]])
         XCTAssertFalse(probe.order.contains("present"))
     }
 
-    func testTogetherStepReconcilesAndExpandsBeforePhasesAndBegin() async throws {
+    func testTogetherStepExpandsBeforePhasesAndBeginWithoutAdvancing() async throws {
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade] {
             let probe = PageStepProbe()
             try await probe.perform(style: style)
             XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "register:B:enter",
                 "batch", "present", "wait:2:700", "release", "batch", "hidden", "active", "input:true"])
-            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .reconcile, .expand, .phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair")], [.end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
+            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .expand, .phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair")], [.end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
         }
     }
 
@@ -126,7 +123,7 @@ final class ExperiencePageStepTests: XCTestCase {
         try await probe.perform(style: .none)
         XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "batch", "present", "wait:1:700", "release",
             "register:B:enter", "batch", "present", "wait:1:700", "release", "batch", "hidden", "active", "input:true"])
-        XCTAssertEqual(probe.batches[1], [.take, .position(isBack: false), .reconcile, .expand, .phases([("B", .entering)], "pair"), .begin("pair"),
+        XCTAssertEqual(probe.batches[1], [.take, .position(isBack: false), .expand, .phases([("B", .entering)], "pair"), .begin("pair"),
             .phases([("A", .hidden)], ""), .retire])
         XCTAssertEqual(probe.batches[2], [.end("pair"), .phases([("B", .active)], "")])
         XCTAssertEqual(probe.registrationsAtRetirement, [["B": 1]],
@@ -153,7 +150,7 @@ final class ExperiencePageStepTests: XCTestCase {
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade, .none] {
             let probe = PageStepProbe()
             try await probe.perform(style: style, reduced: true)
-            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .reconcile, .expand, .phases([("A", .exiting)], "pair"), .phases([("B", .entering)], "pair"),
+            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .expand, .phases([("A", .exiting)], "pair"), .phases([("B", .entering)], "pair"),
                 .begin("pair"), .end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
             XCTAssertFalse(probe.order.contains("present"))
         }
@@ -170,7 +167,7 @@ final class ExperiencePageStepTests: XCTestCase {
         }
     }
 
-    func testReconcileDeliversPendingEventsAndCommandsOnceBeforeExpansion() async throws {
+    func testPendingEventsAndCommandsDeliverOnceOnFirstFrameAfterExpansionAndBegin() async throws {
         let probe = PageStepProbe()
         var operations = probe.operations
         var order: [String] = []
@@ -178,39 +175,123 @@ final class ExperiencePageStepTests: XCTestCase {
         var pendingCommands = ["command-1", "command-2"]
         var deliveredEvents: [String] = []
         var deliveredCommands: [String] = []
-        var dirty = false
         operations.batch = { changes in
             for change in changes {
                 switch change {
-                case .position:
-                    dirty = true
-                    order.append("mutate")
-                case .reconcile:
-                    if dirty {
-                        order.append("step:0")
-                        deliveredEvents += pendingEvents
-                        deliveredCommands += pendingCommands
-                        pendingEvents.removeAll()
-                        pendingCommands.removeAll()
-                        dirty = false
-                    }
-                case .expand:
-                    XCTAssertFalse(dirty)
-                    order.append("expand")
+                case .position: order.append("mutate")
+                case .expand: order.append("expand")
                 case .phases: order.append("phases")
                 case .begin: order.append("begin")
                 default: break
                 }
             }
+            // Native begin/end/collapse do not dispatch their pending output.
+            if !order.contains("frame") {
+                XCTAssertTrue(deliveredEvents.isEmpty)
+                XCTAssertTrue(deliveredCommands.isEmpty)
+            }
+        }
+        operations.present = {
+            order.append("frame")
+            deliveredEvents += pendingEvents
+            deliveredCommands += pendingCommands
+            pendingEvents.removeAll()
+            pendingCommands.removeAll()
         }
         try await ExperiencePageStep.perform(source: "A", target: "B", style: .fade, isBack: false,
             plan: PageStepProbe.plan, exit: .init(declaration: nil, reduceMotion: false),
             reduceMotion: false, operations: operations)
-        try await operations.batch([.reconcile])
-        XCTAssertEqual(Array(order.prefix(5)), ["mutate", "step:0", "expand", "phases", "begin"])
+        try await operations.present()
+        XCTAssertEqual(Array(order.prefix(5)), ["mutate", "expand", "phases", "begin", "frame"])
         XCTAssertEqual(deliveredEvents, ["row-event"])
         XCTAssertEqual(deliveredCommands, ["command-1", "command-2"])
-        XCTAssertEqual(order.filter { $0 == "step:0" }.count, 1)
+    }
+
+    func testForwardHeightPublishesAfterBeginAndBackHeightAfterEnd() async throws {
+        // The fixture has no qualified unequal intrinsic heights. Probe the
+        // runtime's top-expanded-row result at the actual frame boundaries.
+        for back in [false, true] {
+            let measurement = ExperiencePageContentMeasurement()
+            measurement.configure(enabled: true)
+            let probe = PageStepProbe()
+            var operations = probe.operations
+            var topHeight: Float = 410
+            var order: [String] = []
+            var published: [Float?] = []
+            operations.batch = { changes in
+                for change in changes {
+                    switch change {
+                    case .begin:
+                        order.append("begin")
+                        if !back { topHeight = 230 }
+                    case .end:
+                        order.append("end")
+                        topHeight = 230
+                    default: break
+                    }
+                }
+            }
+            @MainActor func frame() async throws {
+                order.append("frame")
+                let changed = try await measurement.update {
+                    order.append("query")
+                    return topHeight
+                }
+                if changed { published.append(measurement.height) }
+            }
+            operations.present = { try await frame() }
+            operations.drain = { try await frame() }
+            try await ExperiencePageStep.perform(source: "A", target: "B", style: .fade, isBack: back,
+                plan: PageStepProbe.plan, exit: .init(declaration: nil, reduceMotion: false),
+                reduceMotion: false, operations: operations)
+            XCTAssertEqual(order, ["begin", "frame", "query", "end", "frame", "query"])
+            XCTAssertEqual(published, back ? [410, 230] : [230])
+        }
+    }
+
+    func testPageHeightQueriesEveryUncoveredFrameAndPublishesOnlyChanges() async throws {
+        let measurement = ExperiencePageContentMeasurement()
+        measurement.configure(enabled: true)
+        XCTAssertNil(measurement.height, "Before any step the sheet keeps its large fallback")
+        var queries = 0
+        func query() async throws -> Float? { queries += 1; return nil }
+        let absent = try await measurement.update(query: query)
+        XCTAssertFalse(absent, "NOT_FOUND keeps the existing large fallback")
+        measurement.covered = true
+        try await measurement.update(query: query)
+        XCTAssertEqual(queries, 1)
+        measurement.covered = false
+        try await measurement.update(query: query)
+        XCTAssertNil(measurement.height, "NOT_FOUND must preserve the large fallback")
+        let changed = try await measurement.update { queries += 1; return 230 }
+        XCTAssertTrue(changed)
+        XCTAssertEqual(measurement.height, 230)
+        let unchanged = try await measurement.update { queries += 1; return 230 }
+        XCTAssertFalse(unchanged, "A cached height must not publish again")
+        try await measurement.update(query: query)
+        XCTAssertNil(measurement.height, "Losing all expanded rows restores the large fallback")
+        XCTAssertEqual(queries, 5)
+        measurement.configure(enabled: false)
+        try await measurement.update(query: query)
+        XCTAssertEqual(queries, 5)
+    }
+
+    func testPageHeightDiscardsQueriesAcrossCoverageAndReconfiguration() async throws {
+        let measurement = ExperiencePageContentMeasurement()
+        measurement.configure(enabled: true)
+        let covered = try await measurement.update {
+            measurement.covered = true
+            return 230
+        }
+        XCTAssertFalse(covered)
+        XCTAssertNil(measurement.height)
+        measurement.covered = false
+        let reconfigured = try await measurement.update {
+            measurement.configure(enabled: true)
+            return 410
+        }
+        XCTAssertFalse(reconfigured)
+        XCTAssertNil(measurement.height)
     }
 
     func testWatchdogStartsAfterPresentedFrame() async throws {
@@ -362,7 +443,7 @@ final class ExperiencePageStepTests: XCTestCase {
         }
     }
 
-    func testBackReconcilesPositionBeforeExpansionPhasesAndBegin() async throws {
+    func testBackPositionsBeforeExpansionPhasesAndBeginWithoutAdvancing() async throws {
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade, .none] {
             let probe = PageStepProbe()
             try await ExperiencePageStep.perform(source: "A", target: "B", style: style, isBack: true,
@@ -370,8 +451,8 @@ final class ExperiencePageStepTests: XCTestCase {
                 reduceMotion: false, operations: probe.operations)
             let batch = try XCTUnwrap(probe.batches.first { $0.contains(.begin("pair")) })
             XCTAssertTrue(batch.contains { if case .phases = $0 { return true }; return false })
-            XCTAssertEqual(Array(batch.prefix(4)), [.take, .position(isBack: true), .reconcile, .expand])
-            guard case .phases = batch[4] else { return XCTFail("Phases must follow expansion") }
+            XCTAssertEqual(Array(batch.prefix(3)), [.take, .position(isBack: true), .expand])
+            guard case .phases = batch[3] else { return XCTFail("Phases must follow expansion") }
             XCTAssertLessThan(try XCTUnwrap(batch.firstIndex(of: .position(isBack: true))),
                               try XCTUnwrap(batch.firstIndex(of: .begin("pair"))))
             if style != .none {

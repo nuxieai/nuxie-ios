@@ -88,12 +88,12 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
 
     func testPublishedInputLocatorReadsFocusedOccurrence() async throws {
         let expected = try PublishedInputFixture.expectations()
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload:
+        let preparation = try await prepareFixturePage(payload:
             SharedValuesFixture.payload(directory: PublishedInputFixture.directory, screens: expected.screens))
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let screen = try await preparation.openScreen(screenID: "input", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await screen.close() }
+        let screen = try await preparation.openRow(screenID: "input", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await closeFixturePageRow(screen) }
         try await screen.enableSemantics()
         _ = try await screen.step(focusInputs: [.next], elapsedSeconds: 0)
         let table = try JSONSerialization.jsonObject(with: Data(contentsOf:
@@ -180,7 +180,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             XCTAssertTrue(field.isFirstResponder, "UIKit's did-begin notification must not cancel the queued native focus")
             XCTAssertTrue(controller.riveFocusState.hasFocus, "Native begin editing must focus Rive")
             XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
-            let focusedSnapshot = try await controller.runtimeSnapshot()
+            let focusedSnapshot = try await fixtureActivePageRow(controller).snapshot
             XCTAssertEqual(focusedSnapshot.values.first { $0.name == "focused" }?.value, .number(1))
             XCTAssertEqual(focusedSnapshot.values.first { $0.name == "typed" }?.value, .number(0))
             var callbacks: [String] = []
@@ -201,7 +201,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             }
             func mirror() async throws -> MirroredText {
                 try await settle()
-                let snapshot = try await controller.runtimeSnapshot()
+                let snapshot = try await fixtureActivePageRow(controller).snapshot
                 let capture = try XCTUnwrap(latestCapture)
                 let occurrence = try XCTUnwrap(capture.nativeInputs[input.textInputName]?.first)
                 let presented = try await controller.readPresentedFieldString(captureID: capture.id,
@@ -252,7 +252,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             try await settle(expectedFocus: false)
             XCTAssertFalse(controller.riveFocusState.hasFocus, "Done must clear Rive focus")
             XCTAssertFalse(field.isFirstResponder)
-            let blurredSnapshot = try await controller.runtimeSnapshot()
+            let blurredSnapshot = try await fixtureActivePageRow(controller).snapshot
             XCTAssertEqual(blurredSnapshot.values.first { $0.name == "blurred" }?.value, .number(1))
             // Programmatic changes and autofill need the same focus guard.
             field.text = "Grace"
@@ -271,36 +271,22 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
     func testSiblingEnvironmentWriteStaysInItsOwnSessionBehindFrameSemanticCapture() async throws {
         let directory = PublishedInputFixture.directory.deletingLastPathComponent()
             .appendingPathComponent("forms-saves")
-        let geometryPath = "nuxieTextInputs/input_scr_screens_sfeedback_v2_3f92b591"
-        let input = NativeExperienceTextInput(inputId: "comment", screenId: "feedback", artboardId: "feedback",
-            viewNodeId: "scr_screens_sfeedback::v2", renderedNodeId: "scr_screens_sfeedback::v2",
-            textInputName: "scr_screens_sfeedback::v2 editable value", value: "", placeholder: nil, editable: true,
-            geometry: .init(xPath: "\(geometryPath)/x", yPath: "\(geometryPath)/y", widthPath: "\(geometryPath)/width",
-                heightPath: "\(geometryPath)/height", rotationPath: "\(geometryPath)/rotation",
-                scaleXPath: "\(geometryPath)/scaleX", scaleYPath: "\(geometryPath)/scaleY"),
-            style: .init(fontFamily: "System", fontWeight: "400", fontStyle: "normal", fontSize: 16,
-                lineHeight: -1, letterSpacing: 0, color: 0xFF111827,
-                fontAssetUniqueName: "font-system-400-normal-6cda3de3-0", textAlign: "left"),
-            keyboardType: nil, secureTextEntry: false, multiline: false, maxLength: nil, responseFieldKey: nil)
-        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
-            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
-        let base = try SharedValuesFixture.payload(directory: directory, screens: ["feedback"], textInputs: [input])
-        let payload = AuthenticatedRuntimePayload(valuePolicy: release.valuePolicy,
-            authenticatedKeyID: base.authenticatedKeyID, requiredCapabilities: base.requiredCapabilities,
-            renderPlan: base.renderPlan, journey: base.journey, sceneBytes: base.sceneBytes, assets: base.assets)
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let payload = try await signedFixturePayload(at: directory)
+        let feedbackID = try FixturePageRow.screenID("feedback", in: payload.renderPlan)
+        let input = try XCTUnwrap(payload.renderPlan.textInputs.first { $0.screenId == feedbackID })
+        let preparation = try await prepareFixturePage(payload: payload)
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let first = try await preparation.openScreen(runValues: run, pixelWidth: 393, pixelHeight: 852)
-        let second = try await preparation.openScreen(runValues: run, pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await first.close(); try await second.close() }
-        let firstEnv = try await first.environmentSnapshot()
-        let secondEnv = try await second.environmentSnapshot()
+        let first = try await preparation.openRow(screenID: feedbackID, runValues: run, pixelWidth: 393, pixelHeight: 852)
+        let second = try await preparation.openRow(screenID: feedbackID, runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await closeFixturePageRow(first); try await closeFixturePageRow(second) }
+        let firstEnv = try await fixtureEnvironmentSnapshot(first)
+        let secondEnv = try await fixtureEnvironmentSnapshot(second)
         let firstEnvironment = try XCTUnwrap(firstEnv)
         let secondEnvironment = try XCTUnwrap(secondEnv)
         XCTAssertNotEqual(firstEnvironment.rootInstanceID, secondEnvironment.rootInstanceID,
             "Each mounted screen owns its environment")
-        try await first.updateEnvironment(reduceMotion: false)
+        try await updateFixtureEnvironment(first, reduceMotion: false)
         try await first.enableSemantics()
         let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, valuePolicy: payload.valuePolicy.native)
         let prepared = try await run.native(in: file)
@@ -325,7 +311,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let rendering = Task { try await first.renderFrame(layoutScaleFactor: 1,
             drawable: ExperienceInteractiveDrawable(drawable), capturesSemantics: true) }
         try await waitForQueuedJobs(1)
-        let updating = Task { try await second.updateEnvironment(reduceMotion: true) }
+        let updating = Task { try await updateFixtureEnvironment(second, reduceMotion: true) }
         try await waitForQueuedJobs(2)
         releaseLane.signal()
         let frame = try await rendering.value
@@ -335,14 +321,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         // F5 authors comment, email and stars; this proof requests the comment occurrence.
         XCTAssertEqual(capture.tree.nodes.filter { $0.role == NuxieNativeSemanticRole.textField.rawValue }.count, 3)
         XCTAssertEqual(capture.nativeInputs[input.textInputName]?.count, 1)
-        let firstAfterSibling = try await first.environmentSnapshot()
+        let firstAfterSibling = try await fixtureEnvironmentSnapshot(first)
         XCTAssertEqual(firstAfterSibling?.values.first { $0.name == "reduceMotion" }?.value, .bool(false),
             "The second screen's environment write must stay in its own session")
-        let secondAfterSibling = try await second.environmentSnapshot()
+        let secondAfterSibling = try await fixtureEnvironmentSnapshot(second)
         XCTAssertEqual(secondAfterSibling?.values.first { $0.name == "reduceMotion" }?.value, .bool(true))
         // A write to the first screen's own environment invalidates its next semantic capture.
-        try await first.updateEnvironment(reduceMotion: true)
-        let changed = try await first.environmentSnapshot()
+        try await updateFixtureEnvironment(first, reduceMotion: true)
+        let changed = try await fixtureEnvironmentSnapshot(first)
         XCTAssertEqual(changed?.values.first { $0.name == "reduceMotion" }?.value, .bool(true))
         _ = try await first.step(elapsedSeconds: 0)
         let nextDrawable = try XCTUnwrap(layer.nextDrawable())
@@ -415,7 +401,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             second.selectedTextRange = second.textRange(from: second.beginningOfDocument, to: second.endOfDocument)
             second.insertText("Grace")
             try await settle()
-            let snapshot = try await controller.runtimeSnapshot()
+            let snapshot = try await fixtureActivePageRow(controller).snapshot
             XCTAssertEqual(snapshot.values.first { $0.name == "name" }?.value, .bytes(Data("Ada".utf8)))
             XCTAssertEqual(snapshot.values.first { $0.name == "surname" }?.value, .bytes(Data("Grace".utf8)))
             XCTAssertEqual(first.text, "Ada")
@@ -483,7 +469,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         let authenticated = try await catalog.prepare(profile,
             authority: ProfileDeliveryAuthority(appId: entry.locator.appId, environment: entry.locator.environment)).snapshot
         let release = try XCTUnwrap(authenticated.releasesByDigest.values.first)
-        let screenID = try XCTUnwrap(release.descriptor.leg.screens.first?.id)
+        let screenID = try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: release.descriptor).entry.screenId
         let presentation = try await store.preparePresentation(release: release, delivery: profile.delivery,
             pinnedArtifacts: nil, productResolver: { _ in [] })
         return try await presentation.artifactLoader(presentation.experience, nil, screenID).payload
@@ -491,12 +477,12 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
 
     func testPublishedInputReplacementPreservesNativeCompositionAndCorrection() async throws {
         let expected = try PublishedInputFixture.expectations()
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload:
+        let preparation = try await prepareFixturePage(payload:
             SharedValuesFixture.payload(directory: PublishedInputFixture.directory, screens: expected.screens))
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let screen = try await preparation.openScreen(screenID: "input", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await screen.close() }
+        let screen = try await preparation.openRow(screenID: "input", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await closeFixturePageRow(screen) }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         let controller = UIViewController()

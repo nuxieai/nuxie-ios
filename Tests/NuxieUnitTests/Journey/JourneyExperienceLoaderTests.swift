@@ -125,7 +125,7 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         }) { _ in
             throw URLError(.notConnectedToInternet)
         }
-        serveSignedFixtureObjects(at: fixture, host: host, onRequest: { requests.increment() })
+        try serveSignedFixtureObjects(at: fixture, host: host, onRequest: { requests.increment() })
         let acquisition = JourneyReleaseAcquisitionStore(
             cacheDirectory: directory,
             urlSession: TestURLSessionProvider.createTestSession()

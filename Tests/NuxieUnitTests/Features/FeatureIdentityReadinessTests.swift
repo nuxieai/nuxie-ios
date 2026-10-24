@@ -352,7 +352,7 @@ final class FeatureIdentityReadinessTests: XCTestCase {
         )
         let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
         StubURLProtocol.reset()
-        serveSignedFixtureObjects(at: fixture, host: host)
+        try serveSignedFixtureObjects(at: fixture, host: host)
         let entry = try XCTUnwrap(profile.releases.first)
         let placeholderPayload = try await statePayload(defaultViewModelName: "Test")
 

@@ -1,6 +1,9 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
 import XCTest
+#if canImport(UIKit)
+import UIKit
+#endif
 @_spi(Testing) @testable import Nuxie
 @testable import NuxieRuntime
 #if SWIFT_PACKAGE || NUXIE_HOSTED_INPUT_TESTS
@@ -10,6 +13,235 @@ import XCTest
 // Shared runtime payload and signed-fixture helpers for the native preparation
 // tests. They live here rather than in NuxieTestSupport because that SwiftPM
 // target does not depend on NuxieRuntime.
+
+/// One lookup for a mounted Screen: resolve its root through the page list,
+/// then return the binding and row-local snapshot, never the page-root snapshot.
+struct FixturePageRow {
+    let binding: ExperienceInteractiveScreen
+    let snapshot: ExperienceInteractiveViewModelSnapshot
+
+    static func resolve(_ page: ExperienceInteractivePage, screenID: String) async throws -> Self {
+        let ids = await page.mountedScreenIDs
+        let index = try XCTUnwrap(ids.firstIndex(of: screenID), "Screen is not mounted: \(screenID)")
+        let native = try await page.runtime.snapshot()
+        guard case .list(let roots) = native.values.first(where: {
+            $0.ownerInstanceID == native.rootInstanceID && $0.name == "screens"
+        })?.value, roots.indices.contains(index) else {
+            throw ExperienceInteractiveScreenError.stateContract("Fixture page has no matching Screen list row")
+        }
+        let binding = try await page.binding(screenID: screenID)
+        let row = try await binding.snapshot()
+        XCTAssertEqual(row.rootInstanceID, roots[index])
+        return Self(binding: binding, snapshot: row)
+    }
+
+    static func mount(_ page: ExperienceInteractivePage, screenID: String,
+                      products: [StoreProduct] = []) async throws -> Self {
+        _ = try await page.prepareRow(screenID: screenID, products: products)
+        let index = await page.mountedScreenIDs.count
+        try await page.insert(screenID: screenID, at: index)
+        try await page.setPhases([(screenID, .entering)])
+        _ = try await page.step(elapsedSeconds: 0)
+        try await page.setPhases([(screenID, .active)])
+        try await page.selectActiveRow(screenID)
+        return try await resolve(page, screenID: screenID)
+    }
+
+    static func screenID(_ role: String?, in plan: NativeExperienceRenderPlan) throws -> String {
+        guard let role else { return plan.entry.screenId }
+        // Existing corpus roles may name the declared Screen or its authored label.
+        // Read that association from the release; never synthesize artboard/model IDs.
+        let exact = plan.screens.filter { $0.screenId == role }
+        let candidates = exact.isEmpty ? plan.screens.filter { $0.artboardName == role } : exact
+        XCTAssertEqual(candidates.count, 1, "Fixture role must resolve uniquely: \(role)")
+        return try XCTUnwrap(candidates.count == 1 ? candidates.first?.screenId : nil)
+    }
+}
+
+func fixtureRowReference(_ path: String, in snapshot: ExperienceInteractiveViewModelSnapshot) throws -> UInt64 {
+    var owner = snapshot.rootInstanceID
+    for name in path.split(separator: "/").map(String.init) {
+        guard case .referencedInstance(let id) = snapshot.values.first(where: {
+            $0.ownerInstanceID == owner && $0.name == name
+        })?.value else { throw ExperienceInteractiveScreenError.stateContract("Missing row reference: \(path)") }
+        owner = id
+    }
+    return owner
+}
+
+#if canImport(UIKit)
+@MainActor
+func fixturePageController(in host: UIViewController, screenID: String) throws -> ExperienceScreenViewController {
+    func find(_ view: UIViewController) -> ExperienceScreenViewController? {
+        if let page = view as? ExperienceScreenViewController, page.isPageController, page.screenId == screenID { return page }
+        return view.presentedViewController.flatMap(find) ?? view.children.reversed().compactMap(find).first
+    }
+    return try XCTUnwrap(find(host), "No page owns active Screen \(screenID)")
+}
+
+@MainActor
+func fixtureActivePageRow(_ controller: ExperienceScreenViewController) async throws -> FixturePageRow {
+    guard let page = controller.interactivePage else {
+        let binding = try XCTUnwrap(Mirror(reflecting: controller).children.first {
+            $0.label == "interactiveScreen"
+        }?.value as? ExperienceInteractiveScreen)
+        return FixturePageRow(binding: binding, snapshot: try await controller.runtimeSnapshot())
+    }
+    let active = await page.activeScreenID
+    XCTAssertEqual(active, controller.screenId)
+    return try await FixturePageRow.resolve(page, screenID: controller.screenId)
+}
+#endif
+
+/// Retain page ownership alongside bindings handed to existing geometry/event
+/// oracles. Explicit close and XCTest teardown both release the same page once.
+private actor FixturePageOwners {
+    static let shared = FixturePageOwners()
+    private var pages: [ObjectIdentifier: ExperienceInteractivePage] = [:]
+    func retain(_ page: ExperienceInteractivePage, for row: ExperienceInteractiveScreen) {
+        pages[ObjectIdentifier(row)] = page
+    }
+    func page(for row: ExperienceInteractiveScreen) -> ExperienceInteractivePage? { pages[ObjectIdentifier(row)] }
+    func close(_ row: ExperienceInteractiveScreen) async throws {
+        guard let page = pages[ObjectIdentifier(row)] else { try await row.close(); return }
+        try await page.close()
+        pages.removeValue(forKey: ObjectIdentifier(row))
+    }
+}
+
+func closeFixturePageRow(_ row: ExperienceInteractiveScreen) async throws {
+    try await FixturePageOwners.shared.close(row)
+}
+
+func fixtureEnvironmentSnapshot(_ row: ExperienceInteractiveScreen) async throws -> NuxieNativeViewModelSnapshot? {
+    if let page = await FixturePageOwners.shared.page(for: row) { return try await page.environmentSnapshot() }
+    return try await row.environmentSnapshot()
+}
+
+func updateFixtureEnvironment(_ row: ExperienceInteractiveScreen, reduceMotion: Bool? = nil,
+                              safeArea: ExperienceSafeAreaInsets? = nil) async throws {
+    if let page = await FixturePageOwners.shared.page(for: row) {
+        try await page.updateEnvironment(reduceMotion: reduceMotion, safeArea: safeArea)
+    } else {
+        try await row.updateEnvironment(reduceMotion: reduceMotion, safeArea: safeArea)
+    }
+}
+
+/// Use the ordinary signed catalog/acquisition path for pages with external resources.
+func signedFixturePayload(at directory: URL) async throws -> AuthenticatedRuntimePayload {
+    let (_, artifact) = try await authenticatedFixtureArtifact(at: directory,
+        profileBytes: signedReleaseEntryProfileBytes(fixture: directory, host: "fixture-page.nuxie.test"))
+    return artifact.payload
+}
+
+/// Producer declarations for an unsigned page scene. Test-authored signing
+/// wrappers use these exact Screen roots, render objects and value policy.
+struct FixturePageSceneDeclarations {
+    let render: [String: Any]
+    let screens: [[String: Any]]
+    let valuePolicy: [String: Any]
+
+    static func load(at directory: URL) throws -> Self {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: directory.appendingPathComponent("scene-declarations.json"))) as? [String: Any])
+        XCTAssertEqual(object["schemaVersion"] as? String, "nuxie.sdk-page-scene.v1")
+        let render = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: directory.appendingPathComponent("render.json"))) as? [String: Any])
+        let embedded = try XCTUnwrap(object["render"] as? [String: Any])
+        XCTAssertTrue(NSDictionary(dictionary: render).isEqual(to: embedded), "Scene declarations and render table must agree")
+        let screens = try XCTUnwrap(object["screens"] as? [[String: Any]])
+        XCTAssertFalse(screens.isEmpty)
+        return .init(render: render, screens: screens,
+            valuePolicy: try XCTUnwrap(object["valuePolicy"] as? [String: Any]))
+    }
+
+    func applying(to template: [String: Any]) throws -> [String: Any] {
+        var result = template
+        result["render"] = render
+        for name in ["state", "responses", "ruleGroups", "stateRules"] { result[name] = valuePolicy[name] }
+        result["viewModelValues"] = []
+        var leg = try XCTUnwrap(result["leg"] as? [String: Any])
+        leg["screens"] = screens.map { $0.merging(["responseCaptures": []]) { old, _ in old } }
+        let first = try XCTUnwrap(screens.first?["id"] as? String)
+        leg["entryStepId"] = "present"
+        leg["steps"] = [["kind": "action", "id": "present",
+            "action": ["type": "navigate", "screenId": first], "outlets": [:]]]
+        leg["routes"] = []
+        result["leg"] = leg
+        result["screenBehaviors"] = try screens.map {
+            ["screenId": try XCTUnwrap($0["id"] as? String), "controls": []] as [String: Any]
+        }.sorted { ($0["screenId"] as! String).utf16.lexicographicallyPrecedes(($1["screenId"] as! String).utf16) }
+        var requirements = try XCTUnwrap(result["requirements"] as? [String: Any])
+        let fonts = render["assets"] as? [[String: Any]] ?? []
+        requirements["requiredCapabilities"] = fonts.contains { $0["location"] as? String == "system" }
+            ? ["nux", "system-fonts"] : ["nux"]
+        result["requirements"] = requirements
+        return result
+    }
+}
+
+/// Opens pages for page plans and the original scene sessions for scene-only
+/// plans. Independent presentations can share an explicitly supplied Journey run.
+struct FixturePagePreparation {
+    let payload: AuthenticatedRuntimePayload
+    let preparation: ExperienceInteractivePreparation
+    let test: XCTestCase
+
+    func prepareRunValues(_ values: ExperienceRunValues) async throws {
+        try await preparation.prepareRunValues(values)
+    }
+
+    func metrics() async -> ExperienceInteractivePreparationMetrics { await preparation.metrics() }
+
+    func openRow(screenID: String? = nil, runValues: ExperienceRunValues? = nil,
+                 products: [StoreProduct] = [], pixelWidth: UInt32, pixelHeight: UInt32,
+                 initialReduceMotion: Bool? = nil, initialFontScale: Double? = nil,
+                 initialSafeArea: ExperienceSafeAreaInsets? = nil,
+                 initialColorScheme: ExperienceColorScheme? = nil) async throws -> ExperienceInteractiveScreen {
+        let id = try FixturePageRow.screenID(screenID, in: payload.renderPlan)
+        guard payload.renderPlan.pageHost != nil else {
+            let screen = try await preparation.openScreen(screenID: id, runValues: runValues, products: products,
+                pixelWidth: pixelWidth, pixelHeight: pixelHeight, initialReduceMotion: initialReduceMotion,
+                initialFontScale: initialFontScale, initialSafeArea: initialSafeArea, initialColorScheme: initialColorScheme)
+            test.addTeardownBlock { try await screen.close() }
+            return screen
+        }
+        let page = try await preparation.openPage(runValues: runValues, pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight, reduceMotion: initialReduceMotion ?? false,
+            fontScale: initialFontScale, safeArea: initialSafeArea, colorScheme: initialColorScheme)
+        test.addTeardownBlock { try await page.close() }
+        let row = try await FixturePageRow.mount(page, screenID: id, products: products).binding
+        await FixturePageOwners.shared.retain(page, for: row)
+        test.addTeardownBlock { try await closeFixturePageRow(row) }
+        return row
+    }
+}
+
+extension XCTestCase {
+    /// Read the published control's settled native geometry before sending input.
+    func fixtureControlBounds(in capture: NuxieNativeSemanticCapture, label: String) throws -> CGRect {
+        // HTML controls can publish a named tap target with role none. The
+        // authored action and enabled/visible state authorize this lookup.
+        let node = try XCTUnwrap(capture.tree.visibleReadingOrder.first {
+            $0.actions & (1 << NuxieNativeSemanticAction.tap.rawValue) != 0
+                && $0.stateFlags & NuxieNativeSemanticNode.disabled == 0
+                && ($0.label == label || $0.value == label)
+        }, "Published control must be exposed: \(label)")
+        XCTAssertGreaterThan(node.bounds.width, 0)
+        XCTAssertGreaterThan(node.bounds.height, 0)
+        return node.bounds
+    }
+
+    func prepareFixturePage(payload: AuthenticatedRuntimePayload) async throws -> FixturePagePreparation {
+        .init(payload: payload, preparation: try await ExperienceInteractivePreparation.prepare(payload: payload), test: self)
+    }
+
+    func openFixturePageRow(payload: AuthenticatedRuntimePayload, screenID: String? = nil,
+                            pixelWidth: UInt32, pixelHeight: UInt32) async throws -> ExperienceInteractiveScreen {
+        let fixture = try await prepareFixturePage(payload: payload)
+        return try await fixture.openRow(screenID: screenID, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    }
+}
 
 private final class ExperiencePreparationTestBundleToken {}
 
@@ -51,18 +283,45 @@ func serveSignedFixtureObjects(
     at fixture: URL,
     host: String,
     onRequest: @escaping @Sendable () -> Void = {}
-) {
+) throws {
+    let descriptor: [String: Any]
+    if FileManager.default.fileExists(atPath: fixture.appendingPathComponent("scene-declarations.json").path) {
+        descriptor = ["render": try FixturePageSceneDeclarations.load(at: fixture).render]
+    } else if let name = ["descriptor.json", "release.json"].first(where: {
+        FileManager.default.fileExists(atPath: fixture.appendingPathComponent($0).path)
+    }) {
+        descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: fixture.appendingPathComponent(name))) as? [String: Any])
+    } else {
+        let profile = try XCTUnwrap(JSONSerialization.jsonObject(with:
+            Data(contentsOf: fixture.appendingPathComponent("profile.json"))) as? [String: Any])
+        let entry = try XCTUnwrap((profile["releases"] as? [[String: Any]])?.first)
+        let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
+        let bytes = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(envelope["descriptorBytesBase64"] as? String)))
+        descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+    }
+    let render = try XCTUnwrap(descriptor["render"] as? [String: Any])
+    let scene = try XCTUnwrap((render["nux"] ?? render["rive"]) as? [String: Any])
+    let assets = (render["assets"] as? [[String: Any]] ?? []).filter { $0["key"] != nil }
+    let behaviors = (descriptor["screenBehaviors"] as? [[String: Any]] ?? []).compactMap {
+        ($0["script"] as? [String: Any])?["artifact"] as? [String: Any]
+    }
+    let objects = [scene] + assets + behaviors
+    var contentTypes: [String: String] = [:]
+    for object in objects {
+        let key = try XCTUnwrap(object["key"] as? String)
+        let contentType = try XCTUnwrap(object["contentType"] as? String)
+        if let previous = contentTypes.updateValue(contentType, forKey: key) {
+            XCTAssertEqual(previous, contentType, "Shared immutable object must have one MIME type")
+        }
+    }
+    let declaredContentTypes = contentTypes
     StubURLProtocol.register(matcher: { $0.url?.host == host }) { request in
         onRequest()
-        let file = fixture.appendingPathComponent(String(request.url!.path.dropFirst()))
+        let path = String(request.url!.path.dropFirst())
+        let file = fixture.appendingPathComponent(path)
         let bytes = try Data(contentsOf: file)
-        let contentType: String
-        switch file.pathExtension {
-        case "nux": contentType = "application/vnd.nuxie.scene"
-        case "png": contentType = "image/png"
-        case "ttf": contentType = "font/ttf"
-        default: contentType = "application/octet-stream"
-        }
+        let contentType = try XCTUnwrap(declaredContentTypes[path], "Object is absent from the signed descriptor: \(path)")
         return (
             HTTPURLResponse(
                 url: request.url!,
@@ -125,7 +384,7 @@ func authenticatedFixtureSnapshot(
     )
     let profile = try JourneyPlaneProfile.decode(profileBytes)
     let host = try XCTUnwrap(URL(string: profile.delivery.renderBaseUrl)?.host)
-    serveSignedFixtureObjects(at: fixture, host: host, onRequest: onRequest)
+    try serveSignedFixtureObjects(at: fixture, host: host, onRequest: onRequest)
     let catalog = JourneyProfileCatalog(
         authorizationKeys: try JourneyTrustRoots.keys(for: .development),
         supportedRuntime: JourneyReleaseRuntime.current,

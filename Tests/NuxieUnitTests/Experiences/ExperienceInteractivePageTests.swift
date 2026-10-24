@@ -199,7 +199,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             (.fade, true, ["B", "A"])] {
             try await withLiveMovePage(initialA: false) { layer in
                 try await layer.insert(screenID: "A", at: 0)
-                try await layer.apply([.take, .position(isBack: back), .reconcile, .expand,
+                try await layer.apply([.take, .position(isBack: back), .expand,
                     .phases([("A", .exiting), ("B", .entering)], ""), .begin(nil)], source: "A", target: "B",
                     reachable: ["A", "B"], reduceMotion: false)
                 _ = try await layer.step(elapsedSeconds: 0)
@@ -218,7 +218,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             let original = try await layer.snapshot(screenID: "A")
             try await layer.apply([.retire], source: "A", target: "B",
                 reachable: ["A", "B"], reduceMotion: false)
-            try await layer.apply([.take, .position(isBack: false), .reconcile, .expand,
+            try await layer.apply([.take, .position(isBack: false), .expand,
                 .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back")], source: "B", target: "A",
                 reachable: ["A", "B"], reduceMotion: false)
             let forwardOrder = await layer.mountedScreenIDs
@@ -232,7 +232,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             try await layer.setPhases([("A", .hidden), ("B", .active)])
             try await layer.apply([.retire], source: "A", target: "B",
                 reachable: ["A", "B"], reduceMotion: false)
-            try await layer.apply([.take, .position(isBack: true), .reconcile, .expand,
+            try await layer.apply([.take, .position(isBack: true), .expand,
                 .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back")], source: "B", target: "A",
                 reachable: ["A"], reduceMotion: false)
             let backOrder = await layer.mountedScreenIDs
@@ -247,38 +247,22 @@ final class ExperienceInteractivePageTests: XCTestCase {
     }
 
     @MainActor
-    func testReconcileRequiredBeforeExpansionAndAlreadyPlacedRowSkipsStep() async throws {
+    func testInsertAndMoveExpandWithoutAnInterveningStep() async throws {
         try await withLiveMovePage(initialA: false) { layer in
             try await layer.insert(screenID: "A", at: 0)
-            _ = try await layer.step(elapsedSeconds: 0)
-            try await layer.apply([.take, .position(isBack: false)], source: "A", target: "B",
-                reachable: ["A", "B"], reduceMotion: false)
-            do {
-                try await layer.apply([.expand], source: "A", target: "B",
-                    reachable: ["A", "B"], reduceMotion: false)
-                XCTFail("Must not call collapse before the runtime reconciles the insert")
-            } catch is ExperienceInteractiveScreenError { }
-            let first = try await layer.apply([.reconcile, .expand], source: "A", target: "B",
-                reachable: ["A", "B"], reduceMotion: false)
-            let frame = try XCTUnwrap(first)
-            XCTAssertEqual(frame.mountedScreenIDs, ["A", "B"])
-            XCTAssertEqual(Set(frame.rows.keys), ["A", "B"])
-            let alreadyPlaced = try await layer.apply([.take, .position(isBack: false), .reconcile, .expand],
+            let first = try await layer.apply([.take, .position(isBack: false), .expand],
                 source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
-            XCTAssertNil(alreadyPlaced, "No mutation means no reconcile result to deliver again")
-            try await layer.apply([.take, .position(isBack: false)], source: "B", target: "A",
-                reachable: ["A", "B"], reduceMotion: false)
-            do {
-                try await layer.apply([.expand], source: "B", target: "A",
-                    reachable: ["A", "B"], reduceMotion: false)
-                XCTFail("Must not call collapse before the runtime reconciles the move")
-            } catch is ExperienceInteractiveScreenError { }
-            let moved = try await layer.apply([.reconcile, .expand], source: "B", target: "A",
-                reachable: ["A", "B"], reduceMotion: false)
-            XCTAssertEqual(moved?.mountedScreenIDs, ["B", "A"])
-            let repeated = try await layer.apply([.reconcile], source: "B", target: "A",
-                reachable: ["A", "B"], reduceMotion: false)
-            XCTAssertNil(repeated)
+            XCTAssertNil(first, "Row mutations and expansion must not advance the player")
+            let inserted = await layer.mountedScreenIDs
+            XCTAssertEqual(inserted, ["A", "B"])
+            let moved = try await layer.apply([.take, .position(isBack: false), .expand],
+                source: "B", target: "A", reachable: ["A", "B"], reduceMotion: false)
+            XCTAssertNil(moved)
+            let reordered = await layer.mountedScreenIDs
+            XCTAssertEqual(reordered, ["B", "A"])
+            let frame = try await layer.step(elapsedSeconds: 0)
+            XCTAssertEqual(frame.mountedScreenIDs, ["B", "A"])
+            XCTAssertEqual(Set(frame.rows.keys), ["A", "B"])
         }
     }
 
@@ -403,12 +387,22 @@ final class ExperienceInteractivePageTests: XCTestCase {
             let diagnostics = PageDiagnosticRecorder()
             try await page.configurePresentationHeight(fitContent: true, size: CGSize(width: 390, height: 844),
                 diagnostic: { await diagnostics.append($0) })
+            let beforeFirstStep = try await page.contentHeight()
+            XCTAssertNil(beforeFirstStep)
             // Layout bounds are published by the next player step, as in presentation.
             _ = try await page.step(elapsedSeconds: 0)
             XCTAssertEqual(page.artboardBounds.size, CGSize(width: 390, height: 844))
             let messages = await diagnostics.messages
             XCTAssertEqual(messages, [ExperienceInteractivePage.fitContentDiagnostic])
             XCTAssertTrue(messages[0].contains("fit-content defaults to large"))
+        }
+    }
+
+    func testContentHeightNotFoundWithNoExpandedRows() async throws {
+        try await withLiveMovePage(initialA: false) { page in
+            _ = try await page.step(elapsedSeconds: 0)
+            let height = try await page.contentHeight()
+            XCTAssertNil(height)
         }
     }
 

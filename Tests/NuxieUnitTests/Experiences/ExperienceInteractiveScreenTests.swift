@@ -261,7 +261,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let suite = try JSONDecoder().decode(Suite.self,
             from: Data(contentsOf: root.appendingPathComponent("fixtures/events/runtime-frame-writes.json")))
         let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
-        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
+        let screen = try await openFixturePageRow(payload: artifact.payload,
             pixelWidth: 320, pixelHeight: 100)
         do {
             for vector in suite.cases {
@@ -296,16 +296,16 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 XCTAssertEqual(published, vector.expectedEvents, vector.name)
             }
         } catch {
-            try? await screen.close()
+            try? await closeFixturePageRow(screen)
             throw error
         }
-        try await screen.close()
+        try await closeFixturePageRow(screen)
     }
 
     func testRootEventUsesSnapshotRootIdentity() async throws {
         let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
-        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload, pixelWidth: 320, pixelHeight: 100)
-        defer { Task { try? await screen.close() } }
+        let screen = try await openFixturePageRow(payload: artifact.payload, pixelWidth: 320, pixelHeight: 100)
+        defer { Task { try? await closeFixturePageRow(screen) } }
         let snapshot = NuxieNativeViewModelSnapshot(rootInstanceID: 71, instances: [.init(id: 71, schemaIndex: 0, valueRange: 0..<0)], values: [])
         let event = NuxieNativeEvent(localIndex: 0, coreType: 131, name: "", url: "https://example.test", target: "_self", delay: 0, properties: [], sourceViewModelInstanceID: nil)
         let step = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [], stateChanges: [], events: [event], hostCommands: [], viewModelChanges: [])
@@ -317,9 +317,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     func testSignedPurchaseComponentsKeepSourceAndAuthoredSelection() async throws {
         let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
         let payload = artifact.payload
-        let screen = try await ExperienceInteractiveScreen.open(payload: payload,
+        let screen = try await openFixturePageRow(payload: payload,
             pixelWidth: 320, pixelHeight: 100)
-        defer { Task { try? await screen.close() } }
+        defer { Task { try? await closeFixturePageRow(screen) } }
         _ = try await screen.step(elapsedSeconds: 0)
         for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
         func tap(_ x: Float, _ y: Float) async throws -> [ExperienceInteractiveEffect] {
@@ -328,7 +328,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             let settled = try await screen.step(elapsedSeconds: 0.016)
             return down.effects + up.effects + settled.effects
         }
-        for (x, expected) in [(Float(80), "plan.first"), (240, "plan.second")] {
+        for (x, expected) in [(Float(80), "first"), (240, "second")] {
             let effects = try await tap(x, 30)
             let controls = effects.compactMap { effect -> ExperienceInteractiveReportedEvent? in
                 guard case .controlAction(let actionId, let event) = effect.kind else { return nil }
@@ -338,8 +338,8 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             XCTAssertEqual(controls.count, 1, "Expected exactly one purchase control: \(effects)")
             let source = try XCTUnwrap(controls.first?.resolvedSource)
             XCTAssertTrue(source.snapshot.instances.contains { $0.id == source.nativeID })
-            XCTAssertEqual(controls.first?.properties.first { $0.key == "instanceId" }?.value,
-                .string(expected))
+            let expectedID = try fixtureRowReference(expected, in: source.snapshot)
+            XCTAssertEqual(source.nativeID, expectedID)
         }
         let selection = try await tap(240, 65)
         XCTAssertFalse(selection.contains {
@@ -347,10 +347,10 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             return false
         })
         let snapshot = try await screen.snapshot()
-        for (alias, expected) in [("plan.first", "plan:monthly"), ("plan.second", "plan:lifetime")] {
-            let reference = try await screen.viewModel(named: "Plan", instanceID: alias)
+        for (alias, expected) in [("first", "plan:monthly"), ("second", "plan:lifetime")] {
+            let reference = try fixtureRowReference(alias, in: snapshot)
             let value = snapshot.values.first {
-                $0.ownerInstanceID == reference.rawValue && $0.name == "placementId"
+                $0.ownerInstanceID == reference && $0.name == "placementId"
             }
             XCTAssertEqual(value?.value, .bytes(Data(expected.utf8)))
         }
@@ -359,9 +359,9 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testNativeNestedEventCanResolveWithoutHostAliases() async throws {
         let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: false)
-        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
+        let screen = try await openFixturePageRow(payload: artifact.payload,
             pixelWidth: 320, pixelHeight: 100)
-        defer { Task { try? await screen.close() } }
+        defer { Task { try? await closeFixturePageRow(screen) } }
         for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
         let down = try await screen.step(pointers: [.init(kind: .down, x: 240, y: 30)], elapsedSeconds: 0)
         let up = try await screen.step(pointers: [.init(kind: .up, x: 240, y: 30, timestamp: 0.1)], elapsedSeconds: 0)
@@ -382,7 +382,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertNil(unaliased.sourceRejection)
         XCTAssertFalse(unaliased.properties.contains { $0.key == "instanceId" })
         XCTAssertEqual(source.string(path: VmPathRef(path: "placementId", isRelative: true)), "plan:annual")
-        try await screen.close()
+        try await closeFixturePageRow(screen)
     }
 
     #if canImport(UIKit)
@@ -393,7 +393,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         host.view.frame = CGRect(x: 0, y: 0, width: 320, height: 150)
         let delegate = PurchaseNavigationDelegate()
         let coordinator = ExperienceScreenTransitionCoordinator(
-            experience: experience, artifact: artifact, initialScreenID: "screen",
+            experience: experience, artifact: artifact, initialScreenID: artifact.renderPlan.entry.screenId,
             hostViewController: host, screenDelegate: delegate,
             onPresentedScreenDismissed: { _, _ in }, onScreenHidden: { _, _ in },
             onScreenActive: { _ in }, onProductsResolved: { _ in },
@@ -403,28 +403,28 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         addTeardownBlock { await coordinator.tearDown() }
         try await coordinator.install()
         _ = await coordinator.activateInitialScreen()
-        func interactiveScreen() throws -> ExperienceInteractiveScreen {
-            let navigation = try XCTUnwrap(host.children.first as? UINavigationController)
-            let controller = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
-            // Observe the renderer owned by the real navigation hierarchy; no replacement renderer.
-            return try XCTUnwrap(Mirror(reflecting: controller).children.first {
-                $0.label == "interactiveScreen"
-            }?.value as? ExperienceInteractiveScreen)
+        func interactiveScreen() async throws -> ExperienceInteractiveScreen {
+            let id = try XCTUnwrap(coordinator.activeScreenId)
+            let controller = try fixturePageController(in: host, screenID: id)
+            return try await fixtureActivePageRow(controller).binding
         }
-        let initial = try interactiveScreen()
+        let initial = try await interactiveScreen()
         try await initial.resize(pixelWidth: 320, pixelHeight: 150, layoutScaleFactor: 1)
         for _ in 0..<20 { _ = try await initial.step(elapsedSeconds: 0.016) }
         _ = try await initial.step(pointers: [.init(kind: .down, x: 240, y: 65)], elapsedSeconds: 0)
         _ = try await initial.step(pointers: [.init(kind: .up, x: 240, y: 65, timestamp: 0.1)], elapsedSeconds: 0)
         func selection(_ screen: ExperienceInteractiveScreen) async throws -> ExperienceInteractiveViewModelValue? {
-            let reference = try await screen.viewModel(named: "Plan", instanceID: "plan.second")
-            return try await screen.snapshot().values.first {
-                $0.ownerInstanceID == reference.rawValue && $0.name == "placementId"
+            let snapshot = try await screen.snapshot()
+            let reference = try fixtureRowReference("second", in: snapshot)
+            return snapshot.values.first {
+                $0.ownerInstanceID == reference && $0.name == "placementId"
             }?.value
         }
         let before = try await selection(initial)
         XCTAssertEqual(before, .bytes(Data("plan:lifetime".utf8)))
-        for destination in ["details", "screen"] {
+        let initialID = artifact.renderPlan.entry.screenId
+        let otherID = try XCTUnwrap(artifact.renderPlan.screens.first { $0.screenId != initialID }?.screenId)
+        for destination in [otherID, initialID] {
             let navigated = expectation(description: "Navigate to \(destination)")
             XCTAssertTrue(coordinator.navigate(to: destination, transition: nil) { _, screenID in
                 XCTAssertEqual(screenID, destination)
@@ -432,7 +432,7 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             })
             await fulfillment(of: [navigated], timeout: 10)
         }
-        let returned = try interactiveScreen()
+        let returned = try await interactiveScreen()
         let after = try await selection(returned)
         XCTAssertEqual(after, .bytes(Data("plan:lifetime".utf8)))
         await coordinator.tearDown()
@@ -527,29 +527,21 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
     func testSignedMultiScreenCorpusVisitsEveryScreenWithRendererBoundImports() async throws {
         let payload = try await authenticatedFixturePayload(named: "multi-screen")
         XCTAssertGreaterThan(payload.renderPlan.screens.count, 1)
-        let preparation = try await ExperienceInteractivePreparation.prepare(
-            payload: payload
-        )
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let page = try await preparation.openPage(pixelWidth: 32, pixelHeight: 32)
+        addTeardownBlock { try await page.close() }
 
         for declaration in payload.renderPlan.screens {
-            let screen = try await preparation.openScreen(
-                screenID: declaration.screenId,
-                pixelWidth: 32,
-                pixelHeight: 32
-            )
-            _ = try await screen.step(elapsedSeconds: 0)
-            try await screen.close()
+            let row = try await FixturePageRow.mount(page, screenID: declaration.screenId)
+            _ = try await row.binding.step(elapsedSeconds: 0)
+            try await page.remove(screenID: declaration.screenId)
         }
+        try await page.close()
 
         let metrics = await preparation.metrics()
-        XCTAssertEqual(
-            metrics.configuredFileImportCount,
-            payload.renderPlan.screens.count + 1
-        )
-        XCTAssertEqual(
-            metrics.openedSessionCount,
-            payload.renderPlan.screens.count
-        )
+        // One prepared file and one renderer-bound import for the shared page.
+        XCTAssertEqual(metrics.configuredFileImportCount, 2)
+        XCTAssertEqual(metrics.openedSessionCount, 1)
     }
 
     func testPreparationCacheCoalescesExactProvenanceAndEvictsWithoutClosingSessions() async throws {
@@ -743,12 +735,13 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                         provenance: UUID().uuidString,
                         payload: payload
                     )
-                    let screen = try await preparation.openScreen(
+                    let fixture = FixturePagePreparation(payload: payload, preparation: preparation, test: self)
+                    let screen = try await fixture.openRow(
                         pixelWidth: 64,
                         pixelHeight: 64
                     )
                     _ = try await screen.step(elapsedSeconds: 0)
-                    try await screen.close()
+                    try await closeFixturePageRow(screen)
                 } catch {
                     errorBox.record(error)
                 }
@@ -809,19 +802,19 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
             size: 16
         ))
 
-        let screen = try await ExperienceInteractiveScreen.open(
+        let screen = try await openFixturePageRow(
             payload: payload,
             pixelWidth: 64,
             pixelHeight: 64
         )
-        defer { Task { try? await screen.close() } }
+        defer { Task { try? await closeFixturePageRow(screen) } }
         XCTAssertNotNil(ExperienceRuntimeFontRegistry.font(
             forUniqueName: font.assetUniqueName,
             contentSHA256: font.sha256,
             size: 16
         ))
 
-        try await screen.close()
+        try await closeFixturePageRow(screen)
         XCTAssertNil(ExperienceRuntimeFontRegistry.font(
             forUniqueName: font.assetUniqueName,
             contentSHA256: font.sha256,
@@ -831,15 +824,31 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
 
     func testSignedFontConverterRendersThroughProductConfiguredImport() async throws {
         let payload = try await authenticatedFixturePayload(named: "font-converter")
-        let screen = try await ExperienceInteractiveScreen.open(
+        let screen = try await openFixturePageRow(
             payload: payload,
             pixelWidth: 64,
             pixelHeight: 64
         )
-        defer { Task { try? await screen.close() } }
+        defer { Task { try? await closeFixturePageRow(screen) } }
 
         _ = try await renderAndWait(screen)
-        try await screen.close()
+        try await closeFixturePageRow(screen)
+    }
+
+    func testPageCloseReleasesExternalFontScopeOfRemovedRow() async throws {
+        let payload = try await authenticatedFixturePayload(named: "font-converter")
+        let font = try XCTUnwrap(payload.renderPlan.fonts.first)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let page = try await preparation.openPage(pixelWidth: 64, pixelHeight: 64, reduceMotion: false)
+        addTeardownBlock { try await page.close() }
+        let id = payload.renderPlan.entry.screenId
+        _ = try await FixturePageRow.mount(page, screenID: id)
+        try await page.remove(screenID: id)
+        XCTAssertNotNil(ExperienceRuntimeFontRegistry.font(forUniqueName: font.assetUniqueName,
+            contentSHA256: font.sha256, size: 16), "A removed binding retains its scope until page close")
+        try await page.close()
+        XCTAssertNil(ExperienceRuntimeFontRegistry.font(forUniqueName: font.assetUniqueName,
+            contentSHA256: font.sha256, size: 16))
     }
 
 
@@ -990,40 +999,38 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
                 && descriptor.requiredProviderFlags == 0
         })
 
-        let screen = try await ExperienceInteractiveScreen.open(
+        let screen = try await openFixturePageRow(
             payload: payload,
             pixelWidth: 64,
             pixelHeight: 64
         )
-        defer { Task { try? await screen.close() } }
+        defer { Task { try? await closeFixturePageRow(screen) } }
 
         _ = try await renderAndWait(screen)
-        try await screen.close()
+        try await closeFixturePageRow(screen)
     }
 
     func testScriptedPreparationUsesRendererBoundImportsForEverySession() async throws {
         let payload = try await authenticatedFixturePayload(
             named: "scripted-resources"
         )
-        let preparation = try await ExperienceInteractivePreparation.prepare(
+        let preparation = try await prepareFixturePage(
             payload: payload
         )
 
-        let first = try await preparation.openScreen(
-            player: .staticArtboard,
+        let first = try await preparation.openRow(
             pixelWidth: 64,
             pixelHeight: 64
         )
         _ = try await renderAndWait(first)
-        try await first.close()
+        try await closeFixturePageRow(first)
 
-        let second = try await preparation.openScreen(
-            player: .staticArtboard,
+        let second = try await preparation.openRow(
             pixelWidth: 64,
             pixelHeight: 64
         )
         _ = try await renderAndWait(second)
-        try await second.close()
+        try await closeFixturePageRow(second)
 
         let metrics = await preparation.metrics()
         XCTAssertEqual(metrics.configuredFileImportCount, 3)
@@ -3796,17 +3803,17 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         XCTAssertTrue(payload.assets.contains { asset in
             asset.bytes != nil && asset.sourceKey.hasPrefix("assets/sha256/")
         })
-        let screen = try await ExperienceInteractiveScreen.open(
+        let screen = try await openFixturePageRow(
             payload: payload,
             pixelWidth: 64,
             pixelHeight: 64
         )
-        defer { Task { try? await screen.close() } }
+        defer { Task { try? await closeFixturePageRow(screen) } }
         for _ in 0..<2 {
             _ = try await renderAndWait(screen)
         }
         _ = try await renderAndWait(screen)
-        try await screen.close()
+        try await closeFixturePageRow(screen)
     }
 
     #if canImport(UIKit)
@@ -3845,11 +3852,11 @@ final class ExperienceInteractiveScreenTests: XCTestCase {
         let directory = experiencePreparationRepositoryRoot().appendingPathComponent("fixtures/journeys/parla-sheets")
         let (_, artifact) = try await authenticatedFixtureArtifact(at: directory,
             profileBytes: signedReleaseEntryProfileBytes(fixture: directory, host: "parla.sdk-fixtures.nuxie.test"))
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+        let preparation = try await prepareFixturePage(payload: artifact.payload)
         let run = ExperienceRunValues()
-        let screen = try await preparation.openScreen(screenID: "scr_screens_ssaved", runValues: run,
+        let screen = try await preparation.openRow(screenID: FixturePageRow.screenID("saved", in: artifact.payload.renderPlan), runValues: run,
             pixelWidth: 402, pixelHeight: 700)
-        addTeardownBlock { try await screen.close(); await run.retire() }
+        addTeardownBlock { try await closeFixturePageRow(screen); await run.retire() }
         let fitsContent = try await screen.setPresentationHeight(fitContent: true, availableSize: CGSize(width: 402, height: 700))
         XCTAssertTrue(fitsContent, "Saved is the published fit-content sheet")
         // Env writes reach only slots the artifact declares. Until a published
