@@ -47,3 +47,15 @@ both to separate number properties. Raw remove followed by a timed advance
 remains a strict expected failure for the marker and active variants. The
 layer's removal settles at zero time in the same gated operation and returns
 that step for normal routing. Their sizes and hashes are in provenance.json.
+
+Stage C row-collapse coverage: this scene has a non-virtual ArtboardComponentList
+named screens, but no live-move records (native types 62000 through 62002).
+Runtime 51ee009249 requires a hosted scene created from those records even for
+set_row_collapsed(..., false). It returns INVALID_ARGUMENT before looking up the
+row. Four ExperienceInteractivePageTests that call collapse/expand are explicitly
+skipped until stage C supplies published records: kept-row forward/Back ordering,
+new-row append ordering, reconciliation-before-expansion, and default-machine
+retention/removal/revisit (its repeated insert expands an already mounted row).
+The production call still executes and propagates errors. Other insertion,
+removal, retention, lifecycle and attribution tests continue using this fixture.
+Re-enable all four tests against the stage C fixture; a skip is not coverage.
