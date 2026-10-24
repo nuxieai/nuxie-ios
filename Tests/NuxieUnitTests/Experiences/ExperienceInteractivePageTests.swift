@@ -98,7 +98,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
         }
     }
 
-    func testRevisitKeptBWithoutA() async throws {
+    func testRevisitRemovedBWithoutACreatesSeededInstance() async throws {
         try await withLayer { layer, _ in
             try await layer.insert(screenID: "screen_2", at: 0)
             _ = try await layer.step(elapsedSeconds: 0)
@@ -108,9 +108,9 @@ final class ExperienceInteractivePageTests: XCTestCase {
             try await layer.remove(screenID: "screen_2")
             try await self.checked("B removed: zero-time step before revisit") { _ = try await layer.step(elapsedSeconds: 0) }
             try await layer.insert(screenID: "screen_2", at: 0)
-            try await self.checked("Kept B reinserted: zero-time step") { _ = try await layer.step(elapsedSeconds: 0) }
+            try await self.checked("Fresh seeded B appended: zero-time step") { _ = try await layer.step(elapsedSeconds: 0) }
             let after = try await layer.snapshot(screenID: "screen_2")
-            XCTAssertEqual(after.rootInstanceID, before.rootInstanceID)
+            XCTAssertNotEqual(after.rootInstanceID, before.rootInstanceID)
             XCTAssertEqual(try self.number(after, "keptValue"), 42)
         }
     }
