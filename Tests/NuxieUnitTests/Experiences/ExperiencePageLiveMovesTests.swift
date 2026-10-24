@@ -35,6 +35,55 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
         }
     }
 
+    func testRepeatedBackRevisitsKeepNativeHandleCountBounded() async throws {
+        try await withLiveMovePage { page in
+            var baseline: Int?
+            for _ in 0..<5 {
+                try await move(page, "A", "B", "t1")
+                let row = try await page.snapshot(screenID: "B")
+                let children = row.rowOwnedInstanceIDs.subtracting([row.rootInstanceID])
+                XCTAssertFalse(children.isEmpty, "B owns its nested ScreenLifecycle model")
+                if baseline != nil {
+                    for id in children {
+                        let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: id))
+                        let retained = try await page.runtime.retainsViewModel(reference)
+                        XCTAssertTrue(retained, "Seeded children must remain retained while the row can write them")
+                    }
+                }
+                try await move(page, "B", "A", "back", reachable: ["A"])
+                let count = try await page.runtime.retainedViewModelCount
+                if let baseline { XCTAssertEqual(count, baseline) }
+                else { baseline = count }
+                // Every seeded lifecycle child must be released with this generation.
+                for id in children {
+                    let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: id))
+                    let retained = try await page.runtime.retainsViewModel(reference)
+                    XCTAssertFalse(retained, "A removed generation must release its child handle")
+                }
+            }
+        }
+    }
+
+    func testBindingAllocationIsReleasedWithItsRowRoot() async throws {
+        try await withLiveMovePage { page in
+            let baseline = try await page.runtime.retainedViewModelCount
+            let binding = try await page.prepareRow(screenID: "B", products: [])
+            let schema = try await page.runtime.defaultSchema(artboardName: "B")
+            let beforeChild = try await page.runtime.retainedViewModelCount
+            let allocated = try await binding.makeViewModel(schemaIndex: schema)
+            let child = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: allocated.rawValue))
+            let afterChild = try await page.runtime.retainedViewModelCount
+            XCTAssertEqual(afterChild, beforeChild + 1)
+            try await page.insert(screenID: "B", at: 1)
+            _ = try await page.step(elapsedSeconds: 0)
+            try await page.remove(screenID: "B")
+            let retained = try await page.runtime.retainsViewModel(child)
+            XCTAssertFalse(retained)
+            let finalCount = try await page.runtime.retainedViewModelCount
+            XCTAssertEqual(finalCount, baseline)
+        }
+    }
+
     func testRemovedRowIsFrozenAndRevisitSeedsANewAppendedInstance() async throws {
         try await withLiveMovePage { page in
             try await move(page, "A", "B", "t1")
