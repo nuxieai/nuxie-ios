@@ -6,6 +6,20 @@ import XCTest
 
 @MainActor
 final class ExperiencePageStepTests: XCTestCase {
+    func testNewBackRowAppendsThenMovesBelowOutgoingWhileForwardOnlyAppends() {
+        for isBack in [false, true] {
+            var rows = ExperiencePageRows()
+            _ = rows.take("A")
+            var mutations = [rows.take("B")]
+            if isBack, let move = rows.position("B", relativeTo: "A", isBack: true) {
+                mutations.append(move)
+            }
+            XCTAssertEqual(mutations, isBack
+                ? [.append("B", 1), .move("B", 1, 0)] : [.append("B", 1)])
+            XCTAssertEqual(rows.screenIDs, isBack ? ["B", "A"] : ["A", "B"])
+        }
+    }
+
     #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
     func testEndCommandsKeepOutgoingSaveOwnerUntilDeliveryAcrossEveryStepStyle() async throws {
         for (style, reduced, back, covered) in [
