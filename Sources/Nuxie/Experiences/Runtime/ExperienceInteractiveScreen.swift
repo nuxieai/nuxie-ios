@@ -1666,6 +1666,57 @@ actor ExperienceInteractivePreparation {
     }
 }
 
+/// Allocations made by one binding, including its preparation before the binding exists.
+/// The operation gate belongs to the caller; this owner never acquires it.
+private actor ExperienceInteractiveRowHandles {
+    private let runtime: NuxieNativeRuntime
+    private let tracksRow: Bool
+    private var references: Set<NuxieNativeViewModelReference> = []
+
+    init(runtime: NuxieNativeRuntime, tracksRow: Bool) {
+        self.runtime = runtime
+        self.tracksRow = tracksRow
+    }
+
+    func makeViewModel(schemaIndex: Int, authoredInstanceIndex: Int? = nil) async throws -> NuxieNativeViewModelReference {
+        let reference = try await runtime.makeViewModel(schemaIndex: schemaIndex, authoredInstanceIndex: authoredInstanceIndex)
+        if tracksRow { references.insert(reference) }
+        return reference
+    }
+
+    func acquireListItem(owner: NuxieNativeViewModelReference, path: String,
+                         index: Int, expectedIdentity: UInt64) async throws -> NuxieNativeViewModelReference {
+        guard tracksRow else {
+            return try await runtime.acquireListItem(owner: owner, path: path, index: index, expectedIdentity: expectedIdentity)
+        }
+        let existing = NuxieNativeViewModelReference(rawValue: expectedIdentity)!
+        let alreadyRetained = try await runtime.retainsViewModel(existing)
+        let reference = try await runtime.acquireListItem(owner: owner, path: path,
+            index: index, expectedIdentity: expectedIdentity)
+        if tracksRow, !alreadyRetained { references.insert(reference) }
+        return reference
+    }
+
+    func record(_ allocated: [NuxieNativeViewModelReference]) {
+        if tracksRow { references.formUnion(allocated) }
+    }
+
+    func release(_ released: [NuxieNativeViewModelReference]) async throws {
+        try await runtime.releaseViewModels(released)
+        references.subtract(released)
+    }
+
+    func take() -> [NuxieNativeViewModelReference] {
+        let owned = Array(references)
+        references.removeAll()
+        return owned
+    }
+
+    func releaseAfterFailedPreparation() async {
+        try? await release(Array(references))
+    }
+}
+
 /// Owns one authenticated Screen's bindings, product interpretation and routing.
 /// Its root is either the standalone player's model or a retained layer row.
 actor ExperienceInteractiveScreen {
@@ -1751,8 +1802,11 @@ actor ExperienceInteractiveScreen {
         )
     }
 
+    private let rowHandles: ExperienceInteractiveRowHandles
+
     private init(
         runtime: NuxieNativeRuntime,
+        rowHandles: ExperienceInteractiveRowHandles,
         operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate(),
         ownsRuntime: Bool = true,
         videoPlayback: ExperienceVideoPlayback?,
@@ -1777,6 +1831,7 @@ actor ExperienceInteractiveScreen {
         trackedLists: ExperienceInteractiveTrackedListPlanner
     ) {
         self.runtime = runtime
+        self.rowHandles = rowHandles
         self.operationGate = operationGate
         self.ownsRuntime = ownsRuntime
         self.videoPlayback = videoPlayback
@@ -1903,6 +1958,7 @@ actor ExperienceInteractiveScreen {
             throw error
         }
 
+        let rowHandles = ExperienceInteractiveRowHandles(runtime: runtime, tracksRow: rowRuntime != nil)
         let initialState: ExperienceInteractiveInitialState.Result
         var sharedExperienceRootName: String?
         let environmentReference: NuxieNativeViewModelReference?
@@ -1913,6 +1969,7 @@ actor ExperienceInteractiveScreen {
                 renderPlan: payload.renderPlan,
                 products: products,
                 runtime: runtime,
+                allocations: rowHandles,
                 rootReference: rowReference
             )
             environmentReference = rowRuntime == nil
@@ -1944,19 +2001,21 @@ actor ExperienceInteractiveScreen {
             }
         } catch {
             if rowRuntime == nil { try? await runtime.close() }
+            else { await rowHandles.releaseAfterFailedPreparation() }
             fontScope.close()
             throw error
         }
 
         if let retainedRowSnapshot, let rowReference {
-            do { try await runtime.seedRow(rowReference, from: retainedRowSnapshot) }
-            catch { fontScope.close(); throw error }
+            do { await rowHandles.record(try await runtime.seedRow(rowReference, from: retainedRowSnapshot)) }
+            catch { await rowHandles.releaseAfterFailedPreparation(); fontScope.close(); throw error }
         }
 
         var textInputs: [String: NativeExperienceTextInput] = [:]
         for input in payload.renderPlan.textInputs where input.screenId == screenID {
             guard textInputs.updateValue(input, forKey: input.inputId) == nil else {
                 if rowRuntime == nil { try? await runtime.close() }
+                else { await rowHandles.releaseAfterFailedPreparation() }
                 fontScope.close()
                 throw ExperienceInteractiveScreenError.invalidScreen(screenID)
             }
@@ -1980,6 +2039,7 @@ actor ExperienceInteractiveScreen {
             }
         } catch {
             if rowRuntime == nil { try? await runtime.close() }
+            else { await rowHandles.releaseAfterFailedPreparation() }
             fontScope.close()
             throw error
         }
@@ -1991,11 +2051,13 @@ actor ExperienceInteractiveScreen {
                 decoderPool: videoDecoderPool)
         } catch {
             if rowRuntime == nil { try? await runtime.close() }
+            else { await rowHandles.releaseAfterFailedPreparation() }
             fontScope.close()
             throw error
         }
         return ExperienceInteractiveScreen(
             runtime: runtime,
+            rowHandles: rowHandles,
             operationGate: operationGate,
             ownsRuntime: rowRuntime == nil,
             videoPlayback: videoPlayback,
@@ -2087,6 +2149,10 @@ actor ExperienceInteractiveScreen {
     }
 
     // The page already holds operationGate. Never reacquire it or close shared resources.
+    func takeOwnedRowHandles() async -> [NuxieNativeViewModelReference] {
+        await rowHandles.take()
+    }
+
     func closeRemovedPageRow() {
         discardTextFrame()
         fontScope.close()
@@ -2340,10 +2406,9 @@ actor ExperienceInteractiveScreen {
         schemaIndex: Int,
         authoredInstanceIndex: Int? = nil
     ) async throws -> ExperienceInteractiveViewModelReference {
-        let runtime = runtime
         return try await operationGate.withLock { [self] in
             try await requireWritableRow()
-            let reference = try await runtime.makeViewModel(
+            let reference = try await rowHandles.makeViewModel(
                 schemaIndex: schemaIndex,
                 authoredInstanceIndex: authoredInstanceIndex
             )
@@ -2421,7 +2486,7 @@ actor ExperienceInteractiveScreen {
                 schemaIndexByViewModel.removeValue(forKey: reference)
             }
         }
-        try await runtime.releaseViewModels(references.compactMap {
+        try await rowHandles.release(references.compactMap {
             NuxieNativeViewModelReference(rawValue: $0.rawValue)
         })
     }
@@ -2619,7 +2684,7 @@ actor ExperienceInteractiveScreen {
         do {
             for id in postorder {
                 guard let instance = instances[id] else { continue }
-                let native = try await runtime.makeViewModel(schemaIndex: instance.schemaIndex)
+                let native = try await rowHandles.makeViewModel(schemaIndex: instance.schemaIndex)
                 guard let reference = ExperienceInteractiveViewModelReference(
                     rawValue: native.rawValue
                 ) else {
@@ -4630,6 +4695,7 @@ private enum ExperienceInteractiveInitialState {
         renderPlan: NativeExperienceRenderPlan,
         products: [StoreProduct],
         runtime: NuxieNativeRuntime,
+        allocations: ExperienceInteractiveRowHandles,
         rootReference: NuxieNativeViewModelReference? = nil
     ) async throws -> Result {
         let catalog = try await runtime.viewModelCatalog()
@@ -4775,7 +4841,7 @@ private enum ExperienceInteractiveInitialState {
         var nativeReferences: [Selection: NuxieNativeViewModelReference] = [.root: nativeRoot]
         for selection in requestOrder where selection != .root {
             guard let request = requests[selection] else { continue }
-            let reference = try await runtime.makeViewModel(
+            let reference = try await allocations.makeViewModel(
                 schemaIndex: request.schema.index,
                 authoredInstanceIndex: nil
             )
@@ -4875,7 +4941,7 @@ private enum ExperienceInteractiveInitialState {
                 }
                 var productRows: [ExperienceInteractiveViewModelReference] = []
                 for (index, id) in nativeIDs.enumerated() {
-                    let retained = try await runtime.acquireListItem(owner: reference, path: value.path,
+                    let retained = try await allocations.acquireListItem(owner: reference, path: value.path,
                         index: index, expectedIdentity: id)
                     guard let item = ExperienceInteractiveViewModelReference(rawValue: retained.rawValue) else {
                         throw stateValue(value.path)

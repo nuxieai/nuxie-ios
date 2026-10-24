@@ -402,7 +402,8 @@ actor ExperienceInteractivePage {
             rows[id]?.removedSnapshot = retained
             await row.binding.markRowRemoved(retained)
             await runtime.freezeRemovedRow(retained)
-            try await runtime.releaseViewModels([row.reference])
+            let children = await row.binding.takeOwnedRowHandles()
+            try await runtime.releaseViewModels(children + [row.reference])
             rowsNeedReconciliation = true
         }
     }
