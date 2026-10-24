@@ -1,0 +1,175 @@
+{
+  "schemaVersion": "publish-path-fixture.v1",
+  "fixtureId": "scripted-response-set",
+  "snapshotArtifact": {
+    "headSeq": 1,
+    "snapshot": {
+      "version": 1,
+      "project": {
+        "id": "project_1",
+        "data": {}
+      },
+      "document": {
+        "rootId": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "projectId": "project_1",
+            "parentId": null,
+            "kind": "root",
+            "type": "root",
+            "data": {
+              "kind": "root",
+              "responses": {
+                "plan": {
+                  "title": "Plan",
+                  "fields": [
+                    {
+                      "key": "selection",
+                      "label": "Selection",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "project_1::artboard_tree",
+            "projectId": "project_1",
+            "parentId": "root",
+            "kind": "artboard_tree",
+            "type": "artboard_tree",
+            "data": {
+              "kind": "artboard_tree",
+              "version": 1
+            }
+          },
+          {
+            "id": "project_1::journey_root",
+            "projectId": "project_1",
+            "parentId": "root",
+            "kind": "journey_root",
+            "type": "journey_root",
+            "data": {
+              "kind": "journey_root",
+              "version": 1
+            }
+          },
+          {
+            "id": "screen_1",
+            "projectId": "project_1",
+            "parentId": "project_1::artboard_tree",
+            "orderKey": "a",
+            "kind": "artboard",
+            "type": "artboard",
+            "name": "Paywall",
+            "data": {
+              "kind": "artboard",
+              "isComponent": false,
+              "canvas": {
+                "position": {
+                  "x": 0,
+                  "y": 0
+                },
+                "dimensions": {
+                  "width": 390,
+                  "height": 844
+                }
+              },
+              "responseCaptures": [
+                "plan/selection"
+              ]
+            }
+          },
+          {
+            "id": "screen_1::view_tree",
+            "projectId": "project_1",
+            "parentId": "screen_1",
+            "kind": "view_tree",
+            "type": "view_tree",
+            "data": {
+              "kind": "view_tree"
+            }
+          },
+          {
+            "id": "screen_1::animation_tree",
+            "projectId": "project_1",
+            "parentId": "screen_1",
+            "kind": "animation_tree",
+            "type": "animation_tree",
+            "data": {
+              "kind": "animation_tree"
+            }
+          },
+          {
+            "id": "cta",
+            "projectId": "project_1",
+            "parentId": "screen_1::view_tree",
+            "orderKey": "a",
+            "kind": "view",
+            "type": "view",
+            "data": {
+              "kind": "view",
+              "viewKind": "content",
+              "view": {
+                "id": "cta",
+                "type": "View",
+                "systemId": "Pressable",
+                "props": {
+                  "style": {
+                    "x": 24,
+                    "y": 700,
+                    "zIndex": 1,
+                    "width": 342,
+                    "height": 56,
+                    "backgroundColor": "#111827",
+                    "borderRadius": 14
+                  },
+                  "pressedStyle": {
+                    "backgroundColor": "#2563eb"
+                  }
+                },
+                "controlAction": {
+                  "actionId": "submit",
+                  "behavior": {
+                    "kind": "script",
+                    "emits": [
+                      "script_control_activated"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "screen_1::capability_tree",
+            "projectId": "project_1",
+            "parentId": "screen_1",
+            "kind": "capability_tree",
+            "type": "capability_tree",
+            "data": {
+              "kind": "capability_tree"
+            }
+          },
+          {
+            "id": "screen_1::state",
+            "projectId": "project_1",
+            "parentId": "screen_1::capability_tree",
+            "kind": "capability",
+            "type": "capability",
+            "data": {
+              "kind": "capability",
+              "capabilityId": "state",
+              "enabled": true,
+              "config": {
+                "fields": []
+              }
+            }
+          }
+        ]
+      },
+      "designSystem": {}
+    }
+  }
+}

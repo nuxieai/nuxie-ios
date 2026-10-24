@@ -1,0 +1,49 @@
+{
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "wrapper": "tools/sdk-fixtures/page-release/test-store-orchestration/wrapper.json",
+  "wrapperPin": {
+    "sha256": "cbf3f47a8abf84e25f11f7d8892cfc269f69776eb0963a147d9aa6487cd64221",
+    "sizeBytes": 11703
+  },
+  "baseWrapper": "tools/sdk-fixtures/page-release/rendered-text-input/wrapper.json",
+  "migratedForCompiler2b": [],
+  "baseMigratedForCompiler2b": [
+    {
+      "old": "nuxie.com schema URLs",
+      "new": "nuxie.ai schema URLs",
+      "why": "2b rejects the retired schema host; no other schema fields were changed"
+    },
+    {
+      "old": "removed iphone-16 preset (393 by 852) in screens/greeting/frame.json, screens/input/frame.json",
+      "new": "nearest supported iphone-17 preset (402 by 874)",
+      "why": "the same unknown-device failure is latent behind the schema/canvas failure; this is a separate device migration from the URL-only schema edit; expectations remain unchanged and geometry qualification is still required"
+    }
+  ],
+  "baseManifest": {
+    "sha256": "256aaa15598d83f74e24e2c6d6dfa94ee870b8590dfb50494646b3f0624dec32",
+    "sizeBytes": 1985
+  },
+  "qualification": "Test-authored wrapper over the verified base page; native SDK qualification remains separate.",
+  "files": {
+    "screen.riv": {
+      "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+      "sizeBytes": 5722
+    },
+    "renders/sha256/dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01.nux": {
+      "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+      "sizeBytes": 5722
+    },
+    "report.json": {
+      "sha256": "639b1bb98201ea96d118d24671a3355572f294f6a4bb75d188c7d3afabb65511",
+      "sizeBytes": 2794
+    },
+    "page-structure.json": {
+      "sha256": "5c40107b6e4247b741e1ac2626e2458ff86ca5e62f115686fc78686075438510",
+      "sizeBytes": 574
+    },
+    "test-store-orchestration.json": {
+      "sha256": "ccf204d79a89948bf23e62a10e164dfc00b3ac6966302ef10b43d4fa4654514c",
+      "sizeBytes": 16273
+    }
+  }
+}

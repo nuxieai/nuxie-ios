@@ -1,0 +1,71 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 187,
+  "outputSizeBytes": 7202,
+  "outputSha256": "7f4484317f25f963497783a42edfc3dde3a9420eccb2bce10f18ed10788d1a03",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen_1",
+        "publishedName": "Paywall",
+        "role": "experience",
+        "width": 390,
+        "height": 844,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen_1",
+        "artboardId": "screen_1",
+        "artboardName": "Paywall",
+        "width": 390,
+        "height": 844,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": []
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {
+      "plan": {
+        "title": "Plan",
+        "model": "Responses:plan",
+        "fields": [
+          {
+            "key": "selection",
+            "label": "Selection",
+            "type": "string",
+            "rules": []
+          }
+        ]
+      }
+    },
+    "ruleGroups": [
+      {
+        "model": "Responses:plan",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "selection",
+            "errors_path": "errors/selection",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 1
+      }
+    ]
+  },
+  "requiredFontFaces": []
+}

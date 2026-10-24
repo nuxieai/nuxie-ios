@@ -1,0 +1,20 @@
+{
+  "sourceSha256": "767c4ac539d220d3f080a51de7c4516a221b2f25698e714f8fe9c85f50886101",
+  "conversions": [],
+  "compiledResources": [
+    {
+      "kind": "script",
+      "assetId": "script-vector",
+      "sha256": "50d69e465eb4413f342a38b1c6c3dbb71531559c98d0a0514a0d2b782ed477bd",
+      "sizeBytes": 702
+    },
+    {
+      "kind": "shader",
+      "assetId": "shader-vector",
+      "sha256": "e83341b43a488f71ba4e1b7cd32a11a1a8143e908bf6e5c51b2ddc61634f920d",
+      "sizeBytes": 366,
+      "qualification": "package-only"
+    }
+  ],
+  "actionCompatibility": "validate_compiled_luau_bytecode"
+}

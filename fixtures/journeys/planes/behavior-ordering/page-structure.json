@@ -1,0 +1,21 @@
+{
+  "sceneSha256": "54bee7350ab04c65f39921f68a3b3fa91137492afe4d165be9a5f4a05bdd136f",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "screen",
+      "artboardName": "Purchase",
+      "rootTypeIndex": 0,
+      "rootTypeName": "PurchaseRoot"
+    },
+    {
+      "screenId": "details",
+      "artboardName": "Details",
+      "rootTypeIndex": 1,
+      "rootTypeName": "DetailsRoot"
+    }
+  ]
+}

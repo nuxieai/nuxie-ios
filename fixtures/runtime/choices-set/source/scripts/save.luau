@@ -10,6 +10,6 @@ return function(context)
         else
             ok, rule = nuxie.responses.set("signup.picks", nil)
         end
-        nuxie.trigger("checked", {ok = ok, rule = rule})
+        nuxie.emit("checked", {ok = ok, rule = rule})
     end }
 end

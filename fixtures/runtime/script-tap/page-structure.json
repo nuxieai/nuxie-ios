@@ -1,0 +1,15 @@
+{
+  "sceneSha256": "aa6597c7d8945db601da23c2387f502126b5ea987c767bceaa1a1bebef1beaa5",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "scr_screens_stap",
+      "artboardName": "tap",
+      "rootTypeIndex": 0,
+      "rootTypeName": "vm_runtime_root_scr_screens_stap"
+    }
+  ]
+}

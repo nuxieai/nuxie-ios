@@ -1,0 +1,70 @@
+{
+  "screen.riv": {
+    "sha256": "125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92",
+    "sizeBytes": 8509
+  },
+  "renders/sha256/125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92.nux": {
+    "sha256": "125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92",
+    "sizeBytes": 8509
+  },
+  "report.json": {
+    "sha256": "81d74d967a653b6431f4395b1e46c3d6eac7456b089af1c42518d860ac64c300",
+    "sizeBytes": 2801
+  },
+  "page-structure.json": {
+    "sha256": "412101b26ddbbe888670a86c56709e668c524c564f29c96d9fbe23992a6bf810",
+    "sizeBytes": 396
+  },
+  "expectations.json": {
+    "sha256": "0f0fe272030b723b691b74096c88ad6392701c798404052eab3e48bc0d5182b7",
+    "sizeBytes": 2499
+  },
+  "source/.nuxie/canvas.json": {
+    "sha256": "f4735b41c3bfae5dda31a931442672fd7cbf69aed567f75bf56305cd1629b83c",
+    "sizeBytes": 53
+  },
+  "source/components/option-label/frame.json": {
+    "sha256": "050dbe21952308db3667af6f98833f36db7d9367735488790986aae0b0d3819c",
+    "sizeBytes": 152
+  },
+  "source/components/option-label/index.html": {
+    "sha256": "5b676baf74efaf10a9bde24a85c98d11a4ec998b2d8abc992e38f187b6054198",
+    "sizeBytes": 64
+  },
+  "source/experience.json": {
+    "sha256": "45de7397e63031db3b1a5ad4314ce0cfd45a5b401247fbb2f2503929df9dace4",
+    "sizeBytes": 811
+  },
+  "source/screens/first/frame.json": {
+    "sha256": "b5e53e3664f044054f8f5667bb5c48877ed2b8956b2d992eeca7d68dfde3fe4e",
+    "sizeBytes": 274
+  },
+  "source/screens/first/index.html": {
+    "sha256": "db802b5cca74a0fddad9d3c097a3e5c13dffab0dccccea88725b2246e079b347",
+    "sizeBytes": 317
+  },
+  "source/scripts/save.luau": {
+    "sha256": "89e33db4285cc541d8d2c80ba9e6e85fde3cf3c446d2bae622ff19c4a4af0bab",
+    "sizeBytes": 531
+  },
+  "descriptor.json": {
+    "sha256": "25dce82fad6df0378c829c95f05ddaa19f2cc20b9c38f3d528783dd1ea615ae9",
+    "sizeBytes": 7760
+  },
+  "release-entry.json": {
+    "sha256": "368f34a9f1c649665ed4de39b0f8b8744c85927d6d2ccc85367cf549593a8eab",
+    "sizeBytes": 11213
+  },
+  "release.json": {
+    "sha256": "25dce82fad6df0378c829c95f05ddaa19f2cc20b9c38f3d528783dd1ea615ae9",
+    "sizeBytes": 7760
+  },
+  "profile-entry.json": {
+    "sha256": "368f34a9f1c649665ed4de39b0f8b8744c85927d6d2ccc85367cf549593a8eab",
+    "sizeBytes": 11213
+  },
+  "provenance.json": {
+    "sha256": "24df49b2c87031b4105bfc52a912074cb082c9995067d0314d9e08ed94197640",
+    "sizeBytes": 6137
+  }
+}

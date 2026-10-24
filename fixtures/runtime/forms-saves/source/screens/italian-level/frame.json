@@ -1,1 +1,1 @@
-{"$schema":"https://nuxie.com/schema/frame/1.json","size":{"device":"iphone-16"},"state":{"level":{"type":"enum","values":["new","basics","conversational"]}},"emits":{"continue":{},"back":{}}}
+{"$schema":"https://nuxie.ai/schema/frame/1.json","size":{"device":"iphone-17"},"state":{"level":{"type":"enum","values":["new","basics","conversational"]}},"emits":{"continue":{},"back":{}}}

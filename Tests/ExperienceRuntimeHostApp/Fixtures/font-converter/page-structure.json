@@ -1,0 +1,15 @@
+{
+  "sceneSha256": "ec6956fa10a214ed435660337ddee0ff25cb5ccad0d0426954644bd081bab41a",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "screen",
+      "artboardName": "String Screen",
+      "rootTypeIndex": 0,
+      "rootTypeName": "Copy"
+    }
+  ]
+}

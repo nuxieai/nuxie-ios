@@ -1,0 +1,113 @@
+{
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/host-external-image/snapshot.json",
+  "wrapper": "tools/sdk-fixtures/page-release/host-external-image/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "wrapper declared 1 by 1 and requested pinned-image-intrinsics to overwrite the retained 4 by 2 hint",
+      "new": "PNG image/png IHDR dimensions 4 by 2, with the original snapshot and no conversion",
+      "why": "the pinned 83-byte PNG header is 4 by 2; the 1 by 1 wrapper metadata and phase 4 conversion were incorrect; asset bytes and the authored 80 by 40 canvas remain unchanged"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/host-external-image/snapshot.json": {
+      "sha256": "87472f629d56bdcdf84e9a245a01099c288fd28391b494d87ada654635f52298",
+      "sizeBytes": 3321
+    },
+    "tools/sdk-fixtures/page-release/host-external-image/wrapper.json": {
+      "sha256": "75384f48c68568e566538d0b477e9e5dcc583201db985c700612b9895527f3af",
+      "sizeBytes": 5023
+    },
+    "tools/sdk-fixtures/page-release/host-external-image/assets/sha256/b9d4e51e3590796b9a65fc9ec0b623bdf71a2bacef0098b79063edc87055b1a0.png": {
+      "sha256": "b9d4e51e3590796b9a65fc9ec0b623bdf71a2bacef0098b79063edc87055b1a0",
+      "sizeBytes": 83
+    }
+  },
+  "processing": {
+    "sourceSha256": "87472f629d56bdcdf84e9a245a01099c288fd28391b494d87ada654635f52298",
+    "conversions": [],
+    "compiledResources": [],
+    "actionCompatibility": "validate_compiled_luau_bytecode"
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "--snapshot",
+    "tools/sdk-fixtures/page-release/host-external-image/snapshot.json",
+    "tools/sdk-fixtures/page-release/host-external-image/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_snapshot",
+    "--",
+    "tools/sdk-fixtures/page-release/host-external-image/snapshot.json",
+    "<producer-output>",
+    "<verified-resources.json>"
+  ],
+  "fonts": [],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "4328f9c23e151816b769ce8080564ef3773215b322fb5add29a75cfe010b71e5",
+      "sizeBytes": 1385
+    },
+    "renders/sha256/4328f9c23e151816b769ce8080564ef3773215b322fb5add29a75cfe010b71e5.nux": {
+      "sha256": "4328f9c23e151816b769ce8080564ef3773215b322fb5add29a75cfe010b71e5",
+      "sizeBytes": 1385
+    },
+    "report.json": {
+      "sha256": "1298016daec07a12e6092b1f19cf1f44428d07fe6370e16c57177ad70c9902a3",
+      "sizeBytes": 1406
+    },
+    "page-structure.json": {
+      "sha256": "ef213e6fd06321eb3306a2bf932378b3afa9b577f42f61748426613d5b7b43a2",
+      "sizeBytes": 383
+    },
+    "snapshot-processing.json": {
+      "sha256": "48321f110a7ab1bec5f2780138022edcf034c01bbccfa2529ff7dc8dfabeb760",
+      "sizeBytes": 197
+    },
+    "compiled-actions.json": {
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "sizeBytes": 3
+    },
+    "source/snapshot.json": {
+      "sha256": "87472f629d56bdcdf84e9a245a01099c288fd28391b494d87ada654635f52298",
+      "sizeBytes": 3321
+    },
+    "assets/sha256/b9d4e51e3590796b9a65fc9ec0b623bdf71a2bacef0098b79063edc87055b1a0.png": {
+      "sha256": "b9d4e51e3590796b9a65fc9ec0b623bdf71a2bacef0098b79063edc87055b1a0",
+      "sizeBytes": 83
+    },
+    "descriptor.json": {
+      "sha256": "f2fde90179e2cde6dd382cc8c48ac0e2e8e9cd79f1d9d4db77cf4f5dbe21faec",
+      "sizeBytes": 2706
+    },
+    "release-entry.json": {
+      "sha256": "dee21d44f328cc31df1b2488d780faac002d5f2c52d5f7df556ca83cb14fedc1",
+      "sizeBytes": 4554
+    },
+    "release.json": {
+      "sha256": "f2fde90179e2cde6dd382cc8c48ac0e2e8e9cd79f1d9d4db77cf4f5dbe21faec",
+      "sizeBytes": 2706
+    },
+    "profile.json": {
+      "sha256": "f3251f50c8ed006e7e7e832b9827f3f1b699405e0680303e234140e9cf54cb3c",
+      "sizeBytes": 5608
+    }
+  }
+}

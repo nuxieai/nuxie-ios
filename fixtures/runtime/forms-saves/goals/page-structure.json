@@ -1,0 +1,21 @@
+{
+  "sceneSha256": "9539812d737ee9234730ba0b6b93590eeb0c55274b8709e4eeb6dbcb0bad798c",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "scr_screens_sgoals",
+      "artboardName": "goals",
+      "rootTypeIndex": 1,
+      "rootTypeName": "vm_runtime_root_scr_screens_sgoals"
+    },
+    {
+      "screenId": "scr_screens_squiet",
+      "artboardName": "quiet",
+      "rootTypeIndex": 3,
+      "rootTypeName": "vm_runtime_root_scr_screens_squiet"
+    }
+  ]
+}

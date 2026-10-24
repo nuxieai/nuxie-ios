@@ -1,0 +1,32 @@
+{
+  "renderer": "nux",
+  "nux": {
+    "key": "renders/sha256/3986fe060ca7de29411a99063f0d4a81bb1585a22bc1ec3625a350105df73bc7.nux",
+    "sha256": "3986fe060ca7de29411a99063f0d4a81bb1585a22bc1ec3625a350105df73bc7",
+    "sizeBytes": 11943,
+    "contentType": "application/vnd.nuxie.scene"
+  },
+  "screens": [
+    {
+      "id": "rate",
+      "artboardId": "scr_screens_srate",
+      "artboardName": "rate",
+      "width": 390,
+      "height": 680
+    }
+  ],
+  "transitions": [],
+  "textInputs": [],
+  "assets": [
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "700",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-700-normal-42d2e562-0",
+      "location": "system",
+      "required": true
+    }
+  ]
+}

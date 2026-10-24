@@ -1,14 +1,141 @@
 {
-  "publisherSourceCommit": "1f7e477ec03917927c7a39d7491e34fdf2845094",
-  "keyId": "TEST_ONLY_DEV_KEYPAIR",
-  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "sourceSnapshotSha256": "6bb039f9b2bc490f1d666fa95911c350e62da3994e4112045e17c4d7b0978f85",
-  "scriptSourceSha256": "9163301d05fb80588746ce90165d636dd80ba4bdb35bc67cf6d9e8b411ef7390",
-  "publishSnapshotSha256": "3f862c0bc369dedf8255a6f8f1bf7ed30b85cb9b30330159b87569ba8799529f",
-  "descriptorSha256": "b89fb327116a34bb638adaa95358332c58032f3098e627f2e33fb1a7c7163581",
-  "qualification": "Production release compiler output inside a test-signed candidate descriptor; SDK and screen-reader qualification remain separate.",
-  "descriptorRefresh": {
-    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
-    "previousDescriptorSha256": "e19308a011b810f37f29c6d0fc43c968cc93d86f760d20d8b0020aa014a899bd"
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/rendered-semantic-roles/snapshot-2b.json",
+  "wrapper": "tools/sdk-fixtures/page-release/rendered-semantic-roles/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "selected.data.controlAction outside the authored view",
+      "new": "the identical controlAction under selected.data.view.controlAction in snapshot-2b.json",
+      "why": "pressable::authored_view returns data.view; the typed listener target lookup requires its controlAction there; accessibility props, bindings, IDs, geometry and compiled actions are unchanged"
+    },
+    {
+      "old": "unresolved vm.response.values.password binding",
+      "new": "same response path resolved to authored model 101 and canonical response property IDs",
+      "why": "compiler 2b TextInput bound_text_run requires a resolved scalar path; secureTextEntry and response capture remain unchanged"
+    },
+    {
+      "old": "no wrapper textInputs; semantic-only secure field oracle",
+      "new": "one publisher-reported secure native password editor, responseFieldKey password",
+      "why": "2b publishes every visible TextInput regardless of binding direction or editable flag; retain secure two-way binding and redaction instead of changing the authored control"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/rendered-semantic-roles/snapshot-2b.json": {
+      "sha256": "b4550fd68d252f1a2cd409f9ac9c0e89bef72ad26d22000adae26ff758cbd65e",
+      "sizeBytes": 30954
+    },
+    "tools/sdk-fixtures/page-release/rendered-semantic-roles/wrapper.json": {
+      "sha256": "db4aede12dbb6129d03f544c33eb255b2c316f50c63ad0f284b3f24da204de26",
+      "sizeBytes": 7284
+    },
+    "tools/sdk-fixtures/page-release/rendered-semantic-roles/assets/sha256/2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5.otf": {
+      "sha256": "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5",
+      "sizeBytes": 192936
+    }
+  },
+  "processing": {
+    "sourceSha256": "b4550fd68d252f1a2cd409f9ac9c0e89bef72ad26d22000adae26ff758cbd65e",
+    "conversions": [
+      "unwrap-publish-input"
+    ],
+    "compiledResources": [],
+    "actionCompatibility": "validate_compiled_luau_bytecode"
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "--snapshot",
+    "tools/sdk-fixtures/page-release/rendered-semantic-roles/snapshot-2b.json",
+    "tools/sdk-fixtures/page-release/rendered-semantic-roles/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_snapshot",
+    "--",
+    "tools/sdk-fixtures/page-release/rendered-semantic-roles/snapshot-2b.json",
+    "<producer-output>",
+    "<verified-resources.json>"
+  ],
+  "fonts": [
+    {
+      "kind": "font",
+      "family": "Nuxie Editor",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-nuxie-editor-400-normal-17520362-0",
+      "location": "cdn",
+      "sha256": "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5",
+      "sizeBytes": 192936,
+      "contentType": "font/otf",
+      "format": "otf",
+      "required": true,
+      "key": "assets/sha256/2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5.otf"
+    }
+  ],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539",
+      "sizeBytes": 15348
+    },
+    "renders/sha256/f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539.nux": {
+      "sha256": "f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539",
+      "sizeBytes": 15348
+    },
+    "report.json": {
+      "sha256": "2655d41b108d504e077517527b9c28fcd55e6c4df1ca829011aca97c7b9c21ef",
+      "sizeBytes": 2710
+    },
+    "page-structure.json": {
+      "sha256": "53468caa3cade4880954ab9f63abe711c9eb0d511531f6c0b709ebf4e86db9b8",
+      "sizeBytes": 367
+    },
+    "screen-behavior/sha256/3792892a89de19b305aabe4fcd090686433987d0d8e1d1a8975ef846d9a5e17b.bin": {
+      "sha256": "3792892a89de19b305aabe4fcd090686433987d0d8e1d1a8975ef846d9a5e17b",
+      "sizeBytes": 4014
+    },
+    "snapshot-processing.json": {
+      "sha256": "cda4bcc148e805094910544da2b320a66abf076736337fa20e13c94f5e64db73",
+      "sizeBytes": 227
+    },
+    "compiled-actions.json": {
+      "sha256": "8ec3a07e3d9768c988a1e649e0846f3134227399c7d219b8423d32641a79297b",
+      "sizeBytes": 28320
+    },
+    "source/snapshot.json": {
+      "sha256": "b4550fd68d252f1a2cd409f9ac9c0e89bef72ad26d22000adae26ff758cbd65e",
+      "sizeBytes": 30954
+    },
+    "assets/sha256/2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5.otf": {
+      "sha256": "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5",
+      "sizeBytes": 192936
+    },
+    "descriptor.json": {
+      "sha256": "8fa9b23333cf7d3a6eff46d357400b8009d32cb484143aaf49faad084ed5e8fe",
+      "sizeBytes": 4599
+    },
+    "release-entry.json": {
+      "sha256": "d9ac6541b778607087caeaf3ca7243c6d0e2793122d1de46e29d01d0211b5a6e",
+      "sizeBytes": 7085
+    },
+    "release.json": {
+      "sha256": "8fa9b23333cf7d3a6eff46d357400b8009d32cb484143aaf49faad084ed5e8fe",
+      "sizeBytes": 4599
+    }
   }
 }

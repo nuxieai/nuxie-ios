@@ -1,0 +1,58 @@
+{
+  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "wrapper": "tools/sdk-fixtures/page-release/presentation-full-screen-dark/wrapper.json",
+  "wrapperPin": {
+    "sha256": "71020e14780405c1a78113739e18e7e59f4cb4f68669063d7938957316e73984",
+    "sizeBytes": 4096
+  },
+  "baseWrapper": "tools/sdk-fixtures/page-release/host-animation-event/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "presentation-state signed profile reusing a standalone animation-event scene",
+      "new": "same identity, background, entry and profile over the verified host-animation-event page",
+      "why": "page preparation and signed schema need current scene format requirements; preserve authored contrast backgrounds"
+    }
+  ],
+  "baseMigratedForCompiler2b": [
+    {
+      "old": "standalone Timeline Screen release",
+      "new": "same corpus-authored snapshot transformations, freshly published page and signed host profile",
+      "why": "page preparation requires $nuxie.page; preserve timeline, typed trigger and frame-scoped event graph"
+    }
+  ],
+  "baseManifest": {
+    "sha256": "f0957b26ddb52c0773e462830e7ea6668c0fe784f48ff0a09b29e847a3284516",
+    "sizeBytes": 1662
+  },
+  "qualification": "Test-authored wrapper over the verified base page; native SDK qualification remains separate.",
+  "files": {
+    "screen.riv": {
+      "sha256": "f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a",
+      "sizeBytes": 2527
+    },
+    "renders/sha256/f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a.nux": {
+      "sha256": "f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a",
+      "sizeBytes": 2527
+    },
+    "report.json": {
+      "sha256": "34bb8fea9229f5a49920f4c03ba5e7ef74a8820e1087655db767dbf21861f3f6",
+      "sizeBytes": 953
+    },
+    "page-structure.json": {
+      "sha256": "24a34dd390ed9de57022e824de828ed798c93576d495d6f4fb873c9e4ca50b16",
+      "sizeBytes": 380
+    },
+    "descriptor.json": {
+      "sha256": "c5837e4088c5b0bd8f15a67703ef841112e1b36d4a0a36feb8f01659bc3499fd",
+      "sizeBytes": 2332
+    },
+    "release-entry.json": {
+      "sha256": "b5f7f4123a832274198bfe2dca688d9fe1478921683ae640c05c19dd0e76d443",
+      "sizeBytes": 4079
+    },
+    "profile.json": {
+      "sha256": "251e5efb38fee57820706b725b9265a5d5e227c15c5922edfafed6b584c94db1",
+      "sizeBytes": 5165
+    }
+  }
+}

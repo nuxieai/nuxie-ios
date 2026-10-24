@@ -1,0 +1,108 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 397,
+  "outputSizeBytes": 15348,
+  "outputSha256": "f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen_1",
+        "publishedName": "Paywall",
+        "role": "experience",
+        "width": 390,
+        "height": 844,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "repeated_item",
+        "publishedName": "Plan item",
+        "role": "component",
+        "width": 342,
+        "height": 48,
+        "authoredOrder": 1
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen_1",
+        "artboardId": "screen_1",
+        "artboardName": "Paywall",
+        "width": 390,
+        "height": 844,
+        "authoredOrder": 0,
+        "reportedEventNames": [
+          "seat_decreased",
+          "seat_increased"
+        ]
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "Nuxie Editor",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-nuxie-editor-400-normal-17520362-0",
+          "location": "cdn",
+          "sha256": "2898476918b21c3f9b5ba22e86853c6d63b544f92da277a92533011a28c93af5",
+          "sizeBytes": 192936,
+          "contentType": "font/otf",
+          "format": "otf",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": [
+      {
+        "artboardId": "screen_1",
+        "viewNodeId": "password",
+        "renderedNodeId": "password",
+        "textObjectKey": "artboard/screen_1/password/text",
+        "textInputName": "password editable value",
+        "sourceNodeId": "password",
+        "value": "",
+        "editable": true,
+        "bindingDirection": "twoWay",
+        "geometry": {
+          "x": 24,
+          "y": 320,
+          "width": 342,
+          "height": 24,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "Nuxie Editor",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 18,
+          "lineHeight": -1,
+          "letterSpacing": 0,
+          "color": 4279310375,
+          "fontAssetUniqueName": "font-nuxie-editor-400-normal-17520362-0",
+          "textAlign": "left"
+        },
+        "placeholder": "Password",
+        "secureTextEntry": true
+      }
+    ]
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": [
+    {
+      "family": "Nuxie Editor",
+      "weight": "400",
+      "style": "normal"
+    }
+  ]
+}

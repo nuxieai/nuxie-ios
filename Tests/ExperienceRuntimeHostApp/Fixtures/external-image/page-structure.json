@@ -1,0 +1,15 @@
+{
+  "sceneSha256": "4328f9c23e151816b769ce8080564ef3773215b322fb5add29a75cfe010b71e5",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "hero_image",
+      "artboardName": "Hero Image",
+      "rootTypeIndex": 5,
+      "rootTypeName": "$nuxie.Screen.hero_image"
+    }
+  ]
+}

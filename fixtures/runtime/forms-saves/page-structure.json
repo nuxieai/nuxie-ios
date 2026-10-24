@@ -1,0 +1,57 @@
+{
+  "sceneSha256": "71c69b2c4d2154c0b3d5572d43311bed4532285ac7e18d3112f1ff524de020c0",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "scr_screens_sdaily-plan",
+      "artboardName": "daily-plan",
+      "rootTypeIndex": 2,
+      "rootTypeName": "vm_runtime_root_scr_screens_sdaily-plan"
+    },
+    {
+      "screenId": "scr_screens_sdaily-reminder",
+      "artboardName": "daily-reminder",
+      "rootTypeIndex": 4,
+      "rootTypeName": "vm_runtime_root_scr_screens_sdaily-reminder"
+    },
+    {
+      "screenId": "scr_screens_sdeparture",
+      "artboardName": "departure",
+      "rootTypeIndex": 6,
+      "rootTypeName": "vm_runtime_root_scr_screens_sdeparture"
+    },
+    {
+      "screenId": "scr_screens_sfeedback",
+      "artboardName": "feedback",
+      "rootTypeIndex": 8,
+      "rootTypeName": "vm_runtime_root_scr_screens_sfeedback"
+    },
+    {
+      "screenId": "scr_screens_sgoals",
+      "artboardName": "goals",
+      "rootTypeIndex": 10,
+      "rootTypeName": "vm_runtime_root_scr_screens_sgoals"
+    },
+    {
+      "screenId": "scr_screens_sitalian-level",
+      "artboardName": "italian-level",
+      "rootTypeIndex": 12,
+      "rootTypeName": "vm_runtime_root_scr_screens_sitalian-level"
+    },
+    {
+      "screenId": "scr_screens_sstart-lesson",
+      "artboardName": "start-lesson",
+      "rootTypeIndex": 14,
+      "rootTypeName": "vm_runtime_root_scr_screens_sstart-lesson"
+    },
+    {
+      "screenId": "scr_screens_swelcome",
+      "artboardName": "welcome",
+      "rootTypeIndex": 16,
+      "rootTypeName": "vm_runtime_root_scr_screens_swelcome"
+    }
+  ]
+}

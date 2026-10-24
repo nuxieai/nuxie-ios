@@ -1,81 +1,157 @@
 {
-  "sourceCommit": "1b558a2cb6b4bd4b5fd493f3f8c9752bf06d1bdc",
-  "compilerBaseCommit": "020ffb241c3664a8afdcc5453991dea9381c64ce",
-  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "worktree": "/Users/levi/dev/nuxie-codex/codex-f4-device-screen",
-  "target": "/Users/levi/dev/nuxie-codex/codex-preview-tool/tools/nuxie-editor/target",
-  "publisherWasm": {
-    "sha256": "b689ed61eabaabeb50329e2d980b5600dc7d5588ef3bb0c1b8fc69eafbfd445f",
-    "sizeBytes": 17489751
-  },
-  "authorityWasm": {
-    "sha256": "4c23f90816ee256e811717fe6b5db14aea1eec260d3520ddfc97117a9da4b6be",
-    "sizeBytes": 23690399
-  },
-  "fonts": [
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/run-values/source",
+  "wrapper": "tools/sdk-fixtures/page-release/run-values/wrapper.json",
+  "migratedForCompiler2b": [
     {
-      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
-      "authoredAssetId": 0,
-      "family": "System",
-      "kind": "font",
-      "location": "system",
-      "required": true,
-      "style": "normal",
-      "weight": "400"
+      "old": "iphone-16 at 393 by 852 logical points",
+      "new": "iphone-17 at 402 by 874 logical points in tap, level and device",
+      "why": "experience-compile/src/devices.rs has no 393 by 852 preset; 402 by 874 is the closest supported portrait size; every expectation is retained and pixel qualification remains required"
     }
   ],
-  "files": {
-    "NOTES.md": {
-      "sha256": "c479f19aff1225f2025e8a2b2a490f649c565d2ea59e0e6251b710bf7c2a9b2f",
-      "sizeBytes": 5206
+  "sources": {
+    "tools/sdk-fixtures/page-release/run-values/source/components/answer-card/frame.json": {
+      "sha256": "bb81833f122cf7a3bb6787e07f4f4c0b4c90e83984b2ced3fe90e4f2f09f43ac",
+      "sizeBytes": 162
     },
-    "env-schema.json": {
-      "sha256": "38b4d40b59ff1ca45e7f73225c33249134f0ab0ca1c8a8b23e454decbe10ca6b",
-      "sizeBytes": 661
+    "tools/sdk-fixtures/page-release/run-values/source/components/answer-card/index.html": {
+      "sha256": "4b3df10edc18fbfe06253e0fc343da5f80423abb561b3fc12b908b09f387806c",
+      "sizeBytes": 112
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/components/motion-note/frame.json": {
+      "sha256": "c9ce975e447f7f85a77ef0a52b1a2525646fdeec52941602d0b4c41c4e9207e0",
+      "sizeBytes": 86
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/components/motion-note/index.html": {
+      "sha256": "d7379f71a268b8108dff48ddd8217907cdd38c97acf18b19ae837a6945a5c94c",
+      "sizeBytes": 83
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/experience.json": {
+      "sha256": "bf00fa85bc5c531e639d1d20b72f637c61b54c3b8525f48f1ebddc518ec19a8f",
+      "sizeBytes": 882
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/screens/device/frame.json": {
+      "sha256": "e3f03f6e053cd154256d06751438602ff469180c653be395089862c7aff3371f",
+      "sizeBytes": 85
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/screens/device/index.html": {
+      "sha256": "c9b938117f1f19d6131c76bae0b5ce9c1f745581484eb29ffdcc55135e8a7868",
+      "sizeBytes": 323
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/screens/device/style.css": {
+      "sha256": "035e718541a64c241ff44c19a7828e8bc47976b9c2f7f8af668b352ef34cc9b9",
+      "sizeBytes": 102
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/screens/level/frame.json": {
+      "sha256": "21f0fdce4d38802edbd2a159f1e091872754111a13af046ece5287e8326a9c2d",
+      "sizeBytes": 136
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/screens/level/index.html": {
+      "sha256": "7d2b34ca06afe90da611e7b3b5326d672015b1a99cb2cbd8182d5822e098908b",
+      "sizeBytes": 308
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/screens/tap/frame.json": {
+      "sha256": "21f0fdce4d38802edbd2a159f1e091872754111a13af046ece5287e8326a9c2d",
+      "sizeBytes": 136
+    },
+    "tools/sdk-fixtures/page-release/run-values/source/screens/tap/index.html": {
+      "sha256": "5a4e501675a339bb167fb3451af44280dec2a9575c72419bb0bbecc32a4b4347",
+      "sizeBytes": 218
+    },
+    "tools/sdk-fixtures/page-release/run-values/wrapper.json": {
+      "sha256": "7e939c08601ae9a1bf312cfe0ea94ca6af06ed7103ccd88bbcc66245e5f69009",
+      "sizeBytes": 13657
+    },
+    "tools/sdk-fixtures/page-release/run-values/expectations.json": {
+      "sha256": "41e23bc48961ba88ecf113ffb3bc7d134593c0ff7cf371ea92b08e807ea0318d",
+      "sizeBytes": 1850
+    }
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "tools/sdk-fixtures/page-release/run-values/source",
+    "tools/sdk-fixtures/page-release/run-values/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_folder",
+    "--",
+    "tools/sdk-fixtures/page-release/run-values/source",
+    "<producer-output>",
+    "--page-fixture"
+  ],
+  "fonts": [
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
+      "required": true
+    }
+  ],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "389adc8c1927b7b9c2e34499fb0cba49bb242471e6fcc8c65ffb597cb35f9066",
+      "sizeBytes": 12933
+    },
+    "renders/sha256/389adc8c1927b7b9c2e34499fb0cba49bb242471e6fcc8c65ffb597cb35f9066.nux": {
+      "sha256": "389adc8c1927b7b9c2e34499fb0cba49bb242471e6fcc8c65ffb597cb35f9066",
+      "sizeBytes": 12933
+    },
+    "report.json": {
+      "sha256": "ddd0e5a3ac9eba807f8f7d62875e7223fc7dc1a1347c78dfc603747f8e104fb0",
+      "sizeBytes": 2791
+    },
+    "page-structure.json": {
+      "sha256": "10fd9dab79187e876b961c688d9619ce9eebc0013db8b07f2361943cd5123558",
+      "sizeBytes": 731
     },
     "expectations.json": {
       "sha256": "41e23bc48961ba88ecf113ffb3bc7d134593c0ff7cf371ea92b08e807ea0318d",
       "sizeBytes": 1850
     },
-    "profile-entry.json": {
-      "sha256": "ae714cddc606464064e50ee77883f754b72b8947102d8e6bad54fe6dd719d226",
-      "sizeBytes": 13593
-    },
-    "release.json": {
-      "sha256": "f23c46d5627d63921f465b5c90aaea1c17a9f470b0c66cf3217b42940ef92e63",
-      "sizeBytes": 9544
-    },
-    "renders/sha256/4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb.nux": {
-      "sha256": "4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb",
-      "sizeBytes": 10855
-    },
-    "screen.riv": {
-      "sha256": "4945085a59432a95dcaf823a880acad1617c0e7c72f19c5844c9fea49dfccdcb",
-      "sizeBytes": 10855
-    },
     "source/components/answer-card/frame.json": {
-      "sha256": "b74869099b375140a2b450ae8513d16513568910925a2cec6f77c27af85bc021",
-      "sizeBytes": 163
+      "sha256": "bb81833f122cf7a3bb6787e07f4f4c0b4c90e83984b2ced3fe90e4f2f09f43ac",
+      "sizeBytes": 162
     },
     "source/components/answer-card/index.html": {
       "sha256": "4b3df10edc18fbfe06253e0fc343da5f80423abb561b3fc12b908b09f387806c",
       "sizeBytes": 112
     },
     "source/components/motion-note/frame.json": {
-      "sha256": "de1e91e32e74e4d1b6bca31f050859148a8b630bf09021b3079f81e49b6e8b1c",
-      "sizeBytes": 87
+      "sha256": "c9ce975e447f7f85a77ef0a52b1a2525646fdeec52941602d0b4c41c4e9207e0",
+      "sizeBytes": 86
     },
     "source/components/motion-note/index.html": {
       "sha256": "d7379f71a268b8108dff48ddd8217907cdd38c97acf18b19ae837a6945a5c94c",
       "sizeBytes": 83
     },
     "source/experience.json": {
-      "sha256": "a8560b934e134878047e8a3b710f2f7216e9d883e9df210a77a222c0eb77dcdc",
-      "sizeBytes": 843
+      "sha256": "bf00fa85bc5c531e639d1d20b72f637c61b54c3b8525f48f1ebddc518ec19a8f",
+      "sizeBytes": 882
     },
     "source/screens/device/frame.json": {
-      "sha256": "cf54c14a85f859cfaaf1a421f7e0d554039be1a8e34ddecbc9fdb1cefb25758f",
-      "sizeBytes": 86
+      "sha256": "e3f03f6e053cd154256d06751438602ff469180c653be395089862c7aff3371f",
+      "sizeBytes": 85
     },
     "source/screens/device/index.html": {
       "sha256": "c9b938117f1f19d6131c76bae0b5ce9c1f745581484eb29ffdcc55135e8a7868",
@@ -86,21 +162,36 @@
       "sizeBytes": 102
     },
     "source/screens/level/frame.json": {
-      "sha256": "d8c3a8e2fe9f63cb57a7d673110228861a1a11edce2e581ffa7571a2b0be93bf",
-      "sizeBytes": 137
+      "sha256": "21f0fdce4d38802edbd2a159f1e091872754111a13af046ece5287e8326a9c2d",
+      "sizeBytes": 136
     },
     "source/screens/level/index.html": {
       "sha256": "7d2b34ca06afe90da611e7b3b5326d672015b1a99cb2cbd8182d5822e098908b",
       "sizeBytes": 308
     },
     "source/screens/tap/frame.json": {
-      "sha256": "d8c3a8e2fe9f63cb57a7d673110228861a1a11edce2e581ffa7571a2b0be93bf",
-      "sizeBytes": 137
+      "sha256": "21f0fdce4d38802edbd2a159f1e091872754111a13af046ece5287e8326a9c2d",
+      "sizeBytes": 136
     },
     "source/screens/tap/index.html": {
       "sha256": "5a4e501675a339bb167fb3451af44280dec2a9575c72419bb0bbecc32a4b4347",
       "sizeBytes": 218
+    },
+    "descriptor.json": {
+      "sha256": "5511d8a3d97377088d5bfd91185a82f78f0685cdba8ca6c5bf08cab58b1aa930",
+      "sizeBytes": 9612
+    },
+    "release-entry.json": {
+      "sha256": "d8f7ec9daf6298d44ea63a7d02e6363bd48966595ccf60048d214ff1cde2603d",
+      "sizeBytes": 13681
+    },
+    "release.json": {
+      "sha256": "5511d8a3d97377088d5bfd91185a82f78f0685cdba8ca6c5bf08cab58b1aa930",
+      "sizeBytes": 9612
+    },
+    "profile-entry.json": {
+      "sha256": "d8f7ec9daf6298d44ea63a7d02e6363bd48966595ccf60048d214ff1cde2603d",
+      "sizeBytes": 13681
     }
-  },
-  "compilerFixCommit": "d9c4e168a49fd029e6aa9aaebb670f37feaecaa8"
+  }
 }

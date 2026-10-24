@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "project": {
+    "id": "project",
+    "data": {}
+  },
+  "document": {
+    "rootId": "project",
+    "nodes": [
+      {
+        "id": "project",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "project_root",
+        "type": "project_root",
+        "data": {
+          "kind": "project_root"
+        }
+      },
+      {
+        "id": "screen",
+        "parentId": "project",
+        "orderKey": "a0",
+        "kind": "artboard",
+        "type": "artboard",
+        "name": "Scripted Screen",
+        "data": {
+          "kind": "artboard",
+          "canvas": {
+            "dimensions": {
+              "width": 160,
+              "height": 100
+            }
+          }
+        }
+      },
+      {
+        "id": "screen::view_tree",
+        "parentId": "screen",
+        "orderKey": "a0",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "script-tree",
+        "parentId": "screen",
+        "orderKey": "b0",
+        "kind": "scripted_drawable_tree",
+        "type": "scripted_drawable_tree",
+        "data": {
+          "kind": "scripted_drawable_tree"
+        }
+      },
+      {
+        "id": "vector-drawable",
+        "parentId": "script-tree",
+        "orderKey": "a0",
+        "kind": "scripted_drawable",
+        "type": "scripted_drawable",
+        "data": {
+          "kind": "scripted_drawable",
+          "scriptAssetId": "script-vector",
+          "scriptName": "VectorDrawable",
+          "shaderAssetId": "shader-vector",
+          "shaderName": "Scene shader"
+        }
+      },
+      {
+        "id": "scripted-ordinary-sibling",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "type": "view",
+        "name": "Unsigned Script Ordinary Sibling",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "scripted-ordinary-sibling",
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "x": 4,
+                "y": 56,
+                "width": 40,
+                "height": 28,
+                "backgroundColor": "#00ff66"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "designSystem": {
+    "designSystems": [],
+    "screenDesignSystems": []
+  }
+}

@@ -1,18 +1,142 @@
 {
-  "contract": "published-native-text-input-response",
-  "publisherSourceCommit": "912d65ed1ad26913b8e6406ddced780e5f30bd17",
-  "descriptorSha256": "a545176c714af77c4eef0e8797a4d496b21d5ed456f5e83daa1663fcb3ad7189",
-  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "F3 native read and admission qualified; migrated signed editing, navigation and response qualification pending native write contract",
-  "descriptorRefresh": {
-    "reason": "Historical policy and offer refresh preserved the former render; nativeInputMigration replaces that render with F3",
-    "previousDescriptorSha256": "cc69b172a5a38742e013e0bfe960d8f982f92537c3a2795e386d03a38ec46900"
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/rendered-text-input/source",
+  "wrapper": "tools/sdk-fixtures/page-release/rendered-text-input/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "nuxie.com schema URLs",
+      "new": "nuxie.ai schema URLs",
+      "why": "2b rejects the retired schema host; no other schema fields were changed"
+    },
+    {
+      "old": "removed iphone-16 preset (393 by 852) in screens/greeting/frame.json, screens/input/frame.json",
+      "new": "nearest supported iphone-17 preset (402 by 874)",
+      "why": "the same unknown-device failure is latent behind the schema/canvas failure; this is a separate device migration from the URL-only schema edit; expectations remain unchanged and geometry qualification is still required"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/rendered-text-input/source/experience.json": {
+      "sha256": "841ea5dd6a0b3e12284741e173d857cd99ad7623ba928547263e5ed5ab2aa27c",
+      "sizeBytes": 280
+    },
+    "tools/sdk-fixtures/page-release/rendered-text-input/source/screens/greeting/frame.json": {
+      "sha256": "12bab442d1c518556e77c11087763a2399e988e1789b30fbaab46f4c1474293e",
+      "sizeBytes": 99
+    },
+    "tools/sdk-fixtures/page-release/rendered-text-input/source/screens/greeting/index.html": {
+      "sha256": "71add267e98f4565eae652e0b4788d70b3cc5e212fa41c8a90992deb536dda6c",
+      "sizeBytes": 128
+    },
+    "tools/sdk-fixtures/page-release/rendered-text-input/source/screens/input/frame.json": {
+      "sha256": "002d15352e42e7ac198c1ec51e7ce965d58995f4d052102efc7449a8244094bd",
+      "sizeBytes": 315
+    },
+    "tools/sdk-fixtures/page-release/rendered-text-input/source/screens/input/index.html": {
+      "sha256": "75ee57accba92f2b16241e7cc2281dd57304313b3f4ec4992ca2bfd46a3f34bf",
+      "sizeBytes": 269
+    },
+    "tools/sdk-fixtures/page-release/rendered-text-input/wrapper.json": {
+      "sha256": "8dfbc9407bbfd83b22d6df54352e85a4621d1c0c05f7dc82ddb5f6456427604c",
+      "sizeBytes": 6939
+    },
+    "tools/sdk-fixtures/page-release/rendered-text-input/expectations.json": {
+      "sha256": "fbc6255f49f79894ac4e2cbbe9d0089aba9ef96f2efe1ac8a0fe9940a830c7d7",
+      "sizeBytes": 993
+    }
   },
-  "nativeInputMigration": {
-    "source": "fixtures/runtime/published-input/screen.riv",
-    "sourceCommit": "09081fd6591bb5f24c33693d0b06a7c3a207ea65",
-    "sha256": "508bf2622f18c6ed2c20814a169cb829d64d6139b3149c11caac3e77c0f8fdc9",
-    "reason": "Release v3 native TextInput hard cut; original Journey routes and response declarations retained"
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "tools/sdk-fixtures/page-release/rendered-text-input/source",
+    "tools/sdk-fixtures/page-release/rendered-text-input/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_folder",
+    "--",
+    "tools/sdk-fixtures/page-release/rendered-text-input/source",
+    "<producer-output>",
+    "--page-fixture"
+  ],
+  "fonts": [
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
+      "required": true
+    }
+  ],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
   },
-  "historicalQualification": "Android API 36: real runtime glyph changes, presentation navigation and durable Journey responses. Additional platform qualification is tracked in the parent repository."
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+      "sizeBytes": 5722
+    },
+    "renders/sha256/dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01.nux": {
+      "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+      "sizeBytes": 5722
+    },
+    "report.json": {
+      "sha256": "639b1bb98201ea96d118d24671a3355572f294f6a4bb75d188c7d3afabb65511",
+      "sizeBytes": 2794
+    },
+    "page-structure.json": {
+      "sha256": "5c40107b6e4247b741e1ac2626e2458ff86ca5e62f115686fc78686075438510",
+      "sizeBytes": 574
+    },
+    "expectations.json": {
+      "sha256": "fbc6255f49f79894ac4e2cbbe9d0089aba9ef96f2efe1ac8a0fe9940a830c7d7",
+      "sizeBytes": 993
+    },
+    "source/experience.json": {
+      "sha256": "841ea5dd6a0b3e12284741e173d857cd99ad7623ba928547263e5ed5ab2aa27c",
+      "sizeBytes": 280
+    },
+    "source/screens/greeting/frame.json": {
+      "sha256": "12bab442d1c518556e77c11087763a2399e988e1789b30fbaab46f4c1474293e",
+      "sizeBytes": 99
+    },
+    "source/screens/greeting/index.html": {
+      "sha256": "71add267e98f4565eae652e0b4788d70b3cc5e212fa41c8a90992deb536dda6c",
+      "sizeBytes": 128
+    },
+    "source/screens/input/frame.json": {
+      "sha256": "002d15352e42e7ac198c1ec51e7ce965d58995f4d052102efc7449a8244094bd",
+      "sizeBytes": 315
+    },
+    "source/screens/input/index.html": {
+      "sha256": "75ee57accba92f2b16241e7cc2281dd57304313b3f4ec4992ca2bfd46a3f34bf",
+      "sizeBytes": 269
+    },
+    "descriptor.json": {
+      "sha256": "7dfd282e98d559d49846d74322b252ec30c7eea58361e2ffa08fe1b72c76f704",
+      "sizeBytes": 4520
+    },
+    "release-entry.json": {
+      "sha256": "99fa29cead44289b50fffddcf73d5e3714e14f7cd3f63b41fd27bce5af30f748",
+      "sizeBytes": 6969
+    },
+    "release.json": {
+      "sha256": "7dfd282e98d559d49846d74322b252ec30c7eea58361e2ffa08fe1b72c76f704",
+      "sizeBytes": 4520
+    }
+  }
 }

@@ -1,0 +1,99 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 430,
+  "outputSizeBytes": 11943,
+  "outputSha256": "3986fe060ca7de29411a99063f0d4a81bb1585a22bc1ec3625a350105df73bc7",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "cmp_components_srate-pair",
+        "publishedName": "rate-pair",
+        "role": "component",
+        "width": 326,
+        "height": 104,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "scr_screens_srate",
+        "publishedName": "rate",
+        "role": "experience",
+        "width": 390,
+        "height": 680,
+        "authoredOrder": 1
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_srate",
+        "artboardId": "scr_screens_srate",
+        "artboardName": "rate",
+        "width": 390,
+        "height": 680,
+        "authoredOrder": 0,
+        "reportedEventNames": [
+          "$nuxie.relay.rated",
+          "$nuxie.response.save",
+          "rated"
+        ]
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "700",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-700-normal-42d2e562-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {
+      "feedback": {
+        "title": "Feedback",
+        "model": "Responses:feedback",
+        "fields": [
+          {
+            "key": "stars",
+            "label": "Stars",
+            "type": "number",
+            "rules": []
+          }
+        ]
+      }
+    },
+    "ruleGroups": [
+      {
+        "model": "Responses:feedback",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "stars",
+            "errors_path": "errors/stars",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 1
+      }
+    ]
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "700",
+      "style": "normal"
+    }
+  ]
+}

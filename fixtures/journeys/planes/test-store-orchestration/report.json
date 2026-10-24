@@ -1,0 +1,112 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 276,
+  "outputSizeBytes": 5722,
+  "outputSha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "scr_screens_sgreeting",
+        "publishedName": "greeting",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "scr_screens_sinput",
+        "publishedName": "input",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 1
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_sgreeting",
+        "artboardId": "scr_screens_sgreeting",
+        "artboardName": "greeting",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "scr_screens_sinput",
+        "artboardId": "scr_screens_sinput",
+        "artboardName": "input",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 1,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": [
+      {
+        "artboardId": "scr_screens_sinput",
+        "viewNodeId": "scr_screens_sinput::v2",
+        "renderedNodeId": "scr_screens_sinput::v2",
+        "textObjectKey": "artboard/scr_screens_sinput/scr_screens_sinput::v2/text",
+        "textInputName": "scr_screens_sinput::v2 editable value",
+        "sourceNodeId": "scr_screens_sinput::v2",
+        "value": "",
+        "editable": true,
+        "bindingDirection": "twoWay",
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 120,
+          "height": 22,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "System",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 16,
+          "lineHeight": -1,
+          "letterSpacing": 0,
+          "color": 4279310375,
+          "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "textAlign": "left"
+        }
+      }
+    ]
+  },
+  "valuePolicy": {
+    "state": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "400",
+      "style": "normal"
+    }
+  ]
+}

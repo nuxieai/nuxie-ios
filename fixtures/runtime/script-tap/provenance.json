@@ -1,57 +1,95 @@
 {
-  "sourceCommit": "4afef8c1ed8e218f2fd8850896fbbd34b604b17f",
-  "compilerBaseCommit": "70cf77be5bc5cb43c6af667bebff5a7552874819",
-  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "worktree": "/Users/levi/dev/nuxie-codex/codex-f6-script-tap-fixture",
-  "target": "/Users/levi/dev/nuxie-codex/codex-f6-script-tap-fixture/target-f6",
-  "publisherWasm": {
-    "sha256": "6950fae7a0015a7211d1e60be888403d4341b164e9c5d829efb9af0344964ef3",
-    "sizeBytes": 17608811
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "apps/nuxie-publish/tests/fixtures/c10/script-tap/source",
+  "wrapper": "tools/sdk-fixtures/page-release/script-tap/wrapper.json",
+  "migratedForCompiler2b": [],
+  "sources": {
+    "apps/nuxie-publish/tests/fixtures/c10/script-tap/source/experience.json": {
+      "sha256": "57d65673f6dfee40dd0ea32dbdfa7c37848cde654ebb24ef47613a67f7715794",
+      "sizeBytes": 402
+    },
+    "apps/nuxie-publish/tests/fixtures/c10/script-tap/source/screens/tap/frame.json": {
+      "sha256": "a44a59c6e24b84f861de7224c036b815596b11a716c02ec7936a7d352b207fa0",
+      "sizeBytes": 191
+    },
+    "apps/nuxie-publish/tests/fixtures/c10/script-tap/source/screens/tap/index.html": {
+      "sha256": "18c28cd74d1b22701a62c31b65162dea7afb14a942afcfc299155f52a8511fce",
+      "sizeBytes": 476
+    },
+    "apps/nuxie-publish/tests/fixtures/c10/script-tap/source/scripts/increment.luau": {
+      "sha256": "2d12554093c9e4c06436e85cfde24e09c48598b510951ef4fa8803bdf2a9820b",
+      "sizeBytes": 242
+    },
+    "tools/sdk-fixtures/page-release/script-tap/wrapper.json": {
+      "sha256": "2d8cd87d9b6fe9a7984fadab7652ed7e14ceb29d5ff478c9241af32124ae9bdf",
+      "sizeBytes": 6824
+    },
+    "tools/sdk-fixtures/page-release/script-tap/expectations.json": {
+      "sha256": "906e08f7dc155014ae86c665a393ced9a68ddf6b10caf9c38f5c11349d68e5fe",
+      "sizeBytes": 685
+    }
   },
-  "authorityWasm": {
-    "sha256": "d2a65238dda342d417aabfa4de5f5cc1ac0aafa13280719ee6fa79d6d94062d5",
-    "sizeBytes": 25111114
-  },
-  "scriptCompilerWasm": {
-    "sha256": "1ef55d14306a7a0be53a9c2558a6966e26b24c551035fedc5c8a1cb7cfc02646",
-    "sizeBytes": 1878974
-  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "apps/nuxie-publish/tests/fixtures/c10/script-tap/source",
+    "tools/sdk-fixtures/page-release/script-tap/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_folder",
+    "--",
+    "apps/nuxie-publish/tests/fixtures/c10/script-tap/source",
+    "<producer-output>",
+    "--page-fixture"
+  ],
   "fonts": [
     {
-      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
-      "authoredAssetId": 0,
-      "family": "System",
       "kind": "font",
-      "location": "system",
-      "required": true,
+      "family": "System",
+      "weight": "400",
       "style": "normal",
-      "weight": "400"
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
+      "required": true
     }
   ],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
   "files": {
-    "NOTES.md": {
-      "sha256": "c6cf79b119fe358b954211ed63ce58b4312ae53afd35939dd58552c74ad987fd",
-      "sizeBytes": 1901
+    "screen.riv": {
+      "sha256": "aa6597c7d8945db601da23c2387f502126b5ea987c767bceaa1a1bebef1beaa5",
+      "sizeBytes": 4679
+    },
+    "renders/sha256/aa6597c7d8945db601da23c2387f502126b5ea987c767bceaa1a1bebef1beaa5.nux": {
+      "sha256": "aa6597c7d8945db601da23c2387f502126b5ea987c767bceaa1a1bebef1beaa5",
+      "sizeBytes": 4679
+    },
+    "report.json": {
+      "sha256": "c87f04dfc6ab3ca90582a5466f817c45a3ed2d212251b2aaab5a828be72fc921",
+      "sizeBytes": 1291
+    },
+    "page-structure.json": {
+      "sha256": "91900074c34f0e33bbc70611d5b66128b77b3c2bd530c7d2830885fd339ecf31",
+      "sizeBytes": 390
     },
     "expectations.json": {
       "sha256": "906e08f7dc155014ae86c665a393ced9a68ddf6b10caf9c38f5c11349d68e5fe",
       "sizeBytes": 685
-    },
-    "profile-entry.json": {
-      "sha256": "4610bf965f869938ae39189c48b11a512b216ea5e6882a96f4533a11c97ada54",
-      "sizeBytes": 6581
-    },
-    "release.json": {
-      "sha256": "5213f99bd9f2f44afa855489098454a3b270cc1779281b6d9c441a5ed3b7c864",
-      "sizeBytes": 4286
-    },
-    "renders/sha256/300bf3d156dacf42096106aab4336827bed799ad9d5237358e46d19b6308214b.nux": {
-      "sha256": "300bf3d156dacf42096106aab4336827bed799ad9d5237358e46d19b6308214b",
-      "sizeBytes": 3605
-    },
-    "screen.riv": {
-      "sha256": "300bf3d156dacf42096106aab4336827bed799ad9d5237358e46d19b6308214b",
-      "sizeBytes": 3605
     },
     "source/experience.json": {
       "sha256": "57d65673f6dfee40dd0ea32dbdfa7c37848cde654ebb24ef47613a67f7715794",
@@ -68,6 +106,22 @@
     "source/scripts/increment.luau": {
       "sha256": "2d12554093c9e4c06436e85cfde24e09c48598b510951ef4fa8803bdf2a9820b",
       "sizeBytes": 242
+    },
+    "descriptor.json": {
+      "sha256": "e8ff99374f5b4f0acb2753729cf759daec92c96f82c787258aa7e40d47e1259f",
+      "sizeBytes": 4331
+    },
+    "release-entry.json": {
+      "sha256": "890335f2291e2ac858f056acb4086f4d9eac2263f51a0a0f9299289d93efe808",
+      "sizeBytes": 6641
+    },
+    "release.json": {
+      "sha256": "e8ff99374f5b4f0acb2753729cf759daec92c96f82c787258aa7e40d47e1259f",
+      "sizeBytes": 4331
+    },
+    "profile-entry.json": {
+      "sha256": "890335f2291e2ac858f056acb4086f4d9eac2263f51a0a0f9299289d93efe808",
+      "sizeBytes": 6641
     }
   }
 }

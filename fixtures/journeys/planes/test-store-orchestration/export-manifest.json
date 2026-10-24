@@ -1,0 +1,26 @@
+{
+  "screen.riv": {
+    "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+    "sizeBytes": 5722
+  },
+  "renders/sha256/dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01.nux": {
+    "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+    "sizeBytes": 5722
+  },
+  "report.json": {
+    "sha256": "639b1bb98201ea96d118d24671a3355572f294f6a4bb75d188c7d3afabb65511",
+    "sizeBytes": 2794
+  },
+  "page-structure.json": {
+    "sha256": "5c40107b6e4247b741e1ac2626e2458ff86ca5e62f115686fc78686075438510",
+    "sizeBytes": 574
+  },
+  "test-store-orchestration.json": {
+    "sha256": "ccf204d79a89948bf23e62a10e164dfc00b3ac6966302ef10b43d4fa4654514c",
+    "sizeBytes": 16273
+  },
+  "provenance.json": {
+    "sha256": "041c619a902ac0bc045908d0af02fa03772255049fa33686ec3350a002991a33",
+    "sizeBytes": 2070
+  }
+}
