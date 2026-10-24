@@ -100,8 +100,8 @@ class PipelineTests(unittest.TestCase):
         steps = json.loads(self.render('2', NUXIE_SDK_PREPARE_PRODUCTS='1').stdout)['steps']
         commands = steps[0]['command'].splitlines()
         self.assertEqual(commands[-4:-2], [
-            'python3 -B scripts/bazel/sdk.py prepare --configuration Debug --platform ios-device --platform ios-simulator --output output/native-products/ios/Debug',
-            'python3 -B scripts/bazel/sdk.py prepare --configuration Release --platform ios-device --platform ios-simulator --output output/native-products/ios/Release',
+            'NUXIE_RUNTIME_USE_LOCAL=0 python3 -B scripts/bazel/sdk.py prepare --configuration Debug --platform ios-device --platform ios-simulator --output output/native-products/ios/Debug',
+            'NUXIE_RUNTIME_USE_LOCAL=0 python3 -B scripts/bazel/sdk.py prepare --configuration Release --platform ios-device --platform ios-simulator --output output/native-products/ios/Release',
         ])
         self.assertIn('output/pipeline/**/*', steps[0]['artifact_paths'])
         self.assertNotEqual(self.render('1', NUXIE_SDK_PREPARE_PRODUCTS='1').returncode, 0)

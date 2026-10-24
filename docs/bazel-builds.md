@@ -112,7 +112,7 @@ Xcode runner; the regular video simulator suite uses Bazel.
 ## Consumer artifacts
 
 ```sh
-scripts/bazel/sdk.sh prepare \
+NUXIE_RUNTIME_USE_LOCAL=0 scripts/bazel/sdk.sh prepare \
   --output /absolute/output/sdk \
   --configuration Release \
   --platform ios-device \
@@ -133,8 +133,9 @@ licenses, file SHA-256/size inventory, and framework symlinks. Products select
 the exact configured Swift modules linked into their owning framework.
 Preparation replaces only an output directory owned by a previous SDK manifest;
 it rejects unrelated files. Distribution preparation uses the pinned released
-runtime. Local builds/tests retain the explicit `NUXIE_RUNTIME_USE_LOCAL=1`
-staged-runtime opt-in.
+runtime and requires `NUXIE_RUNTIME_USE_LOCAL=0`. Local builds/tests use
+`.artifacts/NuxieRuntime.xcframework` when the switch is unset or 1. If absent,
+stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`.
 Preparation also checks each architecture's actual Mach-O build platform before
 staging it, so an iOS simulator binary cannot be published as a device product.
 

@@ -5,11 +5,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/nuxie-provider-adapters.XXXXXX")"
 cp "$repo_root/Package.resolved" "$fixture_root/Package.resolved"
 run_with_runtime_selection() {
-  if [[ -e "$repo_root/.artifacts/NuxieRuntime.xcframework" ]]; then
-    NUXIE_RUNTIME_USE_LOCAL=1 "$@"
-  else
-    env -u NUXIE_RUNTIME_USE_LOCAL "$@"
-  fi
+  "$@"
 }
 cleanup() {
   cp "$fixture_root/Package.resolved" "$repo_root/Package.resolved"

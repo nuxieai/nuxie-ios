@@ -431,8 +431,8 @@ def source_identity(excluded: list[Path]) -> tuple[str, bool, str]:
 
 
 def preparation_output(args: argparse.Namespace) -> Path:
-    if os.environ.get("NUXIE_RUNTIME_USE_LOCAL", ""):
-        raise ValueError("Distribution preparation requires the pinned release; use build/test for a local runtime")
+    if os.environ.get("NUXIE_RUNTIME_USE_LOCAL", "1") != "0":
+        raise ValueError("Distribution preparation requires NUXIE_RUNTIME_USE_LOCAL=0 for the pinned release; use build/test for a local runtime")
     output = Path(args.output).expanduser().resolve()
     if ROOT.resolve().is_relative_to(output):
         raise ValueError("Choose a dedicated artifact output directory")
@@ -588,6 +588,11 @@ def main() -> None:
                               "architectures": {name: args.architecture or list(PLATFORMS[name]) for name in args.platform or PLATFORMS},
                               "runtime": json.loads((ROOT / "Runtime/artifact.json").read_text())}, indent=2))
         else:
+            selection = os.environ.get("NUXIE_RUNTIME_USE_LOCAL", "1")
+            if selection not in ("0", "1"):
+                raise ValueError("NUXIE_RUNTIME_USE_LOCAL must be unset, 1 or 0")
+            if selection == "1" and not (ROOT / ".artifacts/NuxieRuntime.xcframework").is_dir():
+                raise ValueError("stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`")
             if args.command == "test" and args.scheme:
                 args.suite = SCHEMES[args.scheme]
             if args.command == "test" and args.suite == "all":

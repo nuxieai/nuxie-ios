@@ -230,15 +230,18 @@ class ConsumerArtifactContractTests(unittest.TestCase):
 
     def test_distribution_rejects_local_runtime_before_any_bazel_action(self):
         args = argparse.Namespace(output="/tmp/unused-sdk-output", platform=["ios-device"], configuration="Release")
-        with patch.dict("os.environ", {"NUXIE_RUNTIME_USE_LOCAL": "1"}), patch.object(sdk, "run") as run:
-            with self.assertRaises(ValueError):
-                sdk.prepare(args)
-            run.assert_not_called()
+        for selection in (None, "1"):
+            with patch.dict("os.environ", {}, clear=True), patch.object(sdk, "run") as run:
+                if selection is not None:
+                    os.environ["NUXIE_RUNTIME_USE_LOCAL"] = selection
+                with self.assertRaises(ValueError):
+                    sdk.prepare(args)
+                run.assert_not_called()
 
     def test_distribution_rejects_dirty_source_before_any_bazel_action(self):
         with tempfile.TemporaryDirectory() as directory:
             args = argparse.Namespace(output=directory, platform=["ios-device"], configuration="Release")
-            with patch.dict("os.environ", {"NUXIE_RUNTIME_USE_LOCAL": ""}), \
+            with patch.dict("os.environ", {"NUXIE_RUNTIME_USE_LOCAL": "0"}), \
                     patch.object(sdk, "source_identity", return_value=("a" * 40, True, "b" * 64)), \
                     patch.object(sdk, "run") as run:
                 with self.assertRaisesRegex(ValueError, "requires committed source"):
@@ -248,7 +251,7 @@ class ConsumerArtifactContractTests(unittest.TestCase):
     def test_distribution_rejects_unsupported_architecture_before_any_bazel_action(self):
         with tempfile.TemporaryDirectory() as directory:
             args = argparse.Namespace(output=directory, platform=["ios-device"], configuration="Release", architecture=["x86_64"])
-            with patch.dict("os.environ", {"NUXIE_RUNTIME_USE_LOCAL": ""}), \
+            with patch.dict("os.environ", {"NUXIE_RUNTIME_USE_LOCAL": "0"}), \
                     patch.object(sdk, "source_identity", return_value=("a" * 40, False, "b" * 64)), \
                     patch.object(sdk, "run") as run:
                 with self.assertRaisesRegex(ValueError, "supported by each requested SDK platform"):
@@ -372,7 +375,7 @@ class NativeCommandSelectionTests(unittest.TestCase):
     def test_pool_preparation_keeps_the_local_output_ownership_guard(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            with patch.object(sdk, 'ROOT', root):
+            with patch.object(sdk, 'ROOT', root), patch.dict(os.environ, {'NUXIE_RUNTIME_USE_LOCAL': '0'}):
                 args = argparse.Namespace(output=str(root))
                 with self.assertRaisesRegex(ValueError, 'dedicated artifact output'):
                     sdk.preparation_output(args)

@@ -11,17 +11,17 @@ let releasedRuntimeChecksum = "56adb13e3e66ff3ab5a1fa60a2a874ee59033c3d02e80997c
 
 func makeNuxieRuntimeBinaryTarget() -> Target {
     let localRuntimeSelection = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_LOCAL"]
-    if localRuntimeSelection == "1" {
+    if localRuntimeSelection == nil || localRuntimeSelection == "1" {
         guard FileManager.default.fileExists(atPath: localRuntimeURL.path) else {
-            fatalError("NUXIE_RUNTIME_USE_LOCAL=1 requires \(localRuntimePath)")
+            fatalError("stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`")
         }
         return .binaryTarget(
             name: "NuxieRuntimeBinary",
             path: localRuntimePath
         )
     }
-    guard localRuntimeSelection == nil else {
-        fatalError("NUXIE_RUNTIME_USE_LOCAL must be unset or 1")
+    guard localRuntimeSelection == "0" else {
+        fatalError("NUXIE_RUNTIME_USE_LOCAL must be unset, 1 or 0")
     }
 
     return .binaryTarget(
