@@ -3,6 +3,14 @@ import XCTest
 
 @MainActor
 final class ExperiencePageStepTests: XCTestCase {
+    func testCoveredCutKeepsBothRowsHiddenWithoutAVisit() async throws {
+        let probe = PageStepProbe()
+        try await probe.perform(style: .none, reduced: true, coveredCut: true, isBack: true)
+        XCTAssertEqual(probe.batches, [[.phases([("A", .hidden), ("B", .hidden)], ""),
+            .take, .position(isBack: true), .reconcile, .expand, .begin(nil), .end(nil), .retire]])
+        XCTAssertFalse(probe.order.contains("present"))
+    }
+
     func testTogetherStepReconcilesAndExpandsBeforePhasesAndBegin() async throws {
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade] {
             let probe = PageStepProbe()
@@ -316,9 +324,9 @@ private final class PageStepProbe {
             hidden: { self.order.append("hidden") }, active: { self.order.append("active") })
     }
     func perform(style: ExperienceScreenTransitionSpec.Kind, plan: ExperienceScreenCustomTransitionPlan? = PageStepProbe.plan,
-                 reduced: Bool = false, declaredExit: Bool = true, target: String = "B", isBack: Bool = false) async throws {
+                 reduced: Bool = false, coveredCut: Bool = false, declaredExit: Bool = true, target: String = "B", isBack: Bool = false) async throws {
         try await ExperiencePageStep.perform(source: "A", target: target, style: style, isBack: isBack, plan: plan,
             exit: .init(declaration: declaredExit ? .init(completeEventName: "declared-exit", durationMs: 100) : nil, reduceMotion: reduced),
-            reduceMotion: reduced, operations: operations)
+            reduceMotion: reduced, coveredCut: coveredCut, operations: operations)
     }
 }

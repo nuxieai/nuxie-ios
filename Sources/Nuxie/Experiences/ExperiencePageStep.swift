@@ -37,7 +37,7 @@ enum ExperiencePageStep {
 
     static func perform(source: String, target: String, style: ExperienceScreenTransitionSpec.Kind,
                         isBack: Bool, plan: ExperienceScreenCustomTransitionPlan?,
-                        exit: ExperienceScreenExitPlan, reduceMotion: Bool,
+                        exit: ExperienceScreenExitPlan, reduceMotion: Bool, coveredCut: Bool = false,
                         operations: Operations) async throws {
         guard source != target else { return }
         operations.setInputEnabled(false)
@@ -67,7 +67,10 @@ enum ExperiencePageStep {
         }
 
         let incoming: [Change] = [.take, .position(isBack: isBack), .reconcile, .expand]
-        if reduceMotion {
+        if coveredCut {
+            try await operations.batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
+                .begin(nil), .end(nil), .retire])
+        } else if reduceMotion {
             try await operations.batch(incoming + [leaving, entering, .begin(name), .end(name), .retire, hidden, active])
         } else if style != .none, let plan {
             let outgoing = try await operations.register(source, plan.outgoingCompletionEventName)

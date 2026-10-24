@@ -229,9 +229,14 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             XCTAssertEqual(pushed.pageHistory.screenIDs, ["screen_1"])
             let metrics = await preparation.metrics()
             XCTAssertEqual(metrics.openedSessionCount, 2)
+            let priorLifecycle = await lowerPlayer.lifecycle(screenID: "screen_1")
+            let before = try XCTUnwrap(priorLifecycle).appearances
             var cutWhileCovered = false
             lower.onPageStep = { _ in
-                if lower.screenId == "screen_1", navigation.viewControllers.count == 2 { cutWhileCovered = true }
+                if lower.screenId == "screen_1", lower.lifecyclePhase == .hidden, navigation.viewControllers.count == 2 {
+                    cutWhileCovered = true
+                    XCTAssertEqual(lower.lifecycleAppearances, before)
+                }
             }
             let result = await withCheckedContinuation { continuation in
                 XCTAssertTrue(coordinator.back(to: "screen_1", steps: 2) { result, _ in continuation.resume(returning: result) })
@@ -241,6 +246,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             XCTAssertTrue(navigation.topViewController === lower)
             XCTAssertEqual(lower.screenId, "screen_1")
             XCTAssertEqual(lower.pageHistory.screenIDs, ["screen_1"])
+            XCTAssertEqual(lower.lifecycleAppearances, before + 1)
         }
     }
 
@@ -269,6 +275,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
 
     func testHostPopAnnouncesTheRevealedPageOnce() async throws {
         try await withLifecycleCoordinator { coordinator, base, probe, _ in
+            let before = base.lifecycleAppearances
             try await navigate(coordinator, to: "screen_2", transition: ["type": "push"])
             let navigation = try XCTUnwrap(base.navigationController)
             probe.resetActivationRecords()
@@ -284,6 +291,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             assertActivation(probe, screenID: "screen_1")
             try await assertTimelineAdvances(base)
             XCTAssertEqual(base.lifecyclePhase, .active)
+            XCTAssertEqual(base.lifecycleAppearances, before + 1)
         }
     }
 
