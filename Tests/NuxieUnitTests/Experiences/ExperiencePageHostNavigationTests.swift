@@ -273,6 +273,79 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testInteractiveSheetCancellationDoesNotVisitOrUncoverLowerPage() async throws {
+        try await assertInteractivePageDecision(modal: true, completes: false)
+    }
+
+    func testInteractiveSheetCompletionVisitsAndAnnouncesOnce() async throws {
+        try await assertInteractivePageDecision(modal: true, completes: true)
+    }
+
+    func testInteractivePopCancellationDoesNotVisitOrUncoverLowerPage() async throws {
+        try await assertInteractivePageDecision(modal: false, completes: false)
+    }
+
+    func testInteractivePopCompletionVisitsAndAnnouncesOnce() async throws {
+        try await assertInteractivePageDecision(modal: false, completes: true)
+    }
+
+    private func assertInteractivePageDecision(modal: Bool, completes: Bool) async throws {
+        try await withLifecycleCoordinator { coordinator, lower, probe, _ in
+            try await navigate(coordinator, to: "screen_2", transition: modal
+                ? ["type": "modal", "present": "sheet"] : ["type": "push"])
+            let navigation = modal ? coordinator.topPresentedLayer as? UINavigationController : lower.navigationController
+            let outgoing = try XCTUnwrap(navigation?.topViewController as? ExperienceScreenViewController)
+            let appearances = lower.lifecycleAppearances
+            let elapsed = lower.timelineElapsedSeconds
+            probe.resetActivationRecords()
+            // Drive the same owner used by UIKit's interaction-decision callbacks.
+            // Keeping real mounted pages makes hidden timeline/input checks observable.
+            let transition = coordinator.pageTransition(revealing: lower, covering: outgoing, interactive: true)
+            await transition.begin()
+            for _ in 0..<3 {
+                lower.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            XCTAssertEqual(lower.timelineElapsedSeconds, elapsed)
+            XCTAssertEqual(lower.lifecycleAppearances, appearances)
+            XCTAssertEqual(lower.lifecyclePhase, .hidden)
+            XCTAssertFalse(lower.view.isUserInteractionEnabled)
+            XCTAssertEqual(outgoing.lifecyclePhase, .active)
+            XCTAssertTrue(probe.shownScreenIDs.isEmpty)
+            XCTAssertFalse(probe.lifecycle.contains { $0.hasPrefix("active:") })
+            await transition.interactionEnded(cancelled: !completes)
+            if completes {
+                XCTAssertEqual(lower.lifecyclePhase, .entering)
+                XCTAssertEqual(lower.lifecycleAppearances, appearances + 1)
+                XCTAssertEqual(outgoing.lifecyclePhase, .active)
+                XCTAssertTrue(probe.shownScreenIDs.isEmpty)
+                let committed = await transition.commit()
+                XCTAssertTrue(committed)
+                let repeated = await transition.commit()
+                XCTAssertFalse(repeated)
+                XCTAssertEqual(lower.lifecyclePhase, .active)
+                XCTAssertEqual(outgoing.lifecyclePhase, .hidden)
+                XCTAssertEqual(lower.lifecycleAppearances, appearances + 1)
+                assertActivation(probe, screenID: "screen_1")
+            } else {
+                // Stale acceptance/completion must not revive a cancelled transition.
+                await transition.interactionEnded(cancelled: false)
+                let committed = await transition.commit()
+                XCTAssertFalse(committed)
+                lower.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 20_000_000)
+                XCTAssertEqual(lower.timelineElapsedSeconds, elapsed)
+                XCTAssertEqual(lower.lifecycleAppearances, appearances)
+                XCTAssertEqual(lower.lifecyclePhase, .hidden)
+                XCTAssertFalse(lower.view.isUserInteractionEnabled)
+                XCTAssertEqual(outgoing.lifecyclePhase, .active)
+                XCTAssertTrue(outgoing.view.isUserInteractionEnabled)
+                XCTAssertTrue(probe.shownScreenIDs.isEmpty)
+                XCTAssertFalse(probe.lifecycle.contains { $0.hasPrefix("active:") })
+            }
+        }
+    }
+
     func testHostPopAnnouncesTheRevealedPageOnce() async throws {
         try await withLifecycleCoordinator { coordinator, base, probe, _ in
             let before = base.lifecycleAppearances

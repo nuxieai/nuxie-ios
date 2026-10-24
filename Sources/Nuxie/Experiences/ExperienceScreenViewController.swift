@@ -420,11 +420,18 @@ final class ExperienceScreenViewController: UIViewController {
 
     // Native-page visibility is owned here; UIKit appearance alone cannot resume
     // a retained page or distinguish it from a page beneath a sheet.
-    func coverPage(reduceMotion: Bool) async {
+    var pageLifecycleSnapshot: ExperienceScreenLifecycleSnapshot { lifecycleState.snapshot }
+
+    func coverPage(reduceMotion: Bool, restoring snapshot: ExperienceScreenLifecycleSnapshot? = nil) async {
         presentationLoop?.setInputEnabled(false)
         clearHardwareKeys()
         setCoveredByLayer(true)
-        await hide(reduceMotion: reduceMotion)
+        if let snapshot {
+            presentationLoop?.setTimelineActive(false)
+            lifecycleState = .init(snapshot: snapshot)
+            await applyLifecycleSnapshot(snapshot)
+            try? await presentationLoop?.advanceZeroDelta()
+        } else { await hide(reduceMotion: reduceMotion) }
     }
 
     func revealPage(reduceMotion: Bool, starting: Bool = false) async {
