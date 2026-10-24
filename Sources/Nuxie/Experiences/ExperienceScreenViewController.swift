@@ -175,6 +175,7 @@ final class ExperienceScreenViewController: UIViewController {
     private var runtimeFailure: Error?
     private var isShuttingDown = false
     private var shutdownTask: Task<Void, Never>?
+    private(set) var shutdownInvocationCount = 0
     private var contentHidden = false
     private var semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
     private var controllerIsVisible = false
@@ -857,6 +858,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func shutdownInteractiveScreen() async {
+        shutdownInvocationCount += 1
         if let shutdownTask {
             await shutdownTask.value
             return

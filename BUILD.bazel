@@ -221,7 +221,10 @@ sdk_test_library(
         "SignedSemanticJourneyTests", "ExperienceSharedValuesTests", "ExperienceSharedValuesPresentationTests",
         "ExperienceLayerNavigationTests", "ExperiencePageHostNavigationTests", "ExperienceFitContentPresentationTests",
         "ExperienceScreenExitReasonControllerTests", "ExperiencePreparationTestSupport",
-    ]],
+    ]] + [
+        "Tests/NuxieUnitTests/Journey/JourneyServiceTestSupport.swift",
+        "Tests/NuxieUnitTests/Journey/JourneyPlaneProfileTestFixture.swift",
+    ],
     defines = ["NUXIE_HOSTED_INPUT_TESTS"],
     deps = _TEST_DEPS,
 )

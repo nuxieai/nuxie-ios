@@ -512,6 +512,8 @@ targets:
           - Experiences/ExperiencePreparationTestSupport.swift
           - Experiences/ExperienceLayerNavigationTests.swift
           - Experiences/ExperiencePageHostNavigationTests.swift
+          - Journey/JourneyServiceTestSupport.swift
+          - Journey/JourneyPlaneProfileTestFixture.swift
           - Experiences/ExperienceTextInputSemanticsTests.swift
           - Experiences/ExperienceHardwareInputTests.swift
           - Experiences/ExperienceFitContentPresentationTests.swift
