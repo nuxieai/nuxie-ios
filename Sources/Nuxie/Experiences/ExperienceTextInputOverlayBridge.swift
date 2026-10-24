@@ -211,6 +211,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         private var measuredLine: (metrics: ExperienceTextInputMetrics, height: CGFloat, baseline: CGFloat)?
         private var capturedBaseline: (metrics: ExperienceTextInputMetrics, offset: CGFloat)?
 
+        func invalidateStyleMeasurements() {
+            measuredLine = nil
+            capturedBaseline = nil
+        }
+
         func align(firstBaseline: CGFloat?, origin: CGPoint, metrics: ExperienceTextInputMetrics) {
             contentVerticalAlignment = .top
             if measuredLine?.metrics != metrics {
@@ -356,7 +361,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private final class Binding {
         var target: InputTarget
         var input: NativeExperienceTextInput
-        let control: Control
+        var control: Control
+        var restoresFirstResponder = false
         var nativeGeometry: NuxieNativeTextInputGeometry?
         var readCaptureID: UUID?
         var readRenderRevision: UInt64?
@@ -564,6 +570,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             refreshSource(binding, captureID: capture.id, renderRevision: capture.tree.renderRevision)
         }
         layout()
+        for binding in bindingsByTarget.values { restoreFirstResponderIfNeeded(binding) }
         return controls
     }
 
@@ -584,8 +591,18 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                     let declarationChanged = binding.input != input
                     binding.input = input
                     if declarationChanged {
+                        lastAppliedPlacements.removeValue(forKey: target)
+                        lastAppliedMetrics.removeValue(forKey: target)
+                        baselineCorrections.removeValue(forKey: target)
+                        let usesTextView: Bool
+                        if case .textView = binding.control { usesTextView = true }
+                        else { usesTextView = false }
+                        if usesTextView != Self.usesTextView(for: input) {
+                            replaceControl(for: binding, on: surfaceView)
+                        }
                         switch binding.control {
                         case .field(let field):
+                            field.invalidateStyleMeasurements()
                             field.keyboardType = Self.keyboardType(input.keyboardType)
                             field.placeholder = input.placeholder
                             if field.isSecureTextEntry != (input.secureTextEntry == true) {
@@ -602,17 +619,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 } else {
                     let control = makeControl(for: input)
                     control.text = ""
-                    control.view.accessibilityIdentifier = "nuxie-text-input-\(input.inputId)-\(occurrence.nodeID)"
-                    control.view.isAccessibilityElement = true
                     binding = Binding(target: target, input: input, control: control)
                     bindingsByTarget[target] = binding
-                    if case .field(let field) = control {
-                        field.onViewportChange = { [weak self, weak binding] in
-                            guard let self, let binding else { return }
-                            self.drainContentOffset(binding)
-                        }
-                    }
-                    surfaceView.addSubview(control.view)
+                    installControl(for: binding, on: surfaceView)
                 }
                 binding.nativeGeometry = occurrence.geometry
                 if let snapshot = metricsSnapshot {
@@ -628,6 +637,47 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             } else { retireNativeInput(target) }
         }
         invalidMetricIDs = Set(bindingsByTarget.keys).subtracting(metricsByTarget.keys)
+    }
+
+    private func installControl(for binding: Binding, on surfaceView: UIView) {
+        let control = binding.control
+        if let nodeID = binding.target.nodeID {
+            control.view.accessibilityIdentifier = "nuxie-text-input-\(binding.target.inputID)-\(nodeID)"
+        }
+        control.view.isAccessibilityElement = true
+        if case .field(let field) = control {
+            field.onViewportChange = { [weak self, weak binding] in
+                guard let self, let binding else { return }
+                self.drainContentOffset(binding)
+            }
+        }
+        surfaceView.addSubview(control.view)
+    }
+
+    private func replaceControl(for binding: Binding, on surfaceView: UIView) {
+        let previous = binding.control
+        binding.restoresFirstResponder = binding.restoresFirstResponder || previous.view.isFirstResponder
+        // Detach callbacks before UIKit ends editing. A declaration change is
+        // not an authored blur or a new text edit.
+        switch previous {
+        case .field(let field):
+            field.delegate = nil
+            field.onViewportChange = nil
+            field.removeTarget(self, action: #selector(textFieldEditingChanged(_:)), for: .editingChanged)
+        case .textView(let view): view.delegate = nil
+        }
+        if activeEditingControl === previous.view { activeEditingControl = nil }
+        previous.view.resignFirstResponder()
+        previous.view.removeFromSuperview()
+        binding.control = makeControl(for: binding.input)
+        restoreAcceptedText(binding)
+        installControl(for: binding, on: surfaceView)
+    }
+
+    private func restoreFirstResponderIfNeeded(_ binding: Binding) {
+        guard binding.restoresFirstResponder, binding.sourceReadID == nil,
+              allowsEditing(binding), !binding.control.view.isHidden else { return }
+        if binding.control.view.becomeFirstResponder() { binding.restoresFirstResponder = false }
     }
 
     private func retireNativeInput(_ target: InputTarget) {
@@ -703,6 +753,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             }
             self.semanticDrafts[binding.target]?.present(captureID: captureID)
             self.layout()
+            self.restoreFirstResponderIfNeeded(binding)
             self.drainNativeFocus(binding)
             self.drainSemanticWrite(binding.target)
             self.drainContentOffset(binding)
@@ -902,8 +953,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         if editor.textContainerInset != insets { editor.textContainerInset = insets }
     }
 
+    private static func usesTextView(for input: NativeExperienceTextInput) -> Bool {
+        input.multiline == true && input.secureTextEntry != true
+    }
+
     private func makeControl(for input: NativeExperienceTextInput) -> Control {
-        if input.multiline == true && input.secureTextEntry != true {
+        if Self.usesTextView(for: input) {
             let value = TextView(frame: .zero, textContainer: nil)
             value.delegate = self
             value.backgroundColor = .clear

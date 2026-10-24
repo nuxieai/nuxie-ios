@@ -1058,6 +1058,140 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         }
     }
 
+    func testPageDeclarationChangeRestylesRetainedControlAtTheSamePlacement() throws {
+        for multiline in [false, true] {
+            let bridge = ExperienceTextInputOverlayBridge()
+            let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+            defer { bridge.clear() }
+            let style = NativeExperienceTextInput.Style(fontFamily: "System", fontWeight: "700",
+                fontStyle: "normal", fontSize: 16, lineHeight: 20, letterSpacing: 2,
+                color: 0xFFAA3300, fontAssetUniqueName: "", textAlign: "right")
+            let expectedColor = UIColor(red: 170.0 / 255.0, green: 51.0 / 255.0, blue: 0, alpha: 1)
+            let first = makePlan(secure: false, multiline: multiline, screenID: "A")
+            let second = makePlan(secure: false, multiline: multiline, screenID: "B",
+                style: style, placeholder: "New hint")
+            let plan = NativeExperienceRenderPlan(identity: first.identity, scene: first.scene,
+                entry: .init(screenId: "A"), pageHost: .init(artboardName: "$nuxie.page", listPath: "screens"),
+                screens: [], transitions: [], textInputs: first.textInputs + second.textInputs, images: [], fonts: [])
+            func bind(_ id: String, preserving: Bool) {
+                bridge.bind(screenID: id, preservingNativeFields: preserving, renderPlan: plan,
+                    surfaceView: surface, artboardBounds: surface.bounds,
+                    semanticTextWriter: { _, _, _, _ in XCTFail("Restyling must not write text") },
+                    semanticTextReader: { _, _, done in done(.success(.init(text: "kept", ownerInstanceID: 1))) })
+            }
+            bind("A", preserving: false)
+            presentField(on: bridge)
+            let control = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false,
+                multiline: multiline))[1])
+            let bounds = control.bounds, center = control.center, transform = control.transform
+            XCTAssertEqual((control as? UITextField)?.font ?? (control as? UITextView)?.font,
+                UIFont.systemFont(ofSize: 16, weight: .regular))
+            bridge.setStepInProgress(true)
+            bind("B", preserving: true)
+            bridge.setStepInProgress(false)
+            // No new metrics frame, size or geometry: only the declaration changes.
+            let updated = bridge.applySemantics(try nativeCapture(ids: [1], secure: false,
+                revision: 2, multiline: multiline))
+            XCTAssertTrue(updated[1] === control)
+            XCTAssertEqual(control.bounds, bounds)
+            XCTAssertEqual(control.center, center)
+            XCTAssertEqual(control.transform, transform)
+            XCTAssertEqual(control.tintColor, expectedColor)
+            let font = UIFont.systemFont(ofSize: 16, weight: .bold)
+            let placeholder: NSAttributedString?
+            if let field = control as? UITextField {
+                XCTAssertEqual(field.font, font)
+                XCTAssertEqual(field.textAlignment, .right)
+                XCTAssertEqual(field.defaultTextAttributes[.kern] as? CGFloat, 2)
+                XCTAssertEqual(field.text, "kept")
+                placeholder = field.attributedPlaceholder
+            } else {
+                let editor = try XCTUnwrap(control as? UITextView)
+                XCTAssertEqual(editor.font, font)
+                XCTAssertEqual(editor.textAlignment, .right)
+                XCTAssertEqual(editor.typingAttributes[.kern] as? CGFloat, 2)
+                XCTAssertEqual(editor.text, "kept")
+                placeholder = editor.subviews.compactMap { $0 as? UILabel }
+                    .first { $0.text == "New hint" }?.attributedText
+            }
+            let hint = try XCTUnwrap(placeholder)
+            XCTAssertEqual(hint.string, "New hint")
+            XCTAssertEqual(hint.attribute(.font, at: 0, effectiveRange: nil) as? UIFont, font)
+            XCTAssertEqual(hint.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+                expectedColor)
+        }
+    }
+
+    func testPageDeclarationSwapsSingleAndMultilineControlsKeepingAcceptedTextAndFocus() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { bridge.clear(); window.isHidden = true }
+        let surface = host.view!
+        let first = makePlan(secure: false, multiline: false, screenID: "A")
+        let second = makePlan(secure: false, multiline: true, screenID: "B")
+        let plan = NativeExperienceRenderPlan(identity: first.identity, scene: first.scene,
+            entry: .init(screenId: "A"), pageHost: .init(artboardName: "$nuxie.page", listPath: "screens"),
+            screens: [], transitions: [], textInputs: first.textInputs + second.textInputs, images: [], fonts: [])
+        var source = "saved"
+        var writes: [String] = []
+        var ended = 0
+        bridge.onEditingEvent = { _, event in if event.kind == .editingEnded { ended += 1 } }
+        func bind(_ id: String, preserving: Bool) {
+            bridge.bind(screenID: id, preservingNativeFields: preserving, renderPlan: plan,
+                surfaceView: surface, artboardBounds: surface.bounds,
+                semanticTextWriter: { _, target, text, done in
+                    XCTAssertEqual(target.nodeID, 1)
+                    source = text; writes.append(text); done(.accepted)
+                }, semanticTextReader: { _, _, done in done(.success(.init(text: source, ownerInstanceID: 1))) })
+        }
+        bind("A", preserving: false)
+        presentField(on: bridge)
+        let original = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1] as? UITextField)
+        XCTAssertTrue(original.becomeFirstResponder())
+        original.text = "edited"
+        bridge.flushTextChange(for: original)
+        XCTAssertEqual(writes, ["edited"])
+
+        bridge.setStepInProgress(true)
+        bind("B", preserving: true)
+        bridge.setStepInProgress(false)
+        let multilineCapture = try nativeCapture(ids: [1], secure: false, revision: 2, multiline: true)
+        let editor = try XCTUnwrap(bridge.applySemantics(multilineCapture)[1] as? UITextView)
+        XCTAssertNil(original.superview)
+        XCTAssertFalse(original.isFirstResponder)
+        XCTAssertTrue(editor.superview === surface)
+        XCTAssertTrue(editor.isFirstResponder)
+        XCTAssertEqual(editor.text, "edited")
+        XCTAssertEqual(writes, ["edited"], "Swapping controls must not fabricate a text write")
+        XCTAssertEqual(ended, 0, "Replacing the editor is not an authored editing-ended event")
+        XCTAssertTrue(bridge.applySemantics(multilineCapture)[1] === editor)
+        editor.text = "edited again"
+        bridge.flushTextChange(for: editor)
+        XCTAssertEqual(source, "edited again", "The replacement keeps its editing delegate")
+
+        bridge.setStepInProgress(true)
+        bind("A", preserving: true)
+        bridge.setStepInProgress(false)
+        let singleCapture = try nativeCapture(ids: [1], secure: false, revision: 3)
+        let restored = try XCTUnwrap(bridge.applySemantics(singleCapture)[1] as? UITextField)
+        XCTAssertFalse(restored === original)
+        XCTAssertNil(editor.superview)
+        XCTAssertFalse(editor.isFirstResponder)
+        XCTAssertTrue(restored.superview === surface)
+        XCTAssertTrue(restored.isFirstResponder)
+        XCTAssertEqual(restored.text, "edited again")
+        XCTAssertEqual(writes, ["edited", "edited again"])
+        XCTAssertEqual(ended, 0)
+        XCTAssertTrue(bridge.applySemantics(singleCapture)[1] === restored)
+        restored.text = "final"
+        restored.sendActions(for: .editingChanged)
+        XCTAssertEqual(source, "final", "The replacement keeps its editing-changed target")
+        XCTAssertEqual(writes, ["edited", "edited again", "final"])
+    }
+
     func testPageStepKeepsFieldViewAndFocusWhileBlockingTyping() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
@@ -1284,7 +1418,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
     }
 
     private func nativeCapture(ids: [UInt32], secure: Bool = true, captureID: UUID = UUID(),
-                               revision: UInt64 = 1) throws -> NuxieNativeSemanticCapture {
+                               revision: UInt64 = 1, multiline: Bool = false) throws -> NuxieNativeSemanticCapture {
         let nodes = ids.enumerated().map { index, id in
             NuxieNativeSemanticNode(id: id, parentID: nil, siblingIndex: UInt32(index),
                 role: NuxieNativeSemanticRole.textField.rawValue,
@@ -1297,7 +1431,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             return NuxieNativeInputOccurrence(nodeID: node.id, geometry: .init(renderRevision: revision,
                 worldTransform: transform, textBounds: .zero,
                 layout: .init(transform: transform, bounds: CGRect(x: 0, y: 0, width: 100, height: 40)),
-                firstBaseline: nil, obscured: secure, multiline: false))
+                firstBaseline: nil, obscured: secure, multiline: multiline))
         }
         return .init(id: captureID, tree: try .init(renderRevision: revision, treeVersion: 1, nodes: nodes),
             fieldsByTextRun: [:], nativeInputs: ["editable": occurrences])
@@ -1602,12 +1736,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 firstBaseline: nil)])))
     }
 
-    private func makePlan(secure: Bool? = nil, textInputName: String = "editable", multiline: Bool? = nil, screenID: String = "screen", maxLength: Int? = nil) -> NativeExperienceRenderPlan {
+    private func makePlan(secure: Bool? = nil, textInputName: String = "editable", multiline: Bool? = nil,
+                          screenID: String = "screen", maxLength: Int? = nil,
+                          style: NativeExperienceTextInput.Style? = nil, placeholder: String = "Name") -> NativeExperienceRenderPlan {
         let input = NativeExperienceTextInput(inputId: "input", screenId: screenID, artboardId: "a",
-            viewNodeId: "v", renderedNodeId: "r", textInputName: textInputName, value: "saved", placeholder: "Name", editable: true,
+            viewNodeId: "v", renderedNodeId: "r", textInputName: textInputName, value: "saved", placeholder: placeholder, editable: true,
             geometry: .init(xPath: "x", yPath: "y", widthPath: "w", heightPath: "h", rotationPath: "r",
                 scaleXPath: "sx", scaleYPath: "sy"),
-            style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: 16,
+            style: style ?? .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: 16,
                 lineHeight: 20, letterSpacing: 0, color: 0xFF123456, fontAssetUniqueName: "", textAlign: nil),
             keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: maxLength, responseFieldKey: "name")
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
