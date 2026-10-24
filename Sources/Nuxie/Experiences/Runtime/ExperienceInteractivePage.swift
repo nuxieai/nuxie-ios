@@ -413,6 +413,7 @@ actor ExperienceInteractivePage {
             let mutations = try await row.binding.lifecycleMutations(snapshot, screen: row.screen)
             _ = try await runtime.mutateViewModel(mutations)
             await storeLifecycle(snapshot, screenID: screenID)
+            if snapshot.phase == .active { await videoPlayback?.setStepInProgress(false) }
         }
     }
 

@@ -485,12 +485,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         }
 
         let declared = renderPlan.textInputs.filter {
-            (renderPlan.pageHost != nil || $0.screenId == screenID) && $0.editable
+            $0.screenId == screenID && $0.editable
         }
         let counts = Dictionary(grouping: declared, by: \.inputId).mapValues(\.count)
         if semanticTextWriter != nil, semanticTextReader != nil {
-            nativeInputs = declared.filter { renderPlan.pageHost != nil || counts[$0.inputId] == 1 }
-                .sorted { ($0.screenId == screenID ? 1 : 0) < ($1.screenId == screenID ? 1 : 0) }
+            nativeInputs = declared.filter { counts[$0.inputId] == 1 }
         }
         installDismissTapRecognizer(on: surfaceView)
         layout()
@@ -581,7 +580,24 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 if let existing = bindingsByTarget[target] {
                     binding = existing
                     binding.target = target
+                    let declarationChanged = binding.input != input
                     binding.input = input
+                    if declarationChanged {
+                        switch binding.control {
+                        case .field(let field):
+                            field.keyboardType = Self.keyboardType(input.keyboardType)
+                            field.placeholder = input.placeholder
+                            if field.isSecureTextEntry != (input.secureTextEntry == true) {
+                                field.isSecureTextEntry = input.secureTextEntry == true
+                            }
+                            if field.isFirstResponder { field.reloadInputViews() }
+                        case .textView(let view):
+                            view.keyboardType = Self.keyboardType(input.keyboardType)
+                            view.placeholderLabel.text = input.placeholder
+                            view.isSecureTextEntry = input.secureTextEntry == true
+                            if view.isFirstResponder { view.reloadInputViews() }
+                        }
+                    }
                 } else {
                     let control = makeControl(for: input)
                     control.text = ""

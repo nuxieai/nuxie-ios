@@ -218,6 +218,7 @@ final class ExperienceScreenViewController: UIViewController {
         guard let interactiveScreen else { throw ExperienceInteractiveScreenControllerError.unavailable }
         return try await interactiveScreen.environmentSnapshot()
     }
+    var lifecycleAppearances: UInt64 { lifecycleState.appearances }
     var lifecyclePhase: ExperienceScreenLifecyclePhase { lifecycleState.phase }
     var lifecycleExitReason: ExperienceScreenExitReason { lifecycleState.exitReason }
 
@@ -426,7 +427,16 @@ final class ExperienceScreenViewController: UIViewController {
         await hide(reduceMotion: reduceMotion)
     }
 
-    func revealPage(reduceMotion: Bool) async {
+    func revealPage(reduceMotion: Bool, starting: Bool = false) async {
+        if starting {
+            if lifecycleState.phase == .hidden {
+                setCoveredByLayer(false)
+                presentationLoop?.setInputEnabled(false)
+                view.isUserInteractionEnabled = false
+                await enter(reduceMotion: reduceMotion)
+            }
+            return
+        }
         setCoveredByLayer(false)
         presentationLoop?.setInputEnabled(true)
         presentationLoop?.setTimelineActive(true)
@@ -589,7 +599,7 @@ final class ExperienceScreenViewController: UIViewController {
             })
         }
 
-        let includesTextInputSnapshot = artifact.renderPlan.textInputs.contains {
+        let includesTextInputSnapshot = isPageController || artifact.renderPlan.textInputs.contains {
             $0.screenId == screenId && $0.editable
         }
         let semanticConsumer: (@MainActor @Sendable (NuxieNativeSemanticCapture) -> Void)?
@@ -726,7 +736,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func navigatePage(to targetID: String, spec: ExperienceScreenTransitionSpec, isBack: Bool,
-                       reduceMotion: Bool, backSteps: Int? = nil, isEligible: @escaping () -> Bool,
+                       reduceMotion: Bool, backSteps: Int? = nil, coveredCut: Bool = false, isEligible: @escaping () -> Bool,
                        onHidden: @escaping () async -> Void, onActive: @escaping () async -> Void) async throws {
         guard let layer = interactivePage, let loop = presentationLoop,
               let target = artifact.renderPlan.screens.first(where: { $0.screenId == targetID }) else {
@@ -757,13 +767,13 @@ final class ExperienceScreenViewController: UIViewController {
         let operations = ExperiencePageStep.Operations(
             setInputEnabled: { [self] enabled in
                 pageStepInProgress = !enabled
-                loop.setInputEnabled(enabled)
+                loop.setInputEnabled(enabled && !coveredByLayer)
                 view.isUserInteractionEnabled = enabled && !coveredByLayer
                 textInputOverlayBridge.setStepInProgress(!enabled)
                 if !enabled {
                     clearHardwareKeys()
                     semanticContainer.clear()
-                } else { loop.setTimelineActive(true); updatePresentationVisibility() }
+                } else { loop.setTimelineActive(!coveredByLayer); updatePresentationVisibility() }
             }, prepare: { [self] in
                 guard isEligible(), rowBindings[targetID] != nil else { throw CancellationError() }
                 await layer.beginPresentationStep()
@@ -791,7 +801,7 @@ final class ExperienceScreenViewController: UIViewController {
                 lifecycleState = await layer.state(screenID: targetID) ?? .init(reduceMotion: reduceMotion)
                 pageHistory = nextHistory
                 semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
-                let write = semanticFocusLifecycle.beginWrite(phase: .active)
+                let write = semanticFocusLifecycle.beginWrite(phase: coveredCut ? .hidden : .active)
                 _ = semanticFocusLifecycle.completeWrite(write, succeeded: true)
                 semanticContainer.requestFocusOnNextPresentation()
                 if let interactiveScreen {
@@ -803,7 +813,7 @@ final class ExperienceScreenViewController: UIViewController {
         do {
             try await ExperiencePageStep.perform(source: sourceID, target: targetID, style: spec.kind,
                 isBack: isBack, plan: plan, exit: .init(declaration: screen.exit, reduceMotion: reduceMotion),
-                reduceMotion: reduceMotion, operations: operations)
+                reduceMotion: reduceMotion, coveredCut: coveredCut, operations: operations)
         } catch {
             for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
             // A cancelled drain may have mounted its destination without committing navigation.
@@ -1369,7 +1379,7 @@ final class ExperienceScreenViewController: UIViewController {
             nativeEditingOwnerID = source.ownerInstanceID
         }
         if let text {
-            let input = artifact.renderPlan.textInputs.first { $0.inputId == target.inputID }
+            let input = artifact.renderPlan.textInputs.first { $0.screenId == screenId && $0.inputId == target.inputID }
             let text = ExperienceTextInputLimit.apply(text, maximum: input?.maxLength)
             var inputs = ExperienceFocusInputQueue()
             inputs.append(.key(code: 65, modifiers: 8, pressed: true, repeated: false))
