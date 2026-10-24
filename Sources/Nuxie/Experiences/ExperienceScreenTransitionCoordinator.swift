@@ -301,9 +301,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         await controller.coverPage(reduceMotion: reduceMotionEnabled)
     }
 
-    private func revealPage(_ controller: ExperienceScreenViewController, announce: Bool = true) async {
-        await controller.revealPage(reduceMotion: reduceMotionEnabled)
-        if announce { await onScreenActive(controller.screenId) }
+    private func revealPage(_ controller: ExperienceScreenViewController, starting: Bool = false, announce: Bool = true) async {
+        await controller.revealPage(reduceMotion: reduceMotionEnabled, starting: starting)
+        if !starting && announce { await onScreenActive(controller.screenId) }
     }
 
     func activateInitialScreen() async -> String? {
@@ -755,11 +755,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     let products = try await page.products(screenID: screenID)
                     try await lower.preparePageRow(screenID: screenID, products: products)
                     try await lower.navigatePage(to: screenID, spec: .none, isBack: true, reduceMotion: true,
-                        backSteps: lower.pageHistory.entries.count - 1 - (backLocation?.entry ?? 0),
+                        backSteps: lower.pageHistory.entries.count - 1 - (backLocation?.entry ?? 0), coveredCut: true,
                         isEligible: { self.lifecycle == .installed && !self.navigationAdmissionRevoked },
                         onHidden: {}, onActive: {})
                 }
             }, pop: {
+                await self.revealPage(lower, starting: true)
                 while self.presentationLayer !== lower.navigationController, self.hasPresentedLayer {
                     // Back owns activation after all modal dismissals and the final pop.
                     guard await self.performAuthoredLayerDismissal(activateRevealedPage: false) else { throw CancellationError() }
@@ -830,10 +831,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         return true
     }
 
+    private var revealTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController,
                               animated: Bool) {
         if navigationTask == nil, (viewController as? ExperienceScreenViewController)?.isPageController == true {
             nativePageTransitionInProgress = true
+            if let page = viewController as? ExperienceScreenViewController, page.lifecyclePhase == .hidden {
+                revealTasks[ObjectIdentifier(page)] = Task { @MainActor in
+                    await self.revealPage(page, starting: true)
+                }
+            }
         }
     }
 
@@ -849,7 +857,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         let drain = navigationTask
         guard let page = viewController as? ExperienceScreenViewController, page.isPageController else { return }
+        let revealTask = revealTasks.removeValue(forKey: ObjectIdentifier(page))
         Task { @MainActor in
+            await revealTask?.value
             if let drain { await drain.value }
             else if self.lifecycle == .installed, !removed.isEmpty {
                 for outgoing in removed {
@@ -1395,6 +1405,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             closingLayer = nil
             return false
         }
+        if activateRevealedPage, let revealed = pageBelowPresentedLayer {
+            await revealPage(revealed, starting: true)
+        }
         layer.presentationController?.delegate = nil
         await withCheckedContinuation { continuation in
             layer.presentingViewController?.dismiss(animated: !reduceMotionEnabled) { continuation.resume() }
@@ -1403,6 +1416,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             activateRevealedPage: activateRevealedPage)
         closingLayer = nil
         return true
+    }
+
+    private var pageBelowPresentedLayer: ExperienceScreenViewController? {
+        guard navigationLayers.count > 1 else { return nil }
+        let layer = navigationLayers[navigationLayers.count - 2]
+        return (layer as? UINavigationController)?.topViewController as? ExperienceScreenViewController
+    }
+
+    nonisolated func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
+        MainActor.assumeIsolated {
+            guard let page = pageBelowPresentedLayer, page.isPageController else { return }
+            revealTasks[ObjectIdentifier(page)] = Task { @MainActor in
+                await self.revealPage(page, starting: true)
+            }
+        }
     }
 
     private func handlePresentedControllerDidDismiss(
@@ -1440,7 +1468,12 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 .init(revealingScreenId: revealingController?.screenId, method: "journey"))
         }
         if activateRevealedPage, let revealingController {
-            if revealingController.isPageController { await revealPage(revealingController) }
+            if revealingController.isPageController {
+                await revealTasks.removeValue(forKey: ObjectIdentifier(revealingController))?.value
+                // Also supports completed-dismiss callbacks without a will-dismiss notification.
+                await revealPage(revealingController, starting: true)
+                await revealPage(revealingController)
+            }
             else {
                 revealingController.setCoveredByLayer(false)
                 await onScreenActive(revealingController.screenId)

@@ -1031,6 +1031,43 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         }
     }
 
+    func testPageDeclarationsFollowActiveScreenAndRestoreOnBack() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { bridge.clear(); window.isHidden = true }
+        let surface = host.view!
+        let first = makePlan(secure: false, screenID: "A", maxLength: 8)
+        let second = makePlan(secure: true, screenID: "B", maxLength: 2)
+        let plan = NativeExperienceRenderPlan(identity: first.identity, scene: first.scene,
+            entry: .init(screenId: "A"), pageHost: .init(artboardName: "$nuxie.page", listPath: "screens"),
+            screens: [], transitions: [], textInputs: first.textInputs + second.textInputs, images: [], fonts: [])
+        func bind(_ id: String, preserving: Bool) {
+            bridge.bind(screenID: id, preservingNativeFields: preserving, renderPlan: plan,
+                surfaceView: surface, artboardBounds: surface.bounds,
+                semanticTextWriter: { _, _, _, done in done(.accepted) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "x", ownerInstanceID: 1))) })
+        }
+        bind("A", preserving: false)
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1] as? UITextField)
+        XCTAssertTrue(field.becomeFirstResponder())
+        for (id, secure, revision) in [("B", true, UInt64(2)), ("A", false, UInt64(3))] {
+            bridge.setStepInProgress(true)
+            bind(id, preserving: true)
+            bridge.setStepInProgress(false)
+            let controls = bridge.applySemantics(try nativeCapture(ids: [1], secure: secure, revision: revision))
+            XCTAssertTrue(controls[1] === field)
+            XCTAssertTrue(field.isFirstResponder)
+            XCTAssertEqual(field.isSecureTextEntry, secure)
+            XCTAssertEqual(bridge.textField(field,
+                shouldChangeCharactersIn: NSRange(location: 0, length: (field.text ?? "").utf16.count),
+                replacementString: "abc"), !secure)
+        }
+    }
+
     func testPageStepKeepsFieldViewAndFocusWhileBlockingTyping() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
@@ -1573,14 +1610,14 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 firstBaseline: nil)])))
     }
 
-    private func makePlan(secure: Bool? = nil, textInputName: String = "editable", multiline: Bool? = nil) -> NativeExperienceRenderPlan {
-        let input = NativeExperienceTextInput(inputId: "input", screenId: "screen", artboardId: "a",
+    private func makePlan(secure: Bool? = nil, textInputName: String = "editable", multiline: Bool? = nil, screenID: String = "screen", maxLength: Int? = nil) -> NativeExperienceRenderPlan {
+        let input = NativeExperienceTextInput(inputId: "input", screenId: screenID, artboardId: "a",
             viewNodeId: "v", renderedNodeId: "r", textInputName: textInputName, value: "saved", placeholder: "Name", editable: true,
             geometry: .init(xPath: "x", yPath: "y", widthPath: "w", heightPath: "h", rotationPath: "r",
                 scaleXPath: "sx", scaleYPath: "sy"),
             style: .init(fontFamily: "system", fontWeight: "normal", fontStyle: "normal", fontSize: 16,
                 lineHeight: 20, letterSpacing: 0, color: 0xFF123456, fontAssetUniqueName: "", textAlign: nil),
-            keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: nil, responseFieldKey: "name")
+            keyboardType: nil, secureTextEntry: secure, multiline: multiline, maxLength: maxLength, responseFieldKey: "name")
         let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "e", buildId: "b", appId: "a", environment: "test"),
             scene: .init(key: "scene", sha256: "", sizeBytes: 0), entry: .init(screenId: "screen"),
             screens: [], transitions: [], textInputs: [input], images: [], fonts: [])
