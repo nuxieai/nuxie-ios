@@ -1694,6 +1694,7 @@ actor ExperienceInteractiveScreen {
     /// viewport the platform gives it, so it always fills its sheet.
     func setPresentationHeight(fitContent: Bool, availableSize: CGSize) async throws -> Bool {
         try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             await discardTextFrame()
             let available = try await presentationHeight.apply(to: runtime, fitContent: false,
                 width: Float(availableSize.width), height: Float(availableSize.height))
@@ -1852,7 +1853,8 @@ actor ExperienceInteractiveScreen {
         rowReference: NuxieNativeViewModelReference? = nil,
         operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate(),
         rowVideoPlayback: ExperienceVideoPlayback? = nil,
-        rowScreen: JourneyScreen? = nil
+        rowScreen: JourneyScreen? = nil,
+        retainedRowSnapshot: NuxieNativeViewModelSnapshot? = nil
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
         guard let manifestScreen = payload.renderPlan.screens.first(where: {
@@ -1906,7 +1908,7 @@ actor ExperienceInteractiveScreen {
         let environmentReference: NuxieNativeViewModelReference?
         do {
             initialState = try await ExperienceInteractiveInitialState.apply(
-                journey: payload.journey,
+                journey: retainedRowSnapshot == nil ? payload.journey : JourneyDocument(screens: payload.journey.screens, viewModelValues: []),
                 screen: journeyScreen,
                 renderPlan: payload.renderPlan,
                 products: products,
@@ -1944,6 +1946,11 @@ actor ExperienceInteractiveScreen {
             if rowRuntime == nil { try? await runtime.close() }
             fontScope.close()
             throw error
+        }
+
+        if let retainedRowSnapshot, let rowReference {
+            do { try await runtime.seedRow(rowReference, from: retainedRowSnapshot) }
+            catch { fontScope.close(); throw error }
         }
 
         var textInputs: [String: NativeExperienceTextInput] = [:]
@@ -2034,6 +2041,7 @@ actor ExperienceInteractiveScreen {
     /// Both player owners restore the confirmed values before firing the continuation.
     func confirmedResponseSaveMutations(trigger: String, kept: [ExperienceRunSnapshot.Field])
         async throws -> [NuxieNativeViewModelMutation] {
+        try requireWritableRow()
         let root = try await nativeRootReference()
         let restored = try ExperienceRunSnapshot(fields: kept).mutations(for: root)
         return restored + [.fireTrigger(instance: root, path: trigger)]
@@ -2059,13 +2067,28 @@ actor ExperienceInteractiveScreen {
         let theme = colorScheme.flatMap { environmentBindings.themeSelection(for: $0) == nil ? nil : $0 }
         guard !batch.isEmpty || theme != nil else { return }
         contentMeasurement.invalidate()
-        try await operationGate.withLock {
+        try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             if !batch.isEmpty { _ = try await runtime.mutateViewModel(batch) }
             if let theme {
                 _ = try await runtime.bindGlobalViewModel(named: ExperienceEnvironmentBindings.themeGlobalName,
                     authoredInstanceNamed: theme.label)
             }
         }
+    }
+
+    private var removedRowSnapshot: NuxieNativeViewModelSnapshot?
+    var isRemovedPageRow: Bool { removedRowSnapshot != nil }
+
+    // Called while the page operation gate is held, immediately after list-remove.
+    func markRowRemoved(_ snapshot: NuxieNativeViewModelSnapshot) {
+        removedRowSnapshot = snapshot
+        latestSnapshot = snapshot
+    }
+
+    private func requireWritableRow() throws {
+        assert(removedRowSnapshot == nil, "R6b: stale row binding used for a write")
+        guard removedRowSnapshot == nil else { throw CancellationError() }
     }
 
     typealias RowStepper = @Sendable ([NuxieNativePointerEvent], [NuxieNativeFocusInput], Float, UInt64, Bool) async throws -> ExperienceInteractiveStepResult
@@ -2082,12 +2105,16 @@ actor ExperienceInteractiveScreen {
         confirmedResponseSave: (trigger: String, kept: [ExperienceRunSnapshot.Field])? = nil
     ) async throws -> ExperienceInteractiveStepResult {
         if let rowStepper {
-            if let confirmed = confirmedResponseSave {
-                let mutations = try await confirmedResponseSaveMutations(trigger: confirmed.trigger, kept: confirmed.kept)
-                _ = try await runtime.mutateViewModel(mutations)
-                contentMeasurement.invalidate()
+            try await operationGate.withLock { [self] in
+                if !(await isRemovedPageRow), let confirmed = confirmedResponseSave {
+                    let mutations = try await confirmedResponseSaveMutations(trigger: confirmed.trigger, kept: confirmed.kept)
+                    _ = try await runtime.mutateViewModel(mutations)
+                    contentMeasurement.invalidate()
+                }
             }
-            return try await rowStepper(pointers.map(Self.nativePointer), focusInputs, elapsedSeconds, correlationID, capturesTextLayout)
+            // A removed requester may drain page effects, but may not send stale input.
+            return try await rowStepper(isRemovedPageRow ? [] : pointers.map(Self.nativePointer),
+                isRemovedPageRow ? [] : focusInputs, elapsedSeconds, correlationID, capturesTextLayout)
         }
         let nativeInputs = inputs.map(Self.nativeInput)
         let nativePointers = pointers.map(Self.nativePointer)
@@ -2248,6 +2275,7 @@ actor ExperienceInteractiveScreen {
     }
 
     private func nativeSnapshot() async throws -> NuxieNativeViewModelSnapshot {
+        if let removedRowSnapshot { return removedRowSnapshot }
         let root = try await nativeRootReference()
         return try await runtime.snapshot(root)
     }
@@ -2264,6 +2292,7 @@ actor ExperienceInteractiveScreen {
 
     func lifecycleMutations(_ snapshot: ExperienceScreenLifecycleSnapshot,
                             screen: JourneyScreen) throws -> [NuxieNativeViewModelMutation] {
+        try requireWritableRow()
         guard let name = screen.defaultViewModelName, let rootViewModelReference else { return [] }
         let schema = try stateCompiler.schema(named: name)
         let command = snapshot.stateCommand(viewModelName: name, instanceID: screen.defaultInstanceId,
@@ -2307,6 +2336,7 @@ actor ExperienceInteractiveScreen {
     ) async throws -> ExperienceInteractiveViewModelReference {
         let runtime = runtime
         return try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             let reference = try await runtime.makeViewModel(
                 schemaIndex: schemaIndex,
                 authoredInstanceIndex: authoredInstanceIndex
@@ -2338,6 +2368,7 @@ actor ExperienceInteractiveScreen {
         let runtime = runtime
         contentMeasurement.invalidate()
         return try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             try await refreshTrackedTopology()
             let materialization = try await materializeListRowsIfNeeded(for: mutations)
             do {
@@ -2940,6 +2971,7 @@ actor ExperienceInteractiveScreen {
         _ command: ExperienceInteractiveStateCommand,
         correlationID: UInt64
     ) async throws -> ExperienceInteractiveMutationResult {
+        try requireWritableRow()
         let command: ExperienceInteractiveStateCommand = switch command {
         case .snapshot(let values):
             .snapshot(try stateCompiler.normalizeFlattenedEnvelopes(screenOwnedValues(values)))
@@ -3786,6 +3818,7 @@ actor ExperienceInteractiveScreen {
         let stateCompiler = self.stateCompiler
         contentMeasurement.invalidate()
         return try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             let current = try await runtime.fieldOwnerSnapshot(ownerInstanceID)
             guard current.rootInstanceID == ownerInstanceID,
                   let owner = current.instances.first(where: { $0.id == ownerInstanceID }),
@@ -3810,7 +3843,8 @@ actor ExperienceInteractiveScreen {
         }
         let runtime = runtime
         contentMeasurement.invalidate()
-        try await operationGate.withLock {
+        try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             try await runtime.setFieldContentOffset(captureID: captureID, nodeID: nodeID,
                 name: input.textInputName, x: Float(offset.x), y: Float(offset.y))
         }
@@ -3821,7 +3855,8 @@ actor ExperienceInteractiveScreen {
             throw ExperienceInteractiveScreenError.textInputNotEditable(inputID)
         }
         let runtime = runtime
-        return try await operationGate.withLock {
+        return try await operationGate.withLock { [self] in
+            guard !(await isRemovedPageRow) else { throw CancellationError() }
             let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: input.textInputName)
             guard let text = String(data: bytes, encoding: .utf8) else {
                 throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
@@ -3833,7 +3868,8 @@ actor ExperienceInteractiveScreen {
 
     func readPresentedFieldString(captureID: UUID, nodeID: UInt32, name: String) async throws -> String {
         let runtime = runtime
-        return try await operationGate.withLock {
+        return try await operationGate.withLock { [self] in
+            guard !(await isRemovedPageRow) else { throw CancellationError() }
             let bytes = try await runtime.readFieldString(captureID: captureID, nodeID: nodeID, name: name)
             guard let text = String(data: bytes, encoding: .utf8) else {
                 throw ExperienceInteractiveScreenError.stateContract("Native input contains invalid UTF-8")
@@ -3851,6 +3887,7 @@ actor ExperienceInteractiveScreen {
     {
         let runtime = runtime
         return try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             await discardTextFrame()
             if pixelWidth > 0, pixelHeight > 0 {
                 await resizePresentationViewport(CGSize(width: Double(Float(pixelWidth) / layoutScaleFactor),
@@ -3912,7 +3949,8 @@ actor ExperienceInteractiveScreen {
     func queueSemanticAction(captureID: UUID, nodeID: UInt32, action: NuxieNativeSemanticAction) async throws {
         let runtime = runtime
         contentMeasurement.invalidate()
-        try await operationGate.withLock {
+        try await operationGate.withLock { [self] in
+            try await requireWritableRow()
             try await runtime.queueSemanticAction(captureID: captureID, nodeID: nodeID, action: action)
         }
     }
