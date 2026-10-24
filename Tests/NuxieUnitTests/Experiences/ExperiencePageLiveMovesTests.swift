@@ -1,0 +1,233 @@
+#if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+import Foundation
+import XCTest
+@testable import NuxieRuntime
+@_spi(Testing) @testable import Nuxie
+
+/// Real native records from the throwaway exporter, not a publisher qualification.
+@MainActor
+final class ExperiencePageLiveMovesTests: XCTestCase {
+    func testForwardCutSecondForwardAndBackKeepTheInstanceAndRemoveOnlyAfterLanding() async throws {
+        try await withLiveMovePage(preload: true) { page in
+            let identity = try await page.snapshot(screenID: "A").rootInstanceID
+            try await move(page, "A", "B", "t1")
+            await assertRows(page, ["A", "B"], collapsed: ["A"])
+            try await move(page, "B", "A", nil)
+            await assertRows(page, ["B", "A"], collapsed: ["B"])
+            let kept = try await page.snapshot(screenID: "A").rootInstanceID
+            XCTAssertEqual(kept, identity)
+            try await move(page, "A", "B", "t1")
+            try await move(page, "B", "A", "back", reachable: ["A"])
+            await assertRows(page, ["A"], collapsed: [])
+            let landed = try await page.snapshot(screenID: "A").rootInstanceID
+            XCTAssertEqual(landed, identity)
+            _ = try await page.step(elapsedSeconds: 1 / 60)
+        }
+    }
+
+    func testForwardThenBackRemovalAllowsTheNextOrdinaryStep() async throws {
+        try await withLiveMovePage { page in
+            try await move(page, "A", "B", "t1")
+            try await move(page, "B", "A", "back", reachable: ["A"])
+            await assertRows(page, ["A"], collapsed: [])
+            _ = try await page.step(elapsedSeconds: 1 / 60)
+            await assertRows(page, ["A"], collapsed: [])
+        }
+    }
+
+    func testNativeListRemovalAfterLandingAllowsTheNextOrdinaryStep() async throws {
+        try await withLiveMovePage { page in
+            try await move(page, "A", "B", "t1")
+            try await move(page, "B", "A", "back", retire: false)
+            await assertRows(page, ["A", "B"], collapsed: [])
+            let root = try await page.runtime.rootViewModelReference()
+            _ = try await page.runtime.mutateViewModel([.listRemove(instance: root, path: "screens", index: 1)])
+            _ = try await page.runtime.step(elapsedSeconds: 1 / 60)
+        }
+    }
+
+    func testFreshlyAppendedIncomingRowBeginsAfterMountStepWithoutDrawingBetween() async throws {
+        try await withLiveMovePage { page in
+            _ = try await page.prepareRow(screenID: "B", products: [])
+            try await page.apply([.take, .position(isBack: false), .reconcile, .expand,
+                .phases([("A", .exiting), ("B", .entering)], "t1"), .begin("t1"), .end("t1")],
+                source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
+            await assertRows(page, ["A", "B"], collapsed: [])
+        }
+    }
+
+    func testFortyRowsWithThirtyNineCollapsedStepWithoutError() async throws {
+        try await withLiveMovePage(count: 40, preload: true) { page in
+            let ids = (0..<40).map(liveMoveScreen)
+            await assertRows(page, ids, collapsed: Set(ids.dropFirst()))
+            for _ in 0..<60 { _ = try await page.step(elapsedSeconds: 1 / 60) }
+            try await move(page, "A", "B", "t1", reachable: Set(ids))
+            await assertRows(page, ids, collapsed: Set(ids).subtracting(["B"]))
+        }
+    }
+
+    func testKeptARisesAboveBThenBackMovesItBelowWithoutChangingInstance() async throws {
+        try await withLiveMovePage { page in
+            let identity = try await page.snapshot(screenID: "A").rootInstanceID
+            try await move(page, "A", "B", "t1")
+            try await move(page, "B", "A", nil)
+            await assertRows(page, ["B", "A"], collapsed: ["B"])
+            let expanded = try await page.snapshot(screenID: "A").rootInstanceID
+            XCTAssertEqual(expanded, identity)
+            // Reveal B as the outgoing history entry while retained A still sits above it.
+            try await page.insert(screenID: "B", at: 0)
+            try await page.setPhases([("A", .hidden), ("B", .active)])
+            try await page.apply([.retire], source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
+            try await page.apply([.take, .position(isBack: true), .reconcile, .expand,
+                .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back"), .end("back"), .retire],
+                source: "B", target: "A", reachable: ["A", "B"], reduceMotion: false)
+            await assertRows(page, ["A", "B"], collapsed: ["B"])
+            let returned = try await page.snapshot(screenID: "A").rootInstanceID
+            XCTAssertEqual(returned, identity)
+        }
+    }
+}
+
+func liveMoveScreen(_ index: Int) -> String { index == 0 ? "A" : (index == 1 ? "B" : "R\(index)") }
+
+private func liveMoveFixture(_ name: String) throws -> Data {
+    let bundle = Bundle(for: ExperiencePageLiveMovesTests.self)
+    for directory in ["runtime/page-host-live-moves", "page-host-live-moves"] {
+        if let url = bundle.url(forResource: name, withExtension: nil, subdirectory: directory) {
+            return try Data(contentsOf: url)
+        }
+    }
+    return try Data(contentsOf: experiencePreparationRepositoryRoot()
+        .appendingPathComponent("fixtures/runtime/page-host-live-moves/\(name)"))
+}
+
+@MainActor
+func withLiveMovePage(count: Int = 2, preload: Bool = false, initialA: Bool = true,
+                      _ body: (ExperienceInteractivePage) async throws -> Void) async throws {
+    let bytes = try liveMoveFixture("page\(count).riv")
+    let names = (0..<count).map(liveMoveScreen)
+    let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "live", buildId: "live", appId: "test", environment: "test"),
+        scene: .init(key: "scene.nux", sha256: SHA256Provider.hexDigest(bytes), sizeBytes: bytes.count),
+        entry: .init(screenId: "A"), pageHost: .init(artboardName: "Page", listPath: "screens",
+            machineName: "run", modelName: "Page", hasLiveMoves: true, initialRows: .clearBeforePlayer),
+        screens: names.map { .init(screenId: $0, artboardId: $0, artboardName: $0, width: 800, height: 600, exit: nil) },
+        transitions: [], textInputs: [], images: [], fonts: [])
+    let payload = AuthenticatedRuntimePayload(authenticatedKeyID: "test", renderPlan: plan,
+        journey: JourneyDocument(screens: names.map { .init(id: $0) }), sceneBytes: bytes, assets: [])
+    let catalog = try await NuxieNativeRuntime.inspectAssets(bytes: bytes)
+    let prepared = try await NuxieNativePreparedFile.prepare(bytes: bytes,
+        importMode: .configured(moduleName: "nuxie", expectedAssets: catalog, externalAssets: [:], videoEnabled: true))
+    let page = try await ExperienceInteractivePage.open(payload: payload, preparedFile: prepared,
+        runValues: nil, imageIDsByName: [:], pixelWidth: 800, pixelHeight: 600, reduceMotion: false,
+        safeArea: nil, colorScheme: nil)
+    do {
+        let empty = await page.mountedScreenIDs
+        XCTAssertTrue(empty.isEmpty)
+        if initialA {
+            try await page.insertIncoming(screenID: "A", style: .none, isBack: false)
+            try await page.setPhases([("A", .entering)])
+            if preload {
+                for name in names.dropFirst() { try await page.insertIncoming(screenID: name, style: .none, isBack: false) }
+            }
+            _ = try await page.step(elapsedSeconds: 0)
+            if preload { try await page.apply([.retire], source: "A", target: "A", reachable: Set(names), reduceMotion: false) }
+            try await page.setPhases([("A", .active)])
+        }
+        try await body(page)
+        try await page.close()
+    } catch { try? await page.close(); throw error }
+}
+
+@MainActor
+private func assertRows(_ page: ExperienceInteractivePage, _ expected: [String], collapsed: Set<String>,
+                        file: StaticString = #filePath, line: UInt = #line) async {
+    let order = await page.mountedScreenIDs
+    let sleeping = await page.collapsedScreenIDs
+    XCTAssertEqual(order, expected, file: file, line: line)
+    XCTAssertEqual(sleeping, collapsed, file: file, line: line)
+    do {
+        let snapshot = try await page.runtime.snapshot()
+        var identities: [UInt64] = []
+        for id in expected { identities.append(try await page.snapshot(screenID: id).rootInstanceID) }
+        let list = snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "screens" }
+        XCTAssertEqual(list?.value, .list(identities), "Native list must match actor order", file: file, line: line)
+    } catch { XCTFail("Cannot inspect native row order: \(error)", file: file, line: line) }
+}
+
+@MainActor
+private func move(_ page: ExperienceInteractivePage, _ source: String, _ target: String, _ transition: String?,
+                  reachable: Set<String> = ["A", "B"], retire: Bool = true) async throws {
+    struct Lifecycle: Decodable {
+        struct Step: Decodable {
+            struct Side: Decodable { let completeEventName: String? }
+            let durationMs: UInt64
+            let incoming: Side
+            let outgoing: Side
+        }
+        let steps: [String: Step]
+    }
+    let lifecycle = try JSONDecoder().decode(Lifecycle.self, from: liveMoveFixture("lifecycle2.json"))
+    let plan: ExperienceScreenCustomTransitionPlan?
+    if let transition {
+        let step = try XCTUnwrap(lifecycle.steps[transition])
+        plan = .init(transitionId: transition, durationMilliseconds: step.durationMs, incomingOnTop: true,
+            outgoingCompletionEventName: step.outgoing.completeEventName ?? "",
+            incomingCompletionEventName: try XCTUnwrap(step.incoming.completeEventName))
+    } else { plan = nil }
+    var inputEnabled = true
+    var waiters: [(String, UUID)] = []
+    var required: Set<String> = []
+    var seen: Set<String> = []
+    var eventOwners: [String: UInt64] = [:]
+    func observe(_ frame: ExperienceInteractivePage.Step) {
+        for event in frame.native.events where eventOwners[event.name] == event.sourceViewModelInstanceID {
+            if required.contains(event.name) { seen.insert(event.name) }
+        }
+    }
+    var waitError: Error?
+    do {
+        try await ExperiencePageStep.perform(source: source, target: target, style: transition == nil ? .none : .magicMove,
+            isBack: transition == "back", plan: plan, exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false,
+            operations: .init(setInputEnabled: { inputEnabled = $0 }, prepare: {
+                _ = try await page.prepareRow(screenID: target, products: [])
+            }, register: { id, event in
+                if event.isEmpty { return AsyncStream { $0.yield(()); $0.finish() } }
+                required.insert(event)
+                eventOwners[event] = try await page.snapshot(screenID: id).rootInstanceID
+                let waiter = try await page.registerCompletion(screenID: id, eventName: event)
+                waiters.append((id, waiter.id))
+                return waiter.events
+            }, batch: { changes in
+                for change in changes {
+                    if case .end = change {
+                        let mounted = await page.mountedScreenIDs
+                        XCTAssertTrue(mounted.contains(source), "Outgoing row must remain mounted until landing")
+                    }
+                    if change == .retire && !retire { continue }
+                    let frame = try await page.apply([change], source: source, target: target,
+                        reachable: reachable, reduceMotion: false)
+                    if let frame { observe(frame) }
+                }
+            }, present: {
+                let frame = try await page.step(elapsedSeconds: 0)
+                observe(frame)
+            }, wait: { _, milliseconds in
+                do {
+                    for _ in 0..<Int(milliseconds * 60 / 1000) {
+                        XCTAssertFalse(inputEnabled)
+                        let frame = try await page.step(elapsedSeconds: 1 / 60)
+                        observe(frame)
+                        if required.isSubset(of: seen) { return }
+                    }
+                    XCTFail("Published completion event did not arrive for \(transition ?? "cut")")
+                } catch { waitError = error }
+            }, hidden: {}, active: { try await page.selectActiveRow(target) }))
+        if let waitError { throw waitError }
+        XCTAssertTrue(inputEnabled)
+        for (id, token) in waiters { await page.removeCompletion(screenID: id, id: token) }
+    } catch {
+        for (id, token) in waiters { await page.removeCompletion(screenID: id, id: token) }
+        throw error
+    }
+}
+#endif

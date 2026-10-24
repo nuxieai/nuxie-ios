@@ -690,7 +690,8 @@ package actor NuxieNativePreparedFile {
         player: NuxieNativePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
-        bindDefaultViewModel: Bool = false
+        bindDefaultViewModel: Bool = false,
+        clearingDefaultList: String? = nil
     ) async throws -> NuxieNativeRuntime {
         let executor = self.executor
         let bytes = self.bytes
@@ -707,7 +708,8 @@ package actor NuxieNativePreparedFile {
                 pixelHeight: pixelHeight,
                 bindDefaultViewModel: bindDefaultViewModel,
                 importMode: importMode,
-                valuePolicy: valuePolicy
+                valuePolicy: valuePolicy,
+                clearingDefaultList: clearingDefaultList
             )
         }
         openedSessionCount += 1
@@ -1475,7 +1477,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         pixelHeight: UInt32,
         bindDefaultViewModel: Bool,
         importMode: NuxieNativeImportMode,
-        valuePolicy: NuxieNativeValuePolicy = .empty
+        valuePolicy: NuxieNativeValuePolicy = .empty,
+        clearingDefaultList: String? = nil
     ) throws {
         sharedContext = nil
         self.pixelWidth = pixelWidth
@@ -1511,6 +1514,12 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if bindDefaultViewModel {
                 let defaultViewModel = try artboard.makeDefaultViewModel()
                 viewModel = defaultViewModel
+                // Apply the caller's initial-list policy before binding or creating players.
+                if let path = clearingDefaultList {
+                    let reference = try defaultViewModel.reference()
+                    _ = try NuxieNativeViewModelHandle.mutate([.listClear(instance: reference, path: path)],
+                        correlationID: 0, resolve: { _ in defaultViewModel })
+                }
                 try artboard.bind(viewModel: defaultViewModel)
             }
             let players = try Self.makePlayers(artboard: artboard, selection: selection)
