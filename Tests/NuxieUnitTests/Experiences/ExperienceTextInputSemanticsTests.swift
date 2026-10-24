@@ -177,6 +177,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             XCTAssertTrue(field.becomeFirstResponder())
             try await settle(expectedFocus: true)
             XCTContext.runActivity(named: "Keyboard input mode: \(field.textInputMode?.primaryLanguage ?? "none")") { _ in }
+            XCTAssertTrue(field.isFirstResponder, "UIKit's did-begin notification must not cancel the queued native focus")
             XCTAssertTrue(controller.riveFocusState.hasFocus, "Native begin editing must focus Rive")
             XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
             let focusedSnapshot = try await controller.runtimeSnapshot()
@@ -259,6 +260,7 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
             try await verify("Grace")
             XCTAssertTrue(controller.riveFocusState.expectsKeyboardInput)
             XCTContext.runActivity(named: "Native nonsecure callbacks: " + callbacks.joined(separator: "; ")) { _ in }
+            await controller.shutdownInteractiveScreen()
         } catch {
             await controller.shutdownInteractiveScreen()
             throw error

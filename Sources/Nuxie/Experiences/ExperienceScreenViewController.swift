@@ -263,9 +263,9 @@ final class ExperienceScreenViewController: UIViewController {
         surfaceView.onEnvironmentChange = { [weak self] in self?.syncSafeAreaInsets() }
         NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
             name: UIApplication.willResignActiveNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+        NotificationCenter.default.addObserver(self, selector: #selector(nativeEditorDidBeginEditing(_:)),
             name: UITextField.textDidBeginEditingNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(clearHardwareKeys),
+        NotificationCenter.default.addObserver(self, selector: #selector(nativeEditorDidBeginEditing(_:)),
             name: UITextView.textDidBeginEditingNotification, object: nil)
         NotificationCenter.default.addObserver(
             self,
@@ -347,6 +347,14 @@ final class ExperienceScreenViewController: UIViewController {
     @objc private func clearHardwareKeys() {
         presentationLoop?.endActiveInput()
         pressedHardwareKeys.removeAll()
+    }
+
+    @objc private func nativeEditorDidBeginEditing(_ notification: Notification) {
+        // Our overlay withdraws scene input in shouldBeginEditing, before its
+        // didBeginEditing callback queues native focus. UIKit posts this notification
+        // afterward; withdrawing again would cancel that new work's input epoch.
+        if let editor = notification.object as? UIView, editor.isDescendant(of: surfaceView) { return }
+        clearHardwareKeys()
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -1414,6 +1422,7 @@ final class ExperienceScreenViewController: UIViewController {
         preservingNativeFields: Bool = false
     ) {
         if !preservingNativeFields { nativeEditingTarget = nil }
+        textInputOverlayBridge.onWillBeginEditing = { [weak self] in self?.clearHardwareKeys() }
         textInputOverlayBridge.onNativeEditing = { [weak self] captureID, target, point, editing, ownerID, completion in
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork { [weak self] in
                 guard let self else { throw CancellationError() }
