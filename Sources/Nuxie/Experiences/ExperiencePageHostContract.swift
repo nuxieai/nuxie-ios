@@ -5,10 +5,36 @@ import NuxieRuntime
 
 /// Names owned by the published page contract, never release metadata.
 struct NativeExperiencePageHost: Equatable, Sendable {
+    enum InitialRows: Equatable, Sendable {
+        case requireEmpty
+        case clearBeforePlayer
+    }
+
     let artboardName: String
     let listPath: String
+    let machineName: String?
+    let modelName: String?
+    let hasLiveMoves: Bool
+    let initialRows: InitialRows
+
+    // Non-published shapes are constructed by tests, never decoded from a release.
+    // Nil machine/model preserve the older interim fixtures' inferred names.
+    init(artboardName: String, listPath: String, machineName: String? = nil,
+         modelName: String? = nil, hasLiveMoves: Bool = false,
+         initialRows: InitialRows = .requireEmpty) {
+        self.artboardName = artboardName
+        self.listPath = listPath
+        self.machineName = machineName
+        self.modelName = modelName
+        self.hasLiveMoves = hasLiveMoves
+        self.initialRows = initialRows
+    }
+
     static let published = Self(artboardName: ExperiencePageHostContract.artboardName,
-                                listPath: ExperiencePageHostContract.screens)
+                                listPath: ExperiencePageHostContract.screens,
+                                machineName: ExperiencePageHostContract.machineName,
+                                modelName: ExperiencePageHostContract.modelName,
+                                hasLiveMoves: true)
 }
 
 enum ExperiencePageHostContract {

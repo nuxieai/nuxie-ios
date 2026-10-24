@@ -52,10 +52,10 @@ Stage C row-collapse coverage: this scene has a non-virtual ArtboardComponentLis
 named screens, but no live-move records (native types 62000 through 62002).
 Runtime 51ee009249 requires a hosted scene created from those records even for
 set_row_collapsed(..., false). It returns INVALID_ARGUMENT before looking up the
-row. Four ExperienceInteractivePageTests that call collapse/expand are explicitly
-skipped until stage C supplies published records: kept-row forward/Back ordering,
-new-row append ordering, reconciliation-before-expansion, and default-machine
-retention/removal/revisit (its repeated insert expands an already mounted row).
+row. Three ordering/reconciliation tests now use the real records in
+page-host-live-moves instead. The default-machine retention/removal/revisit test
+remains skipped: its markerX and keptValue probes are absent from the new A/B
+fixture, and its repeated insert expands an already mounted row. Stage C must
+supply both records and those probes to restore that particular assertion set.
 The production call still executes and propagates errors. Other insertion,
 removal, retention, lifecycle and attribution tests continue using this fixture.
-Re-enable all four tests against the stage C fixture; a skip is not coverage.

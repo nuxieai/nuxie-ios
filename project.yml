@@ -233,6 +233,8 @@ targets:
         type: folder
       - path: fixtures/video
         type: folder
+      - path: fixtures/runtime/page-host-live-moves
+        type: folder
     dependencies:
       - target: NuxieSDK
       - target: NuxieRuntime

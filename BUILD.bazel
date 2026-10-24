@@ -100,7 +100,7 @@ filegroup(
 
 apple_resource_group(
     name = "unit_fixture_folders",
-    structured_resources = glob(["Tests/ExperienceRuntimeHostApp/Fixtures/**", "fixtures/video/**"]),
+    structured_resources = glob(["Tests/ExperienceRuntimeHostApp/Fixtures/**", "fixtures/video/**", "fixtures/runtime/page-host-live-moves/**"]),
     strip_structured_resources_prefixes = ["Tests/ExperienceRuntimeHostApp", "fixtures"],
 )
 apple_resource_group(

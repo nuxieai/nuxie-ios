@@ -2,6 +2,8 @@
 
 These JSON vectors define the contracts shared by SDK implementations.
 
+- `runtime/page-host-live-moves/`: throwaway exporter fixtures with real live-move records, not publisher output. `ExperiencePageLiveMovesTests` uses Page/run/Page and clears authored rows before player creation; production page names and empty-list validation remain unchanged. Covers native landing, cuts, Back, retained row order/identity, reconciliation, and 40-row collapse. See provenance.json for exact source hashes.
+
 ## Published runtime values
 
 - `runtime/layer-host-interim/`: interim UNIV-5113 stand-in from the published custom-transition scene. `ExperienceInteractivePageTests` qualifies list rows, default machines, completion attribution, retained values and layout sizing.

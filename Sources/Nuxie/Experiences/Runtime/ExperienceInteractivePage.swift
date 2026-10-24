@@ -50,6 +50,7 @@ actor ExperienceInteractivePage {
     private(set) var videoPlayback: ExperienceVideoPlayback?
     private nonisolated let layoutBounds = ExperienceLayoutBounds(.zero)
     nonisolated var artboardBounds: CGRect { layoutBounds.read() }
+    var collapsedScreenIDs: Set<String> { rowList.collapsed }
     private var liveStep: (artboard: String, name: String?)?
     private var currentReduceMotion: Bool
 
@@ -76,8 +77,11 @@ actor ExperienceInteractivePage {
                      reduceMotion: Bool, fontScale: Double? = nil, safeArea: ExperienceSafeAreaInsets?,
                      colorScheme: ExperienceColorScheme?, videoDecoderPool: ExperienceVideoDecoderPool? = nil) async throws -> ExperienceInteractivePage {
         let contract = payload.renderPlan.pageHost ?? .published
+        guard contract.initialRows != .clearBeforePlayer || runValues == nil else {
+            throw ExperienceInteractiveScreenError.stateContract("Cannot clear initial rows in a shared session")
+        }
         guard let artboard = try await preparedFile.artboards().first(where: { $0.name == contract.artboardName }),
-              let machine = artboard.stateMachines.first(where: { contract == .published ? $0 == ExperiencePageHostContract.machineName : true }) else {
+              let machine = artboard.stateMachines.first(where: { contract.machineName == nil || $0 == contract.machineName }) else {
             throw ExperienceInteractiveScreenError.stateContract("Page host requires a root state machine")
         }
         let shared = try await runValues?.native(in: preparedFile)
@@ -89,14 +93,14 @@ actor ExperienceInteractivePage {
         } else {
             runtime = try await preparedFile.openSession(artboardName: contract.artboardName,
                 player: .stateMachine(machine), pixelWidth: pixelWidth, pixelHeight: pixelHeight,
-                bindDefaultViewModel: true)
+                bindDefaultViewModel: true, clearingDefaultList: contract.initialRows == .clearBeforePlayer ? contract.listPath : nil)
         }
         do {
             let root = try await runtime.rootViewModelReference()
             let catalog = try await runtime.viewModelCatalog()
             let snapshot = try await runtime.snapshot()
             guard let rootSchema = snapshot.instances.first(where: { $0.id == root.rawValue })?.schemaIndex,
-                  catalog.schemas.contains(where: { $0.index == rootSchema && (contract != .published || $0.name == ExperiencePageHostContract.modelName) }),
+                  catalog.schemas.contains(where: { $0.index == rootSchema && (contract.modelName == nil || $0.name == contract.modelName) }),
                   catalog.properties.contains(where: {
                       $0.schemaIndex == rootSchema && $0.name == contract.listPath && $0.kind == .list
                   }) else {
@@ -322,11 +326,11 @@ actor ExperienceInteractivePage {
                 guard !rowsNeedReconciliation else {
                     throw ExperienceInteractiveScreenError.stateContract("Page rows must reconcile before step begin")
                 }
-                // Interim test scenes have no LiveStep records. Live moves require the published root.
-                if contract == .published { try await runtime.stepBegin(incomingScreen: mapped.artboardName, stepName: name) }
+                // Only contracts with native live-move records can begin a step.
+                if contract.hasLiveMoves { try await runtime.stepBegin(incomingScreen: mapped.artboardName, stepName: name) }
                 liveStep = (mapped.artboardName, name)
             case .end(let name):
-                if contract == .published { try await runtime.stepEnd(incomingScreen: mapped.artboardName, stepName: name) }
+                if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: mapped.artboardName, stepName: name) }
                 liveStep = nil
             case .retire:
                 var next = rowList
@@ -346,7 +350,7 @@ actor ExperienceInteractivePage {
 
     private func restoreCancelledStepLocked(source: String, target: String, reachable: Set<String>, reduceMotion: Bool) async throws -> Step? {
         if let liveStep {
-            if contract == .published { try await runtime.stepEnd(incomingScreen: liveStep.artboard, stepName: liveStep.name) }
+            if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: liveStep.artboard, stepName: liveStep.name) }
             self.liveStep = nil
         }
         // Bring borrowed instances home before any rollback removes their destination.

@@ -1,0 +1,428 @@
+{
+  "screens": {
+    "A": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "B": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R2": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R3": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R4": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R5": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R6": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R7": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R8": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R9": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R10": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R11": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R12": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R13": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R14": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R15": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R16": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R17": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R18": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R19": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R20": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R21": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R22": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R23": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R24": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R25": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R26": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R27": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R28": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R29": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R30": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R31": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R32": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R33": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R34": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R35": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R36": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R37": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R38": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "R39": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    }
+  },
+  "steps": {
+    "t1": {
+      "durationMs": 1000,
+      "incoming": {
+        "durationMs": 1000,
+        "completeEventName": "nx_enter_done:t1"
+      },
+      "outgoing": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "back": {
+      "durationMs": 1000,
+      "incoming": {
+        "durationMs": 1000,
+        "completeEventName": "nx_enter_done:back"
+      },
+      "outgoing": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    }
+  }
+}

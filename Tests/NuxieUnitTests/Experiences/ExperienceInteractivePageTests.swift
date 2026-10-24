@@ -117,7 +117,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
 
     func testRowsRunTheirDefaultMachinesAndKeepValuesAcrossRemovalAndRevisit() async throws {
         // Stage C: replace the interim scene with published live-move records.
-        try XCTSkipIf(true, "Stage C: layer-host-interim has no live-move records (62000...62002); native row collapse requires them")
+        try XCTSkipIf(true, "Stage C: the live-move A/B fixture lacks markerX and keptValue probes needed to assert default-machine progress, reset on remount, and retained values; interim fixture lacks collapse records")
         try await withLayer { layer, preparation in
             try await layer.insert(screenID: "screen_1", at: 0)
             _ = try await layer.step(elapsedSeconds: 0)
@@ -155,17 +155,16 @@ final class ExperienceInteractivePageTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testNewRowsAppendOnTopEvenForBack() async throws {
-        // Stage C: replace the interim scene with published live-move records.
-        try XCTSkipIf(true, "Stage C: layer-host-interim has no live-move records (62000...62002); native row collapse requires them")
-        for (_, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["screen_1", "screen_2"]),
-            (.push, false, ["screen_1", "screen_2"]), (.magicMove, true, ["screen_1", "screen_2"]),
-            (.fade, true, ["screen_1", "screen_2"])] {
-            try await withLayer { layer, _ in
-                try await layer.insert(screenID: "screen_1", at: 0)
+        for (_, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["A", "B"]),
+            (.push, false, ["A", "B"]), (.magicMove, true, ["A", "B"]),
+            (.fade, true, ["A", "B"])] {
+            try await withLiveMovePage(initialA: false) { layer in
+                try await layer.insert(screenID: "A", at: 0)
                 try await layer.apply([.take, .position(isBack: back), .reconcile, .expand,
-                    .phases([("screen_1", .exiting), ("screen_2", .entering)], ""), .begin(nil)], source: "screen_1", target: "screen_2",
-                    reachable: ["screen_1", "screen_2"], reduceMotion: false)
+                    .phases([("A", .exiting), ("B", .entering)], ""), .begin(nil)], source: "A", target: "B",
+                    reachable: ["A", "B"], reduceMotion: false)
                 _ = try await layer.step(elapsedSeconds: 0)
                 let mounted = await layer.mountedScreenIDs
                 XCTAssertEqual(mounted, expected)
@@ -173,76 +172,75 @@ final class ExperienceInteractivePageTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testNavigateToKeptRowMovesAboveAndBackMovesBelowBeforeRemoval() async throws {
-        // Stage C: replace the interim scene with published live-move records.
-        try XCTSkipIf(true, "Stage C: layer-host-interim has no live-move records (62000...62002); native row collapse requires them")
-        try await withLayer { layer, _ in
-            try await layer.insert(screenID: "screen_1", at: 0)
-            try await layer.insert(screenID: "screen_2", at: 1)
+        try await withLiveMovePage(initialA: false) { layer in
+            try await layer.insert(screenID: "A", at: 0)
+            try await layer.insert(screenID: "B", at: 1)
             _ = try await layer.step(elapsedSeconds: 0)
-            let original = try await layer.snapshot(screenID: "screen_1")
-            try await layer.apply([.retire], source: "screen_1", target: "screen_2",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            let original = try await layer.snapshot(screenID: "A")
+            try await layer.apply([.retire], source: "A", target: "B",
+                reachable: ["A", "B"], reduceMotion: false)
             try await layer.apply([.take, .position(isBack: false), .reconcile, .expand,
-                .phases([("screen_2", .exiting), ("screen_1", .entering)], "ba"), .begin("ba")], source: "screen_2", target: "screen_1",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+                .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back")], source: "B", target: "A",
+                reachable: ["A", "B"], reduceMotion: false)
             let forwardOrder = await layer.mountedScreenIDs
-            XCTAssertEqual(forwardOrder, ["screen_2", "screen_1"])
-            let revisited = try await layer.snapshot(screenID: "screen_1")
+            XCTAssertEqual(forwardOrder, ["B", "A"])
+            let revisited = try await layer.snapshot(screenID: "A")
             XCTAssertEqual(revisited.rootInstanceID, original.rootInstanceID)
-            try await layer.apply([.end("ba"), .retire], source: "screen_2", target: "screen_1",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
-            // Set up a Back from screen_2 with the kept target still above it.
-            try await layer.setPhases([("screen_1", .hidden), ("screen_2", .active)])
-            try await layer.apply([.retire], source: "screen_1", target: "screen_2",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            try await layer.apply([.end("back"), .retire], source: "B", target: "A",
+                reachable: ["A", "B"], reduceMotion: false)
+            // Reveal B for a Back with the kept target still above it.
+            try await layer.insert(screenID: "B", at: 0)
+            try await layer.setPhases([("A", .hidden), ("B", .active)])
+            try await layer.apply([.retire], source: "A", target: "B",
+                reachable: ["A", "B"], reduceMotion: false)
             try await layer.apply([.take, .position(isBack: true), .reconcile, .expand,
-                .phases([("screen_2", .exiting), ("screen_1", .entering)], "ab.reverse"), .begin("ab.reverse")], source: "screen_2", target: "screen_1",
-                reachable: ["screen_1"], reduceMotion: false)
+                .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back")], source: "B", target: "A",
+                reachable: ["A"], reduceMotion: false)
             let backOrder = await layer.mountedScreenIDs
-            XCTAssertEqual(backOrder, ["screen_1", "screen_2"])
-            try await layer.apply([.end("ab.reverse"), .retire], source: "screen_2", target: "screen_1",
-                reachable: ["screen_1"], reduceMotion: false)
+            XCTAssertEqual(backOrder, ["A", "B"])
+            try await layer.apply([.end("back"), .retire], source: "B", target: "A",
+                reachable: ["A"], reduceMotion: false)
             let remaining = await layer.mountedScreenIDs
-            XCTAssertEqual(remaining, ["screen_1"])
-            let landed = try await layer.snapshot(screenID: "screen_1")
+            XCTAssertEqual(remaining, ["A"])
+            let landed = try await layer.snapshot(screenID: "A")
             XCTAssertEqual(landed.rootInstanceID, original.rootInstanceID)
         }
     }
 
+    @MainActor
     func testReconcileRequiredBeforeExpansionAndAlreadyPlacedRowSkipsStep() async throws {
-        // Stage C: replace the interim scene with published live-move records.
-        try XCTSkipIf(true, "Stage C: layer-host-interim has no live-move records (62000...62002); native row collapse requires them")
-        try await withLayer { layer, _ in
-            try await layer.insert(screenID: "screen_1", at: 0)
+        try await withLiveMovePage(initialA: false) { layer in
+            try await layer.insert(screenID: "A", at: 0)
             _ = try await layer.step(elapsedSeconds: 0)
-            try await layer.apply([.take, .position(isBack: false)], source: "screen_1", target: "screen_2",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            try await layer.apply([.take, .position(isBack: false)], source: "A", target: "B",
+                reachable: ["A", "B"], reduceMotion: false)
             do {
-                try await layer.apply([.expand], source: "screen_1", target: "screen_2",
-                    reachable: ["screen_1", "screen_2"], reduceMotion: false)
+                try await layer.apply([.expand], source: "A", target: "B",
+                    reachable: ["A", "B"], reduceMotion: false)
                 XCTFail("Must not call collapse before the runtime reconciles the insert")
             } catch is ExperienceInteractiveScreenError { }
-            let first = try await layer.apply([.reconcile, .expand], source: "screen_1", target: "screen_2",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            let first = try await layer.apply([.reconcile, .expand], source: "A", target: "B",
+                reachable: ["A", "B"], reduceMotion: false)
             let frame = try XCTUnwrap(first)
-            XCTAssertEqual(frame.mountedScreenIDs, ["screen_1", "screen_2"])
-            XCTAssertEqual(Set(frame.rows.keys), ["screen_1", "screen_2"])
+            XCTAssertEqual(frame.mountedScreenIDs, ["A", "B"])
+            XCTAssertEqual(Set(frame.rows.keys), ["A", "B"])
             let alreadyPlaced = try await layer.apply([.take, .position(isBack: false), .reconcile, .expand],
-                source: "screen_1", target: "screen_2", reachable: ["screen_1", "screen_2"], reduceMotion: false)
+                source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
             XCTAssertNil(alreadyPlaced, "No mutation means no reconcile result to deliver again")
-            try await layer.apply([.take, .position(isBack: false)], source: "screen_2", target: "screen_1",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            try await layer.apply([.take, .position(isBack: false)], source: "B", target: "A",
+                reachable: ["A", "B"], reduceMotion: false)
             do {
-                try await layer.apply([.expand], source: "screen_2", target: "screen_1",
-                    reachable: ["screen_1", "screen_2"], reduceMotion: false)
+                try await layer.apply([.expand], source: "B", target: "A",
+                    reachable: ["A", "B"], reduceMotion: false)
                 XCTFail("Must not call collapse before the runtime reconciles the move")
             } catch is ExperienceInteractiveScreenError { }
-            let moved = try await layer.apply([.reconcile, .expand], source: "screen_2", target: "screen_1",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
-            XCTAssertEqual(moved?.mountedScreenIDs, ["screen_2", "screen_1"])
-            let repeated = try await layer.apply([.reconcile], source: "screen_2", target: "screen_1",
-                reachable: ["screen_1", "screen_2"], reduceMotion: false)
+            let moved = try await layer.apply([.reconcile, .expand], source: "B", target: "A",
+                reachable: ["A", "B"], reduceMotion: false)
+            XCTAssertEqual(moved?.mountedScreenIDs, ["B", "A"])
+            let repeated = try await layer.apply([.reconcile], source: "B", target: "A",
+                reachable: ["A", "B"], reduceMotion: false)
             XCTAssertNil(repeated)
         }
     }
