@@ -66,37 +66,91 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
         }
     }
 
-    func testLateRemovedRowJournalUsesFrozenSourceOnceEvenAfterRevisit() async throws {
+    func testRevisitEndsRemovedGenerationAndOldJournalIsUnattributed() async throws {
         try await withLiveMovePage { page in
             try await move(page, "A", "B", "t1")
             let before = try await page.snapshot(screenID: "B")
             let old = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: before.rootInstanceID))
-            _ = try await page.runtime.mutateViewModel([.setNumber(instance: old, path: "offset", value: 42)])
             try await move(page, "B", "A", "back", reachable: ["A"])
-            let frozen = try await page.snapshot(screenID: "B")
+            let retainedAfterRemoval = try await page.runtime.retainsViewModel(old)
+            XCTAssertFalse(retainedAfterRemoval)
             try await move(page, "A", "B", "t1")
             let fresh = try await page.snapshot(screenID: "B")
-            _ = try await page.runtime.mutateViewModel([.setNumber(instance: try XCTUnwrap(NuxieNativeViewModelReference(rawValue: fresh.rootInstanceID)), path: "offset", value: 99)])
-            // Replay a committed journal whose source was removed before delivery.
+            XCTAssertNotEqual(fresh.rootInstanceID, old.rawValue)
+            let retainedAfterRevisit = try await page.runtime.retainsViewModel(old)
+            XCTAssertFalse(retainedAfterRevisit)
+            let snapshotIDs = await page.runtime.removedRowSnapshotIDs
+            XCTAssertTrue(snapshotIDs.isDisjoint(with: before.rowOwnedInstanceIDs))
             let event = NuxieNativeEvent(localIndex: 0, coreType: 128, name: "nx_enter_done:late",
                 url: "", target: "", delay: 0, properties: [], sourceViewModelInstanceID: old.rawValue)
             let native = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [], stateChanges: [],
                 events: [event], hostCommands: [], viewModelChanges: [])
             let live = try await page.runtime.snapshot()
             let delivered = try await page.projectCapturedStep(native, snapshot: live)
-            let events = delivered.rows["B"]?.effects.compactMap { effect -> ExperienceInteractiveReportedEvent? in
-                if case .reportedEvent(let event) = effect.kind { return event }
-                return nil
-            } ?? []
-            XCTAssertEqual(events.count, 1)
-            let source = try XCTUnwrap(events.first?.resolvedSource)
-            XCTAssertEqual(source.snapshot.rootInstanceID, frozen.rootInstanceID)
-            XCTAssertEqual(source.snapshot.values.first { $0.ownerInstanceID == frozen.rootInstanceID && $0.name == "offset" }?.value, .number(42))
-            let next = try await page.step(elapsedSeconds: 0)
-            XCTAssertFalse(next.rows.values.flatMap(\.effects).contains {
+            XCTAssertEqual(delivered.unattributedEvents, [event])
+            XCTAssertFalse(delivered.rows["B"]?.effects.contains {
                 if case .reportedEvent(let event) = $0.kind { return event.name == "nx_enter_done:late" }
                 return false
-            })
+            } ?? false)
+            do {
+                _ = try await page.runtime.mutateViewModel([.setNumber(instance: old, path: "offset", value: 999)])
+                XCTFail("A superseded generation must remain write-protected after its snapshot is dropped")
+            } catch NuxieNativeRuntimeError.invalidNativeValue(let message) {
+                XCTAssertEqual(message, "R6b: removed page row")
+            }
+        }
+    }
+
+    func testRepeatedRevisitsKeepOnlyCurrentRowsAndRemovedSnapshots() async throws {
+        try await withLiveMovePage { page in
+            var previousRemovedIDs: Set<UInt64> = []
+            for _ in 0..<5 {
+                try await move(page, "A", "B", "t1")
+                let liveSnapshotIDs = await page.runtime.removedRowSnapshotIDs
+                XCTAssertTrue(liveSnapshotIDs.isEmpty)
+                try await move(page, "B", "A", "back", reachable: ["A"])
+                let ids = await page.retainedScreenIDs
+                XCTAssertEqual(ids, ["A", "B"])
+                let removed = try await page.snapshot(screenID: "B")
+                let snapshotIDs = await page.runtime.removedRowSnapshotIDs
+                XCTAssertEqual(snapshotIDs, removed.rowOwnedInstanceIDs)
+                XCTAssertTrue(snapshotIDs.isDisjoint(with: previousRemovedIDs))
+                previousRemovedIDs.formUnion(snapshotIDs)
+                let old = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: removed.rootInstanceID))
+                let retained = try await page.runtime.retainsViewModel(old)
+                XCTAssertFalse(retained)
+                let step = try await page.step(elapsedSeconds: 0)
+                XCTAssertEqual(Set(step.rows.keys), ["A", "B"])
+                await assertRows(page, ["A"], collapsed: [])
+            }
+        }
+    }
+
+    func testRemovalWithWaitersRefusesWithoutChangingMembership() async throws {
+        try await withLiveMovePage { page in
+            try await move(page, "A", "B", "t1")
+            let before = try await page.snapshot(screenID: "B")
+            let reference = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: before.rootInstanceID))
+            let waiter = try await page.registerCompletion(screenID: "B", eventName: "never-arrives")
+            do {
+                try await page.remove(screenID: "B")
+                XCTFail("Removal must refuse an outstanding completion")
+            } catch ExperienceInteractiveScreenError.stateContract(let message) {
+                XCTAssertEqual(message, "Screen still awaits completion")
+            }
+            await assertRows(page, ["A", "B"], collapsed: ["A"])
+            let removed = await page.isRowRemoved(screenID: "B")
+            XCTAssertFalse(removed)
+            let retained = try await page.runtime.retainsViewModel(reference)
+            XCTAssertTrue(retained)
+            let snapshotIDs = await page.runtime.removedRowSnapshotIDs
+            XCTAssertTrue(snapshotIDs.isEmpty)
+            let after = try await page.snapshot(screenID: "B")
+            XCTAssertEqual(after, before)
+            await page.removeCompletion(screenID: "B", id: waiter.id)
+            try await page.remove(screenID: "B")
+            let released = try await page.runtime.retainsViewModel(reference)
+            XCTAssertFalse(released)
         }
     }
 
@@ -286,6 +340,9 @@ private func move(_ page: ExperienceInteractivePage, _ source: String, _ target:
                     }
                     XCTFail("Published completion event did not arrive for \(transition ?? "cut")")
                 } catch { waitError = error }
+            }, release: {
+                for (id, token) in waiters { await page.removeCompletion(screenID: id, id: token) }
+                waiters.removeAll()
             }, hidden: {}, active: { try await page.selectActiveRow(target) }))
         if let waitError { throw waitError }
         XCTAssertTrue(inputEnabled)

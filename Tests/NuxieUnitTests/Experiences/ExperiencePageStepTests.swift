@@ -69,7 +69,7 @@ final class ExperiencePageStepTests: XCTestCase {
                         default: break
                         }
                     }
-                }, present: { try deliver() }, wait: { _, _ in }, hidden: {}, active: {
+                }, present: { try deliver() }, wait: { _, _ in }, release: {}, hidden: {}, active: {
                     XCTAssertEqual(delivered.count, 1, "Landing save must be delivered before owner selection")
                     if back { XCTAssertFalse(mounted.contains("A")) }
                     owner = "B"
@@ -102,7 +102,7 @@ final class ExperiencePageStepTests: XCTestCase {
             let probe = PageStepProbe()
             try await probe.perform(style: style)
             XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "register:B:enter",
-                "batch", "present", "wait:2:700", "batch", "hidden", "active", "input:true"])
+                "batch", "present", "wait:2:700", "release", "batch", "hidden", "active", "input:true"])
             XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .reconcile, .expand, .phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair")], [.end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
         }
     }
@@ -110,11 +110,13 @@ final class ExperiencePageStepTests: XCTestCase {
     func testCutRunsPublishedHalvesSequentiallyAndRetiresAfterBegin() async throws {
         let probe = PageStepProbe()
         try await probe.perform(style: .none)
-        XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "batch", "present", "wait:1:700",
-            "register:B:enter", "batch", "present", "wait:1:700", "batch", "hidden", "active", "input:true"])
+        XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "batch", "present", "wait:1:700", "release",
+            "register:B:enter", "batch", "present", "wait:1:700", "release", "batch", "hidden", "active", "input:true"])
         XCTAssertEqual(probe.batches[1], [.take, .position(isBack: false), .reconcile, .expand, .phases([("B", .entering)], "pair"), .begin("pair"),
             .phases([("A", .hidden)], ""), .retire])
         XCTAssertEqual(probe.batches[2], [.end("pair"), .phases([("B", .active)], "")])
+        XCTAssertEqual(probe.registrationsAtRetirement, [["B": 1]],
+            "The incoming row's completion may remain outstanding while the outgoing row retires")
     }
 
     func testCutWithoutIDPassesNullAndWaitsOnlyForDeclaredExit() async throws {
@@ -212,7 +214,74 @@ final class ExperiencePageStepTests: XCTestCase {
                 outgoingCompletionEventName: "exit", incomingCompletionEventName: "enter"),
             exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false, operations: operations)
         XCTAssertFalse(probe.order.contains { $0.hasPrefix("wait:") })
+        let release = try XCTUnwrap(probe.order.firstIndex(of: "release"))
+        let retireBatch = try XCTUnwrap(probe.batches.firstIndex { $0.contains(.retire) })
+        XCTAssertLessThan(release, probe.batchOrderIndices[retireBatch])
+        XCTAssertEqual(probe.order.filter { $0 == "release" }.count, 1)
         XCTAssertTrue(probe.order.contains("active"))
+    }
+
+    func testTogetherReleasesCompletionsAfterWaitBeforeRetirement() async throws {
+        let probe = PageStepProbe()
+        try await probe.perform(style: .magicMove)
+        let wait = try XCTUnwrap(probe.order.firstIndex(of: "wait:2:700"))
+        let release = try XCTUnwrap(probe.order.firstIndex(of: "release"))
+        let retireBatch = try XCTUnwrap(probe.batches.firstIndex { $0.contains(.retire) })
+        XCTAssertLessThan(wait, release)
+        XCTAssertLessThan(release, probe.batchOrderIndices[retireBatch])
+        XCTAssertEqual(probe.order.filter { $0 == "release" }.count, 1)
+    }
+
+    func testCutReleasesEachHalfAfterItsWait() async throws {
+        let probe = PageStepProbe()
+        try await probe.perform(style: .none)
+        let waits = probe.order.indices.filter { probe.order[$0].hasPrefix("wait:") }
+        let releases = probe.order.indices.filter { probe.order[$0] == "release" }
+        XCTAssertEqual(waits.count, 2)
+        XCTAssertEqual(releases.count, 2)
+        guard waits.count == 2, releases.count == 2 else { return }
+        let incoming = try XCTUnwrap(probe.order.firstIndex(of: "register:B:enter"))
+        let retireBatch = try XCTUnwrap(probe.batches.firstIndex { $0.contains(.retire) })
+        XCTAssertLessThan(waits[0], releases[0])
+        XCTAssertLessThan(releases[0], incoming)
+        XCTAssertLessThan(releases[0], probe.batchOrderIndices[retireBatch])
+        XCTAssertLessThan(waits[1], releases[1])
+        XCTAssertLessThan(releases[1], try XCTUnwrap(probe.batchOrderIndices.last))
+        XCTAssertTrue(probe.outstandingRegistrations.isEmpty)
+    }
+
+    func testProbeRejectsRetirementWithOutgoingCompletionOutstanding() async throws {
+        let probe = PageStepProbe(target: "B")
+        let operations = probe.operations
+        _ = try await operations.register("A", "exit")
+        let options = XCTExpectedFailure.Options()
+        options.isStrict = true
+        options.issueMatcher = { $0.compactDescription.contains("PageStepProbe: retiring rows still await completion") }
+        XCTExpectFailure("The probe must diagnose retirement before outgoing completion release", options: options)
+        do {
+            try await operations.batch([.retire])
+            XCTFail("The invalid batch must throw and stop the step")
+        } catch PageStepProbe.Failure.outstandingCompletions(let rows) {
+            XCTAssertEqual(rows, ["A"])
+        }
+        XCTAssertTrue(probe.batches.isEmpty, "The invalid batch must not be accepted")
+        XCTAssertEqual(probe.outstandingRegistrations, ["A": 1])
+    }
+
+    func testPresentationErrorReleasesCompletionsBeforePropagating() async throws {
+        enum PresentationFailure: Error { case failed }
+        let probe = PageStepProbe()
+        var operations = probe.operations
+        operations.present = { throw PresentationFailure.failed }
+        do {
+            try await ExperiencePageStep.perform(source: "A", target: "B", style: .fade, isBack: false,
+                plan: PageStepProbe.plan, exit: .init(declaration: nil, reduceMotion: false),
+                reduceMotion: false, operations: operations)
+            XCTFail("The presentation error must propagate")
+        } catch PresentationFailure.failed { }
+        XCTAssertEqual(probe.order.filter { $0 == "release" }.count, 1)
+        XCTAssertFalse(probe.batches.flatMap { $0 }.contains(.retire))
+        XCTAssertFalse(probe.order.contains("active"))
     }
 
     func testActiveNavigationIsNoOp() async throws {
@@ -235,6 +304,8 @@ final class ExperiencePageStepTests: XCTestCase {
         task.cancel()
         stream.continuation.finish()
         do { try await task.value; XCTFail("Expected cancellation") } catch is CancellationError { }
+        XCTAssertEqual(probe.order.filter { $0 == "release" }.count, 1)
+        XCTAssertTrue(probe.outstandingRegistrations.isEmpty)
         XCTAssertFalse(probe.batches.flatMap { $0 }.contains(.retire))
         XCTAssertFalse(probe.order.contains("active"))
         XCTAssertEqual(probe.order.last, "input:true")
@@ -424,17 +495,45 @@ final class ExperiencePageStepTests: XCTestCase {
 private final class PageStepProbe {
     nonisolated static let plan = ExperienceScreenCustomTransitionPlan(transitionId: "pair", durationMilliseconds: 450,
         incomingOnTop: true, outgoingCompletionEventName: "exit", incomingCompletionEventName: "enter")
+    enum Failure: Error { case outstandingCompletions(Set<String>) }
+    private var target: String
+    private(set) var outstandingRegistrations: [String: Int] = [:]
+    private(set) var registrationsAtRetirement: [[String: Int]] = []
+    init(target: String = "B") { self.target = target }
+
     var order: [String] = []
     var batches: [[ExperiencePageStep.Change]] = []
+    var batchOrderIndices: [Int] = []
     var operations: ExperiencePageStep.Operations {
         .init(setInputEnabled: { self.order.append("input:\($0)") }, prepare: { self.order.append("prepare") },
-            register: { id, name in self.order.append("register:\(id):\(name)"); return AsyncStream { _ in } },
-            batch: { self.order.append("batch"); self.batches.append($0) }, present: { self.order.append("present") },
+            register: { id, name in
+                self.order.append("register:\(id):\(name)")
+                self.outstandingRegistrations[id, default: 0] += 1
+                return AsyncStream { _ in }
+            },
+            batch: {
+                if $0.contains(.retire) {
+                    let blocked = Set(self.outstandingRegistrations.keys.filter { $0 != self.target })
+                    guard blocked.isEmpty else {
+                        XCTFail("PageStepProbe: retiring rows still await completion: \(blocked.sorted())")
+                        throw Failure.outstandingCompletions(blocked)
+                    }
+                    self.registrationsAtRetirement.append(self.outstandingRegistrations)
+                }
+                self.batchOrderIndices.append(self.order.count)
+                self.order.append("batch")
+                self.batches.append($0)
+            }, present: { self.order.append("present") },
             wait: { streams, duration in self.order.append("wait:\(streams.count):\(duration)") },
+            release: {
+                self.order.append("release")
+                self.outstandingRegistrations.removeAll()
+            },
             hidden: { self.order.append("hidden") }, active: { self.order.append("active") })
     }
     func perform(style: ExperienceScreenTransitionSpec.Kind, plan: ExperienceScreenCustomTransitionPlan? = PageStepProbe.plan,
                  reduced: Bool = false, coveredCut: Bool = false, declaredExit: Bool = true, target: String = "B", isBack: Bool = false) async throws {
+        self.target = target
         try await ExperiencePageStep.perform(source: "A", target: target, style: style, isBack: isBack, plan: plan,
             exit: .init(declaration: declaredExit ? .init(completeEventName: "declared-exit", durationMs: 100) : nil, reduceMotion: reduced),
             reduceMotion: reduced, coveredCut: coveredCut, operations: operations)

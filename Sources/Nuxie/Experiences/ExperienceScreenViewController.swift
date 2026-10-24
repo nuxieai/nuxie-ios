@@ -815,6 +815,9 @@ final class ExperienceScreenViewController: UIViewController {
                 try await loop.advanceZeroDelta(awaitsPresentation: true)
             }, wait: { streams, milliseconds in
                 await ExperienceScreenExitWatchdog.wait(for: streams, watchdogMilliseconds: milliseconds)
+            }, release: {
+                for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
+                waiters.removeAll()
             }, hidden: onHidden, active: { [self] in
                 guard isEligible(), runtimeFailure == nil, !isShuttingDown else { throw CancellationError() }
                 try await layer.selectActiveRow(targetID)
