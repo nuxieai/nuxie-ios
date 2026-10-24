@@ -1592,6 +1592,19 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
         )
     }
 
+    // Internal projection shared with fixture readers; keeps publisher identity and
+    // asset/input decoding identical to authenticated acquisition.
+    nonisolated static func runtimePlan(descriptor: JourneyReleaseDescriptor) throws -> NativeExperienceRenderPlan {
+        guard let document = descriptor.render else {
+            throw JourneyReleaseAcquisitionError.invalidRuntimeBinding("Missing render document")
+        }
+        let render = try decode(JourneyReleaseRenderDocument.self, from: document)
+        guard let first = render.screens.first else {
+            throw JourneyReleaseAcquisitionError.invalidRuntimeBinding("Missing render Screen")
+        }
+        return try runtimePlan(identity: descriptor.identity, render: render, initialScreenID: first.id)
+    }
+
     private nonisolated static func runtimePlan(
         identity: JourneyReleaseIdentity,
         render: JourneyReleaseRenderDocument,

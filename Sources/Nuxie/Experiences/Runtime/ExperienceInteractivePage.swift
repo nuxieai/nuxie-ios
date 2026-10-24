@@ -44,7 +44,7 @@ actor ExperienceInteractivePage {
     private let environmentBindings: ExperienceEnvironmentBindings
     private var rows: [String: Row] = [:]
     private var rowList = ExperiencePageRows()
-    private var rowsNeedReconciliation = false
+    private var hasStepped = false
     var retainedScreenIDs: Set<String> { Set(rows.keys) }
     var mountedScreenIDs: [String] { rowList.screenIDs }
     private var closed = false
@@ -214,7 +214,7 @@ actor ExperienceInteractivePage {
                     return result
                 }
                 if let previous, let retained = previous.removedSnapshot {
-                    await previous.binding.closeRemovedPageRow()
+                    await previous.binding.closePageRow()
                     await runtime.endRemovedRowGeneration(retained)
                 }
                 rows[screenID] = Row(screen: resolvedScreen, reference: reference, binding: binding,
@@ -271,7 +271,16 @@ actor ExperienceInteractivePage {
         }
     }
 
-    static let fitContentDiagnostic = "ExperienceInteractivePage: compiler content height is unavailable; fit-content defaults to large"
+    /// No height is valid before the first ordinary step. Reading never advances.
+    func contentHeight() async throws -> Float? {
+        try await gate.withLock { [self] in
+            try await requireOpen()
+            guard await hasStepped else { return nil }
+            return try await runtime.contentHeight()
+        }
+    }
+
+    static let fitContentDiagnostic = "ExperienceInteractivePage: page content height is unavailable; fit-content defaults to large"
 
     func remove(screenID: String) async throws {
         try await gate.withLock { [self] in try await removeLocked(screenID: screenID) }
@@ -305,7 +314,6 @@ actor ExperienceInteractivePage {
         guard let mapped = payload.renderPlan.screens.first(where: { $0.screenId == target }) else {
             throw ExperienceInteractiveScreenError.screenNotFound(target)
         }
-        var reconciled: Step?
         for change in changes {
             switch change {
             case .take:
@@ -321,10 +329,6 @@ actor ExperienceInteractivePage {
                     try await applyRowMutation(mutation)
                     rowList = next
                 }
-            case .reconcile:
-                if rowsNeedReconciliation {
-                    reconciled = try await stepLocked(pointers: [], elapsedSeconds: 0, correlationID: 0)
-                }
             case .expand:
                 guard rowList.screenIDs.contains(target) else {
                     throw ExperienceInteractiveScreenError.stateContract("Incoming page row must be inserted before expansion")
@@ -336,9 +340,6 @@ actor ExperienceInteractivePage {
                 try await setPhasesLocked(phases, transition: transition, reduceMotion: reduceMotion, exitReason: .navigation)
                 if phases.contains(where: { $0.1 == .active }) { await videoPlayback?.setStepInProgress(false) }
             case .begin(let name):
-                guard !rowsNeedReconciliation else {
-                    throw ExperienceInteractiveScreenError.stateContract("Page rows must reconcile before step begin")
-                }
                 // Only contracts with native live-move records can begin a step.
                 if contract.hasLiveMoves { try await runtime.stepBegin(incomingScreen: mapped.artboardName, stepName: name.map { contract.stepNames[$0] ?? $0 }) }
                 liveStep = (mapped.artboardName, name)
@@ -351,7 +352,7 @@ actor ExperienceInteractivePage {
                 rowList = next
             }
         }
-        return reconciled
+        return nil
     }
 
     @discardableResult
@@ -367,7 +368,7 @@ actor ExperienceInteractivePage {
             self.liveStep = nil
         }
         // Bring borrowed instances home before any rollback removes their destination.
-        return try await applyLocked([.take, .position(isBack: true), .reconcile, .expand, .begin(nil), .end(nil),
+        return try await applyLocked([.take, .position(isBack: true), .expand, .begin(nil), .end(nil),
             .phases([(target, .hidden), (source, .active)], ""), .retire], source: target, target: source,
             reachable: reachable, reduceMotion: reduceMotion)
     }
@@ -378,18 +379,13 @@ actor ExperienceInteractivePage {
             guard let row = rows[id] else { throw ExperienceInteractiveScreenError.screenNotFound(id) }
             _ = try await runtime.mutateViewModel([.listInsert(instance: root, path: contract.listPath,
                 index: index, value: row.reference)])
-            rowsNeedReconciliation = true
         case .move(_, let from, let to):
             _ = try await runtime.mutateViewModel([.listMove(instance: root, path: contract.listPath,
                 from: from, to: to)])
-            rowsNeedReconciliation = true
         case .collapse(let id, let index, let collapsed):
             guard let row = rows[id], row.removedSnapshot == nil else {
                 assertionFailure("R6b: collapse of a removed row")
                 throw ExperienceInteractiveScreenError.screenNotFound(id)
-            }
-            guard !rowsNeedReconciliation else {
-                throw ExperienceInteractiveScreenError.stateContract("Page rows must reconcile before collapse or expand")
             }
             try await runtime.setRowCollapsed(list: contract.listPath, index: index, collapsed: collapsed, rowReference: row.reference)
         case .remove(let id, let index):
@@ -407,7 +403,6 @@ actor ExperienceInteractivePage {
             await runtime.freezeRemovedRow(retained)
             let children = await row.binding.takeOwnedRowHandles()
             try await runtime.releaseViewModels(children + [row.reference])
-            rowsNeedReconciliation = true
         }
     }
 
@@ -533,7 +528,7 @@ actor ExperienceInteractivePage {
         try requireOpen()
         let frame = try await runtime.stepWithSnapshot(pointers: pointers, focusInputs: focusInputs, elapsedSeconds: elapsedSeconds,
             correlationID: correlationID)
-        rowsNeedReconciliation = false
+        hasStepped = true
         layoutBounds.update(size: try await runtime.layoutSize())
         try await videoPlayback?.resizeViewport(bounds: artboardBounds)
         let videoActive = try await videoPlayback?.tick() ?? false
@@ -716,7 +711,12 @@ actor ExperienceInteractivePage {
     private func closeLocked() async throws {
         guard !closed else { return }
         closed = true
-        for row in rows.values { for waiter in row.waiters.values { waiter.continuation.finish() } }
+        for row in rows.values {
+            for waiter in row.waiters.values { waiter.continuation.finish() }
+            // The page already holds the shared operation gate. Row cleanup
+            // closes its font scope without reacquiring that gate.
+            await row.binding.closePageRow()
+        }
         await videoPlayback?.close()
         rows.removeAll()
         rowList = ExperiencePageRows()
