@@ -260,6 +260,69 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testBackThreeTrimsRepeatedLowerScreenBeforeUpperPageDismissal() async throws {
+        try await withCoordinator { coordinator, lower, _, _ in
+            try await navigate(coordinator, to: "B")
+            try await navigate(coordinator, to: "A")
+            XCTAssertEqual(lower.pageHistory.screenIDs, ["A", "B", "A"])
+            let page = try XCTUnwrap(lower.interactivePage)
+            let bSnapshot = try await page.snapshot(screenID: "B")
+            let b = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: bSnapshot.rootInstanceID))
+            let before = await page.mountedScreenIDs
+            XCTAssertTrue(before.contains("B"))
+
+            // A push to B is expressible above A with the A/B live-move release.
+            try await navigate(coordinator, to: "B", transition: ["type": "push"])
+            let navigation = try XCTUnwrap(lower.navigationController)
+            let upper = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            XCTAssertFalse(upper === lower)
+            XCTAssertEqual(upper.pageHistory.screenIDs, ["B"])
+            let loop = try XCTUnwrap(Mirror(reflecting: upper).children
+                .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+            let gate = ConcurrencyProbeGate(holding: .all)
+            defer { Task { await gate.open() } }
+            // Hold the upper loop so its exit handshake cannot finish and pop.
+            // The independent lower page can still trim and remove its native row.
+            XCTAssertTrue(loop.enqueue(.init {
+                try await gate.enter("upper-exit")
+                await gate.exit("upper-exit")
+                return .work(requestsFrame: false) {}
+            }))
+            let returning = Task { try await back(coordinator, to: "A", steps: 3) }
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                if await page.mountedScreenIDs == ["A"] { break }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(navigation.topViewController === upper,
+                "The lower page must be trimmed before the upper page is dismissed")
+            XCTAssertEqual(navigation.viewControllers.count, 2)
+            XCTAssertEqual(lower.pageHistory.screenIDs, ["A"])
+            let mounted = await page.mountedScreenIDs
+            XCTAssertEqual(mounted, ["A"])
+            let native = try await page.runtime.snapshot()
+            let list = native.values.first {
+                $0.ownerInstanceID == native.rootInstanceID && $0.name == "screens"
+            }
+            if case .list(let ids) = list?.value {
+                XCTAssertEqual(ids.count, 1)
+                XCTAssertFalse(ids.contains(b.rawValue))
+            } else {
+                XCTFail("The lower page must expose its native Screen list")
+            }
+            let retainedNativeB = try await page.runtime.retainsViewModel(b)
+            XCTAssertFalse(retainedNativeB)
+            let retained = await page.retainedScreenIDs
+            XCTAssertTrue(retained.contains("B"), "The removed row keeps its frozen snapshot until revisit or close")
+            let removedB = await page.isRowRemoved(screenID: "B")
+            XCTAssertTrue(removedB)
+            await gate.open()
+            try await returning.value
+            XCTAssertTrue(navigation.topViewController === lower)
+            XCTAssertEqual(lower.pageHistory.screenIDs, ["A"])
+        }
+    }
+
     func testJourneyBackFromOneModalAnnouncesOnlyTheDestinationOnce() async throws {
         try await assertModalBackActivation(modalCount: 1)
     }
