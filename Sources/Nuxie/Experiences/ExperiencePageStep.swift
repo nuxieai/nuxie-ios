@@ -103,13 +103,6 @@ enum ExperiencePageStep {
     }
 }
 
-private extension Optional {
-    func asyncMap<T>(_ transform: (Wrapped) async throws -> T) async rethrows -> T? {
-        guard let value = self else { return nil }
-        return try await transform(value)
-    }
-}
-
 struct ExperiencePageHistory {
     struct Entry {
         let screenID: String
