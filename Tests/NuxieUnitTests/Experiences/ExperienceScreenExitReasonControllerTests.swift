@@ -86,9 +86,7 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
 
     func testCloseCancelsNavigationAndRunsTheDismissalHandshake() async throws {
         try await withCoordinator { coordinator, source, probe in
-            // Warm both controllers before holding the source's ordinary runtime lane.
-            try await self.navigate(coordinator, to: "reason-target")
-            try await self.navigate(coordinator, to: source.screenId)
+            // Hold the live source. A replace round trip retires it; it is not cached.
             probe.hidden.removeAll()
             probe.active.removeAll()
             let loop = try self.field(source, "presentationLoop", as: ExperienceRuntimePresentationLoop.self)
@@ -169,10 +167,7 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
             let sheet = try XCTUnwrap(layers.last)
             let closing = try XCTUnwrap(sheet.topViewController as? ExperienceScreenViewController)
             let presentation = try XCTUnwrap(sheet.presentationController)
-            // Warm the sheet's target, then hold the closing screen's runtime lane
-            // so its navigation exit is still in flight when the swipe completes.
-            try await self.navigate(coordinator, to: "reason-target")
-            try await self.navigate(coordinator, to: closing.screenId)
+            // Hold the mounted sheet's runtime lane while its navigation exit is in flight.
             XCTAssertTrue(sheet.topViewController === closing)
             probe.active.removeAll()
             let loop = try self.field(closing, "presentationLoop", as: ExperienceRuntimePresentationLoop.self)

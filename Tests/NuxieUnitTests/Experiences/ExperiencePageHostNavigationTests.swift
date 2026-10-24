@@ -65,7 +65,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     func testCachedSnapshotInitializesNewRowsWithoutOverwritingRevisitedValues() async throws {
-        try await withCoordinator { coordinator, controller, _, _ in
+        try await withCoordinator(expectingNativeParentPanic: "Rust panic contained during atomic player step") { coordinator, controller, _, _ in
             let layer = try XCTUnwrap(controller.interactivePage)
             XCTAssertTrue(coordinator.applySnapshot(.init(values: [
                 .init(viewModelName: "Screen0", instanceId: "row-a", path: "offset", value: AnyCodable(7)),
@@ -147,7 +147,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     private func checkRowInitiatedStep(removingRequester: Bool) async throws {
-        try await withCoordinator { _, controller, probe, _ in
+        try await withCoordinator(expectingNativeParentPanic: removingRequester ? "nux_capi.runtime_error" : nil) { _, controller, probe, _ in
             let layer = try XCTUnwrap(controller.interactivePage)
             try await controller.preparePageRow(screenID: "B", products: [])
             let requester = try await layer.binding(screenID: "A")
@@ -628,7 +628,11 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 continuation.resume(returning: .failed)
             }
         }
-        XCTAssertEqual(result, .navigated)
+        guard result == .navigated else { throw NavigationDidNotComplete(result: result) }
+    }
+
+    private struct NavigationDidNotComplete: Error {
+        let result: ExperienceScreenNavigationResult
     }
 
     private func back(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String, steps: Int = 1, transition: Any? = nil) async throws {
@@ -637,7 +641,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 continuation.resume(returning: .failed)
             }
         }
-        XCTAssertEqual(result, .navigated)
+        guard result == .navigated else { throw NavigationDidNotComplete(result: result) }
     }
 
     private func assertTimelineAdvances(_ controller: ExperienceScreenViewController,
@@ -739,6 +743,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     private func withCoordinator(payload suppliedPayload: AuthenticatedRuntimePayload? = nil,
+        expectingNativeParentPanic: String? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil,
         onActive: (@MainActor (String) async -> Void)? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
@@ -765,6 +770,13 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         host.modalPresentationStyle = .fullScreen
         await withCheckedContinuation { continuation in presenter.present(host, animated: false) { continuation.resume() } }
         let probe = LayerHostProbe()
+        var nativeParentFailures: [Error] = []
+        var bodyStarted = false
+        func isKnownNativeFailure(_ error: Error) -> Bool {
+            guard case NuxieNativeRuntimeError.callFailed(let diagnostic) = error,
+                  diagnostic.status == .runtimeError, diagnostic.code == "nux_capi.runtime_error" else { return false }
+            return diagnostic.message == expectingNativeParentPanic
+        }
         let coordinator = ExperienceScreenTransitionCoordinator(experience: experience, artifact: .init(acquired: acquired),
             hostViewController: host, screenDelegate: probe,
             onPresentedScreenDismissed: { _, _ in },
@@ -774,18 +786,39 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 await onActive?(id)
             }, onProductsResolved: { probe.checkoutProducts.append($0) },
             onProductsUnavailable: { _ in XCTFail("Unexpected product resolution failure") },
-            onRuntimeFailure: { id, error in XCTFail("\(id): \(error)") })
+            onRuntimeFailure: { id, error in
+                if expectingNativeParentPanic != nil, bodyStarted, isKnownNativeFailure(error) {
+                    nativeParentFailures.append(error)
+                } else { XCTFail("\(id): \(error)") }
+            })
         do {
             try await coordinator.install()
             coordinator.setContentHidden(false)
             _ = await coordinator.activateInitialScreen()
             let controller = try XCTUnwrap((host.children.first as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
-            try await body(coordinator, controller, probe, preparation)
+            bodyStarted = true
+            do { try await body(coordinator, controller, probe, preparation) }
+            catch {
+                // Stop at a poisoned player's first failure, without asserting later
+                // navigation/value results that this runtime can no longer produce.
+                guard expectingNativeParentPanic != nil,
+                      isKnownNativeFailure(error) ||
+                        (error is NavigationDidNotComplete && !nativeParentFailures.isEmpty) else { throw error }
+                if isKnownNativeFailure(error) { nativeParentFailures.append(error) }
+            }
             await coordinator.tearDown()
         } catch { await coordinator.tearDown(); window.isHidden = true; oldKey?.makeKey(); throw error }
         await withCheckedContinuation { continuation in presenter.dismiss(animated: false) { continuation.resume() } }
         window.isHidden = true
         oldKey?.makeKey()
+        if expectingNativeParentPanic != nil {
+            let options = XCTExpectedFailure.Options()
+            options.isStrict = true
+            XCTExpectFailure("Runtime mark_observable_mutation traverses a non-ViewModelInstance list parent (instance.rs:1302)", options: options) {
+                XCTAssertTrue(nativeParentFailures.isEmpty,
+                    "Native parent traversal panic after page row membership changes: \(nativeParentFailures)")
+            }
+        }
     }
 }
 
