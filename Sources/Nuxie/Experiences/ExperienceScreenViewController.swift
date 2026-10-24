@@ -716,6 +716,11 @@ final class ExperienceScreenViewController: UIViewController {
             interactiveScreen = nil
             lifecycleIncludesExitReason = false
             await loop.shutdown()
+            if !loop.hasTakenSessionOwnership {
+                // Preparation opened the native resource before the loop took ownership.
+                if let interactivePage { try? await interactivePage.close() }
+                else { try? await interactive.close() }
+            }
             interactivePage = nil
             rowBindings.removeAll()
             rowScreens.removeAll()

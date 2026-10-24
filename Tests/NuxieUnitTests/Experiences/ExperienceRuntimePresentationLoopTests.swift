@@ -1255,6 +1255,28 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         await loop.shutdown()
         let operations = await recorder.operationNames()
         XCTAssertTrue(operations.isEmpty, "An unopened session has no runtime teardown transition")
+        XCTAssertFalse(loop.hasTakenSessionOwnership)
+        _ = window
+    }
+
+    @MainActor
+    func testFailedStartStillClosesItsAcquiredSessionExactlyOnce() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.failDeviceCopy()
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        do {
+            try await loop.start()
+            XCTFail("The injected startup failure must be propagated")
+        } catch {
+            XCTAssertTrue(error is PresentationSessionStartupFailure)
+        }
+        XCTAssertTrue(loop.hasTakenSessionOwnership)
+        await loop.shutdown()
+        await loop.shutdown()
+        let operations = await recorder.operationNames()
+        XCTAssertEqual(operations, ["metalDevice", "close"])
         _ = window
     }
 
@@ -1619,11 +1641,16 @@ private actor AsyncBooleanProbe {
     }
 }
 
+private enum PresentationSessionStartupFailure: Error { case deviceCopy }
+
 private actor PresentationSessionRecorder {
     enum CompletionMode { case immediate, held }
 
     private let device: any MTLDevice
     private let onRenderDelivery: (@MainActor @Sendable () async -> Void)?
+    private var shouldFailDeviceCopy = false
+    func failDeviceCopy() { shouldFailDeviceCopy = true }
+
     private var mediaVisibility: Bool?
     private var names: [String] = []
     private var sizes: [ExperienceRuntimeSurfaceSize] = []
@@ -1657,6 +1684,7 @@ private actor PresentationSessionRecorder {
             return .none
         case .copyMetalDevice:
             names.append("metalDevice")
+            if shouldFailDeviceCopy { throw PresentationSessionStartupFailure.deviceCopy }
             return .metalDevice(device)
         case .resize(let size):
             names.append("resize")
