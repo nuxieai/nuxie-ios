@@ -193,10 +193,10 @@ final class ExperienceInteractivePageTests: XCTestCase {
     }
 
     @MainActor
-    func testNewRowsAppendOnTopEvenForBack() async throws {
-        for (_, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["A", "B"]),
-            (.push, false, ["A", "B"]), (.magicMove, true, ["A", "B"]),
-            (.fade, true, ["A", "B"])] {
+    func testNewRowsGoOnTopForwardAndBelowTheOutgoingRowForBack() async throws {
+        for (_, back, expected) in [(ExperienceScreenTransitionSpec.Kind.push, true, ["B", "A"]),
+            (.push, false, ["A", "B"]), (.magicMove, true, ["B", "A"]),
+            (.fade, true, ["B", "A"])] {
             try await withLiveMovePage(initialA: false) { layer in
                 try await layer.insert(screenID: "A", at: 0)
                 try await layer.apply([.take, .position(isBack: back), .reconcile, .expand,
