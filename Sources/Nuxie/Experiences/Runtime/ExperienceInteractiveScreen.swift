@@ -2086,6 +2086,12 @@ actor ExperienceInteractiveScreen {
         latestSnapshot = snapshot
     }
 
+    // The page already holds operationGate. Never reacquire it or close shared resources.
+    func closeRemovedPageRow() {
+        discardTextFrame()
+        fontScope.close()
+    }
+
     private func requireWritableRow() throws {
         assert(removedRowSnapshot == nil, "R6b: stale row binding used for a write")
         guard removedRowSnapshot == nil else { throw CancellationError() }

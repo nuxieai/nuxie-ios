@@ -176,7 +176,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
                         present: {
                             loop.setTimelineActive(true)
                             try await loop.advanceZeroDelta(awaitsPresentation: true)
-                        }, wait: { _, _ in XCTFail("The presentation budget has already expired") },
+                        }, wait: { _, _ in XCTFail("The presentation budget has already expired") }, release: {},
                         hidden: {}, active: { activated = true }))
                 outcome = .success(())
             } catch { outcome = .failure(error) }

@@ -43,9 +43,9 @@ actor ExperienceInteractivePage {
     private let environment: NuxieNativeViewModelReference?
     private let environmentBindings: ExperienceEnvironmentBindings
     private var rows: [String: Row] = [:]
-    private var retiredGenerations: [(String, Row)] = []
     private var rowList = ExperiencePageRows()
     private var rowsNeedReconciliation = false
+    var retainedScreenIDs: Set<String> { Set(rows.keys) }
     var mountedScreenIDs: [String] { rowList.screenIDs }
     private var closed = false
     private(set) var activeScreenID: String?
@@ -213,7 +213,10 @@ actor ExperienceInteractivePage {
                     result.pageStep = step
                     return result
                 }
-                if let previous { retiredGenerations.append((screenID, previous)) }
+                if let previous, let retained = previous.removedSnapshot {
+                    await previous.binding.closeRemovedPageRow()
+                    await runtime.endRemovedRowGeneration(retained)
+                }
                 rows[screenID] = Row(screen: resolvedScreen, reference: reference, binding: binding,
                     products: previous?.products ?? products, lifecycle: previous?.lifecycle ?? .init(reduceMotion: currentReduceMotion))
             } catch {
@@ -391,11 +394,15 @@ actor ExperienceInteractivePage {
                 assertionFailure("R6b: removing an already removed row")
                 throw ExperienceInteractiveScreenError.screenNotFound(id)
             }
+            guard row.waiters.isEmpty else {
+                throw ExperienceInteractiveScreenError.stateContract("Screen still awaits completion")
+            }
             let retained = try await runtime.snapshot(row.reference)
             _ = try await runtime.mutateViewModel([.listRemove(instance: root, path: contract.listPath, index: index)])
             rows[id]?.removedSnapshot = retained
             await row.binding.markRowRemoved(retained)
             await runtime.freezeRemovedRow(retained)
+            try await runtime.releaseViewModels([row.reference])
             rowsNeedReconciliation = true
         }
     }
@@ -493,9 +500,6 @@ actor ExperienceInteractivePage {
 
     private func removeCompletionLocked(screenID: String, id: UUID) {
         rows[screenID]?.waiters.removeValue(forKey: id)?.continuation.finish()
-        for index in retiredGenerations.indices where retiredGenerations[index].0 == screenID {
-            retiredGenerations[index].1.waiters.removeValue(forKey: id)?.continuation.finish()
-        }
     }
 
     func step(pointers: [NuxieNativePointerEvent] = [], focusInputs: [NuxieNativeFocusInput] = [], elapsedSeconds: Float,
@@ -536,13 +540,13 @@ actor ExperienceInteractivePage {
             capturesTextLayout: capturesTextLayout, videoActive: videoActive)
     }
 
-    /// Projects a committed journal using frozen owners for every removed generation.
+    /// Projects a committed journal using the current live or removed row for each Screen.
     func projectCapturedStep(_ result: NuxieNativePlayerStepResult, snapshot: NuxieNativeViewModelSnapshot,
                              correlationID: UInt64 = 0, capturesTextLayout: Bool = false,
                              videoActive: Bool = false) async throws -> Step {
-        let generations = rows.keys.sorted().compactMap { id in rows[id].map { (id, $0) } } + retiredGenerations
+        let currentRows = rows.keys.sorted().compactMap { id in rows[id].map { (id, $0) } }
         var graphs: [UInt64: NuxieNativeViewModelSnapshot] = [:]
-        for (_, row) in generations {
+        for (_, row) in currentRows {
             let identity = row.reference.rawValue
             if let retained = row.removedSnapshot { graphs[identity] = retained }
             else if let graph = snapshot.rooted(at: identity) { graphs[identity] = graph }
@@ -554,7 +558,7 @@ actor ExperienceInteractivePage {
             return matches.count == 1 ? matches.first?.key : nil
         }
         var projected: [String: ExperienceInteractiveStepResult] = [:]
-        for (id, row) in generations {
+        for (id, row) in currentRows {
             let identity = row.reference.rawValue
             guard let graph = graphs[identity] else { continue }
             let ids = Set(graph.instances.map(\.id))
@@ -565,10 +569,7 @@ actor ExperienceInteractivePage {
                 for (token, waiter) in row.waiters where waiter.name == event.name {
                     waiter.continuation.yield(())
                     waiter.continuation.finish()
-                    if rows[id]?.reference == row.reference { rows[id]?.waiters.removeValue(forKey: token) }
-                    else if let index = retiredGenerations.firstIndex(where: { $0.1.reference == row.reference }) {
-                        retiredGenerations[index].1.waiters.removeValue(forKey: token)
-                    }
+                    rows[id]?.waiters.removeValue(forKey: token)
                 }
             }
             let rowResult = NuxieNativePlayerStepResult(keepGoing: result.keepGoing || videoActive,
@@ -579,10 +580,7 @@ actor ExperienceInteractivePage {
                 textGeometry: result.textGeometry, focusResults: result.focusResults,
                 focusState: result.focusState)
             let next = try await row.binding.projectRowStep(rowResult, snapshot: graph, correlationID: correlationID, capturesTextLayout: capturesTextLayout)
-            if let existing = projected[id] {
-                projected[id] = .init(keepGoing: existing.keepGoing || next.keepGoing,
-                    pointerHits: existing.pointerHits, focusState: existing.focusState, effects: existing.effects + next.effects)
-            } else { projected[id] = next }
+            projected[id] = next
         }
         return Step(native: result, rows: projected,
             unattributedEvents: result.events.enumerated().compactMap { index, event in
@@ -716,8 +714,6 @@ actor ExperienceInteractivePage {
         closed = true
         for row in rows.values { for waiter in row.waiters.values { waiter.continuation.finish() } }
         await videoPlayback?.close()
-        for (_, row) in retiredGenerations { for waiter in row.waiters.values { waiter.continuation.finish() } }
-        retiredGenerations.removeAll()
         rows.removeAll()
         rowList = ExperiencePageRows()
         try await runtime.close()
