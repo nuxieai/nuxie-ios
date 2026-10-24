@@ -1,0 +1,48 @@
+{
+  "screens": {
+    "A": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "B": {
+      "exit": {
+        "durationMs": 0,
+        "completeEventName": null
+      },
+      "entrance": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    }
+  },
+  "steps": {
+    "t1": {
+      "durationMs": 1000,
+      "incoming": {
+        "durationMs": 1000,
+        "completeEventName": "nx_enter_done:t1"
+      },
+      "outgoing": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    },
+    "back": {
+      "durationMs": 1000,
+      "incoming": {
+        "durationMs": 1000,
+        "completeEventName": "nx_enter_done:back"
+      },
+      "outgoing": {
+        "durationMs": 0,
+        "completeEventName": null
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "/Users/levi/dev/nuxie-handoff/recreation-loop/live-moves-device-check/assets",
+  "purpose": "UNIV-5113 stage A real live-move actor probes. Exact source bytes, no publisher claim.",
+  "changes": "None. The test-only open seam uses Page/run/Page and clears the prepopulated fixture list before player creation. Production uses $nuxie.page and $nuxie.Page with an empty list.",
+  "sha256": {
+    "lifecycle2.json": "69fcac89b4279a8c57431eb6e656c1552a87fc8040e00d008b5ec9c979fb3149",
+    "lifecycle40.json": "26fc1a565770fdaaefdaa4fd01c5472edcccb1cf1182931a3e6ea7e80e46d781",
+    "page2.riv": "e41bbb9120436738f6bdbad294ce4a25770bca8380cdc005e7e2a926443114e1",
+    "page40.riv": "4efcb548f5b1ca6fbdcb2967e9a2105acf13e5721a5bc77fb3a3dc5d44d02e4b",
+    "video-inventory2.json": "62f920138a558e77e77c215f6dd0d35274ea32cdef479db5c52bc143064f39da"
+  }
+}
