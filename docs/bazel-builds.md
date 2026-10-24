@@ -41,6 +41,8 @@ cache override checks.
 
 ## SDK targets
 
+SDK main uses the staged runtime and cannot be consumed from outside until the next release, so consumers stay on a tagged version.
+
 The public `//:Nuxie` and `//:NuxieRuntime` targets export static Swift and native
 link providers. A wrapper can depend on `//:Nuxie` when linking its existing
 bridge framework. Resources propagate as `Nuxie_Nuxie.bundle`. This preserves
