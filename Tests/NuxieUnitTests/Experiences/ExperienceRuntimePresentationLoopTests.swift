@@ -1281,6 +1281,60 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testShutdownClosesAfterTerminalInputStepFails() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let payload = try await interimLayerPayload()
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let page = try await preparation.openPage(pixelWidth: 128, pixelHeight: 64)
+        let recorder = PresentationSessionRecorder(device: device, onClose: { try await page.close() })
+        let (window, view) = makePresentationSurface()
+        var errors: [Error] = []
+        let loop = makeLoop(recorder: recorder, view: view, onError: { errors.append($0) })
+        try await loop.start()
+        XCTAssertTrue(loop.enqueueFocus(.key(code: 65, modifiers: 0, pressed: true, repeated: false)))
+        try await loop.advanceZeroDelta()
+        await recorder.failTerminalInputStep()
+        await loop.shutdown()
+        await loop.shutdown()
+        let steps = await recorder.steps()
+        XCTAssertTrue(steps.last?.focusInputs.contains(.key(code: 65, modifiers: 0, pressed: false, repeated: false)) == true)
+        let names = await recorder.operationNames()
+        XCTAssertEqual(names.suffix(2), ["step", "close"])
+        XCTAssertEqual(names.filter { $0 == "close" }.count, 1)
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertEqual(errors.first as? PresentationSessionShutdownFailure, .terminalInput)
+        XCTAssertFalse(loop.needsSessionCleanup)
+        do {
+            _ = try await page.runtime.snapshot()
+            XCTFail("The real page's native session must be closed despite the failed terminal input step")
+        } catch NuxieNativeRuntimeError.closed {
+            // Page.close runs media teardown before closing this native session.
+        }
+        _ = window
+    }
+
+    @MainActor
+    func testFailedCloseCanBeRetriedWithoutRepeatingSuccessfulCleanup() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        var errors: [Error] = []
+        let loop = makeLoop(recorder: recorder, view: view, onError: { errors.append($0) })
+        try await loop.start()
+        await recorder.failNextClose()
+        await loop.shutdown()
+        XCTAssertTrue(loop.needsSessionCleanup)
+        await loop.shutdown()
+        XCTAssertFalse(loop.needsSessionCleanup)
+        await loop.shutdown()
+        let names = await recorder.operationNames()
+        XCTAssertEqual(names.filter { $0 == "close" }.count, 2)
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertEqual(errors.first as? PresentationSessionShutdownFailure, .close)
+        _ = window
+    }
+
+    @MainActor
     func testShutdownDrainsFrameAndClosesExactlyOnceDespiteDuplicateCompletion() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
@@ -1641,13 +1695,20 @@ private actor AsyncBooleanProbe {
     }
 }
 
+private enum PresentationSessionShutdownFailure: Error, Equatable { case terminalInput, close }
+
 private enum PresentationSessionStartupFailure: Error { case deviceCopy }
 
 private actor PresentationSessionRecorder {
     enum CompletionMode { case immediate, held }
 
     private let device: any MTLDevice
+    private let onClose: (@Sendable () async throws -> Void)?
     private let onRenderDelivery: (@MainActor @Sendable () async -> Void)?
+    private var shouldFailTerminalInput = false
+    private var shouldFailClose = false
+    func failTerminalInputStep() { shouldFailTerminalInput = true }
+    func failNextClose() { shouldFailClose = true }
     private var shouldFailDeviceCopy = false
     func failDeviceCopy() { shouldFailDeviceCopy = true }
 
@@ -1670,8 +1731,10 @@ private actor PresentationSessionRecorder {
     private var presentedDrawCalls: [UInt64] = []
     private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0, layoutScaleFactor: 0)
 
-    init(device: any MTLDevice, onRenderDelivery: (@MainActor @Sendable () async -> Void)? = nil) {
+    init(device: any MTLDevice, onClose: (@Sendable () async throws -> Void)? = nil,
+         onRenderDelivery: (@MainActor @Sendable () async -> Void)? = nil) {
         self.device = device
+        self.onClose = onClose
         self.onRenderDelivery = onRenderDelivery
     }
 
@@ -1696,6 +1759,10 @@ private actor PresentationSessionRecorder {
         case .step(let step):
             names.append("step")
             recordedSteps.append(step)
+            if shouldFailTerminalInput, step.focusInputs.contains(where: {
+                if case .key(_, _, let pressed, _) = $0 { return !pressed }
+                return false
+            }) { throw PresentationSessionShutdownFailure.terminalInput }
             if shouldHoldStep {
                 shouldHoldStep = false
                 await withCheckedContinuation { stepContinuation = $0 }
@@ -1737,6 +1804,11 @@ private actor PresentationSessionRecorder {
             return try await work.perform()
         case .close:
             names.append("close")
+            if shouldFailClose {
+                shouldFailClose = false
+                throw PresentationSessionShutdownFailure.close
+            }
+            try await onClose?()
             return .none
         }
     }

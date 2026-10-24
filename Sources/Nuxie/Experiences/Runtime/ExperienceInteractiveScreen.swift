@@ -297,7 +297,7 @@ struct ExperienceInteractiveMetalDevice: @unchecked Sendable {
 }
 
 struct ExperienceInteractiveDrawable: @unchecked Sendable {
-    fileprivate let value: any CAMetalDrawable
+    let value: any CAMetalDrawable
 
     init(_ value: any CAMetalDrawable) {
         self.value = value
@@ -4014,7 +4014,12 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    private func discardTextFrame() { pendingTextFrame = nil }
+    func discardTextFrame() { pendingTextFrame = nil }
+
+    func pagePresentationContent() -> (text: ExperienceInteractiveTextFrame?, nativeInputs: [String]) {
+        guard !isRemovedPageRow else { return (nil, []) }
+        return (pendingTextFrame, Array(Set(textInputs.values.filter(\.editable).map(\.textInputName))).sorted())
+    }
 
     func close() async throws {
         let runtime = runtime
@@ -4133,7 +4138,7 @@ actor ExperienceInteractiveScreen {
         }
     }
 
-    private static func renderOutcome(_ outcome: NuxieNativeRendererOutcome)
+    static func renderOutcome(_ outcome: NuxieNativeRendererOutcome)
         -> ExperienceInteractiveRenderOutcome
     {
         let disposition: ExperienceInteractiveRenderDisposition = switch outcome.disposition {
