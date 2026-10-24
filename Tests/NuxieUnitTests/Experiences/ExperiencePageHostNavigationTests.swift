@@ -103,7 +103,6 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     func testUnqualifiedBroadcastResolvesTheDefaultViewModelOfEachRetainedRow() async throws {
-        try XCTSkipIf(true, "Runtime: mark_observable_mutation walks a retired list parent (instance.rs:1302); re-enable with the next live-moves runtime after 1eca21db4e")
         try await withCoordinator { coordinator, controller, _, _ in
             let layer = try XCTUnwrap(controller.interactivePage)
             try await navigate(coordinator, to: "B")
@@ -152,7 +151,6 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     func testRemovedRowsLateStepStillDeliversTheMountedRowsEffects() async throws {
-        try XCTSkipIf(true, "Runtime: mark_observable_mutation walks a retired list parent (instance.rs:1302); re-enable with the next live-moves runtime after 1eca21db4e")
         try await checkRowInitiatedStep(removingRequester: true)
     }
 
