@@ -16,25 +16,27 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
         let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
             from: Data(contentsOf: directory.appendingPathComponent("release.json")))
-        let base = try SharedValuesFixture.payload(directory: directory, screens: ["feedback"])
-        let payload = AuthenticatedRuntimePayload(valuePolicy: release.valuePolicy,
-            authenticatedKeyID: base.authenticatedKeyID, requiredCapabilities: base.requiredCapabilities,
-            renderPlan: base.renderPlan, journey: base.journey, sceneBytes: base.sceneBytes, assets: base.assets)
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let payload = try await signedFixturePayload(at: directory)
+        let preparation = try await prepareFixturePage(payload: payload)
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let a = try await preparation.openScreen(screenID: "feedback", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        let b = try await preparation.openScreen(screenID: "feedback", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await a.close(); try await b.close() }
-        let file = try await NuxieNativePreparedFile.prepare(bytes: base.sceneBytes, valuePolicy: release.valuePolicy.native)
+        let a = try await preparation.openRow(screenID: "feedback", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        let b = try await preparation.openRow(screenID: "feedback", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await closeFixturePageRow(a); try await closeFixturePageRow(b) }
+        let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes, valuePolicy: release.valuePolicy.native)
         let prepared = try await run.native(in: file)
         let native = try XCTUnwrap(prepared)
         let aRuntime = try XCTUnwrap(Mirror(reflecting: a).children.first { $0.label == "runtime" }?.value as? NuxieNativeRuntime)
-        let aRoot = try await aRuntime.rootViewModelReference()
+        let aRootID = try await a.snapshot().rootInstanceID
+        let aRoot = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: aRootID))
         _ = try await aRuntime.mutateViewModel([.setNumber(instance: aRoot,
             path: "experience/responses:feedback/stars", value: 4)])
+        try await b.enableSemantics()
         _ = try await b.step(elapsedSeconds: 0)
-        let pressed = try await b.step(pointers: [.init(kind: .down, x: 121, y: 1)], elapsedSeconds: 0)
+        let frame = try await renderCopyFrame(b, capturesSemantics: true)
+        let bounds = try fixtureControlBounds(in: XCTUnwrap(frame.semantics), label: "Send")
+        let x = Float(bounds.midX), y = Float(bounds.midY)
+        let pressed = try await b.step(pointers: [.init(kind: .down, x: x, y: y)], elapsedSeconds: 0)
         XCTAssertTrue(pressed.pointerHits.contains { $0 != .none }, "The enabled published Save button is hit")
 
         let entered = expectation(description: "shared lane is held")
@@ -49,7 +51,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
                 await Task.yield()
             }
         }
-        let saving = Task { try await b.step(pointers: [.init(kind: .up, x: 121, y: 1)], elapsedSeconds: 0) }
+        let saving = Task { try await b.step(pointers: [.init(kind: .up, x: x, y: y)], elapsedSeconds: 0) }
         try await waitForQueuedJobs(1)
         let editing = Task { try await aRuntime.mutateViewModel([.setNumber(instance: aRoot,
             path: "experience/responses:feedback/stars", value: 5)]) }
@@ -84,13 +86,13 @@ final class ExperienceSharedValuesTests: XCTestCase {
         await original.retire()
         let restored = ExperienceRunValues(snapshot: checkpoint)
         addTeardownBlock { await restored.retire() }
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
-        let first = try await preparation.openScreen(screenID: "goals", runValues: restored,
+        let preparation = try await prepareFixturePage(payload: payload)
+        let first = try await preparation.openRow(screenID: "goals", runValues: restored,
             pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await first.close() }
-        let second = try await preparation.openScreen(screenID: "quiet", runValues: restored,
+        addTeardownBlock { try await closeFixturePageRow(first) }
+        let second = try await preparation.openRow(screenID: "quiet", runValues: restored,
             pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await second.close() }
+        addTeardownBlock { try await closeFixturePageRow(second) }
         let a = try await first.snapshot()
         let b = try await second.snapshot()
         let ownerA = try XCTUnwrap(a.values.first {
@@ -115,12 +117,12 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let expected = try PublishedInputFixture.expectations()
         let payload = try SharedValuesFixture.payload(directory: PublishedInputFixture.directory,
             screens: expected.screens)
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let preparation = try await prepareFixturePage(payload: payload)
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let input = try await preparation.openScreen(screenID: "input", runValues: run,
+        let input = try await preparation.openRow(screenID: "input", runValues: run,
             pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await input.close() }
+        addTeardownBlock { try await closeFixturePageRow(input) }
         func handler(_ name: String) async throws -> ExperienceInteractiveViewModelValue? {
             let snapshot = try await input.snapshot()
             let state = snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "state" }
@@ -157,9 +159,9 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let blur = try XCTUnwrap(expected.handlers["blur"])
         let blurredValue = try await handler(blur.property)
         XCTAssertEqual(blurredValue, .number(blur.after))
-        let greeting = try await preparation.openScreen(screenID: "greeting", runValues: run,
+        let greeting = try await preparation.openRow(screenID: "greeting", runValues: run,
             pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await greeting.close() }
+        addTeardownBlock { try await closeFixturePageRow(greeting) }
         let greetingSnapshot = try await greeting.snapshot()
         XCTAssertEqual(greetingSnapshot.values.first { $0.name == "name" }?.value,
             .bytes(Data(expected.typing.after.utf8)))
@@ -169,46 +171,46 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let expected = try SharedValuesFixture.expectations()
         let payload = try SharedValuesFixture.payload()
         let runValues = ExperienceRunValues()
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
-        let first = try await preparation.openScreen(screenID: "first", runValues: runValues, pixelWidth: 100, pixelHeight: 100)
+        let preparation = try await prepareFixturePage(payload: payload)
+        let first = try await preparation.openRow(screenID: "first", runValues: runValues, pixelWidth: 100, pixelHeight: 100)
         let firstSnapshot = try await first.snapshot()
         XCTAssertEqual(firstSnapshot.values.first { $0.name == "trip_days" }?.value, .number(expected.startingValues.trip_days))
         XCTAssertEqual(firstSnapshot.values.first { $0.name == "trip" }?.value, .bytes(Data(expected.startingValues.trip.utf8)))
         XCTAssertEqual(firstSnapshot.values.first { $0.name == "wants_reminder" }?.value, .bool(expected.startingValues.wants_reminder))
         let root = try await first.rootViewModel()
         _ = try await first.mutateState([.setNumber(root, path: "experience/trip_days", value: 30)])
-        let second = try await preparation.openScreen(screenID: "long", runValues: runValues, pixelWidth: 100, pixelHeight: 100)
+        let second = try await preparation.openRow(screenID: "long", runValues: runValues, pixelWidth: 100, pixelHeight: 100)
         let secondSnapshot = try await second.snapshot()
         XCTAssertEqual(secondSnapshot.values.first { $0.name == "trip_days" }?.value, .number(30))
         XCTAssertEqual(firstSnapshot.values.first { $0.name == "experience" }?.value,
             secondSnapshot.values.first { $0.name == "experience" }?.value)
-        try await first.close()
-        try await second.close()
+        try await closeFixturePageRow(first)
+        try await closeFixturePageRow(second)
     }
     func testRunSurvivesScreenCloseAndPreparationReplacementButOtherRunsStartFresh() async throws {
         let payload = try SharedValuesFixture.payload()
         let run = ExperienceRunValues()
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
-        let first = try await preparation.openScreen(screenID: "first", runValues: run, pixelWidth: 100, pixelHeight: 100)
+        let preparation = try await prepareFixturePage(payload: payload)
+        let first = try await preparation.openRow(screenID: "first", runValues: run, pixelWidth: 100, pixelHeight: 100)
         let root = try await first.rootViewModel()
         _ = try await first.mutateState([.setNumber(root, path: "experience/trip_days", value: 30)])
-        try await first.close()
-        let replacement = try await ExperienceInteractivePreparation.prepare(payload: payload)
-        let later = try await replacement.openScreen(screenID: "short", runValues: run, pixelWidth: 80, pixelHeight: 80)
-        let separate = try await preparation.openScreen(screenID: "short", runValues: ExperienceRunValues(), pixelWidth: 100, pixelHeight: 100)
+        try await closeFixturePageRow(first)
+        let replacement = try await prepareFixturePage(payload: payload)
+        let later = try await replacement.openRow(screenID: "short", runValues: run, pixelWidth: 80, pixelHeight: 80)
+        let separate = try await preparation.openRow(screenID: "short", runValues: ExperienceRunValues(), pixelWidth: 100, pixelHeight: 100)
         let retained = try await later.snapshot()
         let fresh = try await separate.snapshot()
         XCTAssertEqual(retained.values.first { $0.name == "trip_days" }?.value, .number(30))
         XCTAssertEqual(fresh.values.first { $0.name == "trip_days" }?.value, .number(23))
-        try await later.close()
-        try await separate.close()
+        try await closeFixturePageRow(later)
+        try await closeFixturePageRow(separate)
     }
 
     func testSDKSnapshotCannotSeedOrMirrorSharedRunValues() async throws {
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: SharedValuesFixture.payload())
-        let screen = try await preparation.openScreen(screenID: "first", runValues: ExperienceRunValues(), pixelWidth: 100, pixelHeight: 100)
+        let preparation = try await prepareFixturePage(payload: SharedValuesFixture.payload())
+        let screen = try await preparation.openRow(screenID: "first", runValues: ExperienceRunValues(), pixelWidth: 100, pixelHeight: 100)
         _ = try await screen.applyStateCommand(.snapshot([
-            .init(viewModelName: "Runtime first scr_screens_sfirst", instanceID: "first-root", instanceName: nil,
+            .init(viewModelName: try XCTUnwrap(preparation.payload.journey.screens.first { $0.id == preparation.payload.renderPlan.entry.screenId }?.defaultViewModelName), instanceID: nil, instanceName: nil,
                 path: "experience/trip_days", value: .number(999)),
         ]))
         let value = try await screen.snapshot()
@@ -216,23 +218,23 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let root = try await screen.rootViewModel()
         let mutation = try await screen.mutateState([.setNumber(root, path: "experience/trip_days", value: 30)])
         XCTAssertTrue(mutation.effects.isEmpty, "Native run values must not enter the SDK's screen state store")
-        try await screen.close()
+        try await closeFixturePageRow(screen)
     }
 
     func testRetiredRunRejectsNewScreensWhileMountedScreenCanClose() async throws {
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: SharedValuesFixture.payload())
+        let preparation = try await prepareFixturePage(payload: SharedValuesFixture.payload())
         let run = ExperienceRunValues()
-        let screen = try await preparation.openScreen(screenID: "first", runValues: run, pixelWidth: 100, pixelHeight: 100)
+        let screen = try await preparation.openRow(screenID: "first", runValues: run, pixelWidth: 100, pixelHeight: 100)
         await run.retire()
         do {
-            _ = try await preparation.openScreen(screenID: "long", runValues: run, pixelWidth: 100, pixelHeight: 100)
+            _ = try await preparation.openRow(screenID: "long", runValues: run, pixelWidth: 100, pixelHeight: 100)
             XCTFail("An ended run cannot open another screen")
         } catch {
             XCTAssertEqual(error as? ExperienceInteractiveScreenError, .stateContract("The run has ended"))
         }
         let retained = try await screen.snapshot()
         XCTAssertEqual(retained.values.first { $0.name == "trip_days" }?.value, .number(23))
-        try await screen.close()
+        try await closeFixturePageRow(screen)
     }
     #endif
 
@@ -289,11 +291,11 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Fixtures/env-entry")
         let payload = try SharedValuesFixture.payload(directory: directory, screens: ["entry"])
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let preparation = try await prepareFixturePage(payload: payload)
         for scale in [nil, Double(53) / 17] {
-            let screen = try await preparation.openScreen(pixelWidth: 393, pixelHeight: 852,
+            let screen = try await preparation.openRow(pixelWidth: 393, pixelHeight: 852,
                 initialFontScale: scale)
-            addTeardownBlock { try await screen.close() }
+            addTeardownBlock { try await closeFixturePageRow(screen) }
             let env = try await screen.environmentSnapshot()
             XCTAssertEqual(env?.values.first { $0.name == "fontScale" }?.value,
                            .number(Float(scale ?? 1)), "The environment is initialized before the first frame")
@@ -338,8 +340,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
         try await controller.mountInteractiveScreen()
         let mirror = Mirror(reflecting: controller)
-        let screen = try XCTUnwrap(mirror.children.first { $0.label == "interactiveScreen" }?.value
-            as? ExperienceInteractiveScreen)
+        let screen = try await fixtureActivePageRow(controller).binding
         let loop = try XCTUnwrap(mirror.children.first { $0.label == "presentationLoop" }?.value
             as? ExperienceRuntimePresentationLoop)
         func drain() async throws {
@@ -351,7 +352,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
             let expected = Float(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize / 17)
             let env = try await controller.runtimeEnvironmentSnapshot()
             XCTAssertEqual(env?.values.first { $0.name == "fontScale" }?.value, .number(expected))
-            let root = try await controller.runtimeSnapshot()
+            let root = try await fixtureActivePageRow(controller).snapshot
             XCTAssertEqual(root.values.first {
                 $0.ownerInstanceID == root.rootInstanceID && $0.name == "fontScale"
             }?.value, .number(7), "Device text size must never overwrite a product's root property")
@@ -394,9 +395,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
             controller.view.layoutIfNeeded()
             addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
             try await controller.mountInteractiveScreen()
-            let screen = try XCTUnwrap(Mirror(reflecting: controller).children.first {
-                $0.label == "interactiveScreen"
-            }?.value as? ExperienceInteractiveScreen)
+            let screen = try await fixtureActivePageRow(controller).binding
             // Read the mounted state at the fixture's one-pixel-per-point resolution.
             _ = try await screen.resize(pixelWidth: 393, pixelHeight: 852, layoutScaleFactor: 1)
             let mountedEnv = try await screen.environmentSnapshot()
@@ -451,8 +450,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
             addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
             try await controller.mountInteractiveScreen()
             let mirror = Mirror(reflecting: controller)
-            let screen = try XCTUnwrap(mirror.children.first { $0.label == "interactiveScreen" }?.value
-                as? ExperienceInteractiveScreen)
+            let screen = try await fixtureActivePageRow(controller).binding
             let loop = try XCTUnwrap(mirror.children.first { $0.label == "presentationLoop" }?.value
                 as? ExperienceRuntimePresentationLoop)
             _ = try await screen.resize(pixelWidth: 393, pixelHeight: 852, layoutScaleFactor: 1)
@@ -507,8 +505,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
             addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
             let host = UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light)
             try await controller.mountInteractiveScreen(hostTraits: host)
-            let screen = try XCTUnwrap(Mirror(reflecting: controller).children
-                .first { $0.label == "interactiveScreen" }?.value as? ExperienceInteractiveScreen)
+            let screen = try await fixtureActivePageRow(controller).binding
             _ = try await screen.resize(pixelWidth: 393, pixelHeight: 852, layoutScaleFactor: 1)
             let env = try await screen.environmentSnapshot()
             XCTAssertEqual(env?.values.first { $0.name == "colorScheme" }?.value, .integer(scheme == .dark ? 1 : 0))
@@ -534,30 +531,31 @@ final class ExperienceSharedValuesTests: XCTestCase {
 
     func testPublishedDeviceGlobalIsScopedToEachMountedScreen() async throws {
         let expected = try PublishedRunValuesFixture.expectations()
-        let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,
-            screens: expected.screens)
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let payload = try PublishedRunValuesFixture.payload()
+        let preparation = try await prepareFixturePage(payload: payload)
         let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes)
         let catalog = await file.viewModelCatalog()
         let envSchema = try XCTUnwrap(catalog.schemas.first { $0.name == "env" })
         XCTAssertTrue(envSchema.isGlobal)
+        // Compiler 2b carries the full on-canvas environment contract.
+        // Parent tools/rive-compiler/scene-shared/src/env_schema.rs: ENV_ON_CANVAS.
         XCTAssertEqual(Set(catalog.properties.filter { $0.schemaIndex == envSchema.index }.map(\.name)),
-            Set(["reduceMotion", "safeArea"]))
+            Set(["reduceMotion", "fontScale", "safeArea", "width", "height", "fold", "layout", "colorScheme"]))
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let first = try await preparation.openScreen(screenID: "device", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        let second = try await preparation.openScreen(screenID: "device", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await first.close(); try await second.close() }
-        let initialValue = try await first.environmentSnapshot()
+        let first = try await preparation.openRow(screenID: "device", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        let second = try await preparation.openRow(screenID: "device", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await closeFixturePageRow(first); try await closeFixturePageRow(second) }
+        let initialValue = try await fixtureEnvironmentSnapshot(first)
         let initial = try XCTUnwrap(initialValue)
-        let otherValue = try await second.environmentSnapshot()
+        let otherValue = try await fixtureEnvironmentSnapshot(second)
         let other = try XCTUnwrap(otherValue)
         XCTAssertNotEqual(initial.rootInstanceID, other.rootInstanceID, "Each mounted screen owns its native geometry and motion environment")
         XCTAssertEqual(initial.values.first { $0.name == "reduceMotion" }?.value, .bool(false))
         XCTAssertEqual(initial.values.first { $0.name == "top" }?.value, .number(0))
         try await first.enableSemantics()
         let before = try await renderCopyFrame(first, capturesSemantics: true)
-        try await first.updateEnvironment(reduceMotion: true,
+        try await updateFixtureEnvironment(first, reduceMotion: true,
             safeArea: .init(top: 59, bottom: 0, left: 0, right: 0))
         _ = try await first.step(elapsedSeconds: 0)
         _ = try await second.step(elapsedSeconds: 0)
@@ -578,12 +576,12 @@ final class ExperienceSharedValuesTests: XCTestCase {
             "Device's unchanged ink moves by exactly the source's safe-area delta")
         let secondPixels = try await renderCopyPixels(second)
         XCTAssertEqual(secondPixels, before.pixels, "The other screen retains its own environment")
-        try await second.updateEnvironment(reduceMotion: true,
+        try await updateFixtureEnvironment(second, reduceMotion: true,
             safeArea: .init(top: 31, bottom: 0, left: 0, right: 0))
         _ = try await first.step(elapsedSeconds: 0)
         let retained = try await renderCopyPixels(first)
         XCTAssertEqual(retained, after.pixels, "The other screen's env update cannot shift this screen")
-        try await first.updateEnvironment(reduceMotion: false, safeArea: .zero)
+        try await updateFixtureEnvironment(first, reduceMotion: false, safeArea: .zero)
         _ = try await first.step(elapsedSeconds: 0)
         let restored = try await renderCopyPixels(first)
         XCTAssertEqual(restored, before.pixels, "A screen restores its own initial environment")
@@ -591,9 +589,8 @@ final class ExperienceSharedValuesTests: XCTestCase {
 
     func testPublishedCopyDrawsSelectedValueOnItsFirstFrame() async throws {
         let expected = try PublishedRunValuesFixture.expectations()
-        let payload = try SharedValuesFixture.payload(directory: PublishedRunValuesFixture.directory,
-            screens: expected.screens)
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let payload = try PublishedRunValuesFixture.payload()
+        let preparation = try await prepareFixturePage(payload: payload)
         let file = try await NuxieNativePreparedFile.prepare(bytes: payload.sceneBytes)
         var frames: [Data] = []
         for level in [expected.level.tickValue, expected.level.noTickValue, expected.level.tickValue] {
@@ -609,8 +606,8 @@ final class ExperienceSharedValuesTests: XCTestCase {
             if level != expected.startingValues.level {
                 _ = try await native.sessions.mutate([.setNumber(instance: native.reference, path: "level", value: level)])
             }
-            let screen = try await preparation.openScreen(screenID: "level", runValues: run, pixelWidth: 393, pixelHeight: 852)
-            addTeardownBlock { try await screen.close() }
+            let screen = try await preparation.openRow(screenID: "level", runValues: run, pixelWidth: 393, pixelHeight: 852)
+            addTeardownBlock { try await closeFixturePageRow(screen) }
             // No settling steps or preliminary draw: this is this copy's first rendered frame.
             frames.append(try await renderCopyPixels(screen))
         }
@@ -633,11 +630,11 @@ final class ExperienceSharedValuesTests: XCTestCase {
     }
 
     func testComponentCopyKeepsItsOwnCounter() async throws {
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: SharedValuesFixture.payload())
+        let preparation = try await prepareFixturePage(payload: SharedValuesFixture.payload())
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let screen = try await preparation.openScreen(screenID: "long", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await screen.close() }
+        let screen = try await preparation.openRow(screenID: "long", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await closeFixturePageRow(screen) }
         _ = try await renderCopyPixels(screen)
         for _ in 0..<20 { _ = try await screen.step(elapsedSeconds: 0.016) }
         let initial = try await renderCopyPixels(screen)
@@ -680,8 +677,8 @@ final class ExperienceSharedValuesTests: XCTestCase {
         XCTAssertGreaterThan(bounds.width, 0)
         XCTAssertGreaterThan(bounds.height, 0)
         let tap = CGPoint(x: bounds.midX, y: bounds.midY)
-        let other = try await preparation.openScreen(screenID: "long", runValues: run, pixelWidth: 393, pixelHeight: 852)
-        addTeardownBlock { try await other.close() }
+        let other = try await preparation.openRow(screenID: "long", runValues: run, pixelWidth: 393, pixelHeight: 852)
+        addTeardownBlock { try await closeFixturePageRow(other) }
         _ = try await renderCopyPixels(other)
         for _ in 0..<20 { _ = try await other.step(elapsedSeconds: 0.016) }
         let untouched = try await renderCopyPixels(other)
@@ -791,35 +788,127 @@ enum SharedValuesFixture {
             .appendingPathComponent("fixtures/runtime/shared-values")
     }
 
+    private struct NativeFixtureSystemFont: Decodable {
+        let authoredAssetId: UInt64
+        let assetUniqueName: String
+        let weight: String
+        let style: String
+        var requirement: NativeExperienceSystemFontRequirement {
+            .init(authoredAssetId: authoredAssetId, assetUniqueName: assetUniqueName, weight: weight, style: style)
+        }
+    }
+
+    static func releaseObject(directory: URL) throws -> [String: Any] {
+        if FileManager.default.fileExists(atPath: directory.appendingPathComponent("scene-declarations.json").path) {
+            let template = experiencePreparationRepositoryRoot()
+                .appendingPathComponent("Tests/ExperienceRuntimeHostApp/Fixtures/font-converter/descriptor.json")
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: template)) as? [String: Any])
+            return try FixturePageSceneDeclarations.load(at: directory).applying(to: object)
+        }
+        for name in ["release.json", "descriptor.json"] {
+            let file = directory.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: file.path) {
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+            }
+        }
+        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self,
+            from: Data(contentsOf: directory.appendingPathComponent("release-entry.json")))
+        let bytes = try XCTUnwrap(Data(base64Encoded: entry.envelope.descriptorBytesBase64))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+    }
+
     static func payload(directory: URL = SharedValuesFixture.directory, screens: [String] = ["first", "long", "short"], scene suppliedScene: Data? = nil, textInputs: [NativeExperienceTextInput] = [],
                         sceneName: String = "screen.riv", provenanceName: String = "provenance.json") throws -> AuthenticatedRuntimePayload {
-        let scene = try suppliedScene ?? Data(contentsOf: directory.appendingPathComponent(sceneName))
-        struct Provenance: Decodable {
-            struct Font: Decodable {
-                let authoredAssetId: UInt64
-                let assetUniqueName: String
-                let weight: String
-                let style: String
+        let structureURL = directory.appendingPathComponent("page-structure.json")
+        guard FileManager.default.fileExists(atPath: structureURL.path) else {
+            let scene = try suppliedScene ?? Data(contentsOf: directory.appendingPathComponent(sceneName))
+            struct Provenance: Decodable {
+                struct Font: Decodable {
+                    let authoredAssetId: UInt64
+                    let assetUniqueName: String
+                    let weight: String
+                    let style: String
+                }
+                let fonts: [Font]
             }
-            let fonts: [Font]
+            let provenance = try JSONDecoder().decode(Provenance.self,
+                from: Data(contentsOf: directory.appendingPathComponent(provenanceName)))
+            return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
+                requiredCapabilities: ["system-fonts"],
+                renderPlan: NativeExperienceRenderPlan(
+                    identity: .init(experienceId: "shared-values", buildId: "shared-values-build", appId: "test-app", environment: "test"),
+                    scene: .init(key: "screen.riv", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
+                    entry: .init(screenId: try XCTUnwrap(screens.first)),
+                    screens: screens.map { .init(screenId: $0, artboardId: $0, artboardName: $0,
+                        width: 393, height: 852, exit: nil) },
+                    transitions: [], textInputs: textInputs, images: [], fonts: [],
+                    systemFonts: provenance.fonts.map { .init(authoredAssetId: $0.authoredAssetId,
+                        assetUniqueName: $0.assetUniqueName, weight: $0.weight, style: $0.style) }),
+                journey: JourneyDocument(screens: screens.map {
+                    JourneyScreen(id: $0, defaultViewModelName: "Runtime \($0) scr_screens_s\($0)", defaultInstanceId: "\($0)-root")
+                }, viewModelValues: []), sceneBytes: scene, assets: [])
         }
-        let provenance = try JSONDecoder().decode(Provenance.self,
-            from: Data(contentsOf: directory.appendingPathComponent(provenanceName)))
-        return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR",
-            requiredCapabilities: ["system-fonts"],
-            renderPlan: NativeExperienceRenderPlan(
-                identity: .init(experienceId: "shared-values", buildId: "shared-values-build", appId: "test-app", environment: "test"),
-                scene: .init(key: "screen.riv", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
-                entry: .init(screenId: try XCTUnwrap(screens.first)),
-                screens: screens.map { .init(screenId: $0, artboardId: $0, artboardName: $0,
-                    width: 393, height: 852, exit: nil) },
-                transitions: [], textInputs: textInputs, images: [], fonts: [],
-                systemFonts: provenance.fonts.map { .init(authoredAssetId: $0.authoredAssetId,
-                    assetUniqueName: $0.assetUniqueName, weight: $0.weight, style: $0.style) }),
-            journey: JourneyDocument(screens: screens.map {
-                JourneyScreen(id: $0, defaultViewModelName: "Runtime \($0) scr_screens_s\($0)", defaultInstanceId: "\($0)-root")
-            }, viewModelValues: []), sceneBytes: scene, assets: [])
+        // A page scene can be intentionally unsigned (the goals fixture).
+        let hasRelease = ["release.json", "descriptor.json", "release-entry.json"].contains {
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
+        }
+        if !hasRelease && !FileManager.default.fileExists(atPath: directory.appendingPathComponent("scene-declarations.json").path) {
+            struct Structure: Decodable {
+                struct Screen: Decodable { let screenId: String; let artboardName: String; let rootTypeName: String }
+                let screens: [Screen]
+            }
+            struct Report: Decodable {
+                struct Metadata: Decodable {
+                    struct Screen: Decodable { let screenId: String; let width: Double; let height: Double }
+                    let screens: [Screen]
+                }
+                let builtPackageMetadata: Metadata
+            }
+            struct Provenance: Decodable { let fonts: [NativeFixtureSystemFont] }
+            let structure = try JSONDecoder().decode(Structure.self, from: Data(contentsOf: structureURL))
+            let report = try JSONDecoder().decode(Report.self, from: Data(contentsOf: directory.appendingPathComponent("report.json")))
+            let provenance = try JSONDecoder().decode(Provenance.self, from: Data(contentsOf: directory.appendingPathComponent(provenanceName)))
+            let scene = try suppliedScene ?? Data(contentsOf: directory.appendingPathComponent(sceneName))
+            let plan = NativeExperienceRenderPlan(identity: .init(experienceId: "fixture-page", buildId: "fixture-page", appId: "test-app", environment: "test"),
+                scene: .init(key: sceneName, sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
+                entry: .init(screenId: try XCTUnwrap(structure.screens.first?.screenId)), pageHost: .published,
+                screens: try structure.screens.map { row in
+                    let dimensions = try XCTUnwrap(report.builtPackageMetadata.screens.first { $0.screenId == row.screenId })
+                    return .init(screenId: row.screenId, artboardId: row.screenId, artboardName: row.artboardName,
+                        width: dimensions.width, height: dimensions.height, exit: nil)
+                }, transitions: [], textInputs: textInputs, images: [], fonts: [], systemFonts: provenance.fonts.map(\.requirement))
+            for role in screens { _ = try FixturePageRow.screenID(role, in: plan) }
+            return AuthenticatedRuntimePayload(authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR", requiredCapabilities: ["system-fonts"],
+                renderPlan: plan, journey: JourneyDocument(screens: structure.screens.map {
+                    .init(id: $0.screenId, defaultViewModelName: $0.rootTypeName)
+                }, viewModelValues: []), sceneBytes: scene, assets: [])
+        }
+        let object = try releaseObject(directory: directory)
+        let descriptor = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        let scene = try suppliedScene ?? Data(contentsOf: directory.appendingPathComponent(sceneName))
+        let declared = try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: descriptor)
+        guard declared.images.isEmpty, declared.fonts.isEmpty, declared.videos.isEmpty else {
+            throw ExperienceInteractiveScreenError.stateContract("Use signed acquisition for resource-bearing fixture pages")
+        }
+        let values = try object["viewModelValues"].map {
+            try JSONDecoder().decode([JourneyViewModelValue].self, from: JSONSerialization.data(withJSONObject: $0))
+        }
+        let plan = NativeExperienceRenderPlan(identity: declared.identity,
+            scene: .init(key: declared.scene.key, sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
+            entry: .init(screenId: try FixturePageRow.screenID(screens.first, in: declared)),
+            pageHost: declared.pageHost, screens: declared.screens,
+            transitions: declared.transitions, textInputs: textInputs.isEmpty ? declared.textInputs : textInputs,
+            images: declared.images, fonts: declared.fonts, systemFonts: declared.systemFonts)
+        // Validate the requested logical roles against declared mappings; keep every
+        // Screen in the page plan rather than fabricating a smaller per-Screen file.
+        for role in screens { _ = try FixturePageRow.screenID(role, in: plan) }
+        return AuthenticatedRuntimePayload(valuePolicy: descriptor.valuePolicy,
+            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR", requiredCapabilities: ["system-fonts"],
+            renderPlan: plan, journey: JourneyDocument(screens: descriptor.leg.screens.map { .init(id: $0.id, defaultViewModelName: $0.defaultViewModelName, defaultInstanceId: $0.defaultInstanceId) }, viewModelValues: values),
+            sceneBytes: scene, assets: [])
     }
+
 }
 
 enum PublishedRunValuesFixture {
@@ -837,6 +926,10 @@ enum PublishedRunValuesFixture {
 
     static var directory: URL {
         SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("run-values")
+    }
+
+    static func payload() throws -> AuthenticatedRuntimePayload {
+        try SharedValuesFixture.payload(directory: directory, screens: expectations().screens)
     }
 
     static func expectations() throws -> Expectations {

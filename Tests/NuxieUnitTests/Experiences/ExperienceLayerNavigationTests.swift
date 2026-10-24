@@ -382,8 +382,8 @@ final class ExperienceLayerNavigationTests: XCTestCase {
         let offerLayer = try XCTUnwrap(try layers().last)
         let offer = try XCTUnwrap(offerLayer.topViewController as? ExperienceScreenViewController)
         XCTAssertEqual(lesson.lifecyclePhase, .active)
-        XCTAssertTrue(coordinator.applyValue(path: VmPathRef(viewModelName: "Plan", path: "placementId"),
-            value: "covered-plan", screenId: "screen", instanceId: "plan.second"),
+        XCTAssertTrue(coordinator.applyValue(path: VmPathRef(path: "second/placementId"),
+            value: "covered-plan", screenId: lesson.screenId, instanceId: nil),
             "Screen-targeted feedback must reach the mounted covered layer")
         await open("screen", closedby: "none", present: "fullscreen")
         let savedLayer = try XCTUnwrap(try layers().last)

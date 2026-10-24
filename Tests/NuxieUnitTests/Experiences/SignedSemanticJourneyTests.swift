@@ -36,6 +36,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
     }
 
     func testSignedAuthoredRolesPersistNativeActions() async throws {
+        throw XCTSkip("Waiting on UNIV-3248: compiler HTML/ARIA accessibility data. https://universe.basis.dev/issue/UNIV-3248")
         try await exercise(.roles)
     }
 
@@ -77,9 +78,10 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let locator = try XCTUnwrap(entry["locator"] as? [String: Any])
         let envelope = try XCTUnwrap(entry["envelope"] as? [String: Any])
         let signature = try XCTUnwrap(envelope["signature"] as? [String: Any])
+        let signing = try XCTUnwrap(provenance["signing"] as? [String: Any])
         let keys = [JourneyPackageAuthorizationKey(
             keyID: try XCTUnwrap(signature["keyId"] as? String),
-            ed25519PublicKeyBytes: try XCTUnwrap(Data(base64Encoded: XCTUnwrap(provenance["publicKeyBase64"] as? String)))
+            ed25519PublicKeyBytes: try XCTUnwrap(Data(base64Encoded: XCTUnwrap(signing["publicKeyBase64"] as? String)))
         )]
         let profile = try JourneyPlaneProfile.decode(JSONSerialization.data(withJSONObject: [
             "schemaVersion": "nuxie.journey-plane-profile.v2", "status": "ok",
@@ -119,7 +121,11 @@ final class SignedSemanticJourneyTests: XCTestCase {
         let committed = try await catalog.commit(prepared, distinctId: owner)
         XCTAssertTrue(committed)
         let release = try XCTUnwrap(prepared.snapshot.releasesByDigest.values.first)
-        XCTAssertEqual(release.descriptorSHA256, provenance["descriptorSha256"] as? String)
+        // The page exporter records the descriptor digest in its file inventory.
+        let files = try XCTUnwrap(provenance["files"] as? [String: Any])
+        let descriptorFile = try XCTUnwrap(files["descriptor.json"] as? [String: Any])
+        let descriptorSHA256 = try XCTUnwrap(descriptorFile["sha256"] as? String)
+        XCTAssertEqual(release.descriptorSHA256, descriptorSHA256)
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(owner)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -204,6 +210,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 observer.revealed && (scenario == .input
                     ? self.semanticElements(in: presentations.currentExperienceViewController?.view).contains { $0 is UITextField }
                     : scenario == .roles
+                    // visibleRoleLabels includes the clipped native Password editor.
                     ? self.semanticElements(in: presentations.currentExperienceViewController?.view).count == self.visibleRoleLabels(in: presentations.currentExperienceViewController?.view)?.count
                     : self.button(in: presentations.currentExperienceViewController?.view) != nil)
             }
@@ -294,7 +301,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
                 XCTAssertTrue(button.accessibilityActivate())
                 if scenario == .success {
                     try await waitUntil("Authored navigation must follow durable emission admission") { observer.navigationResponses != nil && observer.accepted.count == 1 }
-                    XCTAssertTrue(observer.navigationResponses?.isEmpty == true)
+                    XCTAssertEqual(observer.navigationResponses?["plan/selection"], .string("pro"))
                     XCTAssertEqual(observer.accepted.first?.emissions.map(\.name), ["script_control_activated"])
                     for emission in try XCTUnwrap(observer.accepted.first).emissions {
                         let occurredAt = try XCTUnwrap(JourneyPresentationEventProjector.date(emission.occurredAt))
@@ -305,11 +312,11 @@ final class SignedSemanticJourneyTests: XCTestCase {
                         XCTAssertLessThanOrEqual(occurredAt, Date())
                     }
                     let stored = try await journal.runs()
-                    XCTAssertTrue(stored.first?.context.responses.isEmpty == true)
+                    XCTAssertEqual(stored.first?.context.responses["plan/selection"], .string("pro"))
                     XCTAssertTrue(presentations.isExperiencePresented)
                 } else {
                     try await waitUntil("A throwing script must retire the presentation") { observer.failureResponses != nil && !presentations.isExperiencePresented }
-                    XCTAssertNil(observer.failureResponses?["selection"])
+                    XCTAssertNil(observer.failureResponses?["plan/selection"])
                     XCTAssertTrue(observer.accepted.isEmpty)
                     XCTAssertNil(observer.navigationResponses)
                     let mark = try await journal.checkmark(experienceId: release.descriptor.identity.experienceId)
@@ -487,7 +494,18 @@ final class SignedSemanticJourneyTests: XCTestCase {
                                      journal: JourneyRunJournal) async throws {
         let elements = semanticElements(in: view)
         XCTAssertEqual(elements.compactMap(\.accessibilityLabel).sorted(), try XCTUnwrap(visibleRoleLabels(in: view)).sorted())
-        XCTAssertTrue(elements.allSatisfy { !($0 is UITextField) }, "The roles artifact has no native editor declaration")
+        let fields = elements.compactMap { $0 as? UITextField }
+        let passwordVisible = visibleRoleLabels(in: view)?.contains("Password") == true
+        XCTAssertEqual(fields.count, passwordVisible ? 1 : 0)
+        if passwordVisible {
+            let password = try XCTUnwrap(fields.first)
+            XCTAssertEqual(password.accessibilityLabel, "Password")
+            XCTAssertTrue(password.isSecureTextEntry)
+            XCTAssertTrue(password.isEnabled && password.isUserInteractionEnabled && password.canBecomeFirstResponder)
+            let initial = password.text ?? ""
+            XCTAssertTrue(initial.isEmpty || initial.allSatisfy { "•●*".contains($0) },
+                "Initial secure text must be empty or redacted")
+        }
         let selected = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Annual plan" })
         XCTAssertTrue(selected.accessibilityTraits.contains(.selected))
         XCTAssertEqual(selected.accessibilityValue, "1")
@@ -558,7 +576,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
         guard let view, let surface = surface(in: view), surface.bounds.height > 0 else { return nil }
         let authored: [(String, CGFloat)] = [
             ("Choose your plan", 64), ("Continue", 128), ("Annual plan", 192),
-            ("Seats", 256), ("Unavailable", 384), ("Plan option", 512),
+            ("Seats", 256), ("Password", 320), ("Unavailable", 384), ("Plan option", 512),
             ("Plan option", 576), ("Optional extras", 640),
             ("Choose the options that suit you.", 704),
         ]

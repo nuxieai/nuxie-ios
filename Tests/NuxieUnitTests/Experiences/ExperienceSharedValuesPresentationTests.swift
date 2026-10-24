@@ -12,11 +12,9 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
     func testPublishedScriptTapIncrementsAndDrawsCount() async throws {
         let fixture = try await publishedScriptTapFixture()
         try await withPresentation(fixture: fixture) { presentations, _, _ in
-            let screen = try await waitForScreen("scr_screens_stap", presentations: presentations)
+            let screen = try await waitForScreen("tap", presentations: presentations, fixture: fixture)
             let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
-            let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
-                $0.label == "interactiveScreen"
-            }?.value as? ExperienceInteractiveScreen)
+            let interactive = try await fixtureActivePageRow(screen).binding
             let transform = try XCTUnwrap(ExperienceLayoutTransform(
                 artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
             let rect = transform.viewportRect(fromArtboard: CGRect(x: 20, y: 20, width: 160, height: 60))
@@ -68,7 +66,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 return (pixels, labelPixels)
             }
             func count() async throws -> Float? {
-                let snapshot = try await screen.runtimeSnapshot()
+                let snapshot = try await fixtureActivePageRow(screen).snapshot
                 guard case .referencedInstance(let state) = snapshot.values.first(where: {
                     $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "state"
                 })?.value, case .number(let count) = snapshot.values.first(where: {
@@ -137,25 +135,25 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
     func testNextScreenFirstPresentationReadsRunWrite() async throws {
         let fixture = try await signedFixture()
         try await withPresentation(fixture: fixture) { presentations, journeys, _ in
-            let first = try await waitForScreen("first", presentations: presentations)
-            let firstRoot = try await first.runtimeSnapshot()
+            let first = try await waitForScreen("first", presentations: presentations, fixture: fixture)
+            let firstRoot = try await fixtureActivePageRow(first).snapshot
             let vmPath = VmPathRef(path: "experience/trip_days")
-            XCTAssertTrue(first.applyValue(path: vmPath, value: 30, screenId: "first", instanceId: "first-root"))
+            XCTAssertTrue(first.applyValue(path: vmPath, value: 30, screenId: first.screenId, instanceId: nil))
             for _ in 0..<200 {
-                if try await first.runtimeSnapshot().values.first(where: { $0.name == "trip_days" })?.value == .number(30) { break }
+                if try await fixtureActivePageRow(first).snapshot.values.first(where: { $0.name == "trip_days" })?.value == .number(30) { break }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
             presentations.onAppDidEnterBackground()
             await journeys.onAppDidEnterBackground()
             presentations.onAppBecameActive()
             await journeys.onAppBecameActive()
-            let resumed = try await first.runtimeSnapshot()
+            let resumed = try await fixtureActivePageRow(first).snapshot
             XCTAssertEqual(resumed.values.first { $0.name == "trip_days" }?.value, .number(30))
             let controller = try XCTUnwrap(presentations.currentExperienceViewController)
-            let result = await controller.navigateAndWaitResult(to: "long", transition: nil)
+            let result = await controller.navigateAndWaitResult(to: try fixture.screenID("long"), transition: nil)
             XCTAssertTrue(result.reachedTarget)
-            let next = try await waitForScreen("long", presentations: presentations)
-            let nextRoot = try await next.runtimeSnapshot()
+            let next = try await waitForScreen("long", presentations: presentations, fixture: fixture)
+            let nextRoot = try await fixtureActivePageRow(next).snapshot
             XCTAssertEqual(nextRoot.values.first { $0.name == "trip_days" }?.value, .number(30))
             XCTAssertEqual(firstRoot.values.first { $0.name == "experience" }?.value,
                 nextRoot.values.first { $0.name == "experience" }?.value)
@@ -166,14 +164,12 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let expected = try PublishedRunValuesFixture.expectations()
         let fixture = try await signedFixture(kind: .publishedRunValues)
         try await withPresentation(fixture: fixture) { presentations, _, events in
-            let tap = try await waitForScreen("tap", presentations: presentations)
-            let before = try await tap.runtimeSnapshot()
+            let tap = try await waitForScreen("tap", presentations: presentations, fixture: fixture)
+            let before = try await fixtureActivePageRow(tap).snapshot
             XCTAssertEqual(before.values.first { $0.name == "trip_days" }?.value, .number(expected.tap.before))
             let surface = try XCTUnwrap(tap.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
             // Geometry inspection does not add an unqualified capability to the signed release.
-            let interactive = try XCTUnwrap(Mirror(reflecting: tap).children.first {
-                $0.label == "interactiveScreen"
-            }?.value as? ExperienceInteractiveScreen)
+            let interactive = try await fixtureActivePageRow(tap).binding
             func hits(_ point: CGPoint) async throws -> Bool {
                 let down = try await interactive.step(pointers: [.init(kind: .down,
                     x: Float(point.x), y: Float(point.y))], elapsedSeconds: 0)
@@ -217,7 +213,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
             let geometry = XCTAttachment(string: "F4 Continue native hit bounds: \(bounds)")
             geometry.lifetime = .keepAlways
             self.add(geometry)
-            let probed = try await tap.runtimeSnapshot()
+            let probed = try await fixtureActivePageRow(tap).snapshot
             XCTAssertEqual(probed.values.first { $0.name == "trip_days" }?.value, .number(expected.tap.before))
             XCTAssertFalse(events.routedEvents.contains { $0.name == "continue" })
             XCTAssertFalse(bounds.isEmpty)
@@ -230,8 +226,8 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .down, location: point, timestampSeconds: now),
                 .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .up, location: point, timestampSeconds: now + 0.01),
             ])
-            let level = try await waitForScreen("level", presentations: presentations)
-            let after = try await level.runtimeSnapshot()
+            let level = try await waitForScreen("level", presentations: presentations, fixture: fixture)
+            let after = try await fixtureActivePageRow(level).snapshot
             XCTAssertEqual(after.values.first { $0.name == "trip_days" }?.value, .number(expected.tap.after))
             XCTAssertEqual(before.values.first { $0.name == expected.property }?.value,
                 after.values.first { $0.name == expected.property }?.value)
@@ -256,11 +252,9 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
     func testPublishedEmitsReachTheJourneyWithTheirValues() async throws {
         let fixture = try await signedFixture(kind: .emitValues)
         try await withPresentation(fixture: fixture) { presentations, _, events in
-            let screen = try await waitForScreen("emits", presentations: presentations)
+            let screen = try await waitForScreen("emits", presentations: presentations, fixture: fixture)
             let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
-            let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
-                $0.label == "interactiveScreen"
-            }?.value as? ExperienceInteractiveScreen)
+            let interactive = try await fixtureActivePageRow(screen).binding
             let transform = try XCTUnwrap(ExperienceLayoutTransform(
                 artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
             let observer = try XCTUnwrap(surface.runtimeObserver)
@@ -346,11 +340,9 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let started = [expectation(description: "first save sent"), expectation(description: "second save sent")]
         let transport = FormSaveTestTransport(started: started)
         try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
-            let screen = try await waitForScreen("rate", presentations: presentations)
+            let screen = try await waitForScreen("rate", presentations: presentations, fixture: fixture)
             let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
-            let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
-                $0.label == "interactiveScreen"
-            }?.value as? ExperienceInteractiveScreen)
+            let interactive = try await fixtureActivePageRow(screen).binding
             let transform = try XCTUnwrap(ExperienceLayoutTransform(
                 artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
             let observer = try XCTUnwrap(surface.runtimeObserver)
@@ -410,11 +402,12 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
     func testPublishedEnvironmentReceivesHostInsetsAndMotionBeforeAndAfterMount() async throws {
         let fixture = try await signedFixture(kind: .publishedRunValues)
         try await withPresentation(fixture: fixture) { presentations, _, _ in
-            let tap = try await waitForScreen("tap", presentations: presentations)
+            let tap = try await waitForScreen("tap", presentations: presentations, fixture: fixture)
             let fields = Mirror(reflecting: tap).children
             let artifact = try XCTUnwrap(fields.first { $0.label == "artifact" }?.value as? LoadedExperienceArtifact)
             let experience = try XCTUnwrap(fields.first { $0.label == "experience" }?.value as? Experience)
-            let manifest = try XCTUnwrap(artifact.payload.renderPlan.screens.first { $0.screenId == "device" })
+            let deviceID = try FixturePageRow.screenID("device", in: artifact.payload.renderPlan)
+            let manifest = try XCTUnwrap(artifact.payload.renderPlan.screens.first { $0.screenId == deviceID })
             let controller = ExperienceScreenViewController(experience: experience, artifact: artifact,
                 screen: manifest, reduceMotion: true, delegate: nil)
             let view = EnvironmentInsetsView()
@@ -424,10 +417,10 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
             try await controller.mountInteractiveScreen()
             do {
                 let mounted = Mirror(reflecting: controller).children
-                let screen = try XCTUnwrap(mounted.first { $0.label == "interactiveScreen" }?.value as? ExperienceInteractiveScreen)
+                let screen = try await fixtureActivePageRow(controller).binding
                 let loop = try XCTUnwrap(mounted.first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
                 @MainActor func assertEnvironment(_ motion: Bool) async throws {
-                    let result = try await screen.environmentSnapshot()
+                    let result = try await controller.runtimeEnvironmentSnapshot()
                     let snapshot = try XCTUnwrap(result)
                     XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "reduceMotion" }?.value, .bool(motion))
                     guard case .referencedInstance(let owner) = snapshot.values.first(where: {
@@ -461,12 +454,12 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let second = expectation(description: "second awaited save sent")
         let transport = FormSaveTestTransport(started: [first, second])
         try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
-            let controller = try await waitForScreen("scr_screens_sfeedback", presentations: presentations)
+            let controller = try await waitForScreen("feedback", presentations: presentations, fixture: fixture)
             let surface = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
             XCTAssertTrue(controller.applyValue(path: VmPathRef(path: "experience/responses:feedback/stars"),
-                value: 4, screenId: controller.screenId, instanceId: "vmi_runtime_scr_screens_sfeedback"))
+                value: 4, screenId: controller.screenId, instanceId: nil))
             func field(_ name: String) async throws -> ExperienceInteractiveViewModelValue? {
-                let snapshot = try await controller.runtimeSnapshot()
+                let snapshot = try await fixtureActivePageRow(controller).snapshot
                 guard case .referencedInstance(let shared) = snapshot.values.first(where: {
                     $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "experience"
                 })?.value, case .referencedInstance(let form) = snapshot.values.first(where: {
@@ -474,16 +467,24 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 })?.value else { throw CocoaError(.coderInvalidValue) }
                 return snapshot.values.first { $0.ownerInstanceID == form && $0.name == name }?.value
             }
-            let interactive = try XCTUnwrap(Mirror(reflecting: controller).children.first {
-                $0.label == "interactiveScreen"
-            }?.value as? ExperienceInteractiveScreen)
+            let interactive = try await fixtureActivePageRow(controller).binding
             let transform = try XCTUnwrap(ExperienceLayoutTransform(
                 artboardBounds: interactive.artboardBounds, viewportBounds: surface.bounds))
-            // Measured on these published bytes by the isolated native listener proof.
-            let point = transform.viewportPoint(fromArtboard: CGPoint(x: 121, y: 1))
             let pointer = NSObject()
             let observer = try XCTUnwrap(surface.runtimeObserver)
-            @MainActor func send() {
+            var presented: NuxieNativeSemanticCapture?
+            controller.onSemanticCapture = { presented = $0 }
+            defer { controller.onSemanticCapture = nil }
+            @MainActor func send() async throws {
+                // Wait for the ordinary presenter instead of submitting a
+                // logical-point-sized drawable to its device-pixel renderer.
+                presented = nil
+                let deadline = Date().addingTimeInterval(5)
+                while presented == nil && Date() < deadline {
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                let bounds = try self.fixtureControlBounds(in: XCTUnwrap(presented), label: "Send")
+                let point = transform.viewportPoint(fromArtboard: CGPoint(x: bounds.midX, y: bounds.midY))
                 let now = ProcessInfo.processInfo.systemUptime
                 observer.runtimeSurfaceViewDidReceivePointerEvents([
                     .init(source: ExperienceRuntimePointerSourceID(pointer), kind: .down,
@@ -496,7 +497,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 if try await field("valid") == .bool(true) { break }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
-            send()
+            try await send()
             await fulfillment(of: [first], timeout: 5)
             let sentFirst = await transport.requests()
             XCTAssertEqual(sentFirst.map(\.sequence), [1])
@@ -514,7 +515,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
             XCTAssertEqual(error, .bytes(Data("save_unavailable".utf8)))
             XCTAssertEqual(stopped, .bool(false))
             XCTAssertFalse(events.routedEvents.contains { $0.name == "sent" })
-            send()
+            try await send()
             await fulfillment(of: [second], timeout: 5)
             let retrySaving = try await field("saving")
             let retryError = try await field("saveError")
@@ -540,10 +541,10 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
             let sent = expectation(description: "onboarding saved")
             let transport = FormSaveTestTransport(started: [sent])
             try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
-                let screen = try await waitForScreen("scr_screens_sdeparture", presentations: presentations)
+                let screen = try await waitForScreen("departure", presentations: presentations, fixture: fixture)
                 try await tapPublishedDepartureContinue(screen, days: days)
                 await fulfillment(of: [sent], timeout: 5)
-                _ = try await waitForScreen("scr_screens_sitalian-level", presentations: presentations)
+                _ = try await waitForScreen("italian-level", presentations: presentations, fixture: fixture)
                 let routed = events.routedEvents.filter { ["short_trip", "long_trip"].contains($0.name) }
                 XCTAssertEqual(routed.map(\.name), [eventName], "Published condition must select the expected branch")
                 XCTAssertEqual(routed.first?.properties["trip_days"] as? Double, days)
@@ -559,7 +560,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let sent = expectation(description: "background save sent")
         let transport = FormSaveTestTransport(started: [sent])
         try await withPresentation(fixture: fixture, transport: transport) { presentations, _, events in
-            let screen = try await waitForScreen("scr_screens_sdeparture", presentations: presentations)
+            let screen = try await waitForScreen("departure", presentations: presentations, fixture: fixture)
             try await tapPublishedDepartureContinue(screen)
             await fulfillment(of: [sent], timeout: 5)
             for _ in 0..<200 {
@@ -580,7 +581,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
     func testUnacceptedPublishedSaveDoesNotRouteItsFollowingEmit() async throws {
         let fixture = try await signedFixture(kind: .publishedForms, formsScreen: "departure", formsEvent: "continue")
         try await withPresentation(fixture: fixture) { presentations, _, events in
-            let screen = try await waitForScreen("scr_screens_sdeparture", presentations: presentations)
+            let screen = try await waitForScreen("departure", presentations: presentations, fixture: fixture)
             try await tapPublishedDepartureContinue(screen, publishSynchronously: true)
             XCTAssertFalse(events.routedEvents.contains { $0.name == "continue" })
             XCTAssertFalse(events.routedEvents.contains { $0.name == JourneyEvents.journeyCompleted })
@@ -589,9 +590,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
 
     private func tapPublishedDepartureContinue(_ screen: ExperienceScreenViewController, publishSynchronously: Bool = false, days: Double = 30) async throws {
         let surface = try XCTUnwrap(screen.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
-        let interactive = try XCTUnwrap(Mirror(reflecting: screen).children.first {
-            $0.label == "interactiveScreen"
-        }?.value as? ExperienceInteractiveScreen)
+        let interactive = try await fixtureActivePageRow(screen).binding
         let root = try await interactive.rootViewModel()
         _ = try await interactive.mutateState([.setNumber(root, path: "state/days", value: Float(days))])
         _ = try await interactive.step(elapsedSeconds: 0)
@@ -630,11 +629,14 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("shared-values-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { StubURLProtocol.reset(); try? FileManager.default.removeItem(at: directory) }
-        StubURLProtocol.register(matcher: { $0.url?.host == "shared-values.nuxie.test" }) { request in
-            let url = try XCTUnwrap(request.url)
-            let data = try fixture.assetDirectory.map { try Data(contentsOf: $0.appendingPathComponent(String(url.path.dropFirst()))) } ?? fixture.scene
-            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
-                headerFields: ["Content-Type": url.pathExtension == "otf" ? "font/otf" : "application/vnd.nuxie.scene", "Content-Length": String(data.count)])), data)
+        if let assets = fixture.assetDirectory {
+            try serveSignedFixtureObjects(at: assets, host: "shared-values.nuxie.test")
+        } else {
+            StubURLProtocol.register(matcher: { $0.url?.host == "shared-values.nuxie.test" }) { request in
+                let url = try XCTUnwrap(request.url)
+                return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Content-Type": "application/vnd.nuxie.scene", "Content-Length": String(fixture.scene.count)])), fixture.scene)
+            }
         }
         let identity = MockIdentityService()
         identity.setDistinctId("shared-owner")
@@ -681,7 +683,8 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         }
     }
 
-    private func waitForScreen(_ id: String, presentations: ExperiencePresentationService) async throws -> ExperienceScreenViewController {
+    private func waitForScreen(_ role: String, presentations: ExperiencePresentationService, fixture: Fixture) async throws -> ExperienceScreenViewController {
+        let id = try fixture.screenID(role)
         func find(_ controller: UIViewController) -> ExperienceScreenViewController? {
             if let screen = controller as? ExperienceScreenViewController, screen.screenId == id { return screen }
             return controller.children.compactMap(find).first
@@ -698,6 +701,12 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
     }
 
     private struct Fixture: Sendable {
+        func screenID(_ role: String) throws -> String {
+            let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
+            let plan = try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: release.descriptor)
+            return try FixturePageRow.screenID(role, in: plan)
+        }
+
         let scene: Data
         let assetDirectory: URL?
         let snapshot: JourneyProfileCatalog.Snapshot
@@ -723,26 +732,32 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let forms = kind == .publishedForms ? try XCTUnwrap(JSONSerialization.jsonObject(with:
             Data(contentsOf: directory.appendingPathComponent("release.json"))) as? [String: Any]) : nil
         let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
-        let provenance = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("provenance.json"))) as? [String: Any])
-        let names: [String]
-        if kind == .sharedValues { names = ["first", "long", "short"] }
-        else if kind == .emitValues { names = ["emits"] }
-        else if kind == .awaitValues { names = ["rate"] }
-        else if let forms {
-            names = try XCTUnwrap(XCTUnwrap(forms["leg"] as? [String: Any])["screens"] as? [[String: Any]]).map { try XCTUnwrap($0["id"] as? String) }
-        } else { names = try PublishedRunValuesFixture.expectations().screens }
-        let entryScreen = kind == .publishedForms ? "scr_screens_s\(formsScreen)" : try XCTUnwrap(names.first)
+        let isPageFixture = FileManager.default.fileExists(atPath: directory.appendingPathComponent("page-structure.json").path)
+        let published: [String: Any]
+        if FileManager.default.fileExists(atPath: directory.appendingPathComponent("scene-declarations.json").path) {
+            published = try FixturePageSceneDeclarations.load(at: directory).applying(to: descriptor)
+        } else {
+            published = try SharedValuesFixture.releaseObject(directory: directory)
+        }
+        let publishedLeg = try XCTUnwrap(published["leg"] as? [String: Any])
+        let declaredScreens = try XCTUnwrap(publishedLeg["screens"] as? [[String: Any]])
+        let publishedRender = try XCTUnwrap(published["render"] as? [String: Any])
+        let renderScreens = try XCTUnwrap(publishedRender["screens"] as? [[String: Any]])
+        let publishedDescriptor = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: JSONSerialization.data(withJSONObject: published))
+        let publishedPlan = try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: publishedDescriptor)
+        func screenID(_ role: String) throws -> String {
+            try FixturePageRow.screenID(role, in: publishedPlan)
+        }
+        let names = try renderScreens.map { try XCTUnwrap($0["id"] as? String) }
+        let entryScreen = kind == .publishedForms ? try screenID(formsScreen) : try XCTUnwrap(names.first)
         let capabilities = ["nux", "system-fonts"]
+        for name in ["state", "responses", "ruleGroups", "stateRules"] { descriptor[name] = published[name] }
         var leg = try XCTUnwrap(descriptor["leg"] as? [String: Any])
         leg["entryCondition"] = ["type": "app_foregrounded"]
         leg["entryStepId"] = "present"
         leg["steps"] = [["kind": "action", "id": "present", "action": ["type": "navigate", "screenId": entryScreen], "outlets": [:]]]
-        leg["screens"] = names.map { ["id": $0, "defaultViewModelName": "Runtime \($0) scr_screens_s\($0)", "defaultInstanceId": "\($0)-root", "responseCaptures": []] as [String: Any] }
-        if kind == .emitValues || kind == .awaitValues {
-            // The publish_folder publisher names the root model by its artboard.
-            leg["screens"] = names.map { ["id": $0, "defaultViewModelName": "vm_runtime_root_scr_screens_s\($0)",
-                "defaultInstanceId": "vmi_runtime_scr_screens_s\($0)", "responseCaptures": []] as [String: Any] }
-        }
+        leg["screens"] = declaredScreens
         leg["routes"] = []
         if kind == .publishedRunValues {
             let expected = try PublishedRunValuesFixture.expectations()
@@ -757,15 +772,6 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                 ["kind": "complete", "id": "stale", "outcome": "stale"]
             ]
             leg["routes"] = [["eventName": "continue", "host": ["kind": "screen", "screenId": "tap"], "entryStepId": "read-new-value"]]
-        }
-        if kind == .emitValues {
-            // The release declares the Experience's list as its publisher does.
-            descriptor["state"] = ["goals": ["type": "list", "items": ["title": ["type": "string"]]]]
-        }
-        if kind == .awaitValues {
-            // The release declares the form as its publisher reported it.
-            let policy = try XCTUnwrap(provenance["valuePolicy"] as? [String: Any])
-            for name in ["state", "responses", "ruleGroups"] { descriptor[name] = policy[name] }
         }
         if let forms {
             leg["screens"] = try XCTUnwrap(forms["leg"] as? [String: Any])["screens"]
@@ -784,17 +790,22 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
                     (step["action"] as? [String: Any])?["screenId"] as? String == entryScreen
                 }?["id"] as? String)
             }
-            for name in ["state", "responses", "ruleGroups"] { descriptor[name] = forms[name] }
+            for name in ["state", "responses", "ruleGroups", "stateRules"] { descriptor[name] = forms[name] }
         }
-        descriptor["leg"] = leg
-        descriptor["viewModelValues"] = []
-        descriptor["screenBehaviors"] = names.sorted().map { ["screenId": $0, "controls": []] as [String: Any] }
-        let hash = SHA256Provider.hexDigest(scene)
-        descriptor["render"] = ["renderer": "nux", "nux": ["key": "renders/sha256/\(hash).nux", "sha256": hash, "sizeBytes": scene.count, "contentType": "application/vnd.nuxie.scene"],
-            "assets": (try XCTUnwrap(provenance["fonts"] as? [[String: Any]])).map { $0.merging(["kind": "font"]) { _, new in new } },
-            "screens": names.map { ["id": $0, "artboardId": $0, "artboardName": $0, "width": 393, "height": 852] as [String: Any] }, "transitions": [], "textInputs": []]
-        if let forms { descriptor["render"] = forms["render"] }
-        var requirements = try XCTUnwrap((forms ?? descriptor)["requirements"] as? [String: Any])
+        func resolveScreenReferences(_ value: Any) throws -> Any {
+            if let list = value as? [Any] { return try list.map(resolveScreenReferences) }
+            guard var record = value as? [String: Any] else { return value }
+            for (key, child) in record {
+                if key == "screenId", let role = child as? String { record[key] = try screenID(role) }
+                else { record[key] = try resolveScreenReferences(child) }
+            }
+            return record
+        }
+        descriptor["leg"] = try resolveScreenReferences(leg)
+        descriptor["viewModelValues"] = published["viewModelValues"]
+        descriptor["screenBehaviors"] = published["screenBehaviors"] ?? names.sorted().map { ["screenId": $0, "controls": []] as [String: Any] }
+        descriptor["render"] = publishedRender
+        var requirements = try XCTUnwrap(published["requirements"] as? [String: Any])
         requirements["requiredCapabilities"] = capabilities
         descriptor["requirements"] = requirements
         let bytes = try JSONSerialization.data(withJSONObject: descriptor, options: .sortedKeys)
@@ -825,7 +836,7 @@ final class ExperienceSharedValuesPresentationTests: XCTestCase {
         let catalog = JourneyProfileCatalog(authorizationKeys: [.init(keyID: "TEST_ONLY_DEV_KEYPAIR", ed25519PublicKeyBytes: key.publicKey.rawRepresentation)],
             supportedRuntime: supported, highWaterStore: InMemoryJourneyReleaseHighWaterStore())
         // The caller awaits authentication before installing this profile.
-        return Fixture(scene: scene, assetDirectory: kind == .publishedForms ? directory : nil, snapshot: try await catalog.prepare(decoded, authority: authority).snapshot,
+        return Fixture(scene: scene, assetDirectory: isPageFixture ? directory : nil, snapshot: try await catalog.prepare(decoded, authority: authority).snapshot,
             authority: authority, keys: [.init(keyID: "TEST_ONLY_DEV_KEYPAIR", ed25519PublicKeyBytes: key.publicKey.rawRepresentation)], supported: supported)
     }
 }

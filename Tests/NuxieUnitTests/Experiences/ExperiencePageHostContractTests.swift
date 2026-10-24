@@ -162,18 +162,156 @@ final class ExperiencePageHostContractTests: XCTestCase {
     }
 
     private func sourceDescriptor() throws -> [String: Any] {
-        let path = experiencePreparationRepositoryRoot().appendingPathComponent("fixtures/journeys/rendered-custom-transition/release-entry.json")
-        let entry = try JSONDecoder().decode(JourneyReleaseProfileEntry.self, from: Data(contentsOf: path))
-        let bytes = try XCTUnwrap(Data(base64Encoded: entry.envelope.descriptorBytesBase64))
-        func pageForm(_ value: Any) -> Any {
-            if var record = value as? [String: Any] {
-                if record["type"] as? String == "custom" { record["type"] = "magic-move" }
-                return record.mapValues(pageForm)
-            }
-            if let array = value as? [Any] { return array.map(pageForm) }
-            return value
+        // Schema-only descriptor. No publisher bytes or retired transition family.
+        let bytes = Data(#"""
+{
+  "identity": {
+    "appId": "app-page-contract",
+    "buildId": "page-contract-build",
+    "environment": "test",
+    "experienceId": "page-contract",
+    "experienceVersionId": "page-contract-v1",
+    "publishedAt": "2026-08-13T00:00:00.000Z",
+    "publishedAtSeq": 1811,
+    "versionNumber": 1
+  },
+  "leg": {
+    "completionOutputs": {},
+    "entryCondition": {
+      "type": "app_foregrounded"
+    },
+    "entryStepId": "entry",
+    "facts": {
+      "experimentIds": [],
+      "propertyKeys": [],
+      "segmentIds": []
+    },
+    "id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "inputs": {
+      "eventFields": [],
+      "responseFields": []
+    },
+    "offers": [],
+    "outputs": [],
+    "policy": {
+      "entry": {
+        "frequency": {
+          "type": "every_match"
+        },
+        "trigger": {
+          "eventName": "$app_opened",
+          "type": "event"
         }
-        var descriptor = try XCTUnwrap(pageForm(JSONSerialization.jsonObject(with: bytes)) as? [String: Any])
+      },
+      "exitWhenAny": []
+    },
+    "routes": [],
+    "schemaVersion": "nuxie.experience-planes.v1",
+    "screens": [
+      {
+        "id": "screen_1",
+        "responseCaptures": []
+      },
+      {
+        "id": "screen_2",
+        "responseCaptures": []
+      }
+    ],
+    "steps": [
+      {
+        "id": "entry",
+        "kind": "action",
+        "action": {
+          "type": "navigate",
+          "screenId": "screen_1"
+        },
+        "outlets": {}
+      }
+    ]
+  },
+  "metadata": {
+    "appDefaultTimezone": "UTC",
+    "name": "Inline page contract"
+  },
+  "placements": [],
+  "presentation": {
+    "backgroundColor": "#00000000",
+    "orientation": "portrait"
+  },
+  "products": [],
+  "provenance": {
+    "compilerCommit": "inline-test",
+    "compilerVersion": "inline-test"
+  },
+  "render": {
+    "assets": [],
+    "nux": {
+      "contentType": "application/vnd.nuxie.scene",
+      "key": "renders/sha256/0000000000000000000000000000000000000000000000000000000000000000.nux",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "sizeBytes": 1
+    },
+    "renderer": "nux",
+    "screens": [
+      {
+        "id": "screen_1",
+        "artboardId": "screen_1",
+        "artboardName": "screen_1",
+        "width": 390,
+        "height": 844
+      },
+      {
+        "id": "screen_2",
+        "artboardId": "screen_2",
+        "artboardName": "screen_2",
+        "width": 390,
+        "height": 844
+      }
+    ],
+    "textInputs": [],
+    "transitions": []
+  },
+  "requirements": {
+    "luau": {
+      "bytecodeVersions": [
+        3,
+        6
+      ],
+      "revision": "rive_0_36"
+    },
+    "minimumSdkVersion": "0.1.0",
+    "requiredCapabilities": [
+      "nux"
+    ],
+    "runtimeRevision": "753fcb19fc1d6219cabbd95a7694ca1d13ae2bd8",
+    "sceneFormat": {
+      "major": 7,
+      "minor": 3
+    },
+    "timezoneData": {
+      "format": "iana-tzdb",
+      "revision": "2026c",
+      "sha256": "d4ad5c12a6be491076f333c9b4f96f60cb8ab552495bbfae0d8cdc9730ecb198"
+    }
+  },
+  "responses": {},
+  "ruleGroups": [],
+  "schemaVersion": "nuxie.journey-release.v3",
+  "screenBehaviors": [
+    {
+      "controls": [],
+      "screenId": "screen_1"
+    },
+    {
+      "controls": [],
+      "screenId": "screen_2"
+    }
+  ],
+  "state": {},
+  "viewModelValues": []
+}
+"""#.utf8)
+        var descriptor = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         var render = try XCTUnwrap(descriptor["render"] as? [String: Any])
         render["transitions"] = [validTransition]
         descriptor["render"] = render

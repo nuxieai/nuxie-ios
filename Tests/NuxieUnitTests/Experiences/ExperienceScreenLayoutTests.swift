@@ -13,8 +13,8 @@ final class ExperienceScreenLayoutTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/multi-screen")
         let (_, artifact) = try await authenticatedFixtureArtifact(at: fixture)
-        let screen = try await ExperienceInteractiveScreen.open(payload: artifact.payload,
-            pixelWidth: 1179, pixelHeight: 2556)
+        let screen = try await openFixturePageRow(payload: artifact.payload,
+            pixelWidth: 320, pixelHeight: 640)
         do {
             let session = screen.presentationSession { _ in }
             XCTAssertEqual(session.artboardBounds(), CGRect(x: 0, y: 0, width: 320, height: 640))
@@ -26,15 +26,15 @@ final class ExperienceScreenLayoutTests: XCTestCase {
             _ = try await session.perform(.step(.init(elapsedSeconds: 0, pointers: [])))
             XCTAssertEqual(screen.artboardBounds, CGRect(x: 0, y: 0, width: 375, height: 667))
             XCTAssertEqual(session.artboardBounds(), CGRect(x: 0, y: 0, width: 375, height: 667))
-            try await screen.close()
+            try await closeFixturePageRow(screen)
         } catch {
-            try? await screen.close()
+            try? await closeFixturePageRow(screen)
             throw error
         }
     }
 
     @MainActor
-    func testControllerDoesNotWriteDeviceValuesIntoLegacyScreenRoot() async throws {
+    func testControllerWritesDeviceValuesOnlyToDeclaredPageEnvironment() async throws {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("ExperienceRuntimeHostApp/Fixtures/rendered-text-input")
@@ -47,31 +47,38 @@ final class ExperienceScreenLayoutTests: XCTestCase {
         try await controller.mountInteractiveScreen()
         do {
             let mirror = Mirror(reflecting: controller)
-            let screen = try XCTUnwrap(mirror.children.first { $0.label == "interactiveScreen" }?.value as? ExperienceInteractiveScreen)
+            let screen = try await fixtureActivePageRow(controller).binding
             let loop = try XCTUnwrap(mirror.children.first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
             func assertSafeArea(top: Float, bottom: Float, size: CGSize) async throws {
                 let snapshot = try await screen.snapshot()
-                let safeArea = try XCTUnwrap(snapshot.values.first {
-                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "safeArea"
+                // Compiler 2b moved device values to the page's env global.
+                XCTAssertFalse(snapshot.values.contains {
+                    $0.ownerInstanceID == snapshot.rootInstanceID
+                        && ["safeArea", "width", "height"].contains($0.name)
+                })
+                let environment = try await controller.runtimeEnvironmentSnapshot()
+                let env = try XCTUnwrap(environment)
+                let safeArea = try XCTUnwrap(env.values.first {
+                    $0.ownerInstanceID == env.rootInstanceID && $0.name == "safeArea"
                 })
                 guard case .referencedInstance(let owner) = safeArea.value else {
                     return XCTFail("safeArea must be an authored view model")
                 }
                 for (side, expected) in [("top", top), ("bottom", bottom), ("left", 0), ("right", 0)] {
-                    XCTAssertEqual(snapshot.values.first { $0.ownerInstanceID == owner && $0.name == side }?.value,
+                    XCTAssertEqual(env.values.first { $0.ownerInstanceID == owner && $0.name == side }?.value,
                         .number(expected), "\(size) safeArea/\(side)")
                 }
             }
             view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
             controller.syncSafeAreaInsets(force: true)
             try await loop.advanceZeroDelta()
-            try await assertSafeArea(top: 59, bottom: 34, size: view.bounds.size)
+            try await assertSafeArea(top: 0, bottom: 0, size: view.bounds.size)
             view.testInsets = UIEdgeInsets(top: 20, left: 0, bottom: 10, right: 0)
             for size in [CGSize.zero, CGSize(width: 393, height: 852), CGSize(width: 820, height: 1180)] {
                 view.frame = CGRect(origin: .zero, size: size)
                 controller.syncSafeAreaInsets(force: true)
                 try await loop.advanceZeroDelta()
-                try await assertSafeArea(top: 59, bottom: 34, size: size)
+                try await assertSafeArea(top: 20, bottom: 10, size: size)
             }
             await controller.shutdownInteractiveScreen()
         } catch {

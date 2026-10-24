@@ -8,25 +8,12 @@ import XCTest
 final class ExperienceChoicesSetTests: XCTestCase {
     func testPublishedScriptReplacesChoicesAtomicallyAndNilKeepsRecords() async throws {
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("choices-set")
-        let scene = try Data(contentsOf: directory.appendingPathComponent("screen.riv"))
-        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
-            from: Data(contentsOf: directory.appendingPathComponent("release.json")))
-        let payload = AuthenticatedRuntimePayload(valuePolicy: release.valuePolicy,
-            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR", requiredCapabilities: ["system-fonts"],
-            renderPlan: NativeExperienceRenderPlan(
-                identity: .init(experienceId: "choices-set", buildId: "choices-set-build", appId: "test-app", environment: "test"),
-                scene: .init(key: "screen.riv", sha256: SHA256Provider.hexDigest(scene), sizeBytes: scene.count),
-                entry: .init(screenId: "first"),
-                screens: [.init(screenId: "first", artboardId: "scr_screens_sfirst", artboardName: "first", width: 300, height: 300, exit: nil)],
-                transitions: [], textInputs: [], images: [], fonts: [],
-                systemFonts: [.init(authoredAssetId: 0, assetUniqueName: "font-system-400-normal-6cda3de3-0", weight: "400", style: "normal")]),
-            journey: JourneyDocument(screens: [.init(id: "first", defaultViewModelName: "Runtime first scr_screens_sfirst", defaultInstanceId: "first-root")], viewModelValues: []),
-            sceneBytes: scene, assets: [])
-        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        let payload = try SharedValuesFixture.payload(directory: directory, screens: [])
+        let preparation = try await prepareFixturePage(payload: payload)
         let run = ExperienceRunValues()
         addTeardownBlock { await run.retire() }
-        let screen = try await preparation.openScreen(screenID: "first", runValues: run, pixelWidth: 300, pixelHeight: 300)
-        addTeardownBlock { try await screen.close() }
+        let screen = try await preparation.openRow(screenID: payload.renderPlan.entry.screenId, runValues: run, pixelWidth: 300, pixelHeight: 300)
+        addTeardownBlock { try await closeFixturePageRow(screen) }
         try await screen.enableSemantics()
         try assertChoices(try await screen.snapshot(), picked: [true, false, false], errors: [])
 
