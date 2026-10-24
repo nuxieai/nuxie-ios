@@ -1246,6 +1246,19 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testShutdownBeforeStartDoesNotCloseAnUnopenedSession() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        await loop.shutdown()
+        await loop.shutdown()
+        let operations = await recorder.operationNames()
+        XCTAssertTrue(operations.isEmpty, "An unopened session has no runtime teardown transition")
+        _ = window
+    }
+
+    @MainActor
     func testShutdownDrainsFrameAndClosesExactlyOnceDespiteDuplicateCompletion() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")

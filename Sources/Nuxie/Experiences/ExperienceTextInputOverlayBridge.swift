@@ -412,6 +412,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var latestKeyboardFrame: CGRect?
     private var dismissTapRecognizer: UITapGestureRecognizer?
 
+    var onWillBeginEditing: (() -> Void)?
     var onNativeEditing: ((UUID?, InputTarget, CGPoint?, Bool, UInt64?,
         @escaping @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void) -> Void)?
 
@@ -1031,12 +1032,16 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func textFieldShouldBeginEditing(_ textField: UITextField) -> Bool {
         guard !stepInProgress, let binding = binding(for: textField) else { return false }
-        return allowsInteraction(binding)
+        guard allowsInteraction(binding) else { return false }
+        onWillBeginEditing?()
+        return true
     }
 
     func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
         guard !stepInProgress, let binding = binding(for: textView) else { return false }
-        return allowsInteraction(binding)
+        guard allowsInteraction(binding) else { return false }
+        onWillBeginEditing?()
+        return true
     }
 
     func textFieldDidBeginEditing(_ textField: UITextField) {
