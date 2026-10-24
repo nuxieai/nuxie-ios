@@ -33,6 +33,7 @@ enum ExperiencePageStep {
         var wait: ([AsyncStream<Void>], UInt64) async -> Void
         var hidden: () async -> Void
         var active: () async throws -> Void
+        var drain: () async throws -> Void = {}
     }
 
     static func perform(source: String, target: String, style: ExperienceScreenTransitionSpec.Kind,
@@ -92,6 +93,10 @@ enum ExperiencePageStep {
             }
             try await operations.batch([.end(name), active])
         }
+        // step_end commands arrive on the next player step. Deliver that result
+        // while the outgoing row still owns host commands, even after retirement.
+        try await operations.drain()
+        try Task.checkCancellation()
         await operations.hidden()
         try Task.checkCancellation()
         try await operations.active()

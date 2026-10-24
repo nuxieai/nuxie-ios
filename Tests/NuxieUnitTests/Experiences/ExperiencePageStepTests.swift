@@ -1,8 +1,94 @@
 import XCTest
 @testable import Nuxie
+#if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+@testable import NuxieRuntime
+#endif
 
 @MainActor
 final class ExperiencePageStepTests: XCTestCase {
+    #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
+    func testEndCommandsKeepOutgoingSaveOwnerUntilDeliveryAcrossEveryStepStyle() async throws {
+        for (style, reduced, back, covered) in [
+            (ExperienceScreenTransitionSpec.Kind.magicMove, false, false, false),
+            (.none, false, false, false), (.none, false, true, false),
+            (.magicMove, true, false, false), (.none, true, true, true)
+        ] {
+            let catalog = NuxieNativeViewModelCatalog(schemas: [
+                .init(index: 2, name: "Form", propertyRange: 3..<4, authoredInstanceRange: 0..<0,
+                    defaultAuthoredInstance: nil, isGlobal: false)
+            ], properties: [
+                .init(schemaIndex: 0, index: 0, name: "state", kind: .viewModel, referencedSchemaIndex: 1, enumLabels: []),
+                .init(schemaIndex: 0, index: 1, name: "responses:form", kind: .viewModel, referencedSchemaIndex: 2, enumLabels: []),
+                .init(schemaIndex: 1, index: 0, name: "kept", kind: .number, referencedSchemaIndex: nil, enumLabels: []),
+                .init(schemaIndex: 2, index: 0, name: "answer", kind: .string, referencedSchemaIndex: nil, enumLabels: [])
+            ], authoredInstances: [])
+            let policy = JourneyReleaseValuePolicy(state: [:], responses: ["form": .init(title: "Form", model: "Form",
+                fields: [.init(key: "answer", label: "Answer", type: "string", values: nil, multiple: nil, rules: [])])], ruleGroups: [])
+            func snapshot(_ root: UInt64, _ answer: String, _ kept: Float) -> NuxieNativeViewModelSnapshot {
+                .init(rootInstanceID: root, instances: [
+                    .init(id: root, schemaIndex: 0, valueRange: 0..<2),
+                    .init(id: root + 1, schemaIndex: 1, valueRange: 2..<3),
+                    .init(id: root + 2, schemaIndex: 2, valueRange: 3..<4)
+                ], values: [
+                    .init(ownerInstanceID: root, propertyIndex: 0, name: "state", value: .referencedInstance(root + 1)),
+                    .init(ownerInstanceID: root, propertyIndex: 1, name: "responses:form", value: .referencedInstance(root + 2)),
+                    .init(ownerInstanceID: root + 1, propertyIndex: 0, name: "kept", value: .number(kept)),
+                    .init(ownerInstanceID: root + 2, propertyIndex: 0, name: "answer", value: .bytes(Data(answer.utf8)))
+                ])
+            }
+            // Fake player retains row snapshots after list retirement, as the page actor does.
+            let retained = ["A": snapshot(10, "outgoing", 41), "B": snapshot(20, "incoming", 82)]
+            var mounted: Set<String> = ["A", "B"]
+            var owner = "A"
+            var pending: [ExperienceInteractiveEffectKind] = []
+            var delivered: [(String, ExperienceResponseSaveRequest)] = []
+            var reconcileOwners: [String] = []
+            func save(_ trigger: String) -> ExperienceInteractiveEffectKind {
+                .hostCommand(name: "$nuxie.response.save", payload: .object([
+                    .init(key: "form", value: .string("form")),
+                    .init(key: "awaitTrigger", value: .string(trigger)),
+                    .init(key: "keep:value", value: .string("state/kept"))
+                ]))
+            }
+            func deliver() throws {
+                let commands = pending
+                pending.removeAll()
+                for command in commands {
+                    let captured = try XCTUnwrap(ExperienceResponseSaveRequest.capture(command,
+                        snapshot: retained[owner], catalog: catalog, policy: policy))
+                    delivered.append((owner, captured))
+                }
+            }
+            let operations = ExperiencePageStep.Operations(setInputEnabled: { _ in }, prepare: {},
+                register: { _, _ in AsyncStream { $0.finish() } }, batch: { changes in
+                    for change in changes {
+                        switch change {
+                        case .reconcile: reconcileOwners.append(owner); try deliver()
+                        case .end: pending.append(save("state/outgoingSaved"))
+                        case .retire: if back { mounted.remove("A") }
+                        default: break
+                        }
+                    }
+                }, present: { try deliver() }, wait: { _, _ in }, hidden: {}, active: {
+                    XCTAssertEqual(delivered.count, 1, "Landing save must be delivered before owner selection")
+                    if back { XCTAssertFalse(mounted.contains("A")) }
+                    owner = "B"
+                    pending.append(save("state/incomingSaved"))
+                    try deliver()
+                }, drain: { try deliver() })
+            try await ExperiencePageStep.perform(source: "A", target: "B", style: style, isBack: back,
+                plan: PageStepProbe.plan, exit: .init(declaration: nil, reduceMotion: reduced),
+                reduceMotion: reduced, coveredCut: covered, operations: operations)
+            try deliver()
+            XCTAssertEqual(reconcileOwners, ["A"])
+            XCTAssertEqual(delivered.map { $0.0 }, ["A", "B"])
+            XCTAssertEqual(delivered.map { $0.1.answers }, [["answer": .string("outgoing")], ["answer": .string("incoming")]])
+            XCTAssertEqual(delivered.map { $0.1.awaitTrigger }, ["state/outgoingSaved", "state/incomingSaved"])
+            XCTAssertEqual(delivered.map { $0.1.kept.map(\.value) }, [[.number(41)], [.number(82)]])
+        }
+    }
+    #endif
+
     func testCoveredCutKeepsBothRowsHiddenWithoutAVisit() async throws {
         let probe = PageStepProbe()
         try await probe.perform(style: .none, reduced: true, coveredCut: true, isBack: true)
