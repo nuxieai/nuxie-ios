@@ -87,84 +87,6 @@
       "closedby": "none",
       "available": true,
       "firstLayer": "sheet"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "fullscreen",
-        "height": "large",
-        "closedby": "any"
-      },
-      "present": "fullscreen",
-      "height": "large",
-      "closedby": "any",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "fullscreen",
-        "height": "large",
-        "closedby": "none"
-      },
-      "present": "fullscreen",
-      "height": "large",
-      "closedby": "none",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "fullscreen",
-        "height": "medium",
-        "closedby": "any"
-      },
-      "present": "fullscreen",
-      "height": "medium",
-      "closedby": "any",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "fullscreen",
-        "height": "medium",
-        "closedby": "none"
-      },
-      "present": "fullscreen",
-      "height": "medium",
-      "closedby": "none",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "fullscreen",
-        "height": "fit-content",
-        "closedby": "any"
-      },
-      "present": "fullscreen",
-      "height": "fit-content",
-      "closedby": "any",
-      "available": true,
-      "firstLayer": "fullscreen"
-    },
-    {
-      "transition": {
-        "type": "modal",
-        "present": "fullscreen",
-        "height": "fit-content",
-        "closedby": "none"
-      },
-      "present": "fullscreen",
-      "height": "fit-content",
-      "closedby": "none",
-      "available": true,
-      "firstLayer": "fullscreen"
     }
   ],
   "invalid": [
@@ -207,6 +129,42 @@
     {
       "type": "modal",
       "present": "dialog"
+    },
+    {
+      "type": "modal",
+      "present": "fullscreen",
+      "height": "large",
+      "closedby": "any"
+    },
+    {
+      "type": "modal",
+      "present": "fullscreen",
+      "height": "large",
+      "closedby": "none"
+    },
+    {
+      "type": "modal",
+      "present": "fullscreen",
+      "height": "medium",
+      "closedby": "any"
+    },
+    {
+      "type": "modal",
+      "present": "fullscreen",
+      "height": "medium",
+      "closedby": "none"
+    },
+    {
+      "type": "modal",
+      "present": "fullscreen",
+      "height": "fit-content",
+      "closedby": "any"
+    },
+    {
+      "type": "modal",
+      "present": "fullscreen",
+      "height": "fit-content",
+      "closedby": "none"
     }
   ]
 }

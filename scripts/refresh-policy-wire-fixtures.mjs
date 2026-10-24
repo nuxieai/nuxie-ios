@@ -92,6 +92,23 @@ const refresh = (value, fixturePath) => {
       publicKey, Buffer.from(value.signature.signatureBase64, 'base64'))) {
       throw new Error('Refusing to refresh an unverified fixture envelope');
     }
+    // These SDK-owned admission fixtures carry synthetic transition records.
+    // Verify their original envelope above before migrating and re-signing it.
+    if (fixturePath === 'fixtures/journeys/planes/release.json'
+      || fixturePath === 'fixtures/journeys/planes/text-input-navigation.json') {
+      for (const transition of descriptor.render?.transitions ?? []) {
+        transition.kind = 'page';
+        delete transition.incomingOnTop;
+        transition.source.completeEventName = `nx_exit_done:${transition.id}`;
+        transition.destination.completeEventName = `nx_enter_done:${transition.id}`;
+        if (transition.reverse) {
+          transition.reverse.durationMs ??= transition.durationMs;
+          delete transition.reverse.incomingOnTop;
+          transition.reverse.source.completeEventName = `nx_exit_done:${transition.id}.reverse`;
+          transition.reverse.destination.completeEventName = `nx_enter_done:${transition.id}.reverse`;
+        }
+      }
+    }
     if (descriptor.schemaVersion !== 'nuxie.journey-release.v3') migrateInputTable(descriptor, fixturePath);
     descriptor.schemaVersion = 'nuxie.journey-release.v3';
     // Retained fixtures declare no native forms; compiled state remains catalog-owned.
