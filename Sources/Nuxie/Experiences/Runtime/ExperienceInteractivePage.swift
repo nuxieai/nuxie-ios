@@ -55,14 +55,6 @@ actor ExperienceInteractivePage {
     nonisolated var artboardBounds: CGRect { layoutBounds.read() }
     var collapsedScreenIDs: Set<String> { rowList.collapsed }
     private var liveStep: (artboard: String, name: String?)?
-    // One-shot observation of the native call only, used by runtime regression tests.
-    private var removalStepObserver: (@Sendable (Result<Void, Error>) async -> Void)?
-    private var observeRemovalStep = false
-
-    func observeNextNativeStepAfterRemoval(_ observer: @escaping @Sendable (Result<Void, Error>) async -> Void) {
-        removalStepObserver = observer
-    }
-
     private var currentReduceMotion: Bool
 
     private init(runtime: NuxieNativeRuntime, contract: NativeExperiencePageHost,
@@ -407,7 +399,6 @@ actor ExperienceInteractivePage {
             rows[id]?.removedSnapshot = retained
             await row.binding.markRowRemoved(retained)
             await runtime.freezeRemovedRow(retained)
-            if removalStepObserver != nil { observeRemovalStep = true }
             rowsNeedReconciliation = true
         }
     }
@@ -534,20 +525,8 @@ actor ExperienceInteractivePage {
     private func stepLocked(pointers: [NuxieNativePointerEvent], focusInputs: [NuxieNativeFocusInput] = [], elapsedSeconds: Float,
                             correlationID: UInt64, capturesTextLayout: Bool = false) async throws -> Step {
         try requireOpen()
-        let observer = observeRemovalStep ? removalStepObserver : nil
-        if observeRemovalStep {
-            observeRemovalStep = false
-            removalStepObserver = nil
-        }
-        let frame: (result: NuxieNativePlayerStepResult, snapshot: NuxieNativeViewModelSnapshot?)
-        do {
-            frame = try await runtime.stepWithSnapshot(pointers: pointers, focusInputs: focusInputs,
-                elapsedSeconds: elapsedSeconds, correlationID: correlationID)
-        } catch {
-            await observer?(.failure(error))
-            throw error
-        }
-        await observer?(.success(()))
+        let frame = try await runtime.stepWithSnapshot(pointers: pointers, focusInputs: focusInputs, elapsedSeconds: elapsedSeconds,
+            correlationID: correlationID)
         rowsNeedReconciliation = false
         layoutBounds.update(size: try await runtime.layoutSize())
         try await videoPlayback?.resizeViewport(bounds: artboardBounds)
@@ -657,7 +636,6 @@ actor ExperienceInteractivePage {
     private func closeLocked() async throws {
         guard !closed else { return }
         closed = true
-        removalStepObserver = nil
         for row in rows.values { for waiter in row.waiters.values { waiter.continuation.finish() } }
         await videoPlayback?.close()
         for (_, row) in retiredGenerations { for waiter in row.waiters.values { waiter.continuation.finish() } }
