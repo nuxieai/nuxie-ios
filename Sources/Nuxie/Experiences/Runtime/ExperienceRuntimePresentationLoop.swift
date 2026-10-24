@@ -664,7 +664,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var appliedMediaVisibility = true
     private var isPresentationVisible = true
     private var isTimelineActive = true
-    private var sessionIsOpen = true
+    private var sessionIsOpen = false
+    private(set) var hasTakenSessionOwnership = false
     private var lastAppliedSize: ExperienceRuntimeSurfaceSize?
     private var frameSequence: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
@@ -758,6 +759,9 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         terminalError = nil
         applicationIsActive = UIApplication.shared.applicationState == .active
         refreshOwningSceneActivity()
+        // Ownership begins with the first session operation, including failed startup.
+        hasTakenSessionOwnership = true
+        sessionIsOpen = true
         let deviceResult = try await session.perform(.copyMetalDevice)
         guard !isShuttingDown, generation == lifecycleGeneration else {
             throw CancellationError()
