@@ -441,6 +441,17 @@ package struct NuxieNativeViewModelSnapshot: Equatable, Sendable {
 }
 
 extension NuxieNativeViewModelSnapshot {
+    /// Screen-owned graph excludes the shared Experience global.
+    package var rowOwnedInstanceIDs: Set<UInt64> {
+        var shared = Set<UInt64>()
+        for field in values where field.ownerInstanceID == rootInstanceID && field.name == "experience" {
+            if case .referencedInstance(let id) = field.value, let graph = rooted(at: id) {
+                shared.formUnion(graph.instances.map(\.id))
+            }
+        }
+        return Set(instances.map(\.id)).subtracting(shared)
+    }
+
     /// Copies a reachable subgraph with its own root and rebuilt value ranges.
     package func rooted(at root: UInt64) -> Self? {
         let byID = Dictionary(uniqueKeysWithValues: instances.map { ($0.id, $0) })
@@ -520,6 +531,21 @@ package enum NuxieNativeViewModelMutation: Equatable, Sendable {
         value: NuxieNativeViewModelReference
     )
     case listClear(instance: NuxieNativeViewModelReference, path: String)
+}
+
+extension NuxieNativeViewModelMutation {
+    fileprivate var rowWriteIdentities: [UInt64] {
+        switch self {
+        case .setString(let owner, _, _), .setNumber(let owner, _, _), .setBool(let owner, _, _),
+             .setColor(let owner, _, _), .setEnumeration(let owner, _, _), .fireTrigger(let owner, _),
+             .setListIndex(let owner, _, _), .setImage(let owner, _, _), .listRemove(let owner, _, _),
+             .listSwap(let owner, _, _, _), .listMove(let owner, _, _, _), .listClear(let owner, _):
+            return [owner.rawValue]
+        case .setViewModel(let owner, _, let child), .listInsert(let owner, _, _, let child),
+             .listSet(let owner, _, _, let child):
+            return [owner.rawValue, child.rawValue]
+        }
+    }
 }
 
 package struct NuxieNativeMetalDevice: @unchecked Sendable {
@@ -926,6 +952,74 @@ private final class NuxieNativeFileContext: @unchecked Sendable {
 }
 
 package actor NuxieNativeRuntime {
+    private var removedRowSnapshots: [UInt64: NuxieNativeViewModelSnapshot] = [:]
+    private var recordsRowWrites = false
+    package private(set) var rowWriteLog: [UInt64] = []
+
+    package func recordRowWrites() { recordsRowWrites = true; rowWriteLog.removeAll() }
+
+    /// Rebuilds owned topology with new identities; never attaches a removed child.
+    /// Triggers and opaque authored assets retain schema defaults.
+    package func seedRow(_ root: NuxieNativeViewModelReference, from snapshot: NuxieNativeViewModelSnapshot) async throws {
+        let catalog = try await viewModelCatalog()
+        let owned = snapshot.rowOwnedInstanceIDs
+        var replacements = [snapshot.rootInstanceID: root]
+        var allocated: [NuxieNativeViewModelReference] = []
+        do {
+            for instance in snapshot.instances where owned.contains(instance.id) && instance.id != snapshot.rootInstanceID {
+                let fresh = try await makeViewModel(schemaIndex: instance.schemaIndex)
+                allocated.append(fresh)
+                replacements[instance.id] = fresh
+            }
+            var writes: [NuxieNativeViewModelMutation] = []
+            for field in snapshot.values {
+                guard let owner = replacements[field.ownerInstanceID],
+                      let schema = snapshot.instances.first(where: { $0.id == field.ownerInstanceID })?.schemaIndex,
+                      let property = catalog.properties.first(where: { $0.schemaIndex == schema && $0.name == field.name }) else { continue }
+                let path = field.name
+                switch field.value {
+                case .bytes(let value) where property.kind == .string: writes.append(.setString(instance: owner, path: path, value: value))
+                case .number(let value): writes.append(.setNumber(instance: owner, path: path, value: value))
+                case .bool(let value): writes.append(.setBool(instance: owner, path: path, value: value))
+                case .integer(let value):
+                    switch property.kind {
+                    case .color: writes.append(.setColor(instance: owner, path: path, value: UInt32(truncatingIfNeeded: value)))
+                    case .enumeration: writes.append(.setEnumeration(instance: owner, path: path, value: value))
+                    case .listIndex: writes.append(.setListIndex(instance: owner, path: path, value: value))
+                    case .image: writes.append(.setImage(instance: owner, path: path, value: value))
+                    default: break
+                    }
+                case .referencedInstance(let id):
+                    if let child = replacements[id] { writes.append(.setViewModel(instance: owner, path: path, value: child)) }
+                case .list(let ids):
+                    writes.append(.listClear(instance: owner, path: path))
+                    for (index, id) in ids.enumerated() {
+                        guard let child = replacements[id] else { throw NuxieNativeRuntimeError.invalidNativeValue("Missing retained row child") }
+                        writes.append(.listInsert(instance: owner, path: path, index: index, value: child))
+                    }
+                default: break
+                }
+            }
+            _ = try await mutateViewModel(writes)
+        } catch {
+            try? await releaseViewModels(allocated)
+            throw error
+        }
+    }
+
+    package func freezeRemovedRow(_ snapshot: NuxieNativeViewModelSnapshot) {
+        for id in snapshot.rowOwnedInstanceIDs {
+            removedRowSnapshots[id] = snapshot.rooted(at: id)
+        }
+    }
+
+    private func checkRowWrite(_ identities: [UInt64]) throws {
+        let allowed = identities.allSatisfy { removedRowSnapshots[$0] == nil }
+        assert(allowed, "R6b: write to a removed page row")
+        guard allowed else { throw NuxieNativeRuntimeError.invalidNativeValue("R6b: removed page row") }
+        if recordsRowWrites { rowWriteLog += identities }
+    }
+
     private let executor: NuxieRuntimePinnedThreadExecutor
     private let preparedFile: NuxieNativePreparedFile?
     private var state: NuxieNativeRuntimeState?
@@ -1048,7 +1142,9 @@ package actor NuxieNativeRuntime {
         try await executor.call { try state.player.stepEnd(incomingScreen: incomingScreen, stepName: stepName) }
     }
 
-    package func setRowCollapsed(list: String, index: Int, collapsed: Bool) async throws {
+    package func setRowCollapsed(list: String, index: Int, collapsed: Bool,
+                                 rowReference: NuxieNativeViewModelReference? = nil) async throws {
+        if let rowReference { try checkRowWrite([rowReference.rawValue]) }
         guard let row = UInt32(exactly: index) else {
             throw NuxieNativeRuntimeError.invalidNativeValue("row index is outside uint32")
         }
@@ -1121,6 +1217,7 @@ package actor NuxieNativeRuntime {
     }
 
     package func snapshot(_ reference: NuxieNativeViewModelReference) async throws -> NuxieNativeViewModelSnapshot {
+        if let retained = removedRowSnapshots[reference.rawValue] { return retained }
         let state = try requireState()
         return try await executor.call { try state.snapshot(reference) }
     }
@@ -1186,6 +1283,7 @@ package actor NuxieNativeRuntime {
         _ mutations: [NuxieNativeViewModelMutation],
         correlationID: UInt64 = 0
     ) async throws -> NuxieNativeViewModelMutationResult {
+        try checkRowWrite(mutations.flatMap(\.rowWriteIdentities))
         let state = try requireState()
         return try await executor.call {
             try state.mutateViewModel(mutations, correlationID: correlationID)
@@ -1207,11 +1305,13 @@ package actor NuxieNativeRuntime {
     }
 
     package func fieldOwnerSnapshot(_ identity: UInt64) async throws -> NuxieNativeViewModelSnapshot {
+        if let retained = removedRowSnapshots[identity] { return retained }
         let state = try requireState()
         return try await executor.call { try state.fieldOwner(identity).snapshot() }
     }
 
     package func mutateFieldOwner(_ identity: UInt64, mutations: [NuxieNativeViewModelMutation]) async throws -> NuxieNativeViewModelMutationResult {
+        try checkRowWrite([identity] + mutations.flatMap(\.rowWriteIdentities))
         let state = try requireState()
         return try await executor.call {
             let handle = try state.fieldOwner(identity)
@@ -1234,6 +1334,9 @@ package actor NuxieNativeRuntime {
     }
 
     package func setFieldContentOffset(captureID: UUID, nodeID: UInt32, name: String, x: Float, y: Float) async throws {
+        if let owner = try await fieldViewModelInstance(captureID: captureID, nodeID: nodeID, name: name) {
+            try checkRowWrite([owner])
+        }
         let state = try requireState()
         try await executor.call {
             try state.setFieldContentOffset(captureID: captureID, nodeID: nodeID, name: name, x: x, y: y)

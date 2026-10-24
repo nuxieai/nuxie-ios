@@ -147,7 +147,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             try await layer.insert(screenID: "screen_2", at: 0)
             _ = try await layer.step(elapsedSeconds: 0)
             let revisited = try await layer.snapshot(screenID: "screen_2")
-            XCTAssertEqual(revisited.rootInstanceID, b.rootInstanceID)
+            XCTAssertNotEqual(revisited.rootInstanceID, b.rootInstanceID)
             XCTAssertEqual(try self.number(revisited, "keptValue"), 42)
             XCTAssertEqual(try self.number(revisited, "markerX"), 0, accuracy: 0.01)
             let metrics = await preparation.metrics()
