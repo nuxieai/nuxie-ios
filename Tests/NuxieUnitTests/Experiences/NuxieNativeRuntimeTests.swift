@@ -1134,6 +1134,49 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         )
     }
 
+    func testSeedRowReturnsRetainedNestedChildrenForGenerationCleanup() async throws {
+        let runtime = try await NuxieNativeRuntime.open(
+            bytes: try fixture(named: "data_binding_test", extension: "riv"),
+            artboardName: "Artboard", player: .stateMachine("State Machine 1"),
+            pixelWidth: 64, pixelHeight: 64, bindDefaultViewModel: true)
+        do {
+            let root = try await runtime.rootViewModelReference()
+            let nested = try await runtime.makeViewModel(schemaIndex: 1)
+            _ = try await runtime.mutateViewModel([
+                .setString(instance: nested, path: "String", value: Data("retained child".utf8)),
+                .setViewModel(instance: root, path: "Nested", value: nested)
+            ])
+            let snapshot = try await runtime.snapshot(root)
+            let schema = try XCTUnwrap(snapshot.instances.first { $0.id == root.rawValue }?.schemaIndex)
+            let replacement = try await runtime.makeViewModel(schemaIndex: schema)
+            let before = try await runtime.retainedViewModelCount
+            let children = try await runtime.seedRow(replacement, from: snapshot)
+            XCTAssertFalse(children.isEmpty)
+            XCTAssertEqual(children.count, snapshot.rowOwnedInstanceIDs.count - 1)
+            let after = try await runtime.retainedViewModelCount
+            XCTAssertEqual(after, before + children.count)
+            let seeded = try await runtime.snapshot(replacement)
+            let childID = try XCTUnwrap(seeded.values.first {
+                $0.ownerInstanceID == replacement.rawValue && $0.name == "Nested"
+            }.flatMap { field -> UInt64? in
+                if case .referencedInstance(let id) = field.value { return id }
+                return nil
+            })
+            XCTAssertTrue(children.contains { $0.rawValue == childID })
+            XCTAssertNotEqual(childID, nested.rawValue)
+            XCTAssertEqual(seeded.values.first { $0.ownerInstanceID == childID && $0.name == "String" }?.value,
+                .bytes(Data("retained child".utf8)))
+            try await runtime.releaseViewModels(children + [replacement])
+            for child in children {
+                let retained = try await runtime.retainsViewModel(child)
+                XCTAssertFalse(retained)
+            }
+            let finalCount = try await runtime.retainedViewModelCount
+            XCTAssertEqual(finalCount, before - 1)
+            try await runtime.close()
+        } catch { try? await runtime.close(); throw error }
+    }
+
     func testDetachedViewModelCanBeHydratedBeforeStructuralCommit() async throws {
         let runtime = try await NuxieNativeRuntime.open(
             bytes: try fixture(named: "data_binding_test", extension: "riv"),

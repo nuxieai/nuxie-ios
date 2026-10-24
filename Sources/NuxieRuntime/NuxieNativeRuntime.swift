@@ -961,7 +961,7 @@ package actor NuxieNativeRuntime {
 
     /// Rebuilds owned topology with new identities; never attaches a removed child.
     /// Triggers and opaque authored assets retain schema defaults.
-    package func seedRow(_ root: NuxieNativeViewModelReference, from snapshot: NuxieNativeViewModelSnapshot) async throws {
+    package func seedRow(_ root: NuxieNativeViewModelReference, from snapshot: NuxieNativeViewModelSnapshot) async throws -> [NuxieNativeViewModelReference] {
         let catalog = try await viewModelCatalog()
         let owned = snapshot.rowOwnedInstanceIDs
         var replacements = [snapshot.rootInstanceID: root]
@@ -1002,6 +1002,7 @@ package actor NuxieNativeRuntime {
                 }
             }
             _ = try await mutateViewModel(writes)
+            return allocated
         } catch {
             try? await releaseViewModels(allocated)
             throw error
@@ -1020,6 +1021,13 @@ package actor NuxieNativeRuntime {
     }
 
     package var removedRowSnapshotIDs: Set<UInt64> { Set(removedRowSnapshots.keys) }
+
+    package var retainedViewModelCount: Int {
+        get async throws {
+            let state = try requireState()
+            return try await executor.call { state.retainedViewModelCount }
+        }
+    }
 
     package func retainsViewModel(_ reference: NuxieNativeViewModelReference) async throws -> Bool {
         let state = try requireState()
@@ -2189,6 +2197,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             throw error
         }
     }
+
+    var retainedViewModelCount: Int { retainedViewModels.count }
 
     func retainsViewModel(_ reference: NuxieNativeViewModelReference) -> Bool {
         retainedViewModels[reference.rawValue] != nil
