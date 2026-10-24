@@ -1,0 +1,120 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 629,
+  "outputSizeBytes": 12933,
+  "outputSha256": "389adc8c1927b7b9c2e34499fb0cba49bb242471e6fcc8c65ffb597cb35f9066",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "cmp_components_sanswer-card",
+        "publishedName": "answer-card",
+        "role": "component",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "cmp_components_smotion-note",
+        "publishedName": "motion-note",
+        "role": "component",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 1
+      },
+      {
+        "sourceArtboardId": "scr_screens_sdevice",
+        "publishedName": "device",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 2
+      },
+      {
+        "sourceArtboardId": "scr_screens_slevel",
+        "publishedName": "level",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 3
+      },
+      {
+        "sourceArtboardId": "scr_screens_stap",
+        "publishedName": "tap",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 4
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_sdevice",
+        "artboardId": "scr_screens_sdevice",
+        "artboardName": "device",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "scr_screens_slevel",
+        "artboardId": "scr_screens_slevel",
+        "artboardName": "level",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 1,
+        "reportedEventNames": [
+          "continue"
+        ]
+      },
+      {
+        "screenId": "scr_screens_stap",
+        "artboardId": "scr_screens_stap",
+        "artboardName": "tap",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 2,
+        "reportedEventNames": [
+          "continue"
+        ]
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {
+      "trip_days": {
+        "type": "number"
+      },
+      "level": {
+        "type": "number"
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "400",
+      "style": "normal"
+    }
+  ]
+}

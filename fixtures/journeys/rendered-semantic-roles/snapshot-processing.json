@@ -1,0 +1,8 @@
+{
+  "sourceSha256": "b4550fd68d252f1a2cd409f9ac9c0e89bef72ad26d22000adae26ff758cbd65e",
+  "conversions": [
+    "unwrap-publish-input"
+  ],
+  "compiledResources": [],
+  "actionCompatibility": "validate_compiled_luau_bytecode"
+}

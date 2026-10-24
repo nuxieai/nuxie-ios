@@ -1,0 +1,113 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 381,
+  "outputSizeBytes": 8862,
+  "outputSha256": "f15307764e5ce73bb71c9f41e7311dae4f6154425232e9c8354deac99e5be137",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "cmp_components_stap-count",
+        "publishedName": "tap-count",
+        "role": "component",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "scr_screens_sfirst",
+        "publishedName": "first",
+        "role": "experience",
+        "width": 393,
+        "height": 852,
+        "authoredOrder": 1
+      },
+      {
+        "sourceArtboardId": "scr_screens_slong",
+        "publishedName": "long",
+        "role": "experience",
+        "width": 393,
+        "height": 852,
+        "authoredOrder": 2
+      },
+      {
+        "sourceArtboardId": "scr_screens_sshort",
+        "publishedName": "short",
+        "role": "experience",
+        "width": 393,
+        "height": 852,
+        "authoredOrder": 3
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_sfirst",
+        "artboardId": "scr_screens_sfirst",
+        "artboardName": "first",
+        "width": 393,
+        "height": 852,
+        "authoredOrder": 0,
+        "reportedEventNames": [
+          "continue"
+        ]
+      },
+      {
+        "screenId": "scr_screens_slong",
+        "artboardId": "scr_screens_slong",
+        "artboardName": "long",
+        "width": 393,
+        "height": 852,
+        "authoredOrder": 1,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "scr_screens_sshort",
+        "artboardId": "scr_screens_sshort",
+        "artboardName": "short",
+        "width": 393,
+        "height": 852,
+        "authoredOrder": 2,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {
+      "trip": {
+        "type": "string"
+      },
+      "trip_days": {
+        "type": "number"
+      },
+      "wants_reminder": {
+        "type": "boolean"
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "400",
+      "style": "normal"
+    }
+  ]
+}

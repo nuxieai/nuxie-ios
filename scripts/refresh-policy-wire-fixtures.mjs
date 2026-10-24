@@ -34,13 +34,9 @@ function migrateInputTable(descriptor, fixturePath) {
   if (!render?.textInputs?.length) return;
   const previousScene = render.nux.sha256;
   const oldInputs = render.textInputs;
-  if (fixturePath.includes('rendered-custom-transition/') || fixturePath.includes('rendered-semantic-roles/')) {
-    // These scenes retain their transition/role oracles. Native editing is covered by F3
-    // and the separately qualified secure TextInput fixture, not by their old text runs.
-    render.textInputs = [];
-    migratedInputs.push({ fixturePath, previousScene, replacement: 'remove retired input declarations; retain non-input scene' });
-    return;
-  }
+  // Page semantic-role releases retain their native secure editor declaration.
+  if (fixturePath.includes('rendered-semantic-roles/')) return;
+
   const synthetic = fixturePath === 'fixtures/journeys/planes/release.json'
     || fixturePath === 'fixtures/journeys/planes/text-input-navigation.json';
   if (synthetic) {

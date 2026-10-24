@@ -1,0 +1,45 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 143,
+  "outputSizeBytes": 2527,
+  "outputSha256": "f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen",
+        "publishedName": "Timeline Screen",
+        "role": "experience",
+        "width": 200,
+        "height": 100,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen",
+        "artboardId": "screen",
+        "artboardName": "Timeline Screen",
+        "width": 200,
+        "height": 100,
+        "authoredOrder": 0,
+        "reportedEventNames": [
+          "Done"
+        ]
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": []
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": []
+}

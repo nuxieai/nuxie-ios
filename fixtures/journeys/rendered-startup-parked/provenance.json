@@ -1,12 +1,58 @@
 {
-  "publisherSourceCommit": "12ed2fa1480c5cb50c18c3479c2d897bb13f16c7",
-  "descriptorSha256": "e436e778ddddb019c1443f6558574372d5f3ce2a4f9771beee879b3184d94a24",
-  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Test-authored event-entry signed Journey; reuses unchanged publisher-generated render and screen-action artifacts. Not a live publisher release qualification.",
-  "sourceFixture": "journeys/rendered-screen-control",
-  "sourceDescriptorSha256": "67d534e89101a23b180caf30bbf23836a73a77a5e9d3bfd34b1789b00cbd93af",
-  "descriptorRefresh": {
-    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
-    "previousDescriptorSha256": "e24342b201da93f8da746906430fbedd5de1413485a239b5fcc9c1e8dede3383"
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "wrapper": "tools/sdk-fixtures/page-release/rendered-startup-parked/wrapper.json",
+  "wrapperPin": {
+    "sha256": "bff85b291de2de73c47053f7a3742cc7b5795b53b89a52fc7aaddb0d4d2e6bb2",
+    "sizeBytes": 6496
+  },
+  "baseWrapper": "tools/sdk-fixtures/page-release/rendered-screen-control/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "flat response selection",
+      "new": "form response plan/selection",
+      "why": "redesigned for compiler 2b: flat response `selection` becomes form response `plan/selection`; lane (a) decision 2026-10-24"
+    }
+  ],
+  "baseMigratedForCompiler2b": [
+    {
+      "old": "flat response selection",
+      "new": "form response plan/selection",
+      "why": "redesigned for compiler 2b: flat response `selection` becomes form response `plan/selection`; lane (a) decision 2026-10-24"
+    }
+  ],
+  "baseManifest": {
+    "sha256": "a2314966f4b8f70e03484d46f4dfd2b32b7823a7e8724d4f57964e99446f00b9",
+    "sizeBytes": 1745
+  },
+  "qualification": "Test-authored wrapper over the verified base page; native SDK qualification remains separate.",
+  "files": {
+    "screen.riv": {
+      "sha256": "7f4484317f25f963497783a42edfc3dde3a9420eccb2bce10f18ed10788d1a03",
+      "sizeBytes": 7202
+    },
+    "renders/sha256/7f4484317f25f963497783a42edfc3dde3a9420eccb2bce10f18ed10788d1a03.nux": {
+      "sha256": "7f4484317f25f963497783a42edfc3dde3a9420eccb2bce10f18ed10788d1a03",
+      "sizeBytes": 7202
+    },
+    "report.json": {
+      "sha256": "6dd2d82b19b5ff3fcb500efc2cf0a8d218955389775a1a267a0f6bb632651c50",
+      "sizeBytes": 1550
+    },
+    "page-structure.json": {
+      "sha256": "bd502884148226be53bada4c68b41c37b46961dc9cd493f2b9d0ba52f94b147d",
+      "sizeBytes": 378
+    },
+    "screen-behavior/sha256/0f7388c5c1c5eade58faccbe90ea97590dfd458d22e59c5085c8476d49293977.bin": {
+      "sha256": "0f7388c5c1c5eade58faccbe90ea97590dfd458d22e59c5085c8476d49293977",
+      "sizeBytes": 5399
+    },
+    "descriptor.json": {
+      "sha256": "fe051aff967fd00cd588cecea58420cc349c37e6500ff78ca8cd38feb9336f99",
+      "sizeBytes": 3669
+    },
+    "release-entry.json": {
+      "sha256": "ea58cb3db530731cac2683809b4a48c4e42ea61ab38c6b99a8526895b40c688e",
+      "sizeBytes": 5808
+    }
   }
 }

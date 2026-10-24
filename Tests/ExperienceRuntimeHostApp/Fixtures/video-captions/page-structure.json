@@ -1,0 +1,15 @@
+{
+  "sceneSha256": "c8e016922451990ae838285c80bb2351d93fc2501c90c333b91dd8832ea6d1ac",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "screen",
+      "artboardName": "Video Frame",
+      "rootTypeIndex": 8,
+      "rootTypeName": "$nuxie.Screen.screen"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 131,
+  "outputSizeBytes": 2638,
+  "outputSha256": "ec6956fa10a214ed435660337ddee0ff25cb5ccad0d0426954644bd081bab41a",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen",
+        "publishedName": "String Screen",
+        "role": "experience",
+        "width": 320,
+        "height": 180,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen",
+        "artboardId": "screen",
+        "artboardName": "String Screen",
+        "width": 320,
+        "height": 180,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "Roboto",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-roboto-400-normal-544ed647-0",
+          "location": "cdn",
+          "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
+          "sizeBytes": 2208,
+          "contentType": "font/ttf",
+          "format": "ttf",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": [
+    {
+      "family": "Roboto",
+      "weight": "400",
+      "style": "normal"
+    }
+  ]
+}

@@ -1,0 +1,271 @@
+{
+  "version": 1,
+  "project": {
+    "id": "project-vm-string",
+    "userId": "user-vm-string",
+    "workspaceId": "workspace-vm-string",
+    "appId": null,
+    "name": "Root ViewModel String",
+    "thumbnailUrl": null,
+    "env": "live",
+    "deletedAt": null
+  },
+  "document": {
+    "rootId": "project-vm-string",
+    "nodes": [
+      {
+        "id": "project-vm-string",
+        "projectId": "project-vm-string",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "root",
+        "type": "root",
+        "name": "Root ViewModel String",
+        "data": {
+          "kind": "root",
+          "meta": { "name": "Root ViewModel String" }
+        }
+      },
+      {
+        "id": "project-vm-string::artboard_tree",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string",
+        "orderKey": "a0",
+        "kind": "artboard_tree",
+        "type": "artboard_tree",
+        "name": "Artboard Tree",
+        "data": { "kind": "artboard_tree" }
+      },
+      {
+        "id": "project-vm-string::experiment_tree",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string",
+        "orderKey": "a1",
+        "kind": "experiment_tree",
+        "type": "experiment_tree",
+        "name": "Experiment Tree",
+        "data": { "kind": "experiment_tree" }
+      },
+      {
+        "id": "project-vm-string::journey_root",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string",
+        "orderKey": "a2",
+        "kind": "journey_root",
+        "type": "journey_root",
+        "name": "Journey Tree",
+        "data": { "kind": "journey_root", "version": 1 }
+      },
+      {
+        "id": "project-vm-string::journey_canvas_tree",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string",
+        "orderKey": "a3",
+        "kind": "journey_canvas_tree",
+        "type": "journey_canvas_tree",
+        "name": "Journey Canvas Tree",
+        "data": { "kind": "journey_canvas_tree", "version": 1 }
+      },
+      {
+        "id": "vm.copy",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string",
+        "orderKey": "b0",
+        "kind": "view_model",
+        "type": "view_model",
+        "name": "Copy",
+        "data": {
+          "kind": "view_model",
+          "viewModelPathId": 101,
+          "properties": {
+            "label": {
+              "type": "string",
+              "propertyId": 8,
+              "defaultValue": "a"
+            }
+          }
+        }
+      },
+      {
+        "id": "vmi.copy.default",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "vm.copy",
+        "orderKey": "a0",
+        "kind": "view_model_instance",
+        "type": "view_model_instance",
+        "name": "Copy Defaults",
+        "data": {
+          "kind": "view_model_instance",
+          "values": { "label": "a" }
+        }
+      },
+      {
+        "id": "converter.copy.trim",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string",
+        "orderKey": "b1",
+        "kind": "converter",
+        "type": "converter",
+        "name": "Trim copy",
+        "data": {
+          "kind": "converter",
+          "converter": { "type": "string_trim", "mode": "all" }
+        }
+      },
+      {
+        "id": "converter.copy.template",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string",
+        "orderKey": "b2",
+        "kind": "converter",
+        "type": "converter",
+        "name": "Copy template",
+        "data": {
+          "kind": "converter",
+          "converter": {
+            "type": "template",
+            "template": "{{value}}",
+            "outputType": "string"
+          }
+        }
+      },
+      {
+        "id": "screen",
+        "projectId": "project-vm-string",
+        "screenId": null,
+        "parentId": "project-vm-string::artboard_tree",
+        "orderKey": "a0",
+        "kind": "artboard",
+        "type": "artboard",
+        "name": "String Screen",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": { "dimensions": { "width": 320, "height": 180 } },
+          "viewModelDefaults": {
+            "viewModelId": "vm.copy",
+            "instanceId": "vmi.copy.default"
+          }
+        }
+      },
+      {
+        "id": "screen::view_tree",
+        "projectId": "project-vm-string",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a0",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "name": "View Tree",
+        "data": { "kind": "view_tree" }
+      },
+      {
+        "id": "screen::animation_tree",
+        "projectId": "project-vm-string",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a1",
+        "kind": "animation_tree",
+        "type": "animation_tree",
+        "name": "Animation Tree",
+        "data": { "kind": "animation_tree" }
+      },
+      {
+        "id": "screen::capability_tree",
+        "projectId": "project-vm-string",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a2",
+        "kind": "capability_tree",
+        "type": "capability_tree",
+        "name": "Capability Tree",
+        "data": { "kind": "capability_tree" }
+      },
+      {
+        "id": "label",
+        "projectId": "project-vm-string",
+        "screenId": "screen",
+        "parentId": "screen::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "type": "view",
+        "name": "Label",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "type": "View",
+            "systemId": "Text",
+            "props": {
+              "style": {
+                "x": 20,
+                "y": 20,
+                "width": 240,
+                "height": 80,
+                "opacity": 1,
+                "fontSize": 32,
+                "lineHeight": 40,
+                "fontFamily": "Roboto",
+                "fontWeight": "400",
+                "fontStyle": "normal",
+                "color": "#ffffff"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "label-value",
+        "projectId": "project-vm-string",
+        "screenId": "screen",
+        "parentId": "label",
+        "orderKey": "a0",
+        "kind": "view",
+        "type": "view",
+        "name": "Label Value",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "label-value",
+            "type": "Projection",
+            "kind": "Value",
+            "expr": {
+              "kind": "Converter",
+              "converterId": "converter.copy.template",
+              "expr": {
+                "kind": "Converter",
+                "converterId": "converter.copy.trim",
+                "expr": {
+                  "kind": "Path",
+                  "root": "vm",
+                  "segments": [{ "type": "prop", "name": "label" }],
+                  "pathRef": {
+                    "kind": "ids",
+                    "pathIds": [101, 8],
+                    "isRelative": false,
+                    "nameBased": false
+                  },
+                  "isRelative": false,
+                  "nameBased": false
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "designSystem": {
+    "screenDesignSystems": [],
+    "designSystems": []
+  }
+}

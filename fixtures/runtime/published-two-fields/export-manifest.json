@@ -1,0 +1,70 @@
+{
+  "screen.riv": {
+    "sha256": "90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861",
+    "sizeBytes": 6151
+  },
+  "renders/sha256/90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861.nux": {
+    "sha256": "90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861",
+    "sizeBytes": 6151
+  },
+  "report.json": {
+    "sha256": "57b7c79d7404a81f1f9c167dfcbb2cf7819c03b333a3fe7a08bef835116d799b",
+    "sizeBytes": 3363
+  },
+  "page-structure.json": {
+    "sha256": "2ee096a1197fa04320618faeee3cda81b35cc4c7a92f5dac5289a0740e1ee13b",
+    "sizeBytes": 396
+  },
+  "expectations.json": {
+    "sha256": "19039431f025097ccc3d9de1f0f8329aca6a4473ec2b350fe9c78613054e7e3a",
+    "sizeBytes": 220
+  },
+  "source/experience.json": {
+    "sha256": "8e50428656d725245ae9bce1ccc6dfe22e687f258ea1f7015f605db47c2397e7",
+    "sizeBytes": 354
+  },
+  "source/screens/input/frame.json": {
+    "sha256": "002d15352e42e7ac198c1ec51e7ce965d58995f4d052102efc7449a8244094bd",
+    "sizeBytes": 315
+  },
+  "source/screens/input/index.html": {
+    "sha256": "f29659c61ba5838bc3d4d354efb0b831c61988d3fc8aac8d878715400a18377f",
+    "sizeBytes": 529
+  },
+  "locations.json": {
+    "sha256": "c56a501acffa78bb09f075627dbd15f16cdffcfc7c5bd0c8a0dc46d8134c7c4f",
+    "sizeBytes": 370
+  },
+  "descriptor.json": {
+    "sha256": "5d31ec442651ca1c4404935084ab158969d129eb487d2af849224f03f7141cf6",
+    "sizeBytes": 4770
+  },
+  "release-entry.json": {
+    "sha256": "c2cfe7b119797d8039e03dc461e75d69ad1b335013d7c694a05a4ae939724b47",
+    "sizeBytes": 7233
+  },
+  "release.json": {
+    "sha256": "621a6976d3893cc34546b5286abd1a2b38c3835e35121c8e0c4ea0aa99355b16",
+    "sizeBytes": 7455
+  },
+  "profile.json": {
+    "sha256": "09ef9e778e7b0d962632662abc020687e0fbbc85c0df520a7046626e3686f3f9",
+    "sizeBytes": 8196
+  },
+  "render.json": {
+    "sha256": "97632db0dd24fa390cae9fabe92bc0eb48992e6a1abe9bd4da4d94b28c58d6e5",
+    "sizeBytes": 3191
+  },
+  "text-inputs.json": {
+    "sha256": "84a312afb9080f77701ccf573c2c8b1116eb792a30753f699693988e7f91df18",
+    "sizeBytes": 2573
+  },
+  "fonts.json": {
+    "sha256": "88443d4a83f4166b839867f8f472cc4dac4eee04d93640e8119cde83dbe2992b",
+    "sizeBytes": 213
+  },
+  "provenance.json": {
+    "sha256": "ea5b3076f3a95b7cfbaca8d2f98a0d201b40753eb3500819f3e63479b2aeeef0",
+    "sizeBytes": 5686
+  }
+}

@@ -126,7 +126,6 @@
               "width": 300,
               "height": 700
             },
-            "sizeSource": "custom",
             "canvasOwnerId": "screen:screens/background",
             "dragRole": "loose"
           },
@@ -363,7 +362,6 @@
               "width": 300,
               "height": 700
             },
-            "sizeSource": "custom",
             "canvasOwnerId": "screen:screens/fill-child",
             "dragRole": "loose"
           },
@@ -568,7 +566,6 @@
               "width": 300,
               "height": 700
             },
-            "sizeSource": "custom",
             "canvasOwnerId": "experience:fit-content",
             "dragRole": "member"
           },

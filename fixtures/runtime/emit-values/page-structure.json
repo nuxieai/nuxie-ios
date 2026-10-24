@@ -1,0 +1,15 @@
+{
+  "sceneSha256": "62574a3be63f4f3ffe4c55ad9453f38b694e8fff225f7023e9a3753cf499cbd1",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "scr_screens_semits",
+      "artboardName": "emits",
+      "rootTypeIndex": 5,
+      "rootTypeName": "vm_runtime_root_scr_screens_semits"
+    }
+  ]
+}

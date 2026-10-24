@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "nuxie.sdk-page-scene.v1",
+  "valuePolicy": {
+    "state": {
+      "goals": {
+        "type": "list",
+        "items": {
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "render": {
+    "renderer": "nux",
+    "nux": {
+      "key": "renders/sha256/62574a3be63f4f3ffe4c55ad9453f38b694e8fff225f7023e9a3753cf499cbd1.nux",
+      "sha256": "62574a3be63f4f3ffe4c55ad9453f38b694e8fff225f7023e9a3753cf499cbd1",
+      "sizeBytes": 16942,
+      "contentType": "application/vnd.nuxie.scene"
+    },
+    "screens": [
+      {
+        "id": "emits",
+        "artboardId": "scr_screens_semits",
+        "artboardName": "emits",
+        "width": 390,
+        "height": 680
+      }
+    ],
+    "transitions": [],
+    "textInputs": [],
+    "assets": [
+      {
+        "kind": "font",
+        "family": "System",
+        "weight": "700",
+        "style": "normal",
+        "authoredAssetId": 0,
+        "assetUniqueName": "font-system-700-normal-42d2e562-0",
+        "location": "system",
+        "required": true
+      }
+    ]
+  },
+  "screens": [
+    {
+      "id": "emits",
+      "defaultViewModelName": "vm_runtime_root_scr_screens_semits"
+    }
+  ]
+}

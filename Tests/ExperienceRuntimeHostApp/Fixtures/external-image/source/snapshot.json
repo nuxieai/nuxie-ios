@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "project": {
+    "id": "proj_image",
+    "userId": "user_image",
+    "workspaceId": "ws_image",
+    "appId": null,
+    "name": "Image Proof",
+    "thumbnailUrl": null,
+    "env": "live",
+    "deletedAt": null
+  },
+  "document": {
+    "rootId": "proj_image",
+    "nodes": [
+      {
+        "id": "proj_image",
+        "projectId": "proj_image",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "root",
+        "name": "Image Proof",
+        "data": {
+          "kind": "root",
+          "meta": {
+            "name": "Image Proof"
+          }
+        },
+        "type": "root"
+      },
+      {
+        "id": "proj_image::artboard_tree",
+        "projectId": "proj_image",
+        "screenId": null,
+        "parentId": "proj_image",
+        "orderKey": "00",
+        "name": "Artboard Tree",
+        "type": "artboard_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "artboard_tree",
+        "data": {
+          "kind": "artboard_tree"
+        }
+      },
+      {
+        "id": "proj_image::experiment_tree",
+        "projectId": "proj_image",
+        "screenId": null,
+        "parentId": "proj_image",
+        "orderKey": "01",
+        "name": "Experiment Tree",
+        "type": "experiment_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "experiment_tree",
+        "data": {
+          "kind": "experiment_tree"
+        }
+      },
+      {
+        "id": "proj_image::journey_root",
+        "projectId": "proj_image",
+        "screenId": null,
+        "parentId": "proj_image",
+        "orderKey": "02",
+        "name": "Journey Tree",
+        "type": "journey_root",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "journey_root",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        }
+      },
+      {
+        "id": "proj_image::journey_canvas_tree",
+        "projectId": "proj_image",
+        "screenId": null,
+        "parentId": "proj_image",
+        "orderKey": "03",
+        "name": "Journey Canvas Tree",
+        "type": "journey_canvas_tree",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "journey_canvas_tree",
+        "data": {
+          "kind": "journey_canvas_tree",
+          "version": 1
+        }
+      },
+      {
+        "id": "hero_image",
+        "projectId": "proj_image",
+        "screenId": null,
+        "parentId": "proj_image",
+        "orderKey": "a0",
+        "name": "Hero Image",
+        "type": "image",
+        "userId": null,
+        "appId": null,
+        "path": null,
+        "kind": "image",
+        "data": {
+          "kind": "image",
+          "canvas": {
+            "position": {
+              "x": 12,
+              "y": 34
+            },
+            "dimensions": {
+              "width": 80,
+              "height": 40
+            }
+          },
+          "image": {
+            "status": "ready",
+            "assetId": "asset-hero",
+            "url": "https://example.test/hero.png",
+            "intrinsicWidth": 4,
+            "intrinsicHeight": 2,
+            "contentType": "image/png",
+            "objectFit": "fill"
+          }
+        }
+      }
+    ]
+  },
+  "designSystem": {
+    "screenDesignSystems": [],
+    "designSystems": []
+  }
+}

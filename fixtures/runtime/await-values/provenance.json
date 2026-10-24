@@ -1,27 +1,44 @@
 {
-  "publisherSourceCommit": "8e5214a82a442077e6f0c066ce3b2cbae2290658",
-  "superprojectCommit": "8e5214a82a442077e6f0c066ce3b2cbae2290658",
-  "source": "tools/sdk-fixtures/await-values",
-  "publisher": "the parent repository's full publisher, through its publish_folder example",
-  "sha256": "76e765b5856799aea1188a2079a162b20c4eb2ba7a843f1f2376c2403486c395",
-  "sizeBytes": 12749,
-  "fonts": [
-    {
-      "assetUniqueName": "font-system-700-normal-42d2e562-0",
-      "authoredAssetId": 0,
-      "family": "System",
-      "kind": "font",
-      "location": "system",
-      "required": true,
-      "style": "normal",
-      "weight": "700"
+  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "publisherSourceCommit": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/await-values/source",
+  "wrapper": "tools/sdk-fixtures/page-release/await-values/wrapper.json",
+  "migratedForCompiler2b": [],
+  "sources": {
+    "tools/sdk-fixtures/page-release/await-values/source/components/rate-pair/frame.json": {
+      "sha256": "3881424cf7b18a0db9f092e633a7b75c37afff63784d0c653ec783094da65f7f",
+      "sizeBytes": 415
+    },
+    "tools/sdk-fixtures/page-release/await-values/source/components/rate-pair/index.html": {
+      "sha256": "e27b07f989857132a4a28e828e05c94cd8d746c47de4aee9ac1dbf49a3ff4591",
+      "sizeBytes": 519
+    },
+    "tools/sdk-fixtures/page-release/await-values/source/components/rate-pair/style.css": {
+      "sha256": "6494bee28f704f27871b473ce51282679dd9edbe56a026d91ab96474204b8300",
+      "sizeBytes": 423
+    },
+    "tools/sdk-fixtures/page-release/await-values/source/experience.json": {
+      "sha256": "91a7506cda3203dab9f19a766cb959a11023293db4f7bace31461bc77f9b5d3c",
+      "sizeBytes": 410
+    },
+    "tools/sdk-fixtures/page-release/await-values/source/screens/rate/frame.json": {
+      "sha256": "134e6e15f60e4d91a61b4afa8f0d36cb9789574ffad2acda32dac844d74c792a",
+      "sizeBytes": 284
+    },
+    "tools/sdk-fixtures/page-release/await-values/source/screens/rate/index.html": {
+      "sha256": "b80755dc0444b1bc62e624b95d2d8fa547373e34aff8ea688889ad460b57e99b",
+      "sizeBytes": 416
+    },
+    "tools/sdk-fixtures/page-release/await-values/source/screens/rate/style.css": {
+      "sha256": "7e5fb4323e4887f9a9a5e0a4a11e95fda38a97c69264b08931ed2aa3d29c9960",
+      "sizeBytes": 138
+    },
+    "tools/sdk-fixtures/page-release/await-values/wrapper.json": {
+      "sha256": "1e52a4f12ee4dbb6d5567df6cdf6a96c666c31548d6333e30516b2239717362e",
+      "sizeBytes": 4621
     }
-  ],
-  "reportedEventNames": [
-    "$nuxie.relay.rated",
-    "$nuxie.response.save",
-    "rated"
-  ],
+  },
   "valuePolicy": {
     "state": {},
     "responses": {
@@ -55,15 +72,67 @@
       }
     ]
   },
-  "qualification": "Real publisher output through the bridge's publish_folder example. The parent's await_values_tests plays the same folder, its tap points and two quick calls' kept values in an editor session and in the native runtime; the native SDK tests are separate.",
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "tools/sdk-fixtures/page-release/await-values/source",
+    "tools/sdk-fixtures/page-release/await-values/wrapper.json",
+    "<output-root>",
+    "1f9e4e10f1009cb7284c85d329672f621eebfd22"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_folder",
+    "--",
+    "tools/sdk-fixtures/page-release/await-values/source",
+    "<producer-output>",
+    "--page-fixture"
+  ],
+  "fonts": [
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "700",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-700-normal-42d2e562-0",
+      "location": "system",
+      "required": true
+    }
+  ],
+  "signing": {
+    "note": "Unsigned scene-only corpus; consumer authors its own Journey."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
   "files": {
-    "NOTES.md": {
-      "sha256": "5f79c3cd3781fc786e662786b0627be250cc733a1391620c1584c1a7ed685417",
-      "sizeBytes": 2126
-    },
     "screen.riv": {
-      "sha256": "76e765b5856799aea1188a2079a162b20c4eb2ba7a843f1f2376c2403486c395",
-      "sizeBytes": 12749
+      "sha256": "3986fe060ca7de29411a99063f0d4a81bb1585a22bc1ec3625a350105df73bc7",
+      "sizeBytes": 11943
+    },
+    "renders/sha256/3986fe060ca7de29411a99063f0d4a81bb1585a22bc1ec3625a350105df73bc7.nux": {
+      "sha256": "3986fe060ca7de29411a99063f0d4a81bb1585a22bc1ec3625a350105df73bc7",
+      "sizeBytes": 11943
+    },
+    "report.json": {
+      "sha256": "4bed083107da6f1dc76d0541763f3841fedc963c00bff99e2160b77b9112dbcf",
+      "sizeBytes": 2236
+    },
+    "page-structure.json": {
+      "sha256": "f15ac582657e6720eef09833bc7b09b1c9be7dcb623a9712c9af758e492044b6",
+      "sizeBytes": 393
+    },
+    "render.json": {
+      "sha256": "81ce5a1cb079afadde402d8951e8b8f9e8af39bafe8233a8deb709968093f76e",
+      "sizeBytes": 765
+    },
+    "scene-declarations.json": {
+      "sha256": "51694fc8c6cb5298062f18eabc8d60772f1df19ea89087dc23852d932685b02a",
+      "sizeBytes": 1723
     },
     "source/components/rate-pair/frame.json": {
       "sha256": "3881424cf7b18a0db9f092e633a7b75c37afff63784d0c653ec783094da65f7f",

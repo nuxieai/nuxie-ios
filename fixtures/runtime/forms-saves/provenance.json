@@ -1,100 +1,314 @@
 {
-  "sourceCommit": "6281edf876e1d523295cb444b8c9cd374cc0aaea",
-  "compilerBaseCommit": "761943f976dc896b47b41dd356ac2a9a4dc3d0bd",
-  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "worktree": "/Users/levi/dev/nuxie-codex/codex-f4-device-screen",
-  "target": "/Users/levi/dev/nuxie-codex/codex-preview-tool/tools/nuxie-editor/target",
-  "publisherWasm": {
-    "sha256": "b689ed61eabaabeb50329e2d980b5600dc7d5588ef3bb0c1b8fc69eafbfd445f",
-    "sizeBytes": 17489751
-  },
-  "authorityWasm": {
-    "sha256": "29db745c55939b8e0a0ce5b2ac0051a05a8a4d9dd1812aef04d237272ccf68ce",
-    "sizeBytes": 23692042
-  },
-  "scriptCompilerWasm": {
-    "sha256": "97d5867364d440b2eb1ba028c7b53272678c490b8ee537a2382f7c9d96be246d",
-    "sizeBytes": 1878943
-  },
-  "fonts": [
+  "cleanParentHead": "1826d78a1441a88762f247dc99089d0fc99873ae",
+  "publisherSourceCommit": "1826d78a1441a88762f247dc99089d0fc99873ae",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/forms-saves/source",
+  "wrapper": "tools/sdk-fixtures/page-release/forms-saves/wrapper.json",
+  "migratedForCompiler2b": [
     {
-      "assetUniqueName": "font-dm-sans-700-normal-0cc21809-1",
-      "authoredAssetId": 1,
-      "contentType": "font/otf",
-      "family": "DM Sans",
-      "format": "otf",
-      "key": "assets/sha256/3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1.otf",
-      "kind": "font",
-      "location": "cdn",
-      "required": true,
-      "sha256": "3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1",
-      "sizeBytes": 209864,
-      "style": "normal",
-      "weight": "700"
+      "old": "source/.nuxie/canvas.json exists locally but is ignored and absent from the commit",
+      "new": "same exact canvas file to be force-added by Claude; no byte change",
+      "why": "exportFixture recursively inventories hidden files and committedBytes compares every input to git show at the clean parent SHA before publication"
     },
     {
-      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
-      "authoredAssetId": 0,
-      "family": "System",
-      "kind": "font",
-      "location": "system",
-      "required": true,
-      "style": "normal",
-      "weight": "400"
+      "old": "removed iphone-16 preset (393 by 852) in screens/daily-plan/frame.json, screens/daily-reminder/frame.json, screens/departure/frame.json, screens/feedback/frame.json, screens/goals/frame.json, screens/italian-level/frame.json, screens/start-lesson/frame.json, screens/welcome/frame.json",
+      "new": "nearest supported iphone-17 preset (402 by 874)",
+      "why": "the same unknown-device failure is latent behind the schema/canvas failure; this is a separate device migration from the URL-only schema edit; expectations remain unchanged and geometry qualification is still required"
+    },
+    {
+      "old": "Sunghyun Sans Regular bytes registered as DM Sans 700; DM Sans 400 missing",
+      "new": "genuine DM Sans variable TTF, identical bytes pinned for 400 normal and 700 normal",
+      "why": "authored 400 and 700 faces require genuine metrics; production resource path preserves variable bytes",
+      "origin": {
+        "project": "googlefonts/dm-fonts",
+        "url": "https://github.com/googlefonts/dm-fonts",
+        "license": "SIL Open Font License 1.1",
+        "copiedFrom": "/Users/levi/dev/nuxie-handoff/coordinator/screen-enter-exit-files-notes/dm-sans.ttf",
+        "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d"
+      }
+    },
+    {
+      "old": "DM Sans pins covered only 400 normal and 700 normal",
+      "new": "complete used face set: 400 normal, 600 normal, 700 normal, all using the existing genuine variable TTF",
+      "why": "source audit: tokens.css .small-label authors 600 in departure, daily-plan and daily-reminder; all screen/component styles and inherited defaults add no other DM Sans weight or italic face"
+    },
+    {
+      "old": "external pins covered DM Sans only; Fraunces 700 normal was missing",
+      "new": "complete external face inventory: DM Sans 400/600/700 normal and Fraunces 700 normal",
+      "why": "all seven Fraunces selectors use 700 normal; cmap covers every authored Fraunces character plus numeric and trip-title output; no italic face is authored",
+      "origin": {
+        "project": "undercasetype/Fraunces",
+        "url": "https://github.com/undercasetype/Fraunces",
+        "license": "SIL Open Font License 1.1",
+        "copiedFrom": "/Users/levi/dev/worktrees/rive-runtime-pin-80d76ee6/dependencies/rive-app_harfbuzz_rive_13.1.1/test/subset/data/fonts/Fraunces.ttf",
+        "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb"
+      }
     }
   ],
-  "files": {
-    "NOTES.md": {
-      "sha256": "c7272bc77f70aa5323fb3f4c5d7abec75325c69ea61103acc013769de6e9eeef",
-      "sizeBytes": 5252
+  "sources": {
+    "tools/sdk-fixtures/page-release/forms-saves/source/.nuxie/canvas.json": {
+      "sha256": "d313d144faba44c98c23e89791626e0b3807ce9beff6733924768f03a0c3839f",
+      "sizeBytes": 97
     },
-    "assets/sha256/3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1.otf": {
-      "sha256": "3956574f186313166fb69b90b893f33df0afdc6ca95f15de0c5c40f64b2422b1",
-      "sizeBytes": 209864
+    "tools/sdk-fixtures/page-release/forms-saves/source/components/error-line/frame.json": {
+      "sha256": "c9f3f2dba77aea364a9ce2f6fe1b1927504ee81a3f0451f23817f7b309743e0d",
+      "sizeBytes": 195
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/components/error-line/index.html": {
+      "sha256": "ffb092e7c60d15e6abe5f1c69af1433646b40369fab3f16297d4dadb58e22470",
+      "sizeBytes": 71
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/components/goal-card/frame.json": {
+      "sha256": "f9fa42e73f89ec90bf9822013183415b8127751a1fa2bedbbd0b0ad1013376b1",
+      "sizeBytes": 193
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/components/goal-card/index.html": {
+      "sha256": "92e1c1e4fc2d236c49185a0ac633e4ae86d6a5ee75b841bc1d10378f910ab2ed",
+      "sizeBytes": 62
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/experience.json": {
+      "sha256": "bd15cc60e3f921d46cf493dad23948b0bf4aff135f654719ce876c76eef6eb2f",
+      "sizeBytes": 5839
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/daily-plan/frame.json": {
+      "sha256": "141c7daccdbfa1d5be02ca73bff12d00687eae54e6f70df16cd5880ee38532a5",
+      "sizeBytes": 114
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/daily-plan/index.html": {
+      "sha256": "12d5308ed7be6b0df6339038e948b4cda79786a09dcfb714a0c2355102e5d736",
+      "sizeBytes": 2874
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/daily-plan/style.css": {
+      "sha256": "94993d9aba54d67a54a1ff09e176654dbb2e43fff1c48b301ba3b208e273499c",
+      "sizeBytes": 248
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/daily-reminder/frame.json": {
+      "sha256": "ee1142f10f577a4fa754eda8d1572380001ea881aa05bf9993dd6bcd3377ca5d",
+      "sizeBytes": 224
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/daily-reminder/index.html": {
+      "sha256": "82247605d8179717541b342dd07ba4a5b27a59d8be2a46045f03f946d76939b1",
+      "sizeBytes": 2627
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/daily-reminder/style.css": {
+      "sha256": "c39b29f94078e3234e464e6ce97805f0d98596610b980015efecb96546ef0816",
+      "sizeBytes": 563
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/departure/frame.json": {
+      "sha256": "a8160f114e1fab9c0e91559f3133fb541476f7d613afd47832f3b890e6a50947",
+      "sizeBytes": 162
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/departure/index.html": {
+      "sha256": "1af982cd13b73f6b2b2770e9cef39d1d7be12a59df4231d28dac8c7296d3d004",
+      "sizeBytes": 1850
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/departure/style.css": {
+      "sha256": "a9ca5c53558ceb7e7b04cbd412c5617d7a092de9a16e698ee4a930c1bed0d00d",
+      "sizeBytes": 518
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/feedback/frame.json": {
+      "sha256": "a045899c74b6df5a36cdc0fe2ca925cd92b6bfc4efa8d814a244e225d0a59176",
+      "sizeBytes": 132
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/feedback/index.html": {
+      "sha256": "d365e93a7d196d748f41451da2d53b5578dfe696d5754484f769eb10063b5ee6",
+      "sizeBytes": 1151
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/goals/frame.json": {
+      "sha256": "86608044b6cffac29b3c9d94bed87aa062bcc903120df9c3fa88171eabf11915",
+      "sizeBytes": 114
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/goals/index.html": {
+      "sha256": "3519156241dcc73bec0321cf188e3552c334f34fc13eb7358841f9ac05f67108",
+      "sizeBytes": 201
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/italian-level/frame.json": {
+      "sha256": "a4e87247f5d594376d6dbc78d0ee5433dbc9c1df52375d4a96b744422ae2410f",
+      "sizeBytes": 191
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/italian-level/index.html": {
+      "sha256": "e58878bf11761b64b20b52dbbe17c2198c757717562e349715f2767f1aee7865",
+      "sizeBytes": 1831
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/start-lesson/frame.json": {
+      "sha256": "7c95abb55a0b75140982f5e32ca1589f8890f1afa23a84c46e51c96a272845fc",
+      "sizeBytes": 111
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/start-lesson/index.html": {
+      "sha256": "270ee6a11d2f2bafdc09a89d4ce562baefb4fda5a3063d7ca8206d8438e5a14d",
+      "sizeBytes": 1904
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/start-lesson/style.css": {
+      "sha256": "b071e0985813cc8b4afba43749c08bf2af60ed7f3e549da5af89ae92018e71f1",
+      "sizeBytes": 225
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/welcome/frame.json": {
+      "sha256": "3b3c263459c9137cd352a1d4bd72be59db4b3869b9fb4b806368f6a3139a7814",
+      "sizeBytes": 127
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/welcome/index.html": {
+      "sha256": "c9607aaa28eaecd5412e585435472d27992cee6abc823aa2978fffcf3d6ae0ba",
+      "sizeBytes": 1182
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/screens/welcome/style.css": {
+      "sha256": "a7971e8c292e7a3f45cffe4fe1a6c89403727c0a82baaba4dcd5fd4cc67bfba6",
+      "sizeBytes": 598
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/scripts/save-feedback.luau": {
+      "sha256": "0d882abe70178893a2d127542272488604fba77f3964ce55accb2b0935333ebf",
+      "sizeBytes": 183
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/scripts/trip-title.luau": {
+      "sha256": "e5c5df663a4a6f3017cb8f8238eca7da13d401885e470b7f05ce69fd88617d18",
+      "sizeBytes": 307
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/source/styles/tokens.css": {
+      "sha256": "9ab591bf00cf7fc571ede9466b8b7ccd71cf036cc91d15cc855388fda8ebaf9c",
+      "sizeBytes": 4256
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/wrapper.json": {
+      "sha256": "4444be4e793ff88ae7fe095117da012d0444cd13bddd575b5394c47e61031788",
+      "sizeBytes": 84400
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/expectations.json": {
+      "sha256": "1c9b352d0b0d22b2d3331d0e134670c4343a7743a6dd851e02e43e492c8e3254",
+      "sizeBytes": 15318
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/assets/sha256/8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d.ttf": {
+      "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d",
+      "sizeBytes": 240164
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/assets/sha256/177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb.ttf": {
+      "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+      "sizeBytes": 360440
+    }
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "tools/sdk-fixtures/page-release/forms-saves/source",
+    "tools/sdk-fixtures/page-release/forms-saves/wrapper.json",
+    "<output-root>",
+    "1826d78a1441a88762f247dc99089d0fc99873ae"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_folder",
+    "--",
+    "tools/sdk-fixtures/page-release/forms-saves/source",
+    "<producer-output>",
+    "--page-fixture",
+    "<verified-resources.json>"
+  ],
+  "fonts": [
+    {
+      "kind": "font",
+      "family": "Fraunces",
+      "weight": "700",
+      "style": "normal",
+      "authoredAssetId": 2,
+      "assetUniqueName": "font-fraunces-700-normal-2a84dcba-2",
+      "location": "cdn",
+      "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+      "sizeBytes": 360440,
+      "contentType": "font/ttf",
+      "format": "ttf",
+      "required": true,
+      "key": "assets/sha256/177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb.ttf"
+    },
+    {
+      "kind": "font",
+      "family": "DM Sans",
+      "weight": "700",
+      "style": "normal",
+      "authoredAssetId": 1,
+      "assetUniqueName": "font-dm-sans-700-normal-0cc21809-1",
+      "location": "cdn",
+      "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d",
+      "sizeBytes": 240164,
+      "contentType": "font/ttf",
+      "format": "ttf",
+      "required": true,
+      "key": "assets/sha256/8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d.ttf"
+    },
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
+      "required": true
+    }
+  ],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "71c69b2c4d2154c0b3d5572d43311bed4532285ac7e18d3112f1ff524de020c0",
+      "sizeBytes": 140912
+    },
+    "renders/sha256/71c69b2c4d2154c0b3d5572d43311bed4532285ac7e18d3112f1ff524de020c0.nux": {
+      "sha256": "71c69b2c4d2154c0b3d5572d43311bed4532285ac7e18d3112f1ff524de020c0",
+      "sizeBytes": 140912
+    },
+    "report.json": {
+      "sha256": "ccce64ff0fa3ff8242f7fa09037b93a12413d1ca9f1118c2702f0bfac26d79c7",
+      "sizeBytes": 20745
+    },
+    "page-structure.json": {
+      "sha256": "a1a668e9fbf5a8829d17c2e20456c89b32cd70cbdcd661d86decaff6e899f8ea",
+      "sizeBytes": 1697
     },
     "expectations.json": {
       "sha256": "1c9b352d0b0d22b2d3331d0e134670c4343a7743a6dd851e02e43e492c8e3254",
       "sizeBytes": 15318
     },
-    "profile-entry.json": {
-      "sha256": "3ff4cd446b300b1e889dc42e03260d2b955b0b747b55ec672970c1d3e655e169",
-      "sizeBytes": 65102
+    "assets/sha256/177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb.ttf": {
+      "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+      "sizeBytes": 360440
     },
-    "release.json": {
-      "sha256": "4be50b4bcc8236dbc4a2650e5b6c320a9535ca6050b473b69bd2d7e99981818a",
-      "sizeBytes": 48176
+    "assets/sha256/8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d.ttf": {
+      "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d",
+      "sizeBytes": 240164
     },
-    "renders/sha256/1883be37f4dd5035271847f1825efa07d4c66484252ee1bf58a9a299672e0f9a.nux": {
-      "sha256": "1883be37f4dd5035271847f1825efa07d4c66484252ee1bf58a9a299672e0f9a",
-      "sizeBytes": 151057
-    },
-    "screen.riv": {
-      "sha256": "1883be37f4dd5035271847f1825efa07d4c66484252ee1bf58a9a299672e0f9a",
-      "sizeBytes": 151057
+    "source/.nuxie/canvas.json": {
+      "sha256": "d313d144faba44c98c23e89791626e0b3807ce9beff6733924768f03a0c3839f",
+      "sizeBytes": 97
     },
     "source/components/error-line/frame.json": {
-      "sha256": "75a7301aae76069ee18bd91a95b08de427b6de32a9a7e2c85acde827e51bfb9b",
-      "sizeBytes": 196
+      "sha256": "c9f3f2dba77aea364a9ce2f6fe1b1927504ee81a3f0451f23817f7b309743e0d",
+      "sizeBytes": 195
     },
     "source/components/error-line/index.html": {
       "sha256": "ffb092e7c60d15e6abe5f1c69af1433646b40369fab3f16297d4dadb58e22470",
       "sizeBytes": 71
     },
     "source/components/goal-card/frame.json": {
-      "sha256": "d4680e16dd5fe56885d2e9356c715e8869db9d623db3ef1c7045466a612cde86",
-      "sizeBytes": 194
+      "sha256": "f9fa42e73f89ec90bf9822013183415b8127751a1fa2bedbbd0b0ad1013376b1",
+      "sizeBytes": 193
     },
     "source/components/goal-card/index.html": {
       "sha256": "92e1c1e4fc2d236c49185a0ac633e4ae86d6a5ee75b841bc1d10378f910ab2ed",
       "sizeBytes": 62
     },
     "source/experience.json": {
-      "sha256": "1b3f051b4d606c2bc81326ce6a7f9c0f17431573cf66a013ccba1b33a71bf1d7",
-      "sizeBytes": 5800
+      "sha256": "bd15cc60e3f921d46cf493dad23948b0bf4aff135f654719ce876c76eef6eb2f",
+      "sizeBytes": 5839
     },
     "source/screens/daily-plan/frame.json": {
-      "sha256": "1657f2a3f268ef268fe18b0d32a384bf1cdf5e9d015472df37e349324752c592",
-      "sizeBytes": 115
+      "sha256": "141c7daccdbfa1d5be02ca73bff12d00687eae54e6f70df16cd5880ee38532a5",
+      "sizeBytes": 114
     },
     "source/screens/daily-plan/index.html": {
       "sha256": "12d5308ed7be6b0df6339038e948b4cda79786a09dcfb714a0c2355102e5d736",
@@ -105,8 +319,8 @@
       "sizeBytes": 248
     },
     "source/screens/daily-reminder/frame.json": {
-      "sha256": "93532ef7d1a727ec7eaa8668045e2568a064863453730df24474deb22e74bad1",
-      "sizeBytes": 225
+      "sha256": "ee1142f10f577a4fa754eda8d1572380001ea881aa05bf9993dd6bcd3377ca5d",
+      "sizeBytes": 224
     },
     "source/screens/daily-reminder/index.html": {
       "sha256": "82247605d8179717541b342dd07ba4a5b27a59d8be2a46045f03f946d76939b1",
@@ -117,8 +331,8 @@
       "sizeBytes": 563
     },
     "source/screens/departure/frame.json": {
-      "sha256": "09acf10ae95080a404418b05769121027e9abeaa9708804b80ea63adafa1e8a1",
-      "sizeBytes": 163
+      "sha256": "a8160f114e1fab9c0e91559f3133fb541476f7d613afd47832f3b890e6a50947",
+      "sizeBytes": 162
     },
     "source/screens/departure/index.html": {
       "sha256": "1af982cd13b73f6b2b2770e9cef39d1d7be12a59df4231d28dac8c7296d3d004",
@@ -129,32 +343,32 @@
       "sizeBytes": 518
     },
     "source/screens/feedback/frame.json": {
-      "sha256": "d29b94509241a40695879bbbbc0bce6c4a6619795fb43f543456af1bc294f872",
-      "sizeBytes": 133
+      "sha256": "a045899c74b6df5a36cdc0fe2ca925cd92b6bfc4efa8d814a244e225d0a59176",
+      "sizeBytes": 132
     },
     "source/screens/feedback/index.html": {
       "sha256": "d365e93a7d196d748f41451da2d53b5578dfe696d5754484f769eb10063b5ee6",
       "sizeBytes": 1151
     },
     "source/screens/goals/frame.json": {
-      "sha256": "3de96169affd760901f3e4057d73bf29c3dafbbbfec989f8836cf7c1334bed5a",
-      "sizeBytes": 115
+      "sha256": "86608044b6cffac29b3c9d94bed87aa062bcc903120df9c3fa88171eabf11915",
+      "sizeBytes": 114
     },
     "source/screens/goals/index.html": {
       "sha256": "3519156241dcc73bec0321cf188e3552c334f34fc13eb7358841f9ac05f67108",
       "sizeBytes": 201
     },
     "source/screens/italian-level/frame.json": {
-      "sha256": "9c9c8353e8663882c8dd7449587b527731a347b26662fec1917bb34bdf3c05b5",
-      "sizeBytes": 192
+      "sha256": "a4e87247f5d594376d6dbc78d0ee5433dbc9c1df52375d4a96b744422ae2410f",
+      "sizeBytes": 191
     },
     "source/screens/italian-level/index.html": {
       "sha256": "e58878bf11761b64b20b52dbbe17c2198c757717562e349715f2767f1aee7865",
       "sizeBytes": 1831
     },
     "source/screens/start-lesson/frame.json": {
-      "sha256": "d23455dfcd7c6438e9f297f44fa088bafcf6cbe3bd7691d9e29e04d1197e10fd",
-      "sizeBytes": 112
+      "sha256": "7c95abb55a0b75140982f5e32ca1589f8890f1afa23a84c46e51c96a272845fc",
+      "sizeBytes": 111
     },
     "source/screens/start-lesson/index.html": {
       "sha256": "270ee6a11d2f2bafdc09a89d4ce562baefb4fda5a3063d7ca8206d8438e5a14d",
@@ -165,8 +379,8 @@
       "sizeBytes": 225
     },
     "source/screens/welcome/frame.json": {
-      "sha256": "0e57465b2b070caf995d35501e9620c051b1eeba9022889155c9b05fb9191f13",
-      "sizeBytes": 128
+      "sha256": "3b3c263459c9137cd352a1d4bd72be59db4b3869b9fb4b806368f6a3139a7814",
+      "sizeBytes": 127
     },
     "source/screens/welcome/index.html": {
       "sha256": "c9607aaa28eaecd5412e585435472d27992cee6abc823aa2978fffcf3d6ae0ba",
@@ -187,7 +401,22 @@
     "source/styles/tokens.css": {
       "sha256": "9ab591bf00cf7fc571ede9466b8b7ccd71cf036cc91d15cc855388fda8ebaf9c",
       "sizeBytes": 4256
+    },
+    "descriptor.json": {
+      "sha256": "40feb529247917a9057dd195db027446edbb09a182fed5a87326995b7b4eba7f",
+      "sizeBytes": 48167
+    },
+    "release-entry.json": {
+      "sha256": "42a5939eeaa0dc866ca18d5965b0136468851d0ba0a7282a62b18d58e2925355",
+      "sizeBytes": 65090
+    },
+    "release.json": {
+      "sha256": "40feb529247917a9057dd195db027446edbb09a182fed5a87326995b7b4eba7f",
+      "sizeBytes": 48167
+    },
+    "profile-entry.json": {
+      "sha256": "42a5939eeaa0dc866ca18d5965b0136468851d0ba0a7282a62b18d58e2925355",
+      "sizeBytes": 65090
     }
-  },
-  "artifactCommit": "df325c84e96cbe388643e4a47fab8ccbfd951d98"
+  }
 }

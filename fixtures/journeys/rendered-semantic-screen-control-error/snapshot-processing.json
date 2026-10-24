@@ -1,0 +1,8 @@
+{
+  "sourceSha256": "acd036d54d1f3c75666794410173396e05439c16ba31f47110b7a5096d0c57a2",
+  "conversions": [
+    "unwrap-snapshot-artifact"
+  ],
+  "compiledResources": [],
+  "actionCompatibility": "validate_compiled_luau_bytecode"
+}

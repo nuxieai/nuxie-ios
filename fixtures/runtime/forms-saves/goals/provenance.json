@@ -1,67 +1,144 @@
 {
-  "superprojectCommit": "81fa73c87f0638d151d0a4082fbcab1cd61ec73c",
-  "publisherSourceCommit": "81fa73c87f0638d151d0a4082fbcab1cd61ec73c",
-  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
-  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
-  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
-  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "tipSelection": "Earliest clean approved lists pick through 81fa73c87f, before excluded golden; no later dirty host work included.",
-  "sha256": "a62578818e941eb3366fae0cde4348ac60af3a0294dc6a97a4e054292f03f1cb",
-  "sizeBytes": 3173,
-  "publisherWasmSha256": "b60b08561842733fa5ef29a6e9183c25849e13e97b8dff4ca9915fbb3df9966b",
-  "authorityWasmSha256": "2f2c81c3d08337d7f904bfc1e46c67bc53e6926a51a5c206f4d9af088ac5bf49",
-  "qualification": "C19 goals cut: native list snapshot and ordered in-place recovery exercise. SDK timed-wait persistence, pixels, forms/saves and C16 remain separate.",
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/forms-saves/goals/source",
+  "wrapper": "tools/sdk-fixtures/page-release/forms-saves/goals/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "nuxie.com schema URLs",
+      "new": "nuxie.ai schema URLs",
+      "why": "2b rejects the retired schema host; no other schema fields were changed"
+    },
+    {
+      "old": "removed iphone-16 preset (393 by 852) in screens/goals/frame.json, screens/quiet/frame.json",
+      "new": "nearest supported iphone-17 preset (402 by 874)",
+      "why": "the same unknown-device failure is latent behind the schema/canvas failure; this is a separate device migration from the URL-only schema edit; expectations remain unchanged and geometry qualification is still required"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source/components/goal-card/frame.json": {
+      "sha256": "f2c62112d4a68823b453817100e1264548b4f019cba4c17b984e8ad9c9ee47ab",
+      "sizeBytes": 193
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source/components/goal-card/index.html": {
+      "sha256": "09db06631c3e35013dbfde8e9b6dce0dbafeb3b44d977da77e93301084574c4a",
+      "sizeBytes": 63
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source/experience.json": {
+      "sha256": "a30e1098d000cda04225d8eef256d55ae35ad288ffb693cf236172c983c61d0a",
+      "sizeBytes": 458
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source/screens/goals/frame.json": {
+      "sha256": "12bab442d1c518556e77c11087763a2399e988e1789b30fbaab46f4c1474293e",
+      "sizeBytes": 99
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source/screens/goals/index.html": {
+      "sha256": "3519156241dcc73bec0321cf188e3552c334f34fc13eb7358841f9ac05f67108",
+      "sizeBytes": 201
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source/screens/quiet/frame.json": {
+      "sha256": "12bab442d1c518556e77c11087763a2399e988e1789b30fbaab46f4c1474293e",
+      "sizeBytes": 99
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source/screens/quiet/index.html": {
+      "sha256": "a80b7ee2c25054a1effdc4b976e06e8a9828c6fbb0b0933cd8c073b8b98dc08c",
+      "sizeBytes": 39
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/wrapper.json": {
+      "sha256": "8963c0d5804ba88e5e0aca0e1fd862892b29295301bc33db45ceb81f0a6f0854",
+      "sizeBytes": 2685
+    },
+    "tools/sdk-fixtures/page-release/forms-saves/goals/expectations.json": {
+      "sha256": "5cce0b85e95db28dc1272d6deb39921c5ce5f2dca2f91c5496cd73d35c3e61a2",
+      "sizeBytes": 1065
+    }
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source",
+    "tools/sdk-fixtures/page-release/forms-saves/goals/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_folder",
+    "--",
+    "tools/sdk-fixtures/page-release/forms-saves/goals/source",
+    "<producer-output>",
+    "--page-fixture"
+  ],
+  "fonts": [
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
+      "required": true
+    }
+  ],
+  "signing": {
+    "note": "Unsigned scene-only goals cut; no historical signed Journey exists."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
   "files": {
-    "NOTES.md": {
-      "sha256": "6cbc10836685a3e3b798146abfce4376d4126040430717d6d4af4c904a30ccfa",
-      "sizeBytes": 10335
+    "screen.riv": {
+      "sha256": "9539812d737ee9234730ba0b6b93590eeb0c55274b8709e4eeb6dbcb0bad798c",
+      "sizeBytes": 4564
+    },
+    "renders/sha256/9539812d737ee9234730ba0b6b93590eeb0c55274b8709e4eeb6dbcb0bad798c.nux": {
+      "sha256": "9539812d737ee9234730ba0b6b93590eeb0c55274b8709e4eeb6dbcb0bad798c",
+      "sizeBytes": 4564
+    },
+    "report.json": {
+      "sha256": "7330f8b107dd8c2571d8665d38cff2b48b914f179fccb5f7f338f76d69ac2127",
+      "sizeBytes": 2103
+    },
+    "page-structure.json": {
+      "sha256": "91236839cd42e81b08c22a336a146f402edae1f1b18f4f20181562751cf6fe67",
+      "sizeBytes": 565
     },
     "expectations.json": {
       "sha256": "5cce0b85e95db28dc1272d6deb39921c5ce5f2dca2f91c5496cd73d35c3e61a2",
       "sizeBytes": 1065
     },
-    "screen.riv": {
-      "sha256": "a62578818e941eb3366fae0cde4348ac60af3a0294dc6a97a4e054292f03f1cb",
-      "sizeBytes": 3173
-    },
     "source/components/goal-card/frame.json": {
-      "sha256": "a1425db12b450ca2d058a12d0d08d2499767792fd7de83994d290efa6847cbc3",
-      "sizeBytes": 194
+      "sha256": "f2c62112d4a68823b453817100e1264548b4f019cba4c17b984e8ad9c9ee47ab",
+      "sizeBytes": 193
     },
     "source/components/goal-card/index.html": {
       "sha256": "09db06631c3e35013dbfde8e9b6dce0dbafeb3b44d977da77e93301084574c4a",
       "sizeBytes": 63
     },
     "source/experience.json": {
-      "sha256": "543cd2d2d01aae3c6cd35aad09321bcb6c63995f38fa0bb80705cb623d5f4506",
-      "sizeBytes": 459
+      "sha256": "a30e1098d000cda04225d8eef256d55ae35ad288ffb693cf236172c983c61d0a",
+      "sizeBytes": 458
     },
     "source/screens/goals/frame.json": {
-      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
-      "sizeBytes": 100
+      "sha256": "12bab442d1c518556e77c11087763a2399e988e1789b30fbaab46f4c1474293e",
+      "sizeBytes": 99
     },
     "source/screens/goals/index.html": {
       "sha256": "3519156241dcc73bec0321cf188e3552c334f34fc13eb7358841f9ac05f67108",
       "sizeBytes": 201
     },
     "source/screens/quiet/frame.json": {
-      "sha256": "854a573af0971343333054c33bd03cd2a2c567e770188285186ed8c475a00560",
-      "sizeBytes": 100
+      "sha256": "12bab442d1c518556e77c11087763a2399e988e1789b30fbaab46f4c1474293e",
+      "sizeBytes": 99
     },
     "source/screens/quiet/index.html": {
       "sha256": "a80b7ee2c25054a1effdc4b976e06e8a9828c6fbb0b0933cd8c073b8b98dc08c",
       "sizeBytes": 39
     }
-  },
-  "fonts": [
-    {
-      "location": "system",
-      "family": "System",
-      "weight": "400",
-      "style": "normal",
-      "authoredAssetId": 0,
-      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
-      "required": true
-    }
-  ]
+  }
 }

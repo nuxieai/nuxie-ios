@@ -146,6 +146,7 @@
                 "height": 874
               },
               "deviceName": "iPhone 17 Pro",
+              "orientation": "portrait",
               "canvasOwnerId": "experience:sdk-parla-sheets",
               "dragRole": "member"
             },
@@ -699,7 +700,9 @@
                   "borderBottomRightRadius": 26,
                   "borderTopLeftRadius": 26,
                   "borderTopRightRadius": 26,
+                  "boxSizing": "border-box",
                   "display": "flex",
+                  "flexDirection": "row",
                   "height": 52,
                   "justifyContent": "center",
                   "width": "100%"
@@ -719,7 +722,7 @@
           "parentId": "scr_screens_slesson::v10",
           "orderKey": "a0",
           "kind": "view",
-          "name": "Text",
+          "name": "span",
           "data": {
             "kind": "view",
             "viewKind": "content",
@@ -730,23 +733,23 @@
                 "style": {
                   "color": "#FFFFFF",
                   "fontFamily": "Inter",
-                  "text": {
-                    "value": "Explore Parla Plus",
-                    "runs": [
-                      {
-                        "id": "scr_screens_slesson::v11~r0",
-                        "text": "Explore Parla Plus",
-                        "style": {
-                          "fontSize": 16,
-                          "fontWeight": "600",
-                          "lineHeight": "24px"
-                        }
-                      }
-                    ]
-                  }
+                  "fontSize": 16,
+                  "fontWeight": "600",
+                  "lineHeight": "24px"
                 }
               },
-              "text": "Explore Parla Plus"
+              "text": "Explore Parla Plus",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#FFFFFF"
+                }
+              }
             }
           },
           "type": "view",
@@ -814,6 +817,7 @@
                 "height": 874
               },
               "deviceName": "iPhone 17 Pro",
+              "orientation": "portrait",
               "canvasOwnerId": "experience:sdk-parla-sheets",
               "dragRole": "member"
             },
@@ -1236,7 +1240,9 @@
                   "borderBottomRightRadius": 26,
                   "borderTopLeftRadius": 26,
                   "borderTopRightRadius": 26,
+                  "boxSizing": "border-box",
                   "display": "flex",
+                  "flexDirection": "row",
                   "height": 52,
                   "justifyContent": "center",
                   "width": "100%"
@@ -1256,7 +1262,7 @@
           "parentId": "scr_screens_soffer::v8",
           "orderKey": "a0",
           "kind": "view",
-          "name": "Text",
+          "name": "span",
           "data": {
             "kind": "view",
             "viewKind": "content",
@@ -1267,23 +1273,23 @@
                 "style": {
                   "color": "#FFFFFF",
                   "fontFamily": "Inter",
-                  "text": {
-                    "value": "Save this offer",
-                    "runs": [
-                      {
-                        "id": "scr_screens_soffer::v9~r0",
-                        "text": "Save this offer",
-                        "style": {
-                          "fontSize": 16,
-                          "fontWeight": "600",
-                          "lineHeight": "24px"
-                        }
-                      }
-                    ]
-                  }
+                  "fontSize": 16,
+                  "fontWeight": "600",
+                  "lineHeight": "24px"
                 }
               },
-              "text": "Save this offer"
+              "text": "Save this offer",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#FFFFFF"
+                }
+              }
             }
           },
           "type": "view",
@@ -1351,6 +1357,7 @@
                 "height": 874
               },
               "deviceName": "iPhone 17 Pro",
+              "orientation": "portrait",
               "canvasOwnerId": "experience:sdk-parla-sheets",
               "dragRole": "member"
             },
@@ -1562,7 +1569,9 @@
                   "borderBottomRightRadius": 26,
                   "borderTopLeftRadius": 26,
                   "borderTopRightRadius": 26,
+                  "boxSizing": "border-box",
                   "display": "flex",
+                  "flexDirection": "row",
                   "height": 52,
                   "justifyContent": "center",
                   "width": "100%"
@@ -1582,7 +1591,7 @@
           "parentId": "scr_screens_ssaved::v4",
           "orderKey": "a0",
           "kind": "view",
-          "name": "Text",
+          "name": "span",
           "data": {
             "kind": "view",
             "viewKind": "content",
@@ -1593,23 +1602,23 @@
                 "style": {
                   "color": "#FFFFFF",
                   "fontFamily": "Inter",
-                  "text": {
-                    "value": "Back to learning",
-                    "runs": [
-                      {
-                        "id": "scr_screens_ssaved::v5~r0",
-                        "text": "Back to learning",
-                        "style": {
-                          "fontSize": 16,
-                          "fontWeight": "600",
-                          "lineHeight": "24px"
-                        }
-                      }
-                    ]
-                  }
+                  "fontSize": 16,
+                  "fontWeight": "600",
+                  "lineHeight": "24px"
                 }
               },
-              "text": "Back to learning"
+              "text": "Back to learning",
+              "fileTextStyle": {
+                "link": null,
+                "presetClasses": [],
+                "overrides": {}
+              },
+              "fileTextStyleDeclarations": {},
+              "fileTextStyleApplyKeeps": {
+                "brand": {
+                  "color": "#FFFFFF"
+                }
+              }
             }
           },
           "type": "view",

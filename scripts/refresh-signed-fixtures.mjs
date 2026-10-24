@@ -21,7 +21,6 @@ const profilePaths = [
 ];
 const entryPaths = [
   "fixtures/journeys/rendered-text-input/release-entry.json",
-  "fixtures/journeys/rendered-custom-transition/release-entry.json",
   "fixtures/journeys/rendered-semantic-roles/release-entry.json",
 ];
 const privateKey = createPrivateKey({
