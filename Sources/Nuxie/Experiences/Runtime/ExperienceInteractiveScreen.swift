@@ -1555,8 +1555,9 @@ actor ExperienceInteractivePreparation {
         }
         let preparedArtboards = try await preparedFile.artboards()
         if payload.renderPlan.pageHost == .published {
-            do { try ExperiencePageHostContract.requirePage(in: preparedArtboards) }
-            catch { try? await preparedFile.retire(); throw error }
+            // Preparation already closed its temporary file/renderer handles.
+            // Rejection releases the metadata holder and its executor through ARC.
+            try ExperiencePageHostContract.requirePage(in: preparedArtboards)
         }
         let generatedInteractionStateMachineByArtboard = Dictionary(
             uniqueKeysWithValues: preparedArtboards.compactMap { artboard in
