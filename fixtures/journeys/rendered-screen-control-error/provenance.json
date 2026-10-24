@@ -1,10 +1,111 @@
 {
-  "publisherSourceCommit": "4f555cd437e2cd3a368ba5b3e679c9c88c197356",
-  "descriptorSha256": "3149b64ca2cd51052dcc113d64fa3acf18d8efcbbad8ac35fa672c2fff6199ad",
-  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Test-authored signed Journey and screen-actions artifact around actual publisher-generated render bytes; not a full production publisher release qualification.",
-  "descriptorRefresh": {
-    "reason": "Explicit Experience policy and offer contract; published render and asset bytes unchanged",
-    "previousDescriptorSha256": "26a1ddcdf8306d8c55a0e9bd4c0ecc881bad39fe47fed96978f615885865e06a"
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/screen-control/snapshot.json",
+  "wrapper": "tools/sdk-fixtures/page-release/rendered-screen-control-error/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "flat response selection",
+      "new": "form response plan/selection",
+      "why": "redesigned for compiler 2b: flat response `selection` becomes form response `plan/selection`; lane (a) decision 2026-10-24"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/screen-control/snapshot.json": {
+      "sha256": "75b07fc3ba7d9fe19f0c3c673694cd2e01084d2c17c3b352dee4b0a7901915b1",
+      "sizeBytes": 4799
+    },
+    "tools/sdk-fixtures/page-release/rendered-screen-control-error/wrapper.json": {
+      "sha256": "b0bcc6ec3b6d9216ca6785722b3e7dc2d0e48c2bea9f0487f47e3288ea6b2a87",
+      "sizeBytes": 6402
+    },
+    "tools/sdk-fixtures/page-release/screen-control/failure.luau": {
+      "sha256": "7e9d32fd06dc92d19241f9d06f1f025eaf45232d280edf8146315240ba8bfe76",
+      "sizeBytes": 206
+    }
+  },
+  "processing": {
+    "sourceSha256": "75b07fc3ba7d9fe19f0c3c673694cd2e01084d2c17c3b352dee4b0a7901915b1",
+    "conversions": [
+      "unwrap-snapshot-artifact"
+    ],
+    "compiledResources": [],
+    "actionCompatibility": "validate_compiled_luau_bytecode"
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "--snapshot",
+    "tools/sdk-fixtures/page-release/screen-control/snapshot.json",
+    "tools/sdk-fixtures/page-release/rendered-screen-control-error/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_snapshot",
+    "--",
+    "tools/sdk-fixtures/page-release/screen-control/snapshot.json",
+    "<producer-output>",
+    "<verified-resources.json>"
+  ],
+  "fonts": [],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "51f867f7f8fc0c45f5ee9e2229ebdc49b9a4db70f21b6b2607450a2de7366e9a",
+      "sizeBytes": 7166
+    },
+    "renders/sha256/51f867f7f8fc0c45f5ee9e2229ebdc49b9a4db70f21b6b2607450a2de7366e9a.nux": {
+      "sha256": "51f867f7f8fc0c45f5ee9e2229ebdc49b9a4db70f21b6b2607450a2de7366e9a",
+      "sizeBytes": 7166
+    },
+    "report.json": {
+      "sha256": "4ea27cedbb78f23f972e8ebeb3d7b8bfda8f2f5969b4dd9be672d7c13a6f01c1",
+      "sizeBytes": 1550
+    },
+    "page-structure.json": {
+      "sha256": "3d7aa6a19db6267771344a4da2ca5fb6fc553dfad09aa61d9f43dc6bc16b51ae",
+      "sizeBytes": 378
+    },
+    "screen-behavior/sha256/8d6d2636602fc34bfb1bdc9ac9e47d0099ea983fbf7f237c94c9402c435334f9.bin": {
+      "sha256": "8d6d2636602fc34bfb1bdc9ac9e47d0099ea983fbf7f237c94c9402c435334f9",
+      "sizeBytes": 5351
+    },
+    "snapshot-processing.json": {
+      "sha256": "42569932db73664a7ee1fb716a03db981a636b6cc492135bc92db08b5f3bf3ca",
+      "sizeBytes": 231
+    },
+    "compiled-actions.json": {
+      "sha256": "1fc764abb6fe33d62cdd44c95454dcf5c0b33cb49597cbe718dc8d8b36f7c357",
+      "sizeBytes": 38379
+    },
+    "source/snapshot.json": {
+      "sha256": "75b07fc3ba7d9fe19f0c3c673694cd2e01084d2c17c3b352dee4b0a7901915b1",
+      "sizeBytes": 4799
+    },
+    "descriptor.json": {
+      "sha256": "be7e65635e9a07b3685c9d496bfd2e24fe4aed94de3664c4483189d486719564",
+      "sizeBytes": 3358
+    },
+    "release-entry.json": {
+      "sha256": "acbf0342b560b092e35aafce3ac7b013dfc7079fc5692315a4f20a3368fb6174",
+      "sizeBytes": 5420
+    },
+    "release.json": {
+      "sha256": "be7e65635e9a07b3685c9d496bfd2e24fe4aed94de3664c4483189d486719564",
+      "sizeBytes": 3358
+    }
   }
 }

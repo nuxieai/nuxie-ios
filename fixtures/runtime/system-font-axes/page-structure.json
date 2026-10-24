@@ -1,0 +1,15 @@
+{
+  "sceneSha256": "5dbb40dcb9be1e0bf0ee97b692a800921c5d364cb2d18b82437648588ee0fbb3",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "ab_one",
+      "artboardName": "One",
+      "rootTypeIndex": 8,
+      "rootTypeName": "$nuxie.Screen.ab_one"
+    }
+  ]
+}

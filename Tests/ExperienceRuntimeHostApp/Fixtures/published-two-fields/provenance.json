@@ -1,0 +1,63 @@
+{
+  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "wrapper": "tools/sdk-fixtures/page-release/host-published-two-fields/wrapper.json",
+  "wrapperPin": {
+    "sha256": "487b1a71666e3907e9c499351ba57675b4ca39ee8201eec74601c2c9be345dc9",
+    "sizeBytes": 6853
+  },
+  "baseWrapper": "tools/sdk-fixtures/page-release/published-two-fields/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "host mirror retained the standalone two-input scene",
+      "new": "host profile derived from published-two-fields at the same clean revision",
+      "why": "preserve independent inputs, initial values, geometry and native editing metadata while admitting the page"
+    }
+  ],
+  "baseMigratedForCompiler2b": [
+    {
+      "old": "nuxie.com schema URLs",
+      "new": "nuxie.ai schema URLs",
+      "why": "2b rejects the retired schema host; no other schema fields were changed"
+    },
+    {
+      "old": "removed iphone-16 preset (393 by 852) in screens/input/frame.json",
+      "new": "nearest supported iphone-17 preset (402 by 874)",
+      "why": "the same unknown-device failure is latent behind the schema/canvas failure; this is a separate device migration from the URL-only schema edit; expectations remain unchanged and geometry qualification is still required"
+    }
+  ],
+  "baseManifest": {
+    "sha256": "6f09492eebc4b5a995ffadcfab93c5ff8e450789eb0226305a42dddfafcdae3f",
+    "sizeBytes": 2332
+  },
+  "qualification": "Test-authored wrapper over the verified base page; native SDK qualification remains separate.",
+  "files": {
+    "screen.riv": {
+      "sha256": "90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861",
+      "sizeBytes": 6151
+    },
+    "renders/sha256/90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861.nux": {
+      "sha256": "90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861",
+      "sizeBytes": 6151
+    },
+    "report.json": {
+      "sha256": "57b7c79d7404a81f1f9c167dfcbb2cf7819c03b333a3fe7a08bef835116d799b",
+      "sizeBytes": 3363
+    },
+    "page-structure.json": {
+      "sha256": "2ee096a1197fa04320618faeee3cda81b35cc4c7a92f5dac5289a0740e1ee13b",
+      "sizeBytes": 396
+    },
+    "descriptor.json": {
+      "sha256": "5d31ec442651ca1c4404935084ab158969d129eb487d2af849224f03f7141cf6",
+      "sizeBytes": 4770
+    },
+    "release-entry.json": {
+      "sha256": "c2cfe7b119797d8039e03dc461e75d69ad1b335013d7c694a05a4ae939724b47",
+      "sizeBytes": 7233
+    },
+    "profile.json": {
+      "sha256": "09ef9e778e7b0d962632662abc020687e0fbbc85c0df520a7046626e3686f3f9",
+      "sizeBytes": 8196
+    }
+  }
+}

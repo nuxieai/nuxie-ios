@@ -1,0 +1,58 @@
+{
+  "screen.riv": {
+    "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+    "sizeBytes": 5722
+  },
+  "renders/sha256/dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01.nux": {
+    "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
+    "sizeBytes": 5722
+  },
+  "report.json": {
+    "sha256": "639b1bb98201ea96d118d24671a3355572f294f6a4bb75d188c7d3afabb65511",
+    "sizeBytes": 2794
+  },
+  "page-structure.json": {
+    "sha256": "5c40107b6e4247b741e1ac2626e2458ff86ca5e62f115686fc78686075438510",
+    "sizeBytes": 574
+  },
+  "expectations.json": {
+    "sha256": "fbc6255f49f79894ac4e2cbbe9d0089aba9ef96f2efe1ac8a0fe9940a830c7d7",
+    "sizeBytes": 993
+  },
+  "source/experience.json": {
+    "sha256": "841ea5dd6a0b3e12284741e173d857cd99ad7623ba928547263e5ed5ab2aa27c",
+    "sizeBytes": 280
+  },
+  "source/screens/greeting/frame.json": {
+    "sha256": "12bab442d1c518556e77c11087763a2399e988e1789b30fbaab46f4c1474293e",
+    "sizeBytes": 99
+  },
+  "source/screens/greeting/index.html": {
+    "sha256": "71add267e98f4565eae652e0b4788d70b3cc5e212fa41c8a90992deb536dda6c",
+    "sizeBytes": 128
+  },
+  "source/screens/input/frame.json": {
+    "sha256": "002d15352e42e7ac198c1ec51e7ce965d58995f4d052102efc7449a8244094bd",
+    "sizeBytes": 315
+  },
+  "source/screens/input/index.html": {
+    "sha256": "75ee57accba92f2b16241e7cc2281dd57304313b3f4ec4992ca2bfd46a3f34bf",
+    "sizeBytes": 269
+  },
+  "descriptor.json": {
+    "sha256": "7dfd282e98d559d49846d74322b252ec30c7eea58361e2ffa08fe1b72c76f704",
+    "sizeBytes": 4520
+  },
+  "release-entry.json": {
+    "sha256": "99fa29cead44289b50fffddcf73d5e3714e14f7cd3f63b41fd27bce5af30f748",
+    "sizeBytes": 6969
+  },
+  "release.json": {
+    "sha256": "7dfd282e98d559d49846d74322b252ec30c7eea58361e2ffa08fe1b72c76f704",
+    "sizeBytes": 4520
+  },
+  "provenance.json": {
+    "sha256": "2b20e5412300d3bcd091dcf08324eae423df627a704131ef8ea8dfa5d5546eab",
+    "sizeBytes": 5562
+  }
+}

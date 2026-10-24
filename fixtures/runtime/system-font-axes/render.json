@@ -1,0 +1,47 @@
+{
+  "renderer": "nux",
+  "nux": {
+    "key": "renders/sha256/5dbb40dcb9be1e0bf0ee97b692a800921c5d364cb2d18b82437648588ee0fbb3.nux",
+    "sha256": "5dbb40dcb9be1e0bf0ee97b692a800921c5d364cb2d18b82437648588ee0fbb3",
+    "sizeBytes": 3121,
+    "contentType": "application/vnd.nuxie.scene"
+  },
+  "screens": [
+    {
+      "id": "ab_one",
+      "artboardId": "ab_one",
+      "artboardName": "One",
+      "width": 320,
+      "height": 640
+    }
+  ],
+  "transitions": [],
+  "textInputs": [],
+  "assets": [
+    {
+      "kind": "font",
+      "family": "Roboto",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-roboto-400-normal-544ed647-0",
+      "location": "cdn",
+      "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
+      "sizeBytes": 2208,
+      "contentType": "font/ttf",
+      "format": "ttf",
+      "required": true,
+      "key": "assets/sha256/b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1.ttf"
+    },
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 1,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-1",
+      "location": "system",
+      "required": true
+    }
+  ]
+}

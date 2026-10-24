@@ -1,0 +1,105 @@
+{
+  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "publisherSourceCommit": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/host-animation-event/snapshot.json",
+  "wrapper": "tools/sdk-fixtures/page-release/host-animation-event/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "standalone Timeline Screen release",
+      "new": "same corpus-authored snapshot transformations, freshly published page and signed host profile",
+      "why": "page preparation requires $nuxie.page; preserve timeline, typed trigger and frame-scoped event graph"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/host-animation-event/snapshot.json": {
+      "sha256": "f98ebef5d63d30a90731306fa01a7b2a5503fbd1a3e375231fd11906ce9ba9d8",
+      "sizeBytes": 12318
+    },
+    "tools/sdk-fixtures/page-release/host-animation-event/wrapper.json": {
+      "sha256": "2220b5168c23fba2b6f9272336a229a7becf319691f8417151d2161ec6eae60c",
+      "sizeBytes": 4422
+    }
+  },
+  "processing": {
+    "sourceSha256": "f98ebef5d63d30a90731306fa01a7b2a5503fbd1a3e375231fd11906ce9ba9d8",
+    "conversions": [],
+    "compiledResources": [],
+    "actionCompatibility": "validate_compiled_luau_bytecode"
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "--snapshot",
+    "tools/sdk-fixtures/page-release/host-animation-event/snapshot.json",
+    "tools/sdk-fixtures/page-release/host-animation-event/wrapper.json",
+    "<output-root>",
+    "1f9e4e10f1009cb7284c85d329672f621eebfd22"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_snapshot",
+    "--",
+    "tools/sdk-fixtures/page-release/host-animation-event/snapshot.json",
+    "<producer-output>",
+    "<verified-resources.json>"
+  ],
+  "fonts": [],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a",
+      "sizeBytes": 2527
+    },
+    "renders/sha256/f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a.nux": {
+      "sha256": "f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a",
+      "sizeBytes": 2527
+    },
+    "report.json": {
+      "sha256": "34bb8fea9229f5a49920f4c03ba5e7ef74a8820e1087655db767dbf21861f3f6",
+      "sizeBytes": 953
+    },
+    "page-structure.json": {
+      "sha256": "24a34dd390ed9de57022e824de828ed798c93576d495d6f4fb873c9e4ca50b16",
+      "sizeBytes": 380
+    },
+    "snapshot-processing.json": {
+      "sha256": "bfedf37ceec74a1cb64cc03d80125754aa391d1767262fd5e7ea1c5cde14e012",
+      "sizeBytes": 197
+    },
+    "compiled-actions.json": {
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "sizeBytes": 3
+    },
+    "source/snapshot.json": {
+      "sha256": "f98ebef5d63d30a90731306fa01a7b2a5503fbd1a3e375231fd11906ce9ba9d8",
+      "sizeBytes": 12318
+    },
+    "descriptor.json": {
+      "sha256": "a4f402f6f913f92e9803ee013b275fbd87736e8b08bcf45bd2407bb60a57f024",
+      "sizeBytes": 2365
+    },
+    "release-entry.json": {
+      "sha256": "e04dfe66ebad4c11293fc9c23223c43cc678c39ca7c7cf3b2fffcd54fab45bad",
+      "sizeBytes": 4105
+    },
+    "release.json": {
+      "sha256": "a4f402f6f913f92e9803ee013b275fbd87736e8b08bcf45bd2407bb60a57f024",
+      "sizeBytes": 2365
+    },
+    "profile.json": {
+      "sha256": "15bc4334a217420fe6a508d47e3b761774fddbb9b80a5b6caf19a1824419dd57",
+      "sizeBytes": 5163
+    }
+  }
+}

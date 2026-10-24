@@ -3,5 +3,16 @@
   "size": {
     "width": 300,
     "height": 300
+  },
+  "emits": {
+    "checked": {
+      "ok": {
+        "type": "boolean",
+        "required": true
+      },
+      "rule": {
+        "type": "string"
+      }
+    }
   }
 }

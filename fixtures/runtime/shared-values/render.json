@@ -1,0 +1,46 @@
+{
+  "renderer": "nux",
+  "nux": {
+    "key": "renders/sha256/f15307764e5ce73bb71c9f41e7311dae4f6154425232e9c8354deac99e5be137.nux",
+    "sha256": "f15307764e5ce73bb71c9f41e7311dae4f6154425232e9c8354deac99e5be137",
+    "sizeBytes": 8862,
+    "contentType": "application/vnd.nuxie.scene"
+  },
+  "screens": [
+    {
+      "id": "first",
+      "artboardId": "scr_screens_sfirst",
+      "artboardName": "first",
+      "width": 393,
+      "height": 852
+    },
+    {
+      "id": "long",
+      "artboardId": "scr_screens_slong",
+      "artboardName": "long",
+      "width": 393,
+      "height": 852
+    },
+    {
+      "id": "short",
+      "artboardId": "scr_screens_sshort",
+      "artboardName": "short",
+      "width": 393,
+      "height": 852
+    }
+  ],
+  "transitions": [],
+  "textInputs": [],
+  "assets": [
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 305,
+  "outputSizeBytes": 6151,
+  "outputSha256": "90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "scr_screens_sinput",
+        "publishedName": "input",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_sinput",
+        "artboardId": "scr_screens_sinput",
+        "artboardName": "input",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": [
+      {
+        "artboardId": "scr_screens_sinput",
+        "viewNodeId": "scr_screens_sinput::v2",
+        "renderedNodeId": "scr_screens_sinput::v2",
+        "textObjectKey": "artboard/scr_screens_sinput/scr_screens_sinput::v2/text",
+        "textInputName": "scr_screens_sinput::v2 editable value",
+        "sourceNodeId": "scr_screens_sinput::v2",
+        "value": "",
+        "editable": true,
+        "bindingDirection": "twoWay",
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 402,
+          "height": 22,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "System",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 16,
+          "lineHeight": -1,
+          "letterSpacing": 0,
+          "color": 4279310375,
+          "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "textAlign": "left"
+        }
+      },
+      {
+        "artboardId": "scr_screens_sinput",
+        "viewNodeId": "scr_screens_sinput::v3",
+        "renderedNodeId": "scr_screens_sinput::v3",
+        "textObjectKey": "artboard/scr_screens_sinput/scr_screens_sinput::v3/text",
+        "textInputName": "scr_screens_sinput::v3 editable value",
+        "sourceNodeId": "scr_screens_sinput::v3",
+        "value": "",
+        "editable": true,
+        "bindingDirection": "twoWay",
+        "geometry": {
+          "x": 0,
+          "y": 46,
+          "width": 402,
+          "height": 22,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "System",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 16,
+          "lineHeight": -1,
+          "letterSpacing": 0,
+          "color": 4279310375,
+          "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "textAlign": "left"
+        }
+      }
+    ]
+  },
+  "valuePolicy": {
+    "state": {
+      "name": {
+        "type": "string"
+      },
+      "surname": {
+        "type": "string"
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "400",
+      "style": "normal"
+    }
+  ]
+}

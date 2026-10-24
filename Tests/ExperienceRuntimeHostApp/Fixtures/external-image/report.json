@@ -1,0 +1,55 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 84,
+  "outputSizeBytes": 1385,
+  "outputSha256": "4328f9c23e151816b769ce8080564ef3773215b322fb5add29a75cfe010b71e5",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "hero_image",
+        "publishedName": "Hero Image",
+        "role": "experience",
+        "width": 80,
+        "height": 40,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "hero_image",
+        "artboardId": "hero_image",
+        "artboardName": "Hero Image",
+        "width": 80,
+        "height": 40,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [
+        {
+          "sourceAssetKey": "https://example.test/hero.png",
+          "authoredAssetId": 0,
+          "assetUniqueName": "image-asset-hero-4f96c6f9-0",
+          "path": "assets/sha256/b9d4e51e3590796b9a65fc9ec0b623bdf71a2bacef0098b79063edc87055b1a0.png",
+          "sha256": "b9d4e51e3590796b9a65fc9ec0b623bdf71a2bacef0098b79063edc87055b1a0",
+          "contentType": "image/png",
+          "width": 4,
+          "height": 2,
+          "required": true
+        }
+      ],
+      "fonts": []
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": []
+}

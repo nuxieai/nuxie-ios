@@ -1,79 +1,138 @@
 {
-  "generatorSourceSha256": "b12983f9392cc7c9e7218f345129249a153a8305203ee27cbee517f7e1756f26",
-  "referenceSha256": "2bfd40dc72e6759e248f82a52a40d551338979fffc9b5c070e685b4b7ad19e66",
-  "scenes": [
+  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "publisherSourceCommit": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/system-font-mixed/snapshot.json",
+  "wrapper": "tools/sdk-fixtures/page-release/system-font-mixed/wrapper.json",
+  "migratedForCompiler2b": [
     {
-      "name": "regular",
-      "weight": "400",
-      "sha256": "fde10b909e2e5d5696779f69c6b409a3ae712513c0d306ed4c2cc3d29de2f362",
-      "fonts": [
-        {
-          "family": "System",
-          "weight": "400",
-          "style": "normal",
-          "authoredAssetId": 0,
-          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
-          "location": "system",
-          "required": true
-        }
-      ]
-    },
-    {
-      "name": "optical-control",
-      "authoredSize": 32,
-      "baselineOpsz": 32,
-      "controlOpsz": 17,
-      "baselineSha256": "fde10b909e2e5d5696779f69c6b409a3ae712513c0d306ed4c2cc3d29de2f362",
-      "sha256": "470fbe7732939bdf6676c569ccf31f2beed552c2a156048c4525d14e892836fe",
-      "qualification": "Test-only axis mutation; verify baseline renders identically to publisher scene before comparing control"
-    },
-    {
-      "name": "bold",
-      "weight": "700",
-      "sha256": "2df53f009c34817f1c13ef995e274c6439bd96605d3791875527d65ec27a325b",
-      "fonts": [
-        {
-          "family": "System",
-          "weight": "700",
-          "style": "normal",
-          "authoredAssetId": 0,
-          "assetUniqueName": "font-system-700-normal-42d2e562-0",
-          "location": "system",
-          "required": true
-        }
-      ]
-    },
-    {
-      "name": "mixed",
-      "sha256": "f5d0a695d9695643760fb96f2ea5ab837ada9352706c3545eb8373dbd70f03e8",
-      "fonts": [
-        {
-          "family": "Roboto",
-          "weight": "400",
-          "style": "normal",
-          "authoredAssetId": 0,
-          "assetUniqueName": "font-roboto-400-normal-544ed647-0",
-          "location": "cdn",
-          "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
-          "sizeBytes": 2208,
-          "contentType": "font/ttf",
-          "format": "ttf",
-          "required": true
-        },
-        {
-          "family": "System",
-          "weight": "400",
-          "style": "normal",
-          "authoredAssetId": 1,
-          "assetUniqueName": "font-system-400-normal-6cda3de3-1",
-          "location": "system",
-          "required": true
-        }
-      ],
-      "cdnFontSha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1"
+      "old": "system_font_fixture mixed branch produced a standalone One artboard using a private System reference during generation",
+      "new": "same mixed source snapshot through page publish_snapshot; System face is host-resolved and only the unchanged Roboto subset is pinned",
+      "why": "published page preparation requires the page root; no private System font bytes are required or included"
     }
   ],
-  "publisherSourceCommit": "a9927b66d210cf64566114614529d81367d1eb3e",
-  "runtimeSourceCommit": "944ad4b77662fc0de467f1e16242555eb3ea1350",
-  "generatorBinarySha256": "6918885acc6230ba7eb9e0286a439d7d3151ad7932459c98f7f87894f229890f"
+  "sources": {
+    "tools/sdk-fixtures/page-release/system-font-mixed/snapshot.json": {
+      "sha256": "0960d37e87d977c4e75e5df7c9c8507e9ac52a109167df36fbb9a281553bef3c",
+      "sizeBytes": 6899
+    },
+    "tools/sdk-fixtures/page-release/system-font-mixed/wrapper.json": {
+      "sha256": "a9ed1ba58c5ba3620ef4fed4c1e90c2941e2ac5671e0a06e0d22306cd6904509",
+      "sizeBytes": 4471
+    },
+    "tools/sdk-fixtures/page-release/host-font-converter/assets/sha256/b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1.ttf": {
+      "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
+      "sizeBytes": 2208
+    }
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "processing": {
+    "sourceSha256": "0960d37e87d977c4e75e5df7c9c8507e9ac52a109167df36fbb9a281553bef3c",
+    "conversions": [],
+    "compiledResources": [],
+    "actionCompatibility": "validate_compiled_luau_bytecode"
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "--snapshot",
+    "tools/sdk-fixtures/page-release/system-font-mixed/snapshot.json",
+    "tools/sdk-fixtures/page-release/system-font-mixed/wrapper.json",
+    "<output-root>",
+    "1f9e4e10f1009cb7284c85d329672f621eebfd22"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_snapshot",
+    "--",
+    "tools/sdk-fixtures/page-release/system-font-mixed/snapshot.json",
+    "<producer-output>",
+    "<verified-resources.json>"
+  ],
+  "fonts": [
+    {
+      "kind": "font",
+      "family": "Roboto",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 0,
+      "assetUniqueName": "font-roboto-400-normal-544ed647-0",
+      "location": "cdn",
+      "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
+      "sizeBytes": 2208,
+      "contentType": "font/ttf",
+      "format": "ttf",
+      "required": true,
+      "key": "assets/sha256/b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1.ttf"
+    },
+    {
+      "kind": "font",
+      "family": "System",
+      "weight": "400",
+      "style": "normal",
+      "authoredAssetId": 1,
+      "assetUniqueName": "font-system-400-normal-6cda3de3-1",
+      "location": "system",
+      "required": true
+    }
+  ],
+  "signing": {
+    "note": "Unsigned scene-only corpus; consumer authors its own Journey."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "5dbb40dcb9be1e0bf0ee97b692a800921c5d364cb2d18b82437648588ee0fbb3",
+      "sizeBytes": 3121
+    },
+    "renders/sha256/5dbb40dcb9be1e0bf0ee97b692a800921c5d364cb2d18b82437648588ee0fbb3.nux": {
+      "sha256": "5dbb40dcb9be1e0bf0ee97b692a800921c5d364cb2d18b82437648588ee0fbb3",
+      "sizeBytes": 3121
+    },
+    "report.json": {
+      "sha256": "30606591262ddfd4c290a140294ce5cbdcd1fa4c29635bf281adbc8f7ed0014e",
+      "sizeBytes": 1789
+    },
+    "page-structure.json": {
+      "sha256": "8ddc1c5b2c9f9704a164f61abd3bee073cde7aff59c5e4d49f5d3915405bc1e2",
+      "sizeBytes": 368
+    },
+    "render.json": {
+      "sha256": "98afabbb1b54ce7c7481c69b3775a167217a71db58072fecef38f08dc012f67c",
+      "sizeBytes": 1265
+    },
+    "scene-declarations.json": {
+      "sha256": "67e95002372f0623d474bb4e0c3bc366c2683435dead8bdb067d80a3adfbb84d",
+      "sizeBytes": 1609
+    },
+    "mixed.nux": {
+      "sha256": "5dbb40dcb9be1e0bf0ee97b692a800921c5d364cb2d18b82437648588ee0fbb3",
+      "sizeBytes": 3121
+    },
+    "snapshot-processing.json": {
+      "sha256": "be5b33e79a69f44fcbd5e066e008f9504fc81c0f87b8aeb442246a91f17fdd76",
+      "sizeBytes": 197
+    },
+    "compiled-actions.json": {
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "sizeBytes": 3
+    },
+    "source/snapshot.json": {
+      "sha256": "0960d37e87d977c4e75e5df7c9c8507e9ac52a109167df36fbb9a281553bef3c",
+      "sizeBytes": 6899
+    },
+    "assets/sha256/b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1.ttf": {
+      "sha256": "b481b059ee94961c7b18585a596935aaa7cc44b68879c096d2cd06922e0431b1",
+      "sizeBytes": 2208
+    }
+  }
 }

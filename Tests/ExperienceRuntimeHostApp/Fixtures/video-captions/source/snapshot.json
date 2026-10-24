@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "project": {
+    "id": "project",
+    "data": {}
+  },
+  "document": {
+    "rootId": "project",
+    "nodes": [
+      {
+        "id": "project",
+        "projectId": "project",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "root",
+        "name": "Video authoring fixture",
+        "data": {
+          "kind": "root",
+          "showsProject": true
+        },
+        "type": "root",
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "screen",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project::artboard_tree",
+        "orderKey": "a0",
+        "name": "Video Frame",
+        "type": "artboard",
+        "kind": "artboard",
+        "data": {
+          "kind": "artboard",
+          "isComponent": false,
+          "canvas": {
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "dimensions": {
+              "width": 320,
+              "height": 640
+            }
+          }
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "screen::view_tree",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a0",
+        "name": "View Tree",
+        "type": "view_tree",
+        "kind": "view_tree",
+        "data": {
+          "kind": "view_tree"
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "screen::animation_tree",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a1",
+        "name": "Animation Tree",
+        "type": "animation_tree",
+        "kind": "animation_tree",
+        "data": {
+          "kind": "animation_tree"
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "screen::capability_tree",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a2",
+        "name": "Capability Tree",
+        "type": "capability_tree",
+        "kind": "capability_tree",
+        "data": {
+          "kind": "capability_tree"
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "project::artboard_tree",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a0",
+        "name": "Artboard Tree",
+        "type": "artboard_tree",
+        "kind": "artboard_tree",
+        "data": {
+          "kind": "artboard_tree"
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "project::experiment_tree",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a1",
+        "name": "Experiment Tree",
+        "type": "experiment_tree",
+        "kind": "experiment_tree",
+        "data": {
+          "kind": "experiment_tree"
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "project::journey_root",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a2",
+        "name": "Journey Tree",
+        "type": "journey_root",
+        "kind": "journey_root",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "project::journey_canvas_tree",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a3",
+        "name": "Journey Canvas Tree",
+        "type": "journey_canvas_tree",
+        "kind": "journey_canvas_tree",
+        "data": {
+          "kind": "journey_canvas_tree",
+          "version": 1
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      },
+      {
+        "id": "clip-view",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "type": "view",
+        "name": "Greeting",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "clip-view",
+            "type": "View",
+            "systemId": "Video",
+            "props": {
+              "source": "asset:clip",
+              "autoplay": true,
+              "loop": true,
+              "muted": false,
+              "style": {
+                "x": 10,
+                "y": 20,
+                "width": 240,
+                "height": 160
+              }
+            }
+          }
+        },
+        "userId": null,
+        "appId": null,
+        "path": null
+      }
+    ]
+  },
+  "designSystem": {
+    "designSystems": [],
+    "screenDesignSystems": []
+  }
+}

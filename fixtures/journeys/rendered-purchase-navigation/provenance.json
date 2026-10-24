@@ -1,6 +1,95 @@
 {
-  "generatorCheckoutCommit": "6c07e7f6a2a1f084cd38d3d580dc437cb6b3d86c",
-  "descriptorSha256": "f53d787484348aa0d9b208c8499c8d08648390bb85229554299d7e833fea4f54",
-  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "qualification": "Test-authored signed Journey over production-publisher render bytes; not a full production release qualification."
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/rendered-purchase-navigation/snapshot.json",
+  "wrapper": "tools/sdk-fixtures/page-release/rendered-purchase-navigation/wrapper.json",
+  "migratedForCompiler2b": [],
+  "sources": {
+    "tools/sdk-fixtures/page-release/rendered-purchase-navigation/snapshot.json": {
+      "sha256": "a7699a5ebd926c81f449e0bea3239f41ccf1010bbae040c64d7eacf1e1c37991",
+      "sizeBytes": 19585
+    },
+    "tools/sdk-fixtures/page-release/rendered-purchase-navigation/wrapper.json": {
+      "sha256": "4699f041fe959566d9c15bd6dc815e25997dd52249f0783880884739f794ab0c",
+      "sizeBytes": 6578
+    }
+  },
+  "processing": {
+    "sourceSha256": "a7699a5ebd926c81f449e0bea3239f41ccf1010bbae040c64d7eacf1e1c37991",
+    "conversions": [],
+    "compiledResources": [],
+    "actionCompatibility": "validate_compiled_luau_bytecode"
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "--snapshot",
+    "tools/sdk-fixtures/page-release/rendered-purchase-navigation/snapshot.json",
+    "tools/sdk-fixtures/page-release/rendered-purchase-navigation/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_snapshot",
+    "--",
+    "tools/sdk-fixtures/page-release/rendered-purchase-navigation/snapshot.json",
+    "<producer-output>",
+    "<verified-resources.json>"
+  ],
+  "fonts": [],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "54bee7350ab04c65f39921f68a3b3fa91137492afe4d165be9a5f4a05bdd136f",
+      "sizeBytes": 5887
+    },
+    "renders/sha256/54bee7350ab04c65f39921f68a3b3fa91137492afe4d165be9a5f4a05bdd136f.nux": {
+      "sha256": "54bee7350ab04c65f39921f68a3b3fa91137492afe4d165be9a5f4a05bdd136f",
+      "sizeBytes": 5887
+    },
+    "report.json": {
+      "sha256": "f1dfd73710a36b0da5c4aacc74c5a415c8120e616e8511f9325fd3a316e39660",
+      "sizeBytes": 1521
+    },
+    "page-structure.json": {
+      "sha256": "2f41c194e54f2949687d79da3802d9c1e35551bae47846babe4ab605e9de54f7",
+      "sizeBytes": 502
+    },
+    "snapshot-processing.json": {
+      "sha256": "374a9343665e99d4ce56d6a7a3190235f50d1bfd2d6d84310ad17be6b5ac9180",
+      "sizeBytes": 197
+    },
+    "compiled-actions.json": {
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "sizeBytes": 3
+    },
+    "source/snapshot.json": {
+      "sha256": "a7699a5ebd926c81f449e0bea3239f41ccf1010bbae040c64d7eacf1e1c37991",
+      "sizeBytes": 19585
+    },
+    "descriptor.json": {
+      "sha256": "afb48761423167fbe098e17b58f285bab9fec33c89e7860ecd43d679a52f21d0",
+      "sizeBytes": 4004
+    },
+    "release-entry.json": {
+      "sha256": "aac542f7eb35fe81695c9c30dd32baefa0dede9751a19d5950134901383bca9e",
+      "sizeBytes": 6240
+    },
+    "release.json": {
+      "sha256": "afb48761423167fbe098e17b58f285bab9fec33c89e7860ecd43d679a52f21d0",
+      "sizeBytes": 4004
+    }
+  }
 }

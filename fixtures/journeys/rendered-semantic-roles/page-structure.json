@@ -1,0 +1,15 @@
+{
+  "sceneSha256": "f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "screen_1",
+      "artboardName": "Paywall",
+      "rootTypeIndex": 0,
+      "rootTypeName": "Accessibility"
+    }
+  ]
+}

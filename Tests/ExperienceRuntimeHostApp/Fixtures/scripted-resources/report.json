@@ -1,0 +1,43 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 126,
+  "outputSizeBytes": 3537,
+  "outputSha256": "6d6a9db38e7274134ffa0a47ec676f3dbddf72012c1a9246efa07241e76b3578",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen",
+        "publishedName": "Scripted Screen",
+        "role": "experience",
+        "width": 160,
+        "height": 100,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen",
+        "artboardId": "screen",
+        "artboardName": "Scripted Screen",
+        "width": 160,
+        "height": 100,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": []
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": []
+}

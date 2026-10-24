@@ -1,0 +1,490 @@
+{
+  "version": 1,
+  "project": {
+    "id": "project",
+    "data": {}
+  },
+  "document": {
+    "rootId": "project",
+    "nodes": [
+      {
+        "id": "project",
+        "projectId": "project",
+        "parentId": null,
+        "orderKey": null,
+        "kind": "root",
+        "type": "root",
+        "data": {
+          "kind": "root"
+        }
+      },
+      {
+        "id": "project::artboard_tree",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a0",
+        "kind": "artboard_tree",
+        "type": "artboard_tree",
+        "data": {
+          "kind": "artboard_tree"
+        }
+      },
+      {
+        "id": "project::experiment_tree",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a1",
+        "kind": "experiment_tree",
+        "type": "experiment_tree",
+        "data": {
+          "kind": "experiment_tree"
+        }
+      },
+      {
+        "id": "project::journey_root",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a2",
+        "kind": "journey_root",
+        "type": "journey_root",
+        "data": {
+          "kind": "journey_root",
+          "version": 1
+        }
+      },
+      {
+        "id": "project::journey_canvas_tree",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project",
+        "orderKey": "a3",
+        "kind": "journey_canvas_tree",
+        "type": "journey_canvas_tree",
+        "data": {
+          "kind": "journey_canvas_tree",
+          "version": 1
+        }
+      },
+      {
+        "id": "screen",
+        "projectId": "project",
+        "screenId": null,
+        "parentId": "project::artboard_tree",
+        "orderKey": "a0",
+        "kind": "artboard",
+        "type": "artboard",
+        "name": "Timeline Screen",
+        "data": {
+          "kind": "artboard",
+          "canvas": {
+            "dimensions": {
+              "width": 200,
+              "height": 100
+            }
+          }
+        }
+      },
+      {
+        "id": "screen::view_tree",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a0",
+        "kind": "view_tree",
+        "type": "view_tree",
+        "data": {
+          "kind": "view_tree"
+        }
+      },
+      {
+        "id": "card",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen::view_tree",
+        "orderKey": "a0",
+        "kind": "view",
+        "type": "view",
+        "name": "Card",
+        "data": {
+          "kind": "view",
+          "viewKind": "content",
+          "view": {
+            "id": "card",
+            "type": "View",
+            "systemId": "View",
+            "props": {
+              "style": {
+                "x": 20,
+                "y": 20,
+                "width": 80,
+                "height": 40,
+                "opacity": 1,
+                "backgroundColor": "#33aaff"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "screen::animation_tree",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a1",
+        "kind": "animation_tree",
+        "type": "animation_tree",
+        "data": {
+          "kind": "animation_tree"
+        }
+      },
+      {
+        "id": "screen::capability_tree",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen",
+        "orderKey": "a2",
+        "kind": "capability_tree",
+        "type": "capability_tree",
+        "data": {
+          "kind": "capability_tree"
+        }
+      },
+      {
+        "id": "fade-card",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen::animation_tree",
+        "orderKey": "a0",
+        "kind": "linear_animation",
+        "type": "linear_animation",
+        "name": "Fade Card",
+        "data": {
+          "kind": "linear_animation",
+          "fps": 60,
+          "duration": 60,
+          "speed": 1,
+          "loopValue": 0
+        }
+      },
+      {
+        "id": "fade-card::target",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "fade-card",
+        "orderKey": "a0",
+        "kind": "keyed_object",
+        "type": "keyed_object",
+        "data": {
+          "kind": "keyed_object",
+          "objectKey": "view_shape/card"
+        }
+      },
+      {
+        "id": "fade-card::opacity",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "fade-card::target",
+        "orderKey": "a0",
+        "kind": "keyed_property",
+        "type": "keyed_property",
+        "data": {
+          "kind": "keyed_property",
+          "propertyKey": 18,
+          "valueType": "number",
+          "mixBehavior": "interpolate"
+        }
+      },
+      {
+        "id": "fade-card::opacity::0",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "fade-card::opacity",
+        "orderKey": "a0",
+        "kind": "key_frame",
+        "type": "key_frame",
+        "data": {
+          "kind": "key_frame",
+          "frame": 0,
+          "valueType": "number",
+          "value": 0.2,
+          "interpolation": {
+            "type": "linear"
+          }
+        }
+      },
+      {
+        "id": "fade-card::opacity::60",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "fade-card::opacity",
+        "orderKey": "b0",
+        "kind": "key_frame",
+        "type": "key_frame",
+        "data": {
+          "kind": "key_frame",
+          "frame": 60,
+          "valueType": "number",
+          "value": 0.6,
+          "interpolation": {
+            "type": "linear"
+          }
+        }
+      },
+      {
+        "id": "active-card",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen::animation_tree",
+        "orderKey": "z0",
+        "kind": "linear_animation",
+        "type": "linear_animation",
+        "name": "Active Card",
+        "data": {
+          "kind": "linear_animation",
+          "fps": 60,
+          "duration": 60,
+          "speed": 1,
+          "loopValue": 0
+        }
+      },
+      {
+        "id": "active-card::target",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "active-card",
+        "orderKey": "a0",
+        "kind": "keyed_object",
+        "type": "keyed_object",
+        "data": {
+          "kind": "keyed_object",
+          "objectKey": "view_shape/card"
+        }
+      },
+      {
+        "id": "active-card::opacity",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "active-card::target",
+        "orderKey": "a0",
+        "kind": "keyed_property",
+        "type": "keyed_property",
+        "data": {
+          "kind": "keyed_property",
+          "propertyKey": 18,
+          "valueType": "number",
+          "mixBehavior": "interpolate"
+        }
+      },
+      {
+        "id": "active-card::opacity::0",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "active-card::opacity",
+        "orderKey": "a0",
+        "kind": "key_frame",
+        "type": "key_frame",
+        "data": {
+          "kind": "key_frame",
+          "frame": 0,
+          "valueType": "number",
+          "value": 0.8,
+          "interpolation": {
+            "type": "linear"
+          }
+        }
+      },
+      {
+        "id": "active-card::opacity::60",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "active-card::opacity",
+        "orderKey": "b0",
+        "kind": "key_frame",
+        "type": "key_frame",
+        "data": {
+          "kind": "key_frame",
+          "frame": 60,
+          "valueType": "number",
+          "value": 0.8,
+          "interpolation": {
+            "type": "linear"
+          }
+        }
+      },
+      {
+        "id": "machine.card",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "screen::animation_tree",
+        "orderKey": "z1",
+        "name": "Card machine",
+        "kind": "state_machine",
+        "type": "state_machine",
+        "data": {
+          "kind": "state_machine",
+          "events": [
+            {
+              "id": "event.done",
+              "name": "Done"
+            }
+          ],
+          "inputs": [
+            {
+              "id": "input.activate",
+              "name": "Activate",
+              "type": "trigger"
+            }
+          ],
+          "listeners": [
+            {
+              "id": "listener.card",
+              "name": "Activate card",
+              "targetObjectKey": "card",
+              "listenerType": "click",
+              "actions": [
+                {
+                  "id": "listener.action.activate",
+                  "type": "triggerChange",
+                  "inputId": "input.activate"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "layer.card",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "machine.card",
+        "orderKey": "a0",
+        "name": "Card",
+        "kind": "state_machine_layer",
+        "type": "state_machine_layer",
+        "data": {
+          "kind": "state_machine_layer"
+        }
+      },
+      {
+        "id": "state.entry",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "layer.card",
+        "orderKey": "a0",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "data": {
+          "kind": "layer_state",
+          "type": "entry"
+        }
+      },
+      {
+        "id": "state.any",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "layer.card",
+        "orderKey": "a1",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "data": {
+          "kind": "layer_state",
+          "type": "any"
+        }
+      },
+      {
+        "id": "state.exit",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "layer.card",
+        "orderKey": "a2",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "data": {
+          "kind": "layer_state",
+          "type": "exit"
+        }
+      },
+      {
+        "id": "state.idle",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "layer.card",
+        "orderKey": "a3",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "data": {
+          "kind": "layer_state",
+          "type": "animation",
+          "animationId": "fade-card"
+        }
+      },
+      {
+        "id": "state.active",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "layer.card",
+        "orderKey": "a4",
+        "kind": "layer_state",
+        "type": "layer_state",
+        "data": {
+          "kind": "layer_state",
+          "type": "animation",
+          "animationId": "active-card",
+          "fireActions": [
+            {
+              "id": "action.done",
+              "type": "fireEvent",
+              "eventId": "event.done",
+              "occurs": "atStart"
+            }
+          ]
+        }
+      },
+      {
+        "id": "transition.entry",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "layer.card",
+        "orderKey": "b0",
+        "kind": "state_transition",
+        "type": "state_transition",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "state.entry",
+          "toStateId": "state.idle",
+          "conditions": [],
+          "mix": 0
+        }
+      },
+      {
+        "id": "transition.activate",
+        "projectId": "project",
+        "screenId": "screen",
+        "parentId": "layer.card",
+        "orderKey": "b1",
+        "kind": "state_transition",
+        "type": "state_transition",
+        "data": {
+          "kind": "state_transition",
+          "fromStateId": "state.any",
+          "toStateId": "state.active",
+          "mix": 0,
+          "conditions": [
+            {
+              "kind": "input",
+              "inputId": "input.activate",
+              "comparator": "fired"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "designSystem": {
+    "designSystems": [],
+    "screenDesignSystems": []
+  }
+}

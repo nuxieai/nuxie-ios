@@ -1,0 +1,108 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 691,
+  "outputSizeBytes": 16942,
+  "outputSha256": "62574a3be63f4f3ffe4c55ad9453f38b694e8fff225f7023e9a3753cf499cbd1",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "cmp_components_scounter-button",
+        "publishedName": "counter-button",
+        "role": "component",
+        "width": 326,
+        "height": 48,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "cmp_components_sgoal-row",
+        "publishedName": "goal-row",
+        "role": "component",
+        "width": 326,
+        "height": 48,
+        "authoredOrder": 1
+      },
+      {
+        "sourceArtboardId": "cmp_components_splan-row",
+        "publishedName": "plan-row",
+        "role": "component",
+        "width": 326,
+        "height": 48,
+        "authoredOrder": 2
+      },
+      {
+        "sourceArtboardId": "cmp_components_sstar-rater",
+        "publishedName": "star-rater",
+        "role": "component",
+        "width": 326,
+        "height": 48,
+        "authoredOrder": 3
+      },
+      {
+        "sourceArtboardId": "scr_screens_semits",
+        "publishedName": "emits",
+        "role": "experience",
+        "width": 390,
+        "height": 680,
+        "authoredOrder": 4
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_semits",
+        "artboardId": "scr_screens_semits",
+        "artboardName": "emits",
+        "width": 390,
+        "height": 680,
+        "authoredOrder": 0,
+        "reportedEventNames": [
+          "$nuxie.relay.changed",
+          "$nuxie.relay.rated",
+          "counted",
+          "goal_removed",
+          "noted",
+          "picked",
+          "rated"
+        ]
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "700",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-700-normal-42d2e562-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {
+      "goals": {
+        "type": "list",
+        "items": {
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "700",
+      "style": "normal"
+    }
+  ]
+}

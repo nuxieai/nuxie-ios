@@ -1,5 +1,6 @@
 {
-  "$schema": "https://nuxie.com/schema/experience/1.json",
+  "$schema": "https://nuxie.ai/schema/experience/1.json",
+  "platforms": ["ios:apple_app_store"],
   "entry": {
     "steps": [
       {

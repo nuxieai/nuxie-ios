@@ -1,0 +1,118 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 244,
+  "outputSizeBytes": 8509,
+  "outputSha256": "125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "cmp_components_soption-label",
+        "publishedName": "option-label",
+        "role": "component",
+        "width": 100,
+        "height": 30,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "scr_screens_sfirst",
+        "publishedName": "first",
+        "role": "experience",
+        "width": 300,
+        "height": 300,
+        "authoredOrder": 1
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_sfirst",
+        "artboardId": "scr_screens_sfirst",
+        "artboardName": "first",
+        "width": 300,
+        "height": 300,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {
+      "signup": {
+        "title": "Signup",
+        "model": "Responses:signup",
+        "fields": [
+          {
+            "key": "picks",
+            "label": "Picks",
+            "type": "enum",
+            "rules": [
+              {
+                "model": "Responses:signup",
+                "property": "picks",
+                "kind": 7,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "picked",
+                "bound_flags": 2,
+                "minimum": 0,
+                "maximum": 1,
+                "code": "maxItems",
+                "message": "Choose fewer options."
+              }
+            ],
+            "values": [
+              "a",
+              "b",
+              "c"
+            ],
+            "multiple": true
+          }
+        ]
+      }
+    },
+    "ruleGroups": [
+      {
+        "model": "Responses:signup",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "picks",
+            "errors_path": "errors/picks",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 1
+      }
+    ]
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "400",
+      "style": "normal"
+    }
+  ]
+}

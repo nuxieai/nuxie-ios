@@ -1,0 +1,65 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 121,
+  "outputSizeBytes": 2483,
+  "outputSha256": "c8e016922451990ae838285c80bb2351d93fc2501c90c333b91dd8832ea6d1ac",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "screen",
+        "publishedName": "Video Frame",
+        "role": "experience",
+        "width": 320,
+        "height": 640,
+        "authoredOrder": 0
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "screen",
+        "artboardId": "screen",
+        "artboardName": "Video Frame",
+        "width": 320,
+        "height": 640,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "videos": [
+        {
+          "required": true,
+          "assetId": "clip",
+          "sourceAssetKey": "asset:clip",
+          "authoredAssetId": 0,
+          "assetUniqueName": "video-clip-5afb4ece-0",
+          "width": 64,
+          "height": 32
+        }
+      ],
+      "images": [],
+      "fonts": []
+    },
+    "textInputs": [],
+    "videoElements": [
+      {
+        "sourceArtboardIndex": 0,
+        "artboardId": "screen",
+        "viewNodeId": "clip-view",
+        "renderedNodeId": "clip-view",
+        "componentId": 6,
+        "readinessTimeoutSeconds": 5,
+        "optional": false
+      }
+    ]
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": []
+}

@@ -1,0 +1,27 @@
+{
+  "sceneSha256": "389adc8c1927b7b9c2e34499fb0cba49bb242471e6fcc8c65ffb597cb35f9066",
+  "artboardName": "$nuxie.page",
+  "machineName": "$nuxie.page",
+  "modelName": "$nuxie.Page",
+  "listPath": "screens",
+  "screens": [
+    {
+      "screenId": "scr_screens_sdevice",
+      "artboardName": "device",
+      "rootTypeIndex": 2,
+      "rootTypeName": "vm_runtime_root_scr_screens_sdevice"
+    },
+    {
+      "screenId": "scr_screens_slevel",
+      "artboardName": "level",
+      "rootTypeIndex": 4,
+      "rootTypeName": "vm_runtime_root_scr_screens_slevel"
+    },
+    {
+      "screenId": "scr_screens_stap",
+      "artboardName": "tap",
+      "rootTypeIndex": 6,
+      "rootTypeName": "vm_runtime_root_scr_screens_stap"
+    }
+  ]
+}

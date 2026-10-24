@@ -1,82 +1,150 @@
 {
-  "publisherSourceCommit": "8cd72f0d43bdfa41c881580a9dc5eab4c5c1e479",
-  "publisherSource": "tools/nuxie-editor/crates/publisher-wasm",
-  "compileSource": "packages/view-compiler/src/compiler-backends/rive.ts",
-  "publishSource": "apps/nuxie-experience-authority/src/repo/publish-source.ts",
-  "runtimeSourceCommit": "32a31b01ba45afa6fb6b3b5cf19fc6a2b32779be",
-  "sha256": "2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563",
-  "sizeBytes": 4907,
-  "publisherWasmSha256": "fd3f5e222eef4bc4483edffbdd6a009e6a793062ac3543dbea956edebefacfb1",
-  "authorityWasmSha256": "5a6e66b556f69100f55bc13d4fa9aa8b9d5ac2dbde4de253f997207825353797",
-  "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
-  "descriptorSha256": "2f92b2d2af9ffcb8def8f47f5930be1833220065b66e0039c23cd212e38dd5a8",
+  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "publisherSourceCommit": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/published-two-fields/source",
+  "wrapper": "tools/sdk-fixtures/page-release/published-two-fields/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "nuxie.com schema URLs",
+      "new": "nuxie.ai schema URLs",
+      "why": "2b rejects the retired schema host; no other schema fields were changed"
+    },
+    {
+      "old": "removed iphone-16 preset (393 by 852) in screens/input/frame.json",
+      "new": "nearest supported iphone-17 preset (402 by 874)",
+      "why": "the same unknown-device failure is latent behind the schema/canvas failure; this is a separate device migration from the URL-only schema edit; expectations remain unchanged and geometry qualification is still required"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/published-two-fields/source/experience.json": {
+      "sha256": "8e50428656d725245ae9bce1ccc6dfe22e687f258ea1f7015f605db47c2397e7",
+      "sizeBytes": 354
+    },
+    "tools/sdk-fixtures/page-release/published-two-fields/source/screens/input/frame.json": {
+      "sha256": "002d15352e42e7ac198c1ec51e7ce965d58995f4d052102efc7449a8244094bd",
+      "sizeBytes": 315
+    },
+    "tools/sdk-fixtures/page-release/published-two-fields/source/screens/input/index.html": {
+      "sha256": "f29659c61ba5838bc3d4d354efb0b831c61988d3fc8aac8d878715400a18377f",
+      "sizeBytes": 529
+    },
+    "tools/sdk-fixtures/page-release/published-two-fields/wrapper.json": {
+      "sha256": "dc038971bf0895b3e9c6eb7f030538c6c381660cbb83ce73af78752a0e91d2d3",
+      "sizeBytes": 8844
+    },
+    "tools/sdk-fixtures/page-release/published-two-fields/expectations.json": {
+      "sha256": "19039431f025097ccc3d9de1f0f8329aca6a4473ec2b350fe9c78613054e7e3a",
+      "sizeBytes": 220
+    },
+    "tools/sdk-fixtures/page-release/published-two-fields/locations.json": {
+      "sha256": "c56a501acffa78bb09f075627dbd15f16cdffcfc7c5bd0c8a0dc46d8134c7c4f",
+      "sizeBytes": 370
+    }
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "tools/sdk-fixtures/page-release/published-two-fields/source",
+    "tools/sdk-fixtures/page-release/published-two-fields/wrapper.json",
+    "<output-root>",
+    "1f9e4e10f1009cb7284c85d329672f621eebfd22"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_folder",
+    "--",
+    "tools/sdk-fixtures/page-release/published-two-fields/source",
+    "<producer-output>",
+    "--page-fixture"
+  ],
   "fonts": [
     {
-      "location": "system",
+      "kind": "font",
       "family": "System",
       "weight": "400",
       "style": "normal",
       "authoredAssetId": 0,
       "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
       "required": true
     }
   ],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
   "files": {
-    "NOTES.md": {
-      "sha256": "d58409548715b3f1bb6eeca4cb6ae5f674c5a7d4d126534d0c6a5ddde5041ee4",
-      "sizeBytes": 1952
+    "screen.riv": {
+      "sha256": "90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861",
+      "sizeBytes": 6151
+    },
+    "renders/sha256/90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861.nux": {
+      "sha256": "90dbd2c5cf364931f2adea09cdbfc754bb5df1bb711646564c65f272e9165861",
+      "sizeBytes": 6151
+    },
+    "report.json": {
+      "sha256": "57b7c79d7404a81f1f9c167dfcbb2cf7819c03b333a3fe7a08bef835116d799b",
+      "sizeBytes": 3363
+    },
+    "page-structure.json": {
+      "sha256": "2ee096a1197fa04320618faeee3cda81b35cc4c7a92f5dac5289a0740e1ee13b",
+      "sizeBytes": 396
     },
     "expectations.json": {
       "sha256": "19039431f025097ccc3d9de1f0f8329aca6a4473ec2b350fe9c78613054e7e3a",
       "sizeBytes": 220
     },
-    "fonts.json": {
-      "sha256": "623b86599bc9104df48f0b4f14232d0523833d11e46bab5d6b25fe2638b46299",
-      "sizeBytes": 213
-    },
-    "locations.json": {
-      "sha256": "c56a501acffa78bb09f075627dbd15f16cdffcfc7c5bd0c8a0dc46d8134c7c4f",
-      "sizeBytes": 370
-    },
-    "profile.json": {
-      "sha256": "b5e11b4848cb54a3d6f3a05c3c212b70f8a1712709d411dda675d4c68db63f50",
-      "sizeBytes": 8116
-    },
-    "release-entry.json": {
-      "sha256": "c0bb38d30648f1e15318ea408d715bdae7eb87232688c93dc83cf9d1b2f0e31d",
-      "sizeBytes": 7153
-    },
-    "release.json": {
-      "sha256": "8a84fb11900594883266f26b51ad2fccc2fa70eed4fbd73379f8c5e079c51028",
-      "sizeBytes": 7383
-    },
-    "render.json": {
-      "sha256": "c352813cef172f7abe20b3dd789a182e1e787e143975fc5b0698335a80d7a022",
-      "sizeBytes": 3191
-    },
-    "renders/sha256/2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563.nux": {
-      "sha256": "2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563",
-      "sizeBytes": 4907
-    },
-    "screen.riv": {
-      "sha256": "2b13e28172cee655a18a79bf06fcdb6b9d04aaaa5ffa391ac056f5015d088563",
-      "sizeBytes": 4907
-    },
     "source/experience.json": {
-      "sha256": "4719cd59cd84a6b57faf78966e20ba49fa592bdec9653875cc3bcb11d5fa144f",
-      "sizeBytes": 355
+      "sha256": "8e50428656d725245ae9bce1ccc6dfe22e687f258ea1f7015f605db47c2397e7",
+      "sizeBytes": 354
     },
     "source/screens/input/frame.json": {
-      "sha256": "c783391be8624324606fce86e80f70a879c6475d6e3514a0cdee1dd258926d3d",
-      "sizeBytes": 316
+      "sha256": "002d15352e42e7ac198c1ec51e7ce965d58995f4d052102efc7449a8244094bd",
+      "sizeBytes": 315
     },
     "source/screens/input/index.html": {
       "sha256": "f29659c61ba5838bc3d4d354efb0b831c61988d3fc8aac8d878715400a18377f",
       "sizeBytes": 529
     },
+    "locations.json": {
+      "sha256": "c56a501acffa78bb09f075627dbd15f16cdffcfc7c5bd0c8a0dc46d8134c7c4f",
+      "sizeBytes": 370
+    },
+    "descriptor.json": {
+      "sha256": "5d31ec442651ca1c4404935084ab158969d129eb487d2af849224f03f7141cf6",
+      "sizeBytes": 4770
+    },
+    "release-entry.json": {
+      "sha256": "c2cfe7b119797d8039e03dc461e75d69ad1b335013d7c694a05a4ae939724b47",
+      "sizeBytes": 7233
+    },
+    "release.json": {
+      "sha256": "621a6976d3893cc34546b5286abd1a2b38c3835e35121c8e0c4ea0aa99355b16",
+      "sizeBytes": 7455
+    },
+    "profile.json": {
+      "sha256": "09ef9e778e7b0d962632662abc020687e0fbbc85c0df520a7046626e3686f3f9",
+      "sizeBytes": 8196
+    },
+    "render.json": {
+      "sha256": "97632db0dd24fa390cae9fabe92bc0eb48992e6a1abe9bd4da4d94b28c58d6e5",
+      "sizeBytes": 3191
+    },
     "text-inputs.json": {
-      "sha256": "2f41cee3616de3eca32f4c15a09bec053ce2cf885cb6e9c9ffd423f9fc349749",
+      "sha256": "84a312afb9080f77701ccf573c2c8b1116eb792a30753f699693988e7f91df18",
       "sizeBytes": 2573
+    },
+    "fonts.json": {
+      "sha256": "88443d4a83f4166b839867f8f472cc4dac4eee04d93640e8119cde83dbe2992b",
+      "sizeBytes": 213
     }
   }
 }

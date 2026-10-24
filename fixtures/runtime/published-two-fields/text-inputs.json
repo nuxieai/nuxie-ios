@@ -1,5 +1,6 @@
 [
   {
+    "id": "text-input/scr_screens_sinput/scr_screens_sinput::v2",
     "screenId": "scr_screens_sinput",
     "artboardId": "scr_screens_sinput",
     "viewNodeId": "scr_screens_sinput::v2",
@@ -27,11 +28,11 @@
       "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
       "textAlign": "left"
     },
-    "id": "text-input/scr_screens_sinput/scr_screens_sinput::v2",
     "secureTextEntry": false,
     "multiline": false
   },
   {
+    "id": "text-input/scr_screens_sinput/scr_screens_sinput::v3",
     "screenId": "scr_screens_sinput",
     "artboardId": "scr_screens_sinput",
     "viewNodeId": "scr_screens_sinput::v3",
@@ -59,7 +60,6 @@
       "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
       "textAlign": "left"
     },
-    "id": "text-input/scr_screens_sinput/scr_screens_sinput::v3",
     "secureTextEntry": false,
     "multiline": false
   }

@@ -3,7 +3,7 @@
 This is an interim stand-in for [UNIV-5113](https://universe.basis.dev/issue/UNIV-5113)'s publisher output. Replace it with
 published output when that work lands. It is not a signed release.
 
-The source is `fixtures/journeys/rendered-custom-transition`. Both Screen
+The historical source was the now-retired custom-transition corpus. Both Screen
 artboards, assets, interaction listeners, transition timelines and forward and
 reverse completion events are preserved. The lossless post-processor splits
 Runtime into distinct Screen root types, disables Screen clipping, preserves

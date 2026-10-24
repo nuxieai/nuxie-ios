@@ -4,13 +4,14 @@
       "id": "scr_screens_sinput",
       "artboardId": "scr_screens_sinput",
       "artboardName": "input",
-      "width": 393,
-      "height": 852
+      "width": 402,
+      "height": 874
     }
   ],
   "transitions": [],
   "textInputs": [
     {
+      "id": "text-input/scr_screens_sinput/scr_screens_sinput::v2",
       "screenId": "scr_screens_sinput",
       "artboardId": "scr_screens_sinput",
       "viewNodeId": "scr_screens_sinput::v2",
@@ -38,11 +39,11 @@
         "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
         "textAlign": "left"
       },
-      "id": "text-input/scr_screens_sinput/scr_screens_sinput::v2",
       "secureTextEntry": false,
       "multiline": false
     },
     {
+      "id": "text-input/scr_screens_sinput/scr_screens_sinput::v3",
       "screenId": "scr_screens_sinput",
       "artboardId": "scr_screens_sinput",
       "viewNodeId": "scr_screens_sinput::v3",
@@ -70,7 +71,6 @@
         "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
         "textAlign": "left"
       },
-      "id": "text-input/scr_screens_sinput/scr_screens_sinput::v3",
       "secureTextEntry": false,
       "multiline": false
     }
@@ -78,12 +78,12 @@
   "assets": [
     {
       "kind": "font",
-      "location": "system",
       "family": "System",
       "weight": "400",
       "style": "normal",
       "authoredAssetId": 0,
       "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+      "location": "system",
       "required": true
     }
   ]

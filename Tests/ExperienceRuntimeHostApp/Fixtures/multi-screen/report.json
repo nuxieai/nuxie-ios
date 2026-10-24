@@ -1,0 +1,60 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 146,
+  "outputSizeBytes": 2745,
+  "outputSha256": "eee682b7b030595133083ed9be6146994d9d71aab4a1dacdcd6f381e66cb58af",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "ab_one",
+        "publishedName": "One",
+        "role": "experience",
+        "width": 320,
+        "height": 640,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "ab_two",
+        "publishedName": "Two",
+        "role": "experience",
+        "width": 240,
+        "height": 360,
+        "authoredOrder": 1
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "ab_one",
+        "artboardId": "ab_one",
+        "artboardName": "One",
+        "width": 320,
+        "height": 640,
+        "authoredOrder": 0,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "ab_two",
+        "artboardId": "ab_two",
+        "artboardName": "Two",
+        "width": 240,
+        "height": 360,
+        "authoredOrder": 1,
+        "reportedEventNames": []
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": []
+    },
+    "textInputs": []
+  },
+  "valuePolicy": {
+    "state": {},
+    "responses": {},
+    "ruleGroups": []
+  },
+  "requiredFontFaces": []
+}

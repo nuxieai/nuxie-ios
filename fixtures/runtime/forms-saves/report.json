@@ -1,0 +1,728 @@
+{
+  "majorVersion": 7,
+  "minorVersion": 3,
+  "fileId": 1,
+  "recordCount": 6077,
+  "outputSizeBytes": 140912,
+  "outputSha256": "71c69b2c4d2154c0b3d5572d43311bed4532285ac7e18d3112f1ff524de020c0",
+  "roundtripValidated": true,
+  "builtPackageMetadata": {
+    "artboards": [
+      {
+        "sourceArtboardId": "cmp_components_serror-line",
+        "publishedName": "error-line",
+        "role": "component",
+        "width": 300,
+        "height": 60,
+        "authoredOrder": 0
+      },
+      {
+        "sourceArtboardId": "cmp_components_sgoal-card",
+        "publishedName": "goal-card",
+        "role": "component",
+        "width": 300,
+        "height": 60,
+        "authoredOrder": 1
+      },
+      {
+        "sourceArtboardId": "scr_screens_sdaily-plan",
+        "publishedName": "daily-plan",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 2
+      },
+      {
+        "sourceArtboardId": "scr_screens_sdaily-reminder",
+        "publishedName": "daily-reminder",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 3
+      },
+      {
+        "sourceArtboardId": "scr_screens_sdeparture",
+        "publishedName": "departure",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 4
+      },
+      {
+        "sourceArtboardId": "scr_screens_sfeedback",
+        "publishedName": "feedback",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 5
+      },
+      {
+        "sourceArtboardId": "scr_screens_sgoals",
+        "publishedName": "goals",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 6
+      },
+      {
+        "sourceArtboardId": "scr_screens_sitalian-level",
+        "publishedName": "italian-level",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 7
+      },
+      {
+        "sourceArtboardId": "scr_screens_sstart-lesson",
+        "publishedName": "start-lesson",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 8
+      },
+      {
+        "sourceArtboardId": "scr_screens_swelcome",
+        "publishedName": "welcome",
+        "role": "experience",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 9
+      }
+    ],
+    "screens": [
+      {
+        "screenId": "scr_screens_sdaily-plan",
+        "artboardId": "scr_screens_sdaily-plan",
+        "artboardName": "daily-plan",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 0,
+        "reportedEventNames": [
+          "$nuxie.response.save",
+          "back",
+          "continue"
+        ]
+      },
+      {
+        "screenId": "scr_screens_sdaily-reminder",
+        "artboardId": "scr_screens_sdaily-reminder",
+        "artboardName": "daily-reminder",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 1,
+        "reportedEventNames": [
+          "$nuxie.response.save",
+          "back",
+          "enable",
+          "skip"
+        ]
+      },
+      {
+        "screenId": "scr_screens_sdeparture",
+        "artboardId": "scr_screens_sdeparture",
+        "artboardName": "departure",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 2,
+        "reportedEventNames": [
+          "$nuxie.response.save",
+          "back",
+          "continue"
+        ]
+      },
+      {
+        "screenId": "scr_screens_sfeedback",
+        "artboardId": "scr_screens_sfeedback",
+        "artboardName": "feedback",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 3,
+        "reportedEventNames": [
+          "$nuxie.response.save",
+          "sent"
+        ]
+      },
+      {
+        "screenId": "scr_screens_sgoals",
+        "artboardId": "scr_screens_sgoals",
+        "artboardName": "goals",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 4,
+        "reportedEventNames": []
+      },
+      {
+        "screenId": "scr_screens_sitalian-level",
+        "artboardId": "scr_screens_sitalian-level",
+        "artboardName": "italian-level",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 5,
+        "reportedEventNames": [
+          "$nuxie.response.save",
+          "back",
+          "continue"
+        ]
+      },
+      {
+        "screenId": "scr_screens_sstart-lesson",
+        "artboardId": "scr_screens_sstart-lesson",
+        "artboardName": "start-lesson",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 6,
+        "reportedEventNames": [
+          "back",
+          "start"
+        ]
+      },
+      {
+        "screenId": "scr_screens_swelcome",
+        "artboardId": "scr_screens_swelcome",
+        "artboardName": "welcome",
+        "width": 402,
+        "height": 874,
+        "authoredOrder": 7,
+        "reportedEventNames": [
+          "begin"
+        ]
+      }
+    ],
+    "assets": {
+      "images": [],
+      "fonts": [
+        {
+          "family": "DM Sans",
+          "weight": "700",
+          "style": "normal",
+          "authoredAssetId": 1,
+          "assetUniqueName": "font-dm-sans-700-normal-0cc21809-1",
+          "location": "cdn",
+          "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d",
+          "sizeBytes": 240164,
+          "contentType": "font/ttf",
+          "format": "ttf",
+          "required": true
+        },
+        {
+          "family": "Fraunces",
+          "weight": "700",
+          "style": "normal",
+          "authoredAssetId": 2,
+          "assetUniqueName": "font-fraunces-700-normal-2a84dcba-2",
+          "location": "cdn",
+          "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+          "sizeBytes": 360440,
+          "contentType": "font/ttf",
+          "format": "ttf",
+          "required": true
+        },
+        {
+          "family": "System",
+          "weight": "400",
+          "style": "normal",
+          "authoredAssetId": 0,
+          "assetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "location": "system",
+          "required": true
+        }
+      ]
+    },
+    "textInputs": [
+      {
+        "artboardId": "scr_screens_sfeedback",
+        "viewNodeId": "scr_screens_sfeedback::v2",
+        "renderedNodeId": "scr_screens_sfeedback::v2",
+        "textObjectKey": "artboard/scr_screens_sfeedback/scr_screens_sfeedback::v2/text",
+        "textInputName": "scr_screens_sfeedback::v2 editable value",
+        "sourceNodeId": "scr_screens_sfeedback::v2",
+        "value": "",
+        "editable": true,
+        "bindingDirection": "twoWay",
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 120,
+          "height": 32,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "System",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 16,
+          "lineHeight": -1,
+          "letterSpacing": 0,
+          "color": 4279310375,
+          "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "textAlign": "left"
+        },
+        "multiline": true
+      },
+      {
+        "artboardId": "scr_screens_sfeedback",
+        "viewNodeId": "scr_screens_sfeedback::v3",
+        "renderedNodeId": "scr_screens_sfeedback::v3",
+        "textObjectKey": "artboard/scr_screens_sfeedback/scr_screens_sfeedback::v3/text",
+        "textInputName": "scr_screens_sfeedback::v3 editable value",
+        "sourceNodeId": "scr_screens_sfeedback::v3",
+        "value": "",
+        "editable": true,
+        "bindingDirection": "twoWay",
+        "geometry": {
+          "x": 0,
+          "y": 32,
+          "width": 120,
+          "height": 22,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "System",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 16,
+          "lineHeight": -1,
+          "letterSpacing": 0,
+          "color": 4279310375,
+          "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "textAlign": "left"
+        }
+      },
+      {
+        "artboardId": "scr_screens_sfeedback",
+        "viewNodeId": "scr_screens_sfeedback::v4",
+        "renderedNodeId": "scr_screens_sfeedback::v4",
+        "textObjectKey": "artboard/scr_screens_sfeedback/scr_screens_sfeedback::v4/text",
+        "textInputName": "scr_screens_sfeedback::v4 editable value",
+        "sourceNodeId": "scr_screens_sfeedback::v4",
+        "value": "",
+        "editable": true,
+        "bindingDirection": "twoWay",
+        "geometry": {
+          "x": 0,
+          "y": 64,
+          "width": 120,
+          "height": 22,
+          "rotation": 0,
+          "scaleX": 1,
+          "scaleY": 1
+        },
+        "style": {
+          "fontFamily": "System",
+          "fontWeight": "400",
+          "fontStyle": "normal",
+          "fontSize": 16,
+          "lineHeight": -1,
+          "letterSpacing": 0,
+          "color": 4279310375,
+          "fontAssetUniqueName": "font-system-400-normal-6cda3de3-0",
+          "textAlign": "left"
+        }
+      }
+    ]
+  },
+  "valuePolicy": {
+    "state": {
+      "goals": {
+        "type": "list",
+        "items": {
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {
+      "onboarding": {
+        "title": "Onboarding answers",
+        "model": "Responses:onboarding",
+        "fields": [
+          {
+            "key": "trip_days",
+            "label": "How long is your trip?",
+            "type": "number",
+            "rules": [
+              {
+                "model": "Responses:onboarding",
+                "property": "trip_days",
+                "kind": 10,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "required",
+                "message": "Enter an answer."
+              },
+              {
+                "model": "Responses:onboarding",
+                "property": "trip_days",
+                "kind": 1,
+                "mode": 0,
+                "number_bound": 1,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "min",
+                "message": "Enter a larger number."
+              },
+              {
+                "model": "Responses:onboarding",
+                "property": "trip_days",
+                "kind": 2,
+                "mode": 1,
+                "number_bound": 365,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "max",
+                "message": "Enter a smaller number."
+              }
+            ]
+          },
+          {
+            "key": "italian_level",
+            "label": "How much Italian do you know?",
+            "type": "enum",
+            "rules": [
+              {
+                "model": "Responses:onboarding",
+                "property": "italian_level",
+                "kind": 5,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [
+                  "new",
+                  "basics",
+                  "conversational"
+                ],
+                "value_count": 3,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "values",
+                "message": "Choose one of the available options."
+              },
+              {
+                "model": "Responses:onboarding",
+                "property": "italian_level",
+                "kind": 10,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "required",
+                "message": "Enter an answer."
+              }
+            ],
+            "values": [
+              "new",
+              "basics",
+              "conversational"
+            ]
+          },
+          {
+            "key": "reminder_time",
+            "label": "When should we remind you?",
+            "type": "enum",
+            "rules": [
+              {
+                "model": "Responses:onboarding",
+                "property": "reminder_time",
+                "kind": 5,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [
+                  "07:00",
+                  "08:00",
+                  "12:00",
+                  "18:00",
+                  "20:00"
+                ],
+                "value_count": 5,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "values",
+                "message": "Choose one of the available options."
+              }
+            ],
+            "values": [
+              "07:00",
+              "08:00",
+              "12:00",
+              "18:00",
+              "20:00"
+            ]
+          },
+          {
+            "key": "wants_reminder",
+            "label": "Remind you every day?",
+            "type": "boolean",
+            "rules": []
+          }
+        ]
+      },
+      "feedback": {
+        "title": "Feedback",
+        "model": "Responses:feedback",
+        "fields": [
+          {
+            "key": "stars",
+            "label": "Stars",
+            "type": "number",
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "stars",
+                "kind": 10,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "required",
+                "message": "Enter an answer."
+              },
+              {
+                "model": "Responses:feedback",
+                "property": "stars",
+                "kind": 1,
+                "mode": 0,
+                "number_bound": 1,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "min",
+                "message": "Enter a larger number."
+              },
+              {
+                "model": "Responses:feedback",
+                "property": "stars",
+                "kind": 2,
+                "mode": 1,
+                "number_bound": 5,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "max",
+                "message": "Enter a smaller number."
+              }
+            ]
+          },
+          {
+            "key": "comment",
+            "label": "Comment",
+            "type": "string",
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "comment",
+                "kind": 8,
+                "mode": 1,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 2,
+                "minimum": 0,
+                "maximum": 500,
+                "code": "maxLength",
+                "message": "Enter fewer characters."
+              }
+            ]
+          },
+          {
+            "key": "email",
+            "label": "Email",
+            "type": "string",
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "email",
+                "kind": 9,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "[a-zA-Z0-9\\.\\!\\#\\$\\%\\&'\\*\\+\\/\\=\\?\\^_\\`\\{\\|\\}\\~\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?)*",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "",
+                "bound_flags": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "code": "format",
+                "message": "Enter an email address."
+              }
+            ]
+          },
+          {
+            "key": "interests",
+            "label": "What interests you?",
+            "type": "enum",
+            "rules": [
+              {
+                "model": "Responses:feedback",
+                "property": "interests",
+                "kind": 7,
+                "mode": 0,
+                "number_bound": 0,
+                "text": "",
+                "values": [],
+                "value_count": 0,
+                "picked_property": "picked",
+                "bound_flags": 1,
+                "minimum": 1,
+                "maximum": 0,
+                "code": "minItems",
+                "message": "Choose more options."
+              }
+            ],
+            "values": [
+              "sleep",
+              "focus",
+              "calm"
+            ],
+            "multiple": true
+          }
+        ]
+      }
+    },
+    "ruleGroups": [
+      {
+        "model": "Responses:onboarding",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "trip_days",
+            "errors_path": "errors/trip_days",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "italian_level",
+            "errors_path": "errors/italian_level",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "reminder_time",
+            "errors_path": "errors/reminder_time",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "wants_reminder",
+            "errors_path": "errors/wants_reminder",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 4
+      },
+      {
+        "model": "Responses:feedback",
+        "valid": "valid",
+        "members": [
+          {
+            "property": "stars",
+            "errors_path": "errors/stars",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "comment",
+            "errors_path": "errors/comment",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "email",
+            "errors_path": "errors/email",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          },
+          {
+            "property": "interests",
+            "errors_path": "errors/interests",
+            "item_model": "ResponseError",
+            "code_property": "rule",
+            "message_property": "message"
+          }
+        ],
+        "member_count": 4
+      }
+    ]
+  },
+  "requiredFontFaces": [
+    {
+      "family": "System",
+      "weight": "400",
+      "style": "normal"
+    },
+    {
+      "family": "DM Sans",
+      "weight": "700",
+      "style": "normal"
+    },
+    {
+      "family": "DM Sans",
+      "weight": "400",
+      "style": "normal"
+    },
+    {
+      "family": "DM Sans",
+      "weight": "600",
+      "style": "normal"
+    },
+    {
+      "family": "Fraunces",
+      "weight": "700",
+      "style": "normal"
+    }
+  ]
+}

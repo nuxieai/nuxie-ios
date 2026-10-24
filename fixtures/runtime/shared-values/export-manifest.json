@@ -1,0 +1,70 @@
+{
+  "screen.riv": {
+    "sha256": "f15307764e5ce73bb71c9f41e7311dae4f6154425232e9c8354deac99e5be137",
+    "sizeBytes": 8862
+  },
+  "renders/sha256/f15307764e5ce73bb71c9f41e7311dae4f6154425232e9c8354deac99e5be137.nux": {
+    "sha256": "f15307764e5ce73bb71c9f41e7311dae4f6154425232e9c8354deac99e5be137",
+    "sizeBytes": 8862
+  },
+  "report.json": {
+    "sha256": "3c436b8ec3cd11772da37c3879b12658031d3199dc91d95d22b385e910a1388d",
+    "sizeBytes": 2599
+  },
+  "page-structure.json": {
+    "sha256": "9d4a5c635a746bd2511e0715fb7077b99276b5188e75ba021af9977263c49c15",
+    "sizeBytes": 731
+  },
+  "render.json": {
+    "sha256": "af96b5206a12d80653cbf2d99feee43b2381cb578f0088e6bf8a34f89b4d8c5c",
+    "sizeBytes": 1058
+  },
+  "scene-declarations.json": {
+    "sha256": "945c212eb0612f0cc45daf95d2b895c104ac9893d178a4f13b2eec9fbff1d8a1",
+    "sizeBytes": 1783
+  },
+  "expectations.json": {
+    "sha256": "5f1051280469c567664018745b9a0a6193b7d629b823cf7b0dbcd1a37b07b9bc",
+    "sizeBytes": 378
+  },
+  "source/components/tap-count/frame.json": {
+    "sha256": "300c8301a1dd6f56b5a32e8cf84a26e6c6e5c43c287be99021e5491d9b6e972b",
+    "sizeBytes": 248
+  },
+  "source/components/tap-count/index.html": {
+    "sha256": "6b8195f3a59dd529b35ecf6af28ffb055211db7a17932b0e8595062d14f427c2",
+    "sizeBytes": 231
+  },
+  "source/experience.json": {
+    "sha256": "55f8a3807b68c60fbcc5d1042438a075b74893a555617bb2776739901a5ab706",
+    "sizeBytes": 664
+  },
+  "source/screens/first/frame.json": {
+    "sha256": "f8d3a792f88e19ec488a467361a7e883ba4eb316c5b291b12972d9621b491f7d",
+    "sizeBytes": 146
+  },
+  "source/screens/first/index.html": {
+    "sha256": "6d53397b1eeccdb8501ada7bc901c4f6f50d67d67574c01844e2b3dcdbd10c13",
+    "sizeBytes": 152
+  },
+  "source/screens/long/frame.json": {
+    "sha256": "f0d8c26bc86bafa5beccb8260920f163c283e24209267c06a05a761618fb5774",
+    "sizeBytes": 109
+  },
+  "source/screens/long/index.html": {
+    "sha256": "4867d8d0dab06456b529f769ffd0472f5cf1553a7b334d8b24f8cd55434b258e",
+    "sizeBytes": 208
+  },
+  "source/screens/short/frame.json": {
+    "sha256": "f0d8c26bc86bafa5beccb8260920f163c283e24209267c06a05a761618fb5774",
+    "sizeBytes": 109
+  },
+  "source/screens/short/index.html": {
+    "sha256": "d24a2cada3cec193163d4b319fd9bd4ff0f67850c7e0869916629232b2964021",
+    "sizeBytes": 122
+  },
+  "provenance.json": {
+    "sha256": "57233e693c10cc194187cff2dadb65037f345674bfa796ca8933cc7494dec514",
+    "sizeBytes": 6686
+  }
+}

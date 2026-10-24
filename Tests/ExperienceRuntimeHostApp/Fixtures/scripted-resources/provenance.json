@@ -1,0 +1,127 @@
+{
+  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "source": "tools/sdk-fixtures/page-release/host-scripted-resources/snapshot.json",
+  "wrapper": "tools/sdk-fixtures/page-release/host-scripted-resources/wrapper.json",
+  "migratedForCompiler2b": [
+    {
+      "old": "retained v11 compiled Luau requiring LuauCallFeedback",
+      "new": "pinned recovered scripted-vector.luau compiled by the current compile_luau_bytecode with DeviceLuauFlagsGuard",
+      "why": "the publisher targets the device VM flags-off floor; the source is present in editor/fixtures/e4 and the corpus producer names it; no snapshot flag is needed and the retained bytecode remains archival"
+    }
+  ],
+  "sources": {
+    "tools/sdk-fixtures/page-release/host-scripted-resources/snapshot.json": {
+      "sha256": "767c4ac539d220d3f080a51de7c4516a221b2f25698e714f8fe9c85f50886101",
+      "sizeBytes": 2467
+    },
+    "tools/sdk-fixtures/page-release/host-scripted-resources/wrapper.json": {
+      "sha256": "4701ce1a8fe7a19ef2f0e21175d070e825d09b1104e1004288fa388a68c93365",
+      "sizeBytes": 5056
+    },
+    "tools/sdk-fixtures/page-release/host-scripted-resources/scripted-vector.luau": {
+      "sha256": "1f77ed2653444b409e0b72193cc1c649477e52237ffcef422545cf1beeb0c98e",
+      "sizeBytes": 600
+    },
+    "tools/sdk-fixtures/page-release/host-scripted-resources/scripted-vector.wgsl": {
+      "sha256": "622010201f2af7dbc9ffa80f3f6abf780ca3a2617f03aa629cf6569c26647b93",
+      "sizeBytes": 285
+    }
+  },
+  "processing": {
+    "sourceSha256": "767c4ac539d220d3f080a51de7c4516a221b2f25698e714f8fe9c85f50886101",
+    "conversions": [],
+    "compiledResources": [
+      {
+        "kind": "script",
+        "assetId": "script-vector",
+        "sha256": "50d69e465eb4413f342a38b1c6c3dbb71531559c98d0a0514a0d2b782ed477bd",
+        "sizeBytes": 702
+      },
+      {
+        "kind": "shader",
+        "assetId": "shader-vector",
+        "sha256": "e83341b43a488f71ba4e1b7cd32a11a1a8143e908bf6e5c51b2ddc61634f920d",
+        "sizeBytes": 366,
+        "qualification": "package-only"
+      }
+    ],
+    "actionCompatibility": "validate_compiled_luau_bytecode"
+  },
+  "command": [
+    "node",
+    "tools/sdk-fixtures/page-release/export.mjs",
+    "--snapshot",
+    "tools/sdk-fixtures/page-release/host-scripted-resources/snapshot.json",
+    "tools/sdk-fixtures/page-release/host-scripted-resources/wrapper.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "producerCommand": [
+    "bash",
+    "tools/nuxie-editor/scripts/bazel.sh",
+    "run",
+    "-p",
+    "experience-editor-bridge",
+    "--example",
+    "publish_snapshot",
+    "--",
+    "tools/sdk-fixtures/page-release/host-scripted-resources/snapshot.json",
+    "<producer-output>",
+    "<verified-resources.json>"
+  ],
+  "fonts": [],
+  "signing": {
+    "keyId": "TEST_ONLY_DEV_KEYPAIR",
+    "publicKeyBase64": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+    "note": "Public test-only fixture key, never a production release."
+  },
+  "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
+  "files": {
+    "screen.riv": {
+      "sha256": "6d6a9db38e7274134ffa0a47ec676f3dbddf72012c1a9246efa07241e76b3578",
+      "sizeBytes": 3537
+    },
+    "renders/sha256/6d6a9db38e7274134ffa0a47ec676f3dbddf72012c1a9246efa07241e76b3578.nux": {
+      "sha256": "6d6a9db38e7274134ffa0a47ec676f3dbddf72012c1a9246efa07241e76b3578",
+      "sizeBytes": 3537
+    },
+    "report.json": {
+      "sha256": "34c81fbaa9476e906ae40a0bb97af26dddc3c9c4fc687cda820bbed654649ef7",
+      "sizeBytes": 927
+    },
+    "page-structure.json": {
+      "sha256": "2b538a112b6924c9313a8d37f0a7f1162bc810ed140d8e4710f1969cd32fb5ff",
+      "sizeBytes": 380
+    },
+    "snapshot-processing.json": {
+      "sha256": "7a2973a7f1b8492a3feb84bdb8a70273a0e6bda9ac1f3b0525421835b1948f94",
+      "sizeBytes": 594
+    },
+    "compiled-actions.json": {
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "sizeBytes": 3
+    },
+    "source/snapshot.json": {
+      "sha256": "767c4ac539d220d3f080a51de7c4516a221b2f25698e714f8fe9c85f50886101",
+      "sizeBytes": 2467
+    },
+    "descriptor.json": {
+      "sha256": "7a17dd60188fa28d502d38a664acfda55ef67223e9d997a6ea1644abdee1fdd2",
+      "sizeBytes": 2380
+    },
+    "release-entry.json": {
+      "sha256": "20f47af200937e5519ba8c2d9c4feb5c05a30bf1ada7b291b2cbdce07cecf5be",
+      "sizeBytes": 4134
+    },
+    "release.json": {
+      "sha256": "7a17dd60188fa28d502d38a664acfda55ef67223e9d997a6ea1644abdee1fdd2",
+      "sizeBytes": 2380
+    },
+    "profile.json": {
+      "sha256": "860306b121fd2e12790f5c2149e5d9c9b49cd7110211835f71f909d031e50349",
+      "sizeBytes": 5204
+    }
+  }
+}

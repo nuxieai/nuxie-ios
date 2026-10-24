@@ -1,0 +1,116 @@
+{
+  "compilerSource": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "command": [
+    "node",
+    "--import",
+    "tsx",
+    "apps/nuxie-experience-authority/tests/workerd/sdk-sheets-export-run.mjs",
+    "tests/fixtures/e2e-experience-files/presentation-sheets",
+    "tools/sdk-fixtures/sheets/published-fit-content",
+    "tools/sdk-fixtures/sheets/parla-large/experience.json",
+    "<output-root>",
+    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+  ],
+  "families": [
+    "journeys/parla-sheets",
+    "runtime/published-fit-content"
+  ],
+  "files": {
+    "journeys/parla-sheets/release-entry.json": {
+      "sha256": "aef6f71b23b6e9f541c6a23f2091a7d3463000dc292e244978edc173513694c9",
+      "sizeBytes": 13017
+    },
+    "journeys/parla-sheets/descriptor.json": {
+      "sha256": "2f6911be29ce83083e4dfaa9eebba49074d7d23d99d8c531d2928864c7db523b",
+      "sizeBytes": 9112
+    },
+    "journeys/parla-sheets/publish-source.json": {
+      "sha256": "c10a72efb9b10ee95666731017808c033bdfe3cfa2194ff85b8f6f0fa1bc4399",
+      "sizeBytes": 72020
+    },
+    "journeys/parla-sheets/renders/sha256/a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a.nux": {
+      "sha256": "a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a",
+      "sizeBytes": 13376
+    },
+    "journeys/parla-sheets/assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": {
+      "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
+      "sizeBytes": 879708
+    },
+    "journeys/parla-sheets/variants/large/release-entry.json": {
+      "sha256": "92c2dc6b2f0bcc27f6a0da10084991e0b30ec2bd056d64e2df4c6c4438b9942c",
+      "sizeBytes": 13017
+    },
+    "journeys/parla-sheets/variants/large/descriptor.json": {
+      "sha256": "c5ae8aedab6feb776bd6f28231e0415a7dd180a511394721f80cd431931d9db4",
+      "sizeBytes": 9112
+    },
+    "journeys/parla-sheets/variants/large/publish-source.json": {
+      "sha256": "23960904b64bfb9e914082de934d4aa3ad77dc5caf4cf5231ea36ae4c4630f56",
+      "sizeBytes": 72662
+    },
+    "journeys/parla-sheets/variants/large/renders/sha256/a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a.nux": {
+      "sha256": "a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a",
+      "sizeBytes": 13376
+    },
+    "journeys/parla-sheets/variants/large/assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": {
+      "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
+      "sizeBytes": 879708
+    },
+    "journeys/parla-sheets/provenance.json": {
+      "sha256": "acba07c6e33004d392d8a6d6832d31f0ee57fad6f413ac2974dc52455f67f134",
+      "sizeBytes": 6869
+    },
+    "runtime/published-fit-content/published/screen.riv": {
+      "sha256": "9303714e76f4ca7037e5cb375111c7e01670636b0918e788b832e27392e8e25b",
+      "sizeBytes": 4704
+    },
+    "runtime/published-fit-content/published/no-binding.riv": {
+      "sha256": "3a72811a3196dea0fa0f3d8b28357b5b932145064e26a8629276376a810cd9cc",
+      "sizeBytes": 4659
+    },
+    "runtime/published-fit-content/published/snapshot.json": {
+      "sha256": "0302d7f04fc2c6fb55af51bac3cb88a1e32e0721ab691827f4da8cf441e36cff",
+      "sizeBytes": 21447
+    },
+    "runtime/published-fit-content/source/experience.json": {
+      "sha256": "cdc32eb8e7b72a158081d14ab87c15a8bc04be25de4d240db3e80e7ff77b3b13",
+      "sizeBytes": 155
+    },
+    "runtime/published-fit-content/source/screens/background/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "runtime/published-fit-content/source/screens/background/index.html": {
+      "sha256": "0ee884ed9dd1c41b3204ea3a300c94030a9db948a80a8f4c8fe6f2afdd39ddc0",
+      "sizeBytes": 371
+    },
+    "runtime/published-fit-content/source/screens/fill-child/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "runtime/published-fit-content/source/screens/fill-child/index.html": {
+      "sha256": "11710f3cea0f39d6a14b2e224852fd295b9250527fe2fcef1b8ee2b56e0756e0",
+      "sizeBytes": 240
+    },
+    "runtime/published-fit-content/source/screens/sheet/frame.json": {
+      "sha256": "1ca94a53e842d578cbed676d5069695563b4d3354d1a9311a3bf381bdaee2490",
+      "sizeBytes": 198
+    },
+    "runtime/published-fit-content/source/screens/sheet/index.html": {
+      "sha256": "46148726283ecc608c78d67025cf9ad1efbd405cf124b8c580c9f52117acc164",
+      "sizeBytes": 257
+    },
+    "runtime/published-fit-content/expectations.json": {
+      "sha256": "f8ba4a4bd22dc9cadbdc20183c45c55a2386fc97c7fa5d1b8907d09cddeb1b28",
+      "sizeBytes": 579
+    },
+    "runtime/published-fit-content/NOTES.md": {
+      "sha256": "f42e0b2b31581ac831d8ea39432740422fe1faef01465c08795ad07ce93f1b58",
+      "sizeBytes": 551
+    },
+    "runtime/published-fit-content/provenance.json": {
+      "sha256": "b0041fc3521679ccacf441ec6b66f9c9c43ebde0ad6114c53afeee9d93eec6da",
+      "sizeBytes": 5503
+    }
+  }
+}
