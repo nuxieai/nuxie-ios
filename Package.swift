@@ -8,12 +8,13 @@ let localRuntimeURL = packageRoot.appendingPathComponent(localRuntimePath)
 let releasedRuntimeBaseURL = "https://github.com/nuxieai/nuxie-runtime/releases/download"
 let releasedRuntimeURL = releasedRuntimeBaseURL + "/apple-runtime-v1.0.0/NuxieRuntime.xcframework.zip"
 let releasedRuntimeChecksum = "a7dc6dc314b89bf8805789184e327282742f79831d95c4d07bc45b829edb14db"
+let unstagedRuntimeMessage = "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework. Stage one with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>`. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead."
 
 func makeNuxieRuntimeBinaryTarget() -> Target {
     let localRuntimeSelection = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_LOCAL"]
     if localRuntimeSelection == nil || localRuntimeSelection == "1" {
         guard FileManager.default.fileExists(atPath: localRuntimeURL.path) else {
-            fatalError("stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`")
+            fatalError(unstagedRuntimeMessage)
         }
         return .binaryTarget(
             name: "NuxieRuntimeBinary",

@@ -24,6 +24,7 @@ from cache import startup_options
 from launcher import executable as installed_bazelisk
 
 ROOT = Path(__file__).resolve().parents[2]
+UNSTAGED_RUNTIME_MESSAGE = "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework. Stage one with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>`. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead."
 PLATFORMS = {
     "ios-device": {"arm64": "ios_arm64"},
     "ios-simulator": {"arm64": "ios_sim_arm64", "x86_64": "ios_x86_64"},
@@ -543,7 +544,7 @@ def main() -> None:
             if selection not in ("0", "1"):
                 raise ValueError("NUXIE_RUNTIME_USE_LOCAL must be unset, 1 or 0")
             if selection == "1" and not (ROOT / ".artifacts/NuxieRuntime.xcframework").is_dir():
-                raise ValueError("stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`")
+                raise ValueError(UNSTAGED_RUNTIME_MESSAGE)
             if args.command == "test" and args.scheme:
                 args.suite = SCHEMES[args.scheme]
             if args.command == "test" and args.suite == "all":

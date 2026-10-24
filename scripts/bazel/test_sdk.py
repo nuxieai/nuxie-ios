@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -24,6 +25,42 @@ consumer_spec.loader.exec_module(consumer)
 
 
 class ConsumerArtifactContractTests(unittest.TestCase):
+    def test_unstaged_runtime_stop_message_matches_all_entry_points(self):
+        message = sdk.UNSTAGED_RUNTIME_MESSAGE
+        for detail in (
+            "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework.",
+            "make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>",
+            "NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead.",
+        ):
+            self.assertIn(detail, message)
+        # Swift, Starlark, Python and Make cannot import one language constant.
+        # Compare the copies and ensure each missing-stage stop uses its copy.
+        entry_points = {
+            "Package.swift": (
+                r'^let unstagedRuntimeMessage = "([^"]+)"$',
+                "fatalError(unstagedRuntimeMessage)",
+            ),
+            "scripts/bazel/runtime.bzl": (
+                r'^_UNSTAGED_RUNTIME_MESSAGE = "([^"]+)"$',
+                "fail(_UNSTAGED_RUNTIME_MESSAGE)",
+            ),
+            "scripts/bazel/sdk.py": (
+                r'^UNSTAGED_RUNTIME_MESSAGE = "([^"]+)"$',
+                "raise ValueError(UNSTAGED_RUNTIME_MESSAGE)",
+            ),
+            "Makefile": (
+                r'^UNSTAGED_RUNTIME_MESSAGE := (.+)$',
+                "echo '$(UNSTAGED_RUNTIME_MESSAGE)' >&2;",
+            ),
+        }
+        for path, (declaration, stop) in entry_points.items():
+            with self.subTest(path=path):
+                source = (sdk.ROOT / path).read_text()
+                match = re.search(declaration, source, re.MULTILINE)
+                self.assertIsNotNone(match, "Missing runtime stop message declaration")
+                self.assertEqual(match.group(1), message)
+                self.assertIn(stop, source)
+
     def test_apple_platform_requests_also_select_the_legacy_bundle_cpu(self):
         for platform, architectures in sdk.PLATFORMS.items():
             for architecture, apple_platform in architectures.items():

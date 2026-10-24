@@ -27,6 +27,7 @@ STOREKIT_REQUIRE_AVAILABLE ?= 1
 NUXIE_RUNTIME_XCFRAMEWORK ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
+UNSTAGED_RUNTIME_MESSAGE := No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework. Stage one with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>`. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead.
 RUNTIME_ARTIFACT_METADATA := Runtime/artifact.json
 DOWNLOADED_RUNTIME_ARCHIVE := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework.zip
 NUXIE_RUNTIME_REFERENCE_APP := $(CURDIR)/.bazel-artifacts/build/ios-simulator/Debug/NuxieExperienceRuntimeReference.app
@@ -223,7 +224,7 @@ check-staged-runtime-xcframework:
 
 check-local-runtime-xcframework:
 	@if [ ! -d "$(STAGED_RUNTIME_XCFRAMEWORK)" ]; then \
-		echo 'stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`' >&2; \
+		echo '$(UNSTAGED_RUNTIME_MESSAGE)' >&2; \
 		exit 1; \
 	fi
 	@scripts/verify-runtime-artifact.sh --xcframework "$(STAGED_RUNTIME_XCFRAMEWORK)"

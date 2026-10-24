@@ -225,7 +225,7 @@ with tempfile.TemporaryDirectory(prefix="nuxie-runtime-package-pin-") as tempora
         require_dump_failure(
             missing_fixture,
             selection,
-            "stage it with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path>`",
+            "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework.",
         )
 
 print(f"Runtime package pin passed: {metadata['release']} URL and checksum are atomic")
