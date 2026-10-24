@@ -1495,7 +1495,8 @@ actor ExperienceInteractivePreparation {
     nonisolated let hasPageHost: Bool
     private var openedSessionCount = 0
 
-    private init(
+    // Internal construction also lets fixture tests supply an explicitly imported file.
+    init(
         payload: AuthenticatedRuntimePayload,
         preparedFile: NuxieNativePreparedFile,
         hasPageHost: Bool,

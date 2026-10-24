@@ -16,18 +16,20 @@ struct NativeExperiencePageHost: Equatable, Sendable {
     let modelName: String?
     let hasLiveMoves: Bool
     let initialRows: InitialRows
+    let stepNames: [String: String]
 
     // Non-published shapes are constructed by tests, never decoded from a release.
     // Nil machine/model preserve the older interim fixtures' inferred names.
     init(artboardName: String, listPath: String, machineName: String? = nil,
          modelName: String? = nil, hasLiveMoves: Bool = false,
-         initialRows: InitialRows = .requireEmpty) {
+         initialRows: InitialRows = .requireEmpty, stepNames: [String: String] = [:]) {
         self.artboardName = artboardName
         self.listPath = listPath
         self.machineName = machineName
         self.modelName = modelName
         self.hasLiveMoves = hasLiveMoves
         self.initialRows = initialRows
+        self.stepNames = stepNames
     }
 
     static let published = Self(artboardName: ExperiencePageHostContract.artboardName,
