@@ -6,7 +6,6 @@ enum ExperiencePageStep {
     enum Change: Equatable, Sendable {
         case take
         case position(isBack: Bool)
-        case reconcile
         case expand
         case phases([(String, ExperienceScreenLifecyclePhase)], String)
         case begin(String?)
@@ -15,7 +14,7 @@ enum ExperiencePageStep {
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             switch (lhs, rhs) {
-            case (.take, .take), (.retire, .retire), (.reconcile, .reconcile), (.expand, .expand): return true
+            case (.take, .take), (.retire, .retire), (.expand, .expand): return true
             case let (.position(a), .position(b)): return a == b
             case let (.begin(a), .begin(b)), let (.end(a), .end(b)): return a == b
             case let (.phases(a, x), .phases(b, y)):
@@ -75,7 +74,7 @@ enum ExperiencePageStep {
             await operations.release()
         }
 
-        let incoming: [Change] = [.take, .position(isBack: isBack), .reconcile, .expand]
+        let incoming: [Change] = [.take, .position(isBack: isBack), .expand]
         if coveredCut {
             try await operations.batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
                 .begin(nil), .end(nil), .retire])
@@ -108,6 +107,36 @@ enum ExperiencePageStep {
         await operations.hidden()
         try Task.checkCancellation()
         try await operations.active()
+    }
+}
+
+/// F5: read after every ordinary visible frame, never
+/// while covered. Nil (including NOT_FOUND) selects the large sheet fallback.
+@MainActor
+final class ExperiencePageContentMeasurement {
+    private(set) var height: Float?
+    private var enabled = false
+    private var revision = 0
+    var covered = false {
+        didSet { if covered != oldValue { revision += 1 } }
+    }
+
+    func configure(enabled: Bool) {
+        self.enabled = enabled
+        height = nil
+        revision += 1
+    }
+
+    @discardableResult
+    func update(query: () async throws -> Float?) async throws -> Bool {
+        guard enabled, !covered else { return false }
+        let revision = self.revision
+        let value = try await query()
+        guard enabled, !covered, revision == self.revision else { return false }
+        let next = value.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        guard next != height else { return false }
+        height = next
+        return true
     }
 }
 

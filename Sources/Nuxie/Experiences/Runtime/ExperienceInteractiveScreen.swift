@@ -2007,7 +2007,13 @@ actor ExperienceInteractiveScreen {
         }
 
         if let retainedRowSnapshot, let rowReference {
-            do { await rowHandles.record(try await runtime.seedRow(rowReference, from: retainedRowSnapshot)) }
+            do {
+                let seeded = try await runtime.seedRow(rowReference, from: retainedRowSnapshot)
+                await rowHandles.record(seeded)
+                // Snapshot identities are writable only while their native
+                // handles remain owned by this generation. Removal takes and
+                // releases this same set along with the root.
+            }
             catch { await rowHandles.releaseAfterFailedPreparation(); fontScope.close(); throw error }
         }
 
@@ -2153,7 +2159,7 @@ actor ExperienceInteractiveScreen {
         await rowHandles.take()
     }
 
-    func closeRemovedPageRow() {
+    func closePageRow() {
         discardTextFrame()
         fontScope.close()
     }
@@ -2367,6 +2373,11 @@ actor ExperienceInteractiveScreen {
         try requireWritableRow()
         guard let name = screen.defaultViewModelName, let rootViewModelReference else { return [] }
         let schema = try stateCompiler.schema(named: name)
+        // Image-only and authored data-model rows can have no lifecycle branch.
+        // Resolve lifecycle only through this row's declared screen property.
+        guard stateCompiler.catalog.properties.contains(where: {
+            $0.schemaIndex == schema.index && ($0.name == "screen" || $0.name == "screen/phase")
+        }) else { return [] }
         let command = snapshot.stateCommand(viewModelName: name, instanceID: screen.defaultInstanceId,
             includesExitReason: supportsScreenExitReason(viewModelName: name))
         guard case .snapshot(let values) = command else { return [] }
