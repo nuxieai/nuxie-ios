@@ -463,7 +463,7 @@ extension ExperienceInteractiveScreen {
         }
     }
 
-    private nonisolated static func presentationOutcome(
+    nonisolated static func presentationOutcome(
         _ outcome: ExperienceInteractiveRenderOutcome
     ) -> ExperienceRuntimePresentationRenderOutcome {
         let disposition: ExperienceRuntimePresentationRenderOutcome.Disposition =
@@ -516,17 +516,48 @@ extension ExperienceInteractivePage {
             case .close:
                 try await self.close()
                 return .none
+            case .copyMetalDevice:
+                return .metalDevice(try await self.metalDevice(enablesSemantics: onSemantics != nil).value)
+            case .setMediaVisible(let visible):
+                try await self.setMediaVisible(visible)
+                return .none
             case .resize(let size):
-                if size.pixelWidth > 0, size.pixelHeight > 0, size.layoutScaleFactor > 0 {
-                    try await self.setLayoutSize(width: Float(size.pixelWidth) / size.layoutScaleFactor,
-                        height: Float(size.pixelHeight) / size.layoutScaleFactor)
+                return .renderer(ExperienceInteractiveScreen.presentationOutcome(try await self.resize(
+                    pixelWidth: size.pixelWidth, pixelHeight: size.pixelHeight, layoutScaleFactor: size.layoutScaleFactor)))
+            case .render(let drawableState, let layoutScaleFactor, let completion):
+                let drawable: ExperienceInteractiveDrawable?
+                let isOccluded: Bool
+                switch drawableState {
+                case .available(let value):
+                    drawable = ExperienceInteractiveDrawable(value.value)
+                    isOccluded = false
+                case .timeout:
+                    drawable = nil
+                    isOccluded = false
+                case .occluded:
+                    drawable = nil
+                    isOccluded = true
                 }
-                fallthrough
-            default:
-                let binding = try await self.activeBinding()
-                return try await binding.presentationSession(onSemantics: onSemantics,
-                    onTextFrame: onTextFrame, onCaptions: onCaptions, onFocus: onFocus,
-                    onStep: { _ in }).perform(operation)
+                let frame = try await self.renderFrame(
+                    layoutScaleFactor: layoutScaleFactor,
+                    drawable: drawable,
+                    isOccluded: isOccluded,
+                    capturesSemantics: onSemantics != nil,
+                    capturesCaptions: onCaptions != nil,
+                    completion: { completion.signalFromNative() }
+                )
+                if frame.semantics != nil || frame.text != nil || frame.captions != nil {
+                    return .renderer(ExperienceInteractiveScreen.presentationOutcome(frame.outcome)) {
+                        // Install this frame's editor geometry before semantic
+                        // admission enables fields and drains their initial writes.
+                        if let text = frame.text { onTextFrame?(text) }
+                        if let semantics = frame.semantics { onSemantics?(semantics) }
+                        if let captions = frame.captions { onCaptions?(captions) }
+                    }
+                }
+                return .renderer(ExperienceInteractiveScreen.presentationOutcome(frame.outcome))
+            case .queued(let work):
+                return try await work.perform()
             }
         }
     }
@@ -665,6 +696,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var isPresentationVisible = true
     private var isTimelineActive = true
     private var sessionIsOpen = false
+    var needsSessionCleanup: Bool { sessionIsOpen }
     private(set) var hasTakenSessionOwnership = false
     private var lastAppliedSize: ExperienceRuntimeSurfaceSize?
     private var frameSequence: UInt64 = 0
@@ -818,17 +850,20 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         await waitForFramesToFinish()
 
         if sessionIsOpen {
-            do {
-                if let ending = pendingInputEnd {
-                    pendingInputEnd = nil
+            if let ending = pendingInputEnd {
+                pendingInputEnd = nil
+                do {
                     let result = try await session.perform(.step(ending))
                     await result.deliver()
-                }
+                } catch { onError(error) }
+            }
+            do {
                 _ = try await session.perform(.close)
+                sessionIsOpen = false
             } catch {
+                // Keep ownership so another shutdown can retry failed cleanup.
                 onError(error)
             }
-            sessionIsOpen = false
         }
         surfaceView?.metalLayer.device = nil
         lastAppliedSize = nil

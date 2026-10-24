@@ -48,7 +48,7 @@ actor ExperienceInteractivePage {
     private var rowsNeedReconciliation = false
     var mountedScreenIDs: [String] { rowList.screenIDs }
     private var closed = false
-    private var activeScreenID: String?
+    private(set) var activeScreenID: String?
     private var activeRowReference: NuxieNativeViewModelReference?
     private(set) var videoPlayback: ExperienceVideoPlayback?
     private nonisolated let layoutBounds = ExperienceLayoutBounds(.zero)
@@ -240,13 +240,10 @@ actor ExperienceInteractivePage {
         return binding
     }
 
-    func activeBinding() throws -> ExperienceInteractiveScreen {
-        guard let activeScreenID else { throw ExperienceInteractiveScreenError.stateContract("Page has no active row") }
-        return try binding(screenID: activeScreenID)
-    }
-
     func selectActiveRow(_ screenID: String) throws {
-        _ = try binding(screenID: screenID)
+        guard let row = rows[screenID], row.removedSnapshot == nil else {
+            throw CancellationError()
+        }
         activeScreenID = screenID
         activeRowReference = rows[screenID]?.reference
     }
@@ -439,6 +436,7 @@ actor ExperienceInteractivePage {
     func applyLifecycleSnapshot(_ snapshot: ExperienceScreenLifecycleSnapshot, screenID: String) async throws {
         try await gate.withLock { [self] in
             guard let row = await rows[screenID] else { throw ExperienceInteractiveScreenError.screenNotFound(screenID) }
+            guard row.removedSnapshot == nil else { return }
             let mutations = try await row.binding.lifecycleMutations(snapshot, screen: row.screen)
             _ = try await runtime.mutateViewModel(mutations)
             await storeLifecycle(snapshot, screenID: screenID)
@@ -622,11 +620,91 @@ actor ExperienceInteractivePage {
 
     func setLayoutSize(width: Float, height: Float) async throws {
         try await gate.withLock { [self] in
-            try await runtime.setLayoutSize(width: width, height: height)
-            try await updateEnvironmentLocked(reduceMotion: nil, fontScale: nil, safeArea: nil,
-                viewport: ExperienceViewportEnvironment(width: Double(width), height: Double(height)),
-                fold: nil, colorScheme: nil)
+            try await setLayoutSizeLocked(width: width, height: height)
         }
+    }
+
+    private func setLayoutSizeLocked(width: Float, height: Float) async throws {
+        try requireOpen()
+        try await runtime.setLayoutSize(width: width, height: height)
+        layoutBounds.update(size: try await runtime.layoutSize())
+        try await updateEnvironmentLocked(reduceMotion: nil, fontScale: nil, safeArea: nil,
+            viewport: .init(width: Double(width), height: Double(height)), fold: nil, colorScheme: nil)
+        try await videoPlayback?.resizeViewport(bounds: artboardBounds)
+    }
+
+    // Renderer, media and geometry belong to the page, including the interval
+    // after the outgoing row retires and before the incoming row becomes active.
+    func metalDevice(enablesSemantics: Bool) async throws -> ExperienceInteractiveMetalDevice {
+        try await gate.withLock { [self] in
+            try await requireOpen()
+            if enablesSemantics { try await runtime.enableSemantics() }
+            return ExperienceInteractiveMetalDevice(value: try await runtime.metalDevice().value)
+        }
+    }
+
+    func setMediaVisible(_ visible: Bool) async throws {
+        try await gate.withLock { [self] in
+            try await requireOpen()
+            try await videoPlayback?.setSuspended(reason: 1, enabled: !visible)
+        }
+    }
+
+    func resize(pixelWidth: UInt32, pixelHeight: UInt32, layoutScaleFactor: Float) async throws
+        -> ExperienceInteractiveRenderOutcome {
+        try await gate.withLock { [self] in
+            try await resizeLocked(pixelWidth: pixelWidth, pixelHeight: pixelHeight, layoutScaleFactor: layoutScaleFactor)
+        }
+    }
+
+    private func resizeLocked(pixelWidth: UInt32, pixelHeight: UInt32, layoutScaleFactor: Float) async throws
+        -> ExperienceInteractiveRenderOutcome {
+        try requireOpen()
+        for row in rows.values { await row.binding.discardTextFrame() }
+        if pixelWidth > 0, pixelHeight > 0, layoutScaleFactor > 0 {
+            let width = Float(pixelWidth) / layoutScaleFactor
+            let height = Float(pixelHeight) / layoutScaleFactor
+            try await setLayoutSizeLocked(width: width, height: height)
+        } else {
+            try await updateEnvironmentLocked(reduceMotion: nil, fontScale: nil, safeArea: nil,
+                viewport: .init(width: 0, height: 0), fold: nil, colorScheme: nil)
+            try await videoPlayback?.resizeViewport(bounds: .zero)
+        }
+        return ExperienceInteractiveScreen.renderOutcome(try await runtime.resize(pixelWidth: pixelWidth, pixelHeight: pixelHeight))
+    }
+
+    func renderFrame(layoutScaleFactor: Float, drawable: ExperienceInteractiveDrawable?, isOccluded: Bool,
+                     capturesSemantics: Bool, capturesCaptions: Bool,
+                     completion: (@Sendable () -> Void)?) async throws -> ExperienceInteractiveRenderedFrame {
+        let state: NuxieNativeDrawableState = if let drawable {
+            .available(NuxieNativeDrawable(drawable.value))
+        } else { isOccluded ? .occluded : .timeout }
+        return try await gate.withLock { [self] in
+            try await renderFrameLocked(layoutScaleFactor: layoutScaleFactor, state: state, isOccluded: isOccluded,
+                capturesSemantics: capturesSemantics, capturesCaptions: capturesCaptions, completion: completion)
+        }
+    }
+
+    private func renderFrameLocked(layoutScaleFactor: Float, state: NuxieNativeDrawableState, isOccluded: Bool,
+                                   capturesSemantics: Bool, capturesCaptions: Bool,
+                                   completion: (@Sendable () -> Void)?) async throws -> ExperienceInteractiveRenderedFrame {
+        try requireOpen()
+        // No outgoing editor metadata is admitted after its row retires.
+        let row = activeScreenID.flatMap { rows[$0] }
+        let content = if let row, row.removedSnapshot == nil {
+            await row.binding.pagePresentationContent()
+        } else { (text: Optional<ExperienceInteractiveTextFrame>.none, nativeInputs: [String]()) }
+        try await videoPlayback?.setSuspended(reason: 1, enabled: isOccluded)
+        let ready = try await videoPlayback?.isReadyForPresentation() ?? true
+        let frame = try await runtime.renderFrame(layoutScaleFactor: layoutScaleFactor,
+            drawable: ready ? state : .timeout, clearColor: 0, readback: nil,
+            capturesSemantics: capturesSemantics, nativeInputs: content.nativeInputs, completion: completion)
+        let captions: [ExperienceInteractiveVideoCaption]?
+        if capturesCaptions, frame.outcome.disposition == .presented {
+            captions = try await videoPlayback?.captions() ?? []
+        } else { captions = nil }
+        return ExperienceInteractiveRenderedFrame(outcome: ExperienceInteractiveScreen.renderOutcome(frame.outcome),
+            semantics: frame.semantics, text: frame.outcome.disposition == .presented ? content.text : nil, captions: captions)
     }
 
     func close() async throws {

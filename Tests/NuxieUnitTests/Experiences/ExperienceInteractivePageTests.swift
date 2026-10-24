@@ -5,6 +5,43 @@ import XCTest
 @_spi(Testing) @testable import Nuxie
 
 final class ExperienceInteractivePageTests: XCTestCase {
+    #if canImport(UIKit) && canImport(QuartzCore)
+    func testBackRetirementCanResizeBeforeSelectingIncomingRow() async throws {
+        try await withLayer { page, _ in
+            try await page.insert(screenID: "screen_1", at: 0)
+            try await page.insert(screenID: "screen_2", at: 1)
+            _ = try await page.step(elapsedSeconds: 0)
+            try await page.selectActiveRow("screen_2")
+            try await page.setPhases([("screen_2", .hidden), ("screen_1", .active)])
+            let outgoing = try await page.snapshot(screenID: "screen_2")
+            // The Back retirement batch finishes before the active callback.
+            _ = try await page.apply([.retire], source: "screen_2", target: "screen_1",
+                reachable: ["screen_1"], reduceMotion: false)
+            let removed = await page.isRowRemoved(screenID: "screen_2")
+            let active = await page.activeScreenID
+            XCTAssertTrue(removed)
+            XCTAssertEqual(active, "screen_2")
+            await page.runtime.recordRowWrites()
+            let session = page.presentationSession(onSemantics: nil, onTextFrame: nil,
+                onCaptions: nil, onFocus: { _ in }, onStep: { _ in })
+            let result = try await session.perform(.resize(.init(pixelWidth: 640, pixelHeight: 960, layoutScaleFactor: 2)))
+            guard case .renderer(let outcome) = result.value else {
+                XCTFail("Resize must return a renderer outcome")
+                return
+            }
+            XCTAssertEqual(outcome.health, .healthy)
+            XCTAssertEqual(outcome.pixelWidth, 640)
+            XCTAssertEqual(outcome.pixelHeight, 960)
+            try await page.selectActiveRow("screen_1")
+            _ = try await page.step(elapsedSeconds: 0)
+            let writes = await page.runtime.rowWriteLog
+            XCTAssertTrue(outgoing.rowOwnedInstanceIDs.isDisjoint(with: writes))
+            let mounted = await page.mountedScreenIDs
+            XCTAssertEqual(mounted, ["screen_1"])
+        }
+    }
+    #endif
+
     func testConfirmedRowSaveRestoresKeptValuesBeforeFiringTrigger() async throws {
         try await withLayer { page, _ in
             let row = try await page.prepareRow(screenID: "screen_1", products: [])
