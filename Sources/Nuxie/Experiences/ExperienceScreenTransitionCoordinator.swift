@@ -1,6 +1,72 @@
 #if canImport(UIKit)
 import UIKit
 
+/// Owns the timing of native-page state; the coordinator owns the state writes.
+@MainActor
+final class ExperienceNativePageTransition {
+    private enum State { case deciding, ready, starting, started, committing, committed, cancelled }
+    private var state: State
+    private var startTask: Task<Void, Never>?
+    private var finishTask: Task<Void, Never>?
+    @TaskLocal private static var executing: ObjectIdentifier?
+    private let start: () async -> Void
+    private let finish: () async -> Void
+    private let abandon: () async -> Void
+
+    init(interactive: Bool, start: @escaping () async -> Void,
+         finish: @escaping () async -> Void, abandon: @escaping () async -> Void = {}) {
+        state = interactive ? .deciding : .ready
+        self.start = start
+        self.finish = finish
+        self.abandon = abandon
+    }
+
+    func begin() async {
+        if state == .ready {
+            state = .starting
+            startTask = Task { @MainActor in
+                guard !Task.isCancelled else { return }
+                await Self.$executing.withValue(ObjectIdentifier(self)) { await self.start() }
+            }
+        }
+        await startTask?.value
+        if state == .starting { state = .started }
+    }
+
+    func interactionEnded(cancelled: Bool) async {
+        guard state == .deciding else { return }
+        if cancelled { await cancel() }
+        else { state = .ready; await begin() }
+    }
+
+    @discardableResult
+    func commit() async -> Bool {
+        if state == .deciding { state = .ready } // Completed delegate callback is authoritative.
+        await begin()
+        guard state == .started else { return false }
+        state = .committing
+        finishTask = Task { @MainActor in
+            await Self.$executing.withValue(ObjectIdentifier(self)) { await self.finish() }
+        }
+        await finishTask?.value
+        state = .committed
+        return true
+    }
+
+    func cancel() async {
+        if state == .committing {
+            if Self.executing != ObjectIdentifier(self) { await finishTask?.value }
+            return
+        }
+        guard state != .committed, state != .cancelled else { return }
+        let didStart = state == .starting || state == .started
+        state = .cancelled
+        startTask?.cancel()
+        if Self.executing != ObjectIdentifier(self) { await startTask?.value }
+        if didStart { await abandon() }
+    }
+}
+
 @MainActor
 final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentationControllerDelegate, UINavigationControllerDelegate {
     typealias Completion = (
@@ -297,8 +363,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         await entryController.enter(reduceMotion: reduceMotionEnabled)
     }
 
-    private func coverPage(_ controller: ExperienceScreenViewController) async {
-        await controller.coverPage(reduceMotion: reduceMotionEnabled)
+    private func coverPage(_ controller: ExperienceScreenViewController, restoring snapshot: ExperienceScreenLifecycleSnapshot? = nil) async {
+        await controller.coverPage(reduceMotion: reduceMotionEnabled, restoring: snapshot)
     }
 
     private func revealPage(_ controller: ExperienceScreenViewController, starting: Bool = false, announce: Bool = true) async {
@@ -377,6 +443,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     private func performTearDown() async {
         lifecycle = .tearingDown
+        let transitions = Array(platformTransitions.values)
+        platformTransitions.removeAll()
+        for transition in transitions { await transition.cancel() }
         let installationTask = installationTask
         let navigationTask = navigationTask
         installationTask?.cancel()
@@ -760,25 +829,31 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                         onHidden: {}, onActive: {})
                 }
             }, pop: {
-                await self.revealPage(lower, starting: true)
-                while self.presentationLayer !== lower.navigationController, self.hasPresentedLayer {
-                    // Back owns activation after all modal dismissals and the final pop.
-                    guard await self.performAuthoredLayerDismissal(activateRevealedPage: false) else { throw CancellationError() }
-                }
-                guard let navigation = lower.navigationController else { throw CancellationError() }
-                if navigation.topViewController !== lower {
-                    let leaving = self.activeController
-                    await leaving?.performExitHandshake(reduceMotion: reduceMotion, exitReason: .navigation)
-                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                        self.animateNavigationControllerOperation(screenId: screenID, completion: { result, _ in
-                            if result.reachedTarget { continuation.resume() }
-                            else { continuation.resume(throwing: CancellationError()) }
-                        }) { navigation.popToViewController(lower, animated: !reduceMotion) }
+                let transition = self.pageTransition(revealing: lower, covering: nil, interactive: false)
+                await transition.begin()
+                do {
+                    while self.presentationLayer !== lower.navigationController, self.hasPresentedLayer {
+                        // Back owns activation after all modal dismissals and the final pop.
+                        guard await self.performAuthoredLayerDismissal(activateRevealedPage: false) else { throw CancellationError() }
                     }
-                    if let leaving { await self.coverPage(leaving) }
-                    if let leaving { await self.onScreenHidden(leaving.screenId, .navigation(revealingScreenId: screenID)) }
+                    guard let navigation = lower.navigationController else { throw CancellationError() }
+                    if navigation.topViewController !== lower {
+                        let leaving = self.activeController
+                        await leaving?.performExitHandshake(reduceMotion: reduceMotion, exitReason: .navigation)
+                        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                            self.animateNavigationControllerOperation(screenId: screenID, completion: { result, _ in
+                                if result.reachedTarget { continuation.resume() }
+                                else { continuation.resume(throwing: CancellationError()) }
+                            }) { navigation.popToViewController(lower, animated: !reduceMotion) }
+                        }
+                        if let leaving { await self.coverPage(leaving) }
+                        if let leaving { await self.onScreenHidden(leaving.screenId, .navigation(revealingScreenId: screenID)) }
+                    }
+                    await transition.commit()
+                } catch {
+                    await transition.cancel()
+                    throw error
                 }
-                await self.revealPage(lower)
             })
             return true
         }
@@ -799,6 +874,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             target: target, availableSize: available)
         try await target.preparePagePresentationPhase(.entering, reduceMotion: reduceMotion)
         try await source.preparePagePresentationPhase(.exiting, reduceMotion: reduceMotion)
+        let transition = pageTransition(revealing: target, covering: source, interactive: false)
+        await transition.begin()
         let completed: Bool
         do {
             completed = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
@@ -816,33 +893,69 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 } catch { continuation.resume(throwing: error) }
             }
         } catch {
-            await coverPage(target)
-            await revealPage(source, announce: false)
+            await transition.cancel()
             throw error
         }
         guard completed else {
-            await coverPage(target)
-            await revealPage(source, announce: false)
+            await transition.cancel()
             return false
         }
-        await coverPage(source)
         await onScreenHidden(source.screenId, .navigation(revealingScreenId: screenID))
-        await revealPage(target)
+        await transition.commit()
         return true
     }
 
-    private var revealTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var platformTransitions: [ObjectIdentifier: ExperienceNativePageTransition] = [:]
+
+    // Internal so hosted tests can drive the same UIKit decision boundary deterministically.
+    func pageTransition(revealing page: ExperienceScreenViewController,
+                        covering outgoing: ExperienceScreenViewController?, interactive: Bool,
+                        announce: Bool = true) -> ExperienceNativePageTransition {
+        let previous = page.pageLifecycleSnapshot
+        return ExperienceNativePageTransition(interactive: interactive, start: { [weak self] in
+            guard let self, self.lifecycle == .installed else { return }
+            await self.revealPage(page, starting: true)
+        }, finish: { [weak self] in
+            guard let self, self.lifecycle == .installed else { return }
+            if let outgoing { await self.coverPage(outgoing) }
+            await self.revealPage(page, announce: announce)
+        }, abandon: { [weak self] in
+            guard let self, self.lifecycle == .installed else { return }
+            await self.coverPage(page, restoring: previous.phase == .hidden ? previous : nil)
+            if let outgoing { await self.revealPage(outgoing, announce: false) }
+        })
+    }
+
+    private func observe(_ transition: ExperienceNativePageTransition,
+                         coordinator: (any UIViewControllerTransitionCoordinator)?) {
+        Task { @MainActor in await transition.begin() }
+        guard let coordinator else { return }
+        if coordinator.isInteractive {
+            coordinator.notifyWhenInteractionChanges { context in
+                let cancelled = context.isCancelled
+                Task { @MainActor in await transition.interactionEnded(cancelled: cancelled) }
+            }
+        }
+        coordinator.animate(alongsideTransition: nil) { context in
+            let cancelled = context.isCancelled
+            Task { @MainActor in
+                if cancelled { await transition.cancel() }
+                // Successful completion is committed by didShow/didDismiss, after stack bookkeeping.
+            }
+        }
+    }
 
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController,
                               animated: Bool) {
-        if navigationTask == nil, (viewController as? ExperienceScreenViewController)?.isPageController == true {
-            nativePageTransitionInProgress = true
-            if let page = viewController as? ExperienceScreenViewController, page.lifecyclePhase == .hidden {
-                revealTasks[ObjectIdentifier(page)] = Task { @MainActor in
-                    await self.revealPage(page, starting: true)
-                }
-            }
-        }
+        guard navigationTask == nil,
+              let page = viewController as? ExperienceScreenViewController, page.isPageController else { return }
+        nativePageTransitionInProgress = true
+        guard page.lifecyclePhase == .hidden else { return }
+        let platform = navigationController.transitionCoordinator
+        let outgoing = shownPages[ObjectIdentifier(navigationController)]?.last
+        let transition = pageTransition(revealing: page, covering: outgoing, interactive: platform?.isInteractive == true)
+        platformTransitions[ObjectIdentifier(navigationController)] = transition
+        observe(transition, coordinator: platform)
     }
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController,
@@ -857,9 +970,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         let drain = navigationTask
         guard let page = viewController as? ExperienceScreenViewController, page.isPageController else { return }
-        let revealTask = revealTasks.removeValue(forKey: ObjectIdentifier(page))
+        let transition = platformTransitions.removeValue(forKey: key)
         Task { @MainActor in
-            await revealTask?.value
+            if removed.isEmpty { await transition?.cancel() }
             if let drain { await drain.value }
             else if self.lifecycle == .installed, !removed.isEmpty {
                 for outgoing in removed {
@@ -867,7 +980,11 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     await self.coverPage(outgoing)
                     await self.onScreenHidden(outgoing.screenId, .navigation(revealingScreenId: page.screenId))
                 }
-                await self.revealPage(page)
+                if let transition { await transition.commit() }
+                else {
+                    let fallback = self.pageTransition(revealing: page, covering: nil, interactive: false)
+                    await fallback.commit()
+                }
             }
             for outgoing in removed { await outgoing.shutdownInteractiveScreen() }
             self.startNavigationDrainIfNeeded()
@@ -1405,8 +1522,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             closingLayer = nil
             return false
         }
-        if activateRevealedPage, let revealed = pageBelowPresentedLayer {
-            await revealPage(revealed, starting: true)
+        if activateRevealedPage, let revealed = pageBelowPresentedLayer, revealed.isPageController {
+            let transition = pageTransition(revealing: revealed, covering: controller, interactive: false)
+            platformTransitions[ObjectIdentifier(layer)] = transition
+            await transition.begin()
         }
         layer.presentationController?.delegate = nil
         await withCheckedContinuation { continuation in
@@ -1426,10 +1545,22 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     nonisolated func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
         MainActor.assumeIsolated {
-            guard let page = pageBelowPresentedLayer, page.isPageController else { return }
-            revealTasks[ObjectIdentifier(page)] = Task { @MainActor in
-                await self.revealPage(page, starting: true)
-            }
+            guard let page = pageBelowPresentedLayer, page.isPageController,
+                  let outgoing = activeController else { return }
+            let layer = presentationController.presentedViewController
+            let platform = layer.transitionCoordinator
+            // Without a coordinator, wait for didDismiss rather than speculate.
+            let transition = pageTransition(revealing: page, covering: outgoing,
+                interactive: platform?.isInteractive ?? true)
+            platformTransitions[ObjectIdentifier(layer)] = transition
+            observe(transition, coordinator: platform)
+        }
+    }
+
+    nonisolated func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+        MainActor.assumeIsolated {
+            let transition = platformTransitions.removeValue(forKey: ObjectIdentifier(presentationController.presentedViewController))
+            Task { @MainActor in await transition?.cancel() }
         }
     }
 
@@ -1469,10 +1600,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         if activateRevealedPage, let revealingController {
             if revealingController.isPageController {
-                await revealTasks.removeValue(forKey: ObjectIdentifier(revealingController))?.value
-                // Also supports completed-dismiss callbacks without a will-dismiss notification.
-                await revealPage(revealingController, starting: true)
-                await revealPage(revealingController)
+                let transition = platformTransitions.removeValue(forKey: ObjectIdentifier(layer))
+                    ?? pageTransition(revealing: revealingController, covering: nil, interactive: false)
+                await transition.commit()
             }
             else {
                 revealingController.setCoveredByLayer(false)
@@ -1613,8 +1743,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         // commits, so the transaction alone may report navigation while the
         // transition is still running, and an immediate back is then dropped.
         // Finish on the transition coordinator whenever UIKit provides one.
+        var cancelled = false
         let finish = ExperienceNavigationCompletion { [weak self] in
-            self?.completeNavigation(to: screenId, completion: completion)
+            if cancelled { completion(.superseded, screenId) }
+            else { self?.completeNavigation(to: screenId, completion: completion) }
         }
         CATransaction.begin()
         CATransaction.setCompletionBlock {
@@ -1622,7 +1754,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
         operation()
         if let transition = navigationController?.transitionCoordinator {
-            finish.awaitsTransition = transition.animate(alongsideTransition: nil) { _ in finish.run() }
+            finish.awaitsTransition = transition.animate(alongsideTransition: nil) { context in
+                cancelled = context.isCancelled
+                finish.run()
+            }
         }
         CATransaction.commit()
     }
