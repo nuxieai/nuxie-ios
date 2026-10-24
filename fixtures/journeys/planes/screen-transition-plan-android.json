@@ -12,6 +12,7 @@
       "completeEventName": "in_done"
     },
     "reverse": {
+      "durationMs": 400,
       "source": {
         "completeEventName": "back_out"
       },

@@ -79,6 +79,7 @@ final class ExperiencePageHostContractTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ExperiencePageHostContract.Transition.self,
             from: JSONSerialization.data(withJSONObject: transition))
         XCTAssertEqual(decoded.durationMs, 450)
+        XCTAssertEqual(decoded.reverse?.durationMs, 900)
         XCTAssertEqual(decoded.reverse?.destination.completeEventName, "nx_enter_done:transition.native-contract.reverse")
         transition["destination"] = ["completeEventName": "wrong"]
         XCTAssertThrowsError(try validate(transition))
@@ -88,6 +89,25 @@ final class ExperiencePageHostContractTests: XCTestCase {
         var reverse = try XCTUnwrap(transition["reverse"] as? [String: Any]); reverse["incomingOnTop"] = false
         transition["reverse"] = reverse
         XCTAssertThrowsError(try validate(transition))
+    }
+
+    func testReverseRequiresBoundedIntegerDuration() throws {
+        let root = experiencePreparationRepositoryRoot()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/layer-host-interim/format-cases.json"))
+        let vectors = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        for item in try XCTUnwrap(vectors["reverseDurations"] as? [[String: Any]]) {
+            var transition = validTransition
+            var reverse = try XCTUnwrap(transition["reverse"] as? [String: Any])
+            if item["omit"] as? Bool == true { reverse.removeValue(forKey: "durationMs") }
+            else { reverse["durationMs"] = item["value"] }
+            transition["reverse"] = reverse
+            if item["accept"] as? Bool == true { XCTAssertNoThrow(try validate(transition)) }
+            else { XCTAssertThrowsError(try validate(transition)) }
+            if item["omit"] as? Bool == true {
+                XCTAssertThrowsError(try JSONDecoder().decode(ExperiencePageHostContract.Transition.self,
+                    from: JSONSerialization.data(withJSONObject: transition)))
+            }
+        }
     }
 
     func testInterimHostMetadataIsRefused() throws {
@@ -129,7 +149,7 @@ final class ExperiencePageHostContractTests: XCTestCase {
         ["id": "transition.native-contract", "kind": "page", "sourceScreenId": "screen_1", "destinationScreenId": "screen_2", "durationMs": 450,
          "source": ["completeEventName": "nx_exit_done:transition.native-contract"],
          "destination": ["completeEventName": "nx_enter_done:transition.native-contract"],
-         "reverse": ["source": ["completeEventName": "nx_exit_done:transition.native-contract.reverse"],
+         "reverse": ["durationMs": 900, "source": ["completeEventName": "nx_exit_done:transition.native-contract.reverse"],
                      "destination": ["completeEventName": "nx_enter_done:transition.native-contract.reverse"]]]
     }
 

@@ -325,11 +325,16 @@ final class ExperiencePageStepTests: XCTestCase {
         let plan = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: pair.id,
             sourceScreenId: "B", destinationScreenId: "A", declarations: [pair]))
         XCTAssertEqual(plan.transitionId, "route.reverse")
+        XCTAssertEqual(plan.watchdogMilliseconds, 1_150)
         XCTAssertEqual(plan.outgoingCompletionEventName, "nx_exit_done:route.reverse")
         XCTAssertEqual(plan.incomingCompletionEventName, "nx_enter_done:route.reverse")
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade, .none] {
             let probe = PageStepProbe()
             try await probe.perform(style: style, plan: plan, isBack: true)
+            XCTAssertTrue(probe.order.contains { $0.hasPrefix("wait:") && $0.hasSuffix(":1150") })
+            let reduced = PageStepProbe()
+            try await reduced.perform(style: style, plan: plan, reduced: true, isBack: true)
+            XCTAssertFalse(reduced.order.contains { $0.hasPrefix("wait:") })
             let changes = probe.batches.flatMap { $0 }
             XCTAssertTrue(changes.contains(.begin("route.reverse")))
             XCTAssertTrue(changes.contains(.end("route.reverse")))
@@ -340,6 +345,26 @@ final class ExperiencePageStepTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testForwardAndSkippingDefaultPairUseThePlayedDirectionsTotal() async throws {
+        let pair = declaration(id: "default", from: "C", to: "A", marked: true)
+        var history = ExperiencePageHistory(root: "A")
+        history.visit("B", transition: .none)
+        history.visit("C", transition: .none)
+        let selected = history.backTransition(steps: 2, target: "A", declarations: [pair])
+        let forward = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(
+            transitionId: try XCTUnwrap(selected.transitionId), sourceScreenId: "C", destinationScreenId: "A", declarations: [pair]))
+        XCTAssertEqual(forward.watchdogMilliseconds, 700)
+        let probe = PageStepProbe()
+        try await probe.perform(style: .magicMove, plan: forward, isBack: true)
+        XCTAssertTrue(probe.order.contains("wait:2:700"))
+        let reverse = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: pair.id,
+            sourceScreenId: "A", destinationScreenId: "C", declarations: [pair]))
+        XCTAssertEqual(reverse.watchdogMilliseconds, 1_150)
+        let normal = PageStepProbe()
+        try await normal.perform(style: .magicMove, plan: forward)
+        XCTAssertTrue(normal.order.contains("wait:2:700"))
     }
 
     func testPageBackIgnoresAuthoredTransitionWithDiagnosticAndReversesHistory() async throws {
@@ -391,7 +416,7 @@ final class ExperiencePageStepTests: XCTestCase {
     private func declaration(id: String, from: String, to: String, marked: Bool) -> NativeExperienceTransition {
         .init(id: id, kind: .page, isDefaultPair: marked, sourceScreenId: from, destinationScreenId: to, durationMs: 450,
             incomingOnTop: true, source: .init(completeEventName: "nx_exit_done:\(id)"), destination: .init(completeEventName: "nx_enter_done:\(id)"),
-            reverse: .init(durationMs: nil, incomingOnTop: nil, source: .init(completeEventName: "nx_exit_done:\(id).reverse"),
+            reverse: .init(durationMs: 900, incomingOnTop: nil, source: .init(completeEventName: "nx_exit_done:\(id).reverse"),
                 destination: .init(completeEventName: "nx_enter_done:\(id).reverse")))
     }
 }

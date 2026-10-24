@@ -291,5 +291,17 @@
       },
       "accept": false
     }
+  ],
+  "reverseDurations": [
+    { "omit": true, "accept": false },
+    { "value": 0, "accept": true },
+    { "value": 900, "accept": true },
+    { "value": 60000, "accept": true },
+    { "value": -1, "accept": false },
+    { "value": 60001, "accept": false },
+    { "value": 1.5, "accept": false },
+    { "value": true, "accept": false },
+    { "value": "900", "accept": false },
+    { "value": null, "accept": false }
   ]
 }

@@ -20,6 +20,7 @@ enum ExperiencePageHostContract {
     struct Transition: Decodable {
         struct Endpoint: Decodable { let completeEventName: String }
         struct Reverse: Decodable {
+            let durationMs: Int
             let source: Endpoint
             let destination: Endpoint
         }

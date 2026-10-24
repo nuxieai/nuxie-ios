@@ -578,7 +578,7 @@ func interimLayerTransition() -> NativeExperienceTransition {
         sourceScreenId: "screen_1", destinationScreenId: "screen_2", durationMs: 450,
         incomingOnTop: true, source: .init(completeEventName: "nx_exit_done:transition.native-contract"),
         destination: .init(completeEventName: "nx_enter_done:transition.native-contract"),
-        reverse: .init(durationMs: nil, incomingOnTop: nil,
+        reverse: .init(durationMs: 900, incomingOnTop: nil,
             source: .init(completeEventName: "nx_exit_done:transition.native-contract.reverse"),
             destination: .init(completeEventName: "nx_enter_done:transition.native-contract.reverse")))
 }
