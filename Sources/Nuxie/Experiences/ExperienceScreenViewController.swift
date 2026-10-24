@@ -464,7 +464,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     func setCoveredByLayer(_ covered: Bool) {
         coveredByLayer = covered
-        interactiveScreen?.setCoveredByLayer(covered)
+        if interactivePage == nil { interactiveScreen?.setCoveredByLayer(covered) }
         view.isUserInteractionEnabled = !covered && !pageStepInProgress
         textInputOverlayBridge.setHidden(contentHidden || covered)
         if covered { view.endEditing(true) }
@@ -663,7 +663,7 @@ final class ExperienceScreenViewController: UIViewController {
             acquireDrawable: acquireDrawable,
             onSessionResult: { [weak self] in
                 guard let self else { return }
-                if let bounds = self.interactiveScreen?.artboardBounds {
+                if let bounds = self.interactivePage?.artboardBounds ?? self.interactiveScreen?.artboardBounds {
                     self.textInputOverlayBridge.updateArtboardBounds(bounds)
                 }
                 self.publishContentHeight()
@@ -716,6 +716,7 @@ final class ExperienceScreenViewController: UIViewController {
             interactiveScreen = nil
             lifecycleIncludesExitReason = false
             await loop.shutdown()
+            if loop.needsSessionCleanup { presentationLoop = loop }
             if !loop.hasTakenSessionOwnership {
                 // Preparation opened the native resource before the loop took ownership.
                 if let interactivePage { try? await interactivePage.close() }
@@ -900,6 +901,7 @@ final class ExperienceScreenViewController: UIViewController {
             self.videoCaptionOverlay.update([])
             self.videoCaptionOverlay.isHidden = true
             await loop?.shutdown()
+            if let loop, loop.needsSessionCleanup { self.presentationLoop = loop }
             if loop == nil { try? await layer?.close() }
             self.isShuttingDown = false
         }
@@ -1017,6 +1019,7 @@ final class ExperienceScreenViewController: UIViewController {
         let id = screenId
         if phase == .entering, lifecycleState.phase == .entering { return }
         try await pageWork {
+            guard !(await page.isRowRemoved(screenID: id)) else { throw CancellationError() }
             try await page.setPhases([(id, phase)], reduceMotion: reduceMotion)
             return nil
         }
@@ -1301,7 +1304,7 @@ final class ExperienceScreenViewController: UIViewController {
         guard !pageStepInProgress, !isShuttingDown, !contentHidden, controllerIsVisible,
               let interactiveScreen, let presentationLoop,
               let transform = ExperienceLayoutTransform(
-                artboardBounds: interactiveScreen.artboardBounds,
+                artboardBounds: interactivePage?.artboardBounds ?? interactiveScreen.artboardBounds,
                 viewportBounds: surfaceView.bounds) else { return }
         onSemanticCapture?(capture)
         let nativeControls = textInputOverlayBridge.applySemantics(capture)
@@ -1325,6 +1328,7 @@ final class ExperienceScreenViewController: UIViewController {
         }, submit: { [weak self] captureID, nodeID, action in
             guard let self else { return false }
             return presentationLoop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                guard !(await interactiveScreen.isRemovedPageRow) else { throw CancellationError() }
                 try await interactiveScreen.queueSemanticAction(captureID: captureID, nodeID: nodeID, action: action)
                 return .work(requestsFrame: true)
             }, isEligible: { [weak self] in self?.semanticInputIsEligible == true })
@@ -1354,6 +1358,7 @@ final class ExperienceScreenViewController: UIViewController {
                   let loop = self.presentationLoop else { return }
             let originatingRun = self.delegate?.screenEmissionRun(for: self)
             loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
+                guard !(await interactiveScreen.isRemovedPageRow) else { throw CancellationError() }
                 let result = try await interactiveScreen.commitTextInput(inputID: input.inputId, value: event.text, ownerInstanceID: event.ownerInstanceID)
                 return .work(requestsFrame: result != nil) { [weak self = self] in
                     guard let self, self.semanticInputIsEligible else { return }
@@ -1477,7 +1482,7 @@ final class ExperienceScreenViewController: UIViewController {
             preservingNativeFields: preservingNativeFields,
             renderPlan: artifact.renderPlan,
             surfaceView: surfaceView,
-            artboardBounds: interactiveScreen.artboardBounds,
+            artboardBounds: interactivePage?.artboardBounds ?? interactiveScreen.artboardBounds,
             semanticTextWriter: semanticWriter,
             semanticContentOffsetWriter: { [weak self] captureID, target, offset, completion in
                 loop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {
@@ -1485,6 +1490,7 @@ final class ExperienceScreenViewController: UIViewController {
                         return .work(requestsFrame: false) { completion(.rejected) }
                     }
                     do {
+                        guard !(await interactiveScreen.isRemovedPageRow) else { throw CancellationError() }
                         try await interactiveScreen.setSemanticInputContentOffset(captureID: captureID,
                             inputID: target.inputID, nodeID: nodeID, offset: offset)
                         return .work(requestsFrame: true) { completion(.accepted) }
