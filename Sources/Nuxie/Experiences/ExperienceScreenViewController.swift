@@ -322,10 +322,10 @@ final class ExperienceScreenViewController: UIViewController {
         // it was out of the window (beneath a modal, behind another screen) is written
         // before it shows.
         syncColorScheme()
-        if isPageController {
-            controllerIsVisible = true
-            updatePresentationVisibility()
-        }
+        // Standalone screens can finish mounting and activate before didAppear.
+        // Their focus admission needs the same window visibility as page hosts.
+        controllerIsVisible = true
+        updatePresentationVisibility()
     }
 
     override func viewDidAppear(_ animated: Bool) {

@@ -7,12 +7,12 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
-    func testFreezeEndsSubmittedTouchesAndKeysBeforePageWork() async throws {
+    func testFreezeEndsSubmittedTouchesAndRetiresKeysSilentlyBeforePageWork() async throws {
         try await assertInputTermination(cover: false)
     }
 
     @MainActor
-    func testCoverEndsSubmittedTouchesAndReleasesHeldKeys() async throws {
+    func testCoverEndsSubmittedTouchesAndRetiresKeysSilently() async throws {
         try await assertInputTermination(cover: true)
     }
 
@@ -48,12 +48,13 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         loop.setInputEnabled(false)
         if cover { loop.setTimelineActive(false); loop.setPresentationVisible(false) }
         touch(.up)
+        XCTAssertFalse(loop.enqueueFocus(.key(code: 65, modifiers: 0, pressed: false, repeated: false)),
+            "A release after withdrawal must not reach the player")
         try await loop.advanceZeroDelta(after: .init {
             let steps = await recorder.steps()
             XCTAssertEqual(steps.flatMap(\.pointers).map(\.kind), [.down, .exit])
             XCTAssertEqual(steps.flatMap(\.focusInputs), [
-                .key(code: 65, modifiers: 0, pressed: true, repeated: false),
-                .key(code: 65, modifiers: 0, pressed: false, repeated: false)
+                .key(code: 65, modifiers: 0, pressed: true, repeated: false)
             ])
             return .work(requestsFrame: false)
         })
@@ -65,6 +66,9 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         try await loop.advanceZeroDelta()
         let beforeFreshTouch = await recorder.steps()
         XCTAssertEqual(beforeFreshTouch.flatMap(\.pointers).map(\.kind), [.down, .exit])
+        XCTAssertEqual(beforeFreshTouch.flatMap(\.focusInputs), [
+            .key(code: 65, modifiers: 0, pressed: true, repeated: false)
+        ], "Neither withdrawal nor the rejected release may replay a key-up after reveal")
         touch(.down)
         touch(.up)
         let nextDeadline = Date().addingTimeInterval(2)
@@ -1291,13 +1295,20 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         var errors: [Error] = []
         let loop = makeLoop(recorder: recorder, view: view, onError: { errors.append($0) })
         try await loop.start()
-        XCTAssertTrue(loop.enqueueFocus(.key(code: 65, modifiers: 0, pressed: true, repeated: false)))
+        let source = NSObject()
+        loop.runtimeSurfaceViewDidReceivePointerEvents([
+            .init(source: .init(source), kind: .down, location: CGPoint(x: 20, y: 20))
+        ])
         try await loop.advanceZeroDelta()
+        let submitted = await recorder.steps().flatMap(\.pointers)
+        XCTAssertEqual(submitted.map(\.kind), [.down])
         await recorder.failTerminalInputStep()
         await loop.shutdown()
         await loop.shutdown()
         let steps = await recorder.steps()
-        XCTAssertTrue(steps.last?.focusInputs.contains(.key(code: 65, modifiers: 0, pressed: false, repeated: false)) == true)
+        XCTAssertEqual(steps.last?.pointers.map(\.kind), [.exit])
+        XCTAssertEqual(steps.last?.pointers.first?.pointerID, submitted.first?.pointerID)
+        XCTAssertTrue(steps.flatMap(\.focusInputs).isEmpty)
         let names = await recorder.operationNames()
         XCTAssertEqual(names.suffix(2), ["step", "close"])
         XCTAssertEqual(names.filter { $0 == "close" }.count, 1)
@@ -1759,10 +1770,9 @@ private actor PresentationSessionRecorder {
         case .step(let step):
             names.append("step")
             recordedSteps.append(step)
-            if shouldFailTerminalInput, step.focusInputs.contains(where: {
-                if case .key(_, _, let pressed, _) = $0 { return !pressed }
-                return false
-            }) { throw PresentationSessionShutdownFailure.terminalInput }
+            if shouldFailTerminalInput, step.pointers.contains(where: { $0.kind == .exit }) {
+                throw PresentationSessionShutdownFailure.terminalInput
+            }
             if shouldHoldStep {
                 shouldHoldStep = false
                 await withCheckedContinuation { stepContinuation = $0 }

@@ -620,10 +620,9 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var pendingFocus = ExperienceFocusInputQueue()
     private var inputEnabled = true
 
-    // Track submitted input, including the operation currently in flight. Queued
-    // downs that never reached the player need no synthetic terminal event.
+    // Track submitted touches, including the operation currently in flight.
+    // Queued downs that never reached the player need no synthetic exit.
     private var submittedPointers: [Int32: ExperienceInteractivePointerEvent] = [:]
-    private var submittedKeys: [UInt16: UInt8] = [:]
     private var pendingInputEnd: ExperienceRuntimePresentationStep?
 
     func endActiveInput() {
@@ -631,16 +630,14 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             ExperienceInteractivePointerEvent(kind: .exit, x: $0.x, y: $0.y,
                 pointerID: $0.pointerID, timestamp: $0.timestamp)
         }
-        let releases: [NuxieNativeFocusInput] = submittedKeys.keys.sorted().map {
-            .key(code: $0, modifiers: submittedKeys[$0]!, pressed: false, repeated: false)
-        }
-        if !exits.isEmpty || !releases.isEmpty {
+        // Withdrawing keyboard ownership is silent. A synthetic key-up would
+        // run authored handlers after editing, hiding, or discarding the press.
+        if !exits.isEmpty {
             pendingInputEnd = .init(elapsedSeconds: 0,
                 pointers: (pendingInputEnd?.pointers ?? []) + exits,
-                focusInputs: (pendingInputEnd?.focusInputs ?? []) + releases, requestsRender: false)
+                focusInputs: [], requestsRender: false)
         }
         submittedPointers.removeAll()
-        submittedKeys.removeAll()
         pendingPointers.removeAll()
         pendingFocus.removeAll()
         pointerInput.reset()
@@ -654,10 +651,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             case .down, .move: submittedPointers[pointer.pointerID] = pointer
             case .up, .exit: submittedPointers.removeValue(forKey: pointer.pointerID)
             }
-        }
-        for case let .key(code, modifiers, pressed, _) in step.focusInputs {
-            if pressed { submittedKeys[code] = modifiers }
-            else { submittedKeys.removeValue(forKey: code) }
         }
     }
 
