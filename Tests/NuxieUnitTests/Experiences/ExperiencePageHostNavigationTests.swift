@@ -649,6 +649,34 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         XCTAssertEqual(controller.lifecyclePhase, .active, file: file, line: line)
     }
 
+    func testDuplicateScreenPagesReceiveEnvironmentAndShutdownExactlyOnce() async throws {
+        try await withCoordinator { coordinator, base, _, _ in
+            try await navigate(coordinator, to: "screen_1", transition: ["type": "push"])
+            let pushed = try XCTUnwrap(base.navigationController?.topViewController as? ExperienceScreenViewController)
+            XCTAssertFalse(pushed === base)
+            XCTAssertEqual(base.navigationController?.viewControllers.count, 2)
+            let basePage = try XCTUnwrap(base.interactivePage)
+            let pushedPage = try XCTUnwrap(pushed.interactivePage)
+            for value in [true, false] {
+                await coordinator.updateReduceMotion(value)
+                let baseState = await basePage.lifecycle(screenID: "screen_1")
+                let pushedState = await pushedPage.lifecycle(screenID: "screen_1")
+                XCTAssertEqual(baseState?.reduceMotion, value)
+                XCTAssertEqual(pushedState?.reduceMotion, value)
+            }
+            XCTAssertEqual(base.shutdownInvocationCount, 0)
+            XCTAssertEqual(pushed.shutdownInvocationCount, 0)
+            await coordinator.tearDown()
+            XCTAssertEqual(base.shutdownInvocationCount, 1)
+            XCTAssertEqual(pushed.shutdownInvocationCount, 1)
+            XCTAssertNil(base.interactivePage)
+            XCTAssertNil(pushed.interactivePage)
+            await coordinator.tearDown()
+            XCTAssertEqual(base.shutdownInvocationCount, 1)
+            XCTAssertEqual(pushed.shutdownInvocationCount, 1)
+        }
+    }
+
     func testPushingSameScreenThenPoppingKeepsScreenTargetedCommandsOnRetainedPage() async throws {
         try await withCoordinator { coordinator, base, _, _ in
             try await navigate(coordinator, to: "screen_1", transition: ["type": "push"])
