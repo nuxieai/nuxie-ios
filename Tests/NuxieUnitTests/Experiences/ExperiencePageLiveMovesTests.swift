@@ -35,6 +35,71 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
         }
     }
 
+    func testRemovedRowIsFrozenAndRevisitSeedsANewAppendedInstance() async throws {
+        try await withLiveMovePage { page in
+            try await move(page, "A", "B", "t1")
+            let binding = try await page.binding(screenID: "B")
+            let before = try await page.snapshot(screenID: "B")
+            let old = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: before.rootInstanceID))
+            _ = try await page.runtime.mutateViewModel([.setNumber(instance: old, path: "offset", value: 42)])
+            try await move(page, "B", "A", "back", reachable: ["A"])
+            let frozen = try await page.snapshot(screenID: "B")
+            await page.runtime.recordRowWrites()
+            try await page.updateEnvironment(reduceMotion: true, fontScale: 1.5)
+            // A real late continuation must drain the page without restoring or firing
+            // even an invalid trigger on the removed binding.
+            let late = try await binding.confirmResponseSave(trigger: "must-not-fire", kept: [.init(path: "offset", kind: NuxieNativeViewModelPropertyKind.number.rawValue, value: .number(999))])
+            XCTAssertNotNil(late.pageStep)
+            let stillFrozen = try await page.snapshot(screenID: "B")
+            XCTAssertEqual(stillFrozen, frozen)
+            try await move(page, "A", "B", "t1")
+            let revisited = try await page.snapshot(screenID: "B")
+            XCTAssertNotEqual(revisited.rootInstanceID, before.rootInstanceID)
+            XCTAssertEqual(revisited.values.first { $0.ownerInstanceID == revisited.rootInstanceID && $0.name == "offset" }?.value, .number(42))
+            await assertRows(page, ["A", "B"], collapsed: ["A"])
+            // The old binding must stay frozen even after a new B exists.
+            _ = try await binding.confirmResponseSave(trigger: "must-not-fire", kept: [.init(path: "offset", kind: NuxieNativeViewModelPropertyKind.number.rawValue, value: .number(999))])
+            try await page.close()
+            let writes = await page.runtime.rowWriteLog
+            XCTAssertTrue(Set(writes).isDisjoint(with: frozen.rowOwnedInstanceIDs),
+                "No value, lifecycle, environment, save, seed or teardown write may target the removed graph")
+        }
+    }
+
+    func testLateRemovedRowJournalUsesFrozenSourceOnceEvenAfterRevisit() async throws {
+        try await withLiveMovePage { page in
+            try await move(page, "A", "B", "t1")
+            let before = try await page.snapshot(screenID: "B")
+            let old = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: before.rootInstanceID))
+            _ = try await page.runtime.mutateViewModel([.setNumber(instance: old, path: "offset", value: 42)])
+            try await move(page, "B", "A", "back", reachable: ["A"])
+            let frozen = try await page.snapshot(screenID: "B")
+            try await move(page, "A", "B", "t1")
+            let fresh = try await page.snapshot(screenID: "B")
+            _ = try await page.runtime.mutateViewModel([.setNumber(instance: try XCTUnwrap(NuxieNativeViewModelReference(rawValue: fresh.rootInstanceID)), path: "offset", value: 99)])
+            // Replay a committed journal whose source was removed before delivery.
+            let event = NuxieNativeEvent(localIndex: 0, coreType: 128, name: "nx_enter_done:late",
+                url: "", target: "", delay: 0, properties: [], sourceViewModelInstanceID: old.rawValue)
+            let native = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [], stateChanges: [],
+                events: [event], hostCommands: [], viewModelChanges: [])
+            let live = try await page.runtime.snapshot()
+            let delivered = try await page.projectCapturedStep(native, snapshot: live)
+            let events = delivered.rows["B"]?.effects.compactMap { effect -> ExperienceInteractiveReportedEvent? in
+                if case .reportedEvent(let event) = effect.kind { return event }
+                return nil
+            } ?? []
+            XCTAssertEqual(events.count, 1)
+            let source = try XCTUnwrap(events.first?.resolvedSource)
+            XCTAssertEqual(source.snapshot.rootInstanceID, frozen.rootInstanceID)
+            XCTAssertEqual(source.snapshot.values.first { $0.ownerInstanceID == frozen.rootInstanceID && $0.name == "offset" }?.value, .number(42))
+            let next = try await page.step(elapsedSeconds: 0)
+            XCTAssertFalse(next.rows.values.flatMap(\.effects).contains {
+                if case .reportedEvent(let event) = $0.kind { return event.name == "nx_enter_done:late" }
+                return false
+            })
+        }
+    }
+
     func testNativeListRemovalAfterLandingAllowsTheNextOrdinaryStep() async throws {
         try await withLiveMovePage { page in
             try await move(page, "A", "B", "t1")

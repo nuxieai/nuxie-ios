@@ -65,7 +65,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     func testCachedSnapshotInitializesNewRowsWithoutOverwritingRevisitedValues() async throws {
-        try await withCoordinator(expectingNativeParentPanic: "Rust panic contained during atomic player step") { coordinator, controller, _, _ in
+        try await withCoordinator { coordinator, controller, _, _ in
             let layer = try XCTUnwrap(controller.interactivePage)
             XCTAssertTrue(coordinator.applySnapshot(.init(values: [
                 .init(viewModelName: "Screen0", instanceId: "row-a", path: "offset", value: AnyCodable(7)),
@@ -81,10 +81,18 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             try await back(coordinator, to: "A")
             let returnedA = try await layer.snapshot(screenID: "A")
             XCTAssertEqual(rootValue("offset", in: returnedA), .number(21))
+            await layer.runtime.recordRowWrites()
+            XCTAssertTrue(coordinator.applyValue(path: .init(viewModelName: "Screen1", path: "offset"),
+                value: 123, screenId: "B", instanceId: "row-b"))
+            XCTAssertTrue(coordinator.applySnapshot(.init(values: [
+                .init(viewModelName: "Screen1", instanceId: "row-b", path: "offset", value: AnyCodable(999))
+            ]), screenId: "B"))
             try await navigate(coordinator, to: "B")
             let returnedB = try await layer.snapshot(screenID: "B")
-            XCTAssertEqual(returnedB.rootInstanceID, firstB.rootInstanceID)
+            XCTAssertNotEqual(returnedB.rootInstanceID, firstB.rootInstanceID)
             XCTAssertEqual(rootValue("offset", in: returnedB), .number(42))
+            let writes = await layer.runtime.rowWriteLog
+            XCTAssertFalse(writes.contains(firstB.rootInstanceID), "Queued values and cached snapshots must not write to removed B")
             XCTAssertTrue(coordinator.applySnapshot(.init(values: [
                 .init(viewModelName: "Screen1", instanceId: "row-b", path: "offset", value: AnyCodable(99))
             ]), screenId: "B"))
@@ -111,7 +119,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             let nextA = try await layer.snapshot(screenID: "A")
             let nextB = try await layer.snapshot(screenID: "B")
             XCTAssertEqual(rootValue("offset", in: nextA), .number(84))
-            XCTAssertEqual(rootValue("offset", in: nextB), .number(84))
+            XCTAssertEqual(rootValue("offset", in: nextB), .number(42), "R6b: broadcasts do not change a removed row's frozen values")
         }
     }
 
@@ -147,7 +155,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     private func checkRowInitiatedStep(removingRequester: Bool) async throws {
-        try await withCoordinator(expectingNativeParentPanic: removingRequester ? "nux_capi.runtime_error" : nil) { _, controller, probe, _ in
+        try await withCoordinator { _, controller, probe, _ in
             let layer = try XCTUnwrap(controller.interactivePage)
             try await controller.preparePageRow(screenID: "B", products: [])
             let requester = try await layer.binding(screenID: "A")
@@ -743,7 +751,6 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     }
 
     private func withCoordinator(payload suppliedPayload: AuthenticatedRuntimePayload? = nil,
-        expectingNativeParentPanic: String? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil,
         onActive: (@MainActor (String) async -> Void)? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
@@ -770,13 +777,6 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         host.modalPresentationStyle = .fullScreen
         await withCheckedContinuation { continuation in presenter.present(host, animated: false) { continuation.resume() } }
         let probe = LayerHostProbe()
-        var nativeParentFailures: [Error] = []
-        var bodyStarted = false
-        func isKnownNativeFailure(_ error: Error) -> Bool {
-            guard case NuxieNativeRuntimeError.callFailed(let diagnostic) = error,
-                  diagnostic.status == .runtimeError, diagnostic.code == "nux_capi.runtime_error" else { return false }
-            return diagnostic.message == expectingNativeParentPanic
-        }
         let coordinator = ExperienceScreenTransitionCoordinator(experience: experience, artifact: .init(acquired: acquired),
             hostViewController: host, screenDelegate: probe,
             onPresentedScreenDismissed: { _, _ in },
@@ -786,39 +786,19 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 await onActive?(id)
             }, onProductsResolved: { probe.checkoutProducts.append($0) },
             onProductsUnavailable: { _ in XCTFail("Unexpected product resolution failure") },
-            onRuntimeFailure: { id, error in
-                if expectingNativeParentPanic != nil, bodyStarted, isKnownNativeFailure(error) {
-                    nativeParentFailures.append(error)
-                } else { XCTFail("\(id): \(error)") }
-            })
+            onRuntimeFailure: { id, error in XCTFail("\(id): \(error)") })
         do {
             try await coordinator.install()
             coordinator.setContentHidden(false)
             _ = await coordinator.activateInitialScreen()
             let controller = try XCTUnwrap((host.children.first as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
-            bodyStarted = true
-            do { try await body(coordinator, controller, probe, preparation) }
-            catch {
-                // Stop at a poisoned player's first failure, without asserting later
-                // navigation/value results that this runtime can no longer produce.
-                guard expectingNativeParentPanic != nil,
-                      isKnownNativeFailure(error) ||
-                        (error is NavigationDidNotComplete && !nativeParentFailures.isEmpty) else { throw error }
-                if isKnownNativeFailure(error) { nativeParentFailures.append(error) }
-            }
+            try await body(coordinator, controller, probe, preparation)
             await coordinator.tearDown()
         } catch { await coordinator.tearDown(); window.isHidden = true; oldKey?.makeKey(); throw error }
         await withCheckedContinuation { continuation in presenter.dismiss(animated: false) { continuation.resume() } }
         window.isHidden = true
         oldKey?.makeKey()
-        if expectingNativeParentPanic != nil {
-            let options = XCTExpectedFailure.Options()
-            options.isStrict = true
-            XCTExpectFailure("Runtime mark_observable_mutation traverses a non-ViewModelInstance list parent (instance.rs:1302)", options: options) {
-                XCTAssertTrue(nativeParentFailures.isEmpty,
-                    "Native parent traversal panic after page row membership changes: \(nativeParentFailures)")
-            }
-        }
+
     }
 }
 

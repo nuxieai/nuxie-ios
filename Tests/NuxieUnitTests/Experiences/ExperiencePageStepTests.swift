@@ -103,8 +103,7 @@ final class ExperiencePageStepTests: XCTestCase {
             try await probe.perform(style: style)
             XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "register:B:enter",
                 "batch", "present", "wait:2:700", "batch", "hidden", "active", "input:true"])
-            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .reconcile, .expand, .phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair")], [.end("pair"), .retire,
-                .phases([("A", .hidden)], ""), .phases([("B", .active)], "")]])
+            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .reconcile, .expand, .phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair")], [.end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
         }
     }
 
@@ -114,7 +113,7 @@ final class ExperiencePageStepTests: XCTestCase {
         XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "batch", "present", "wait:1:700",
             "register:B:enter", "batch", "present", "wait:1:700", "batch", "hidden", "active", "input:true"])
         XCTAssertEqual(probe.batches[1], [.take, .position(isBack: false), .reconcile, .expand, .phases([("B", .entering)], "pair"), .begin("pair"),
-            .retire, .phases([("A", .hidden)], "")])
+            .phases([("A", .hidden)], ""), .retire])
         XCTAssertEqual(probe.batches[2], [.end("pair"), .phases([("B", .active)], "")])
     }
 
@@ -139,7 +138,7 @@ final class ExperiencePageStepTests: XCTestCase {
             let probe = PageStepProbe()
             try await probe.perform(style: style, reduced: true)
             XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .reconcile, .expand, .phases([("A", .exiting)], "pair"), .phases([("B", .entering)], "pair"),
-                .begin("pair"), .end("pair"), .retire, .phases([("A", .hidden)], ""), .phases([("B", .active)], "")]])
+                .begin("pair"), .end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
             XCTAssertFalse(probe.order.contains("present"))
         }
     }

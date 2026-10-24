@@ -72,13 +72,13 @@ enum ExperiencePageStep {
             try await operations.batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
                 .begin(nil), .end(nil), .retire])
         } else if reduceMotion {
-            try await operations.batch(incoming + [leaving, entering, .begin(name), .end(name), .retire, hidden, active])
+            try await operations.batch(incoming + [leaving, entering, .begin(name), .end(name), hidden, .retire, active])
         } else if style != .none, let plan {
             let outgoing = try await operations.register(source, plan.outgoingCompletionEventName)
             let incomingCompletion = try await operations.register(target, plan.incomingCompletionEventName)
             try await operations.batch(incoming + [.phases([(source, .exiting), (target, .entering)], transition), .begin(name)])
             try await waitForFrame([outgoing, incomingCompletion], duration: plan.watchdogMilliseconds)
-            try await operations.batch([.end(name), .retire, hidden, active])
+            try await operations.batch([.end(name), hidden, .retire, active])
         } else {
             let outgoingName = plan?.outgoingCompletionEventName ?? exit.completionEventName
             let outgoing = try await outgoingName.asyncMap { try await operations.register(source, $0) }
@@ -87,7 +87,7 @@ enum ExperiencePageStep {
                 try await waitForFrame([outgoing], duration: plan?.watchdogMilliseconds ?? exit.watchdogMilliseconds ?? 250)
             }
             let incomingCompletion = try await plan.asyncMap { try await operations.register(target, $0.incomingCompletionEventName) }
-            try await operations.batch(incoming + [entering, .begin(name), .retire, hidden])
+            try await operations.batch(incoming + [entering, .begin(name), hidden, .retire])
             if let incomingCompletion, let plan {
                 try await waitForFrame([incomingCompletion], duration: plan.watchdogMilliseconds)
             }

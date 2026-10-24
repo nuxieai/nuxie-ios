@@ -843,6 +843,11 @@ final class ExperienceScreenViewController: UIViewController {
                     try await layer.restoreCancelledStep(source: sourceID, target: targetID,
                         reachable: reachable, reduceMotion: reduceMotion)
                 }
+                if let restored = try? await layer.binding(screenID: sourceID) {
+                    rowBindings[sourceID] = restored
+                    interactiveScreen = restored
+                    bindTextInputs(to: restored, loop: loop, preservingNativeFields: false)
+                }
                 await activate(reduceMotion: reduceMotion)
             }
             throw error
@@ -1232,6 +1237,10 @@ final class ExperienceScreenViewController: UIViewController {
         let sourceID = screenID ?? screenId
         return presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
+                // Work accepted before retirement must not write through the old binding.
+                guard !(await interactiveScreen.isRemovedPageRow) else {
+                    return .work(requestsFrame: false) {}
+                }
                 try await interactiveScreen.updateEnvironment(reduceMotion: reduceMotion)
                 let result = try await interactiveScreen.applyStateCommand(command)
                 return .work(requestsFrame: requestsFrame) { [weak self = self] in
@@ -1375,6 +1384,7 @@ final class ExperienceScreenViewController: UIViewController {
         captureID: UUID?, target: ExperienceTextInputOverlayBridge.InputTarget,
         point: CGPoint?, text: String? = nil, ending: Bool = false, ownerID: UInt64? = nil
     ) async throws {
+        guard !(await screen.isRemovedPageRow) else { throw CancellationError() }
         func apply(_ step: ExperienceInteractiveStepResult) async {
             await deliverStep(step)
         }
@@ -1787,7 +1797,9 @@ final class ExperienceScreenViewController: UIViewController {
             do {
                 try await presentationLoop.advanceZeroDelta(after: .init {
                     try await interactivePage.updateEnvironment(reduceMotion: snapshot.reduceMotion)
-                    try await interactivePage.applyLifecycleSnapshot(snapshot, screenID: id)
+                    if !(await interactivePage.isRowRemoved(screenID: id)) {
+                        try await interactivePage.applyLifecycleSnapshot(snapshot, screenID: id)
+                    }
                     return .work(requestsFrame: false)
                 })
                 _ = semanticFocusLifecycle.completeWrite(write, succeeded: true)
