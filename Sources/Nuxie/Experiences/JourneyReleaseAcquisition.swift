@@ -1702,7 +1702,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     ),
                     reverse: $0.reverse.map {
                         .init(
-                            durationMs: nil,
+                            durationMs: $0.durationMs,
                             incomingOnTop: nil,
                             source: .init(
                                 completeEventName: $0.source.completeEventName

@@ -213,6 +213,9 @@ struct ExperienceScreenCustomTransitionPlan: Equatable, Sendable {
               let reverse = declaration.reverse else {
             return nil
         }
+        // Published page reversals must carry their own total. Only the legacy
+        // per-Screen format retains its historical forward-duration fallback.
+        guard declaration.kind != .page || reverse.durationMs != nil else { return nil }
         return ExperienceScreenCustomTransitionPlan(
             transitionId: declaration.kind == .page ? transitionId + ".reverse" : transitionId,
             durationMilliseconds: UInt64(max(0, reverse.durationMs ?? declaration.durationMs)),

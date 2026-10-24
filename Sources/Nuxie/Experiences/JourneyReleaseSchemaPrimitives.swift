@@ -968,9 +968,10 @@ enum JourneyReleaseSchemaPrimitives {
             if let reverse = transition["reverse"] {
                 let reverse = try object(
                     reverse,
-                    required: ["source", "destination"],
+                    required: ["durationMs", "source", "destination"],
                     path: "render.transitions[\(index)].reverse"
                 )
+                try integer(reverse["durationMs"], minimum: 0, maximum: 60_000, path: "render.transitions[\(index)].reverse.durationMs")
                 try validateEndpoint(reverse["source"], path: "render.transitions[\(index)].reverse.source")
                 try validateEndpoint(reverse["destination"], path: "render.transitions[\(index)].reverse.destination")
                 guard (reverse["source"] as? [String: Any])?["completeEventName"] as? String == "nx_exit_done:\(id).reverse",
