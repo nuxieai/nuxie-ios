@@ -816,6 +816,10 @@ final class ExperienceScreenViewController: UIViewController {
                 }
                 try await loop.advanceZeroDelta()
                 await onActive()
+            }, drain: {
+                guard isEligible() else { throw CancellationError() }
+                // Completion waits for result delivery, not merely native advancement.
+                try await loop.advanceZeroDelta()
             })
         do {
             try await ExperiencePageStep.perform(source: sourceID, target: targetID, style: spec.kind,
