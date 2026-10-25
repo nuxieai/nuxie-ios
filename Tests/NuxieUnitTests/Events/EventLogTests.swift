@@ -211,21 +211,57 @@ final class EventLogTests: AsyncSpec {
                         .toEventually(contain("newer-buffered"))
                     await expect { await received.names }.to(beEmpty())
                     expect(mockStore.pendingStableRouteIds).to(contain(stored.id))
+                    let replayed = await log.replayPendingStableRoutes(
+                        distinctId: "returning-customer"
+                    )
+                    expect(replayed).to(beTrue())
+                    await expect { await received.names }.toEventually(equal([
+                        "older-retained", "newer-buffered",
+                    ]), timeout: .seconds(3))
+                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                }
+
+                it("releases startup captures after a failed replay and replays the retained route on the next recovery") {
+                    // A failed recovery never strands the hold: ordinary
+                    // subscribers keep receiving captures while the retained
+                    // route waits, unacknowledged, for the next recovery.
+                    mockIdentity.setDistinctId("returning-customer")
+                    let received = ReceivedEvents()
+                    await log.subscribeCommitted { event in
+                        await received.append(event.name)
+                    }
+                    let stored = try StoredEvent(
+                        id: "retained-after-failed-replay", name: "older-retained",
+                        properties: [:], timestamp: Date(timeIntervalSince1970: 1_000),
+                        distinctId: "returning-customer"
+                    )
+                    _ = try await mockStore.commitStableCaptureAndStageRoute(
+                        eventId: stored.id, event: stored, recordedAt: stored.timestamp,
+                        assigningCommitSequence: false, admission: nil
+                    )
+                    _ = await log.deferCommittedRouting()
+                    log.track("newer-buffered")
+                    try await log.configure(configuration: testConfig)
+                    await expect { mockStore.storedEvents.map(\.name) }
+                        .toEventually(contain("newer-buffered"))
                     mockStore.shouldFailQuery = true
                     let failedReplay = await log.replayPendingStableRoutes(
                         distinctId: "returning-customer"
                     )
                     expect(failedReplay).to(beFalse())
-                    await expect { await received.names }.to(beEmpty())
                     mockStore.shouldFailQuery = false
+                    await expect { await received.names }
+                        .toEventually(equal(["newer-buffered"]), timeout: .seconds(3))
+                    expect(mockStore.pendingStableRouteIds).to(contain(stored.id))
                     let replayed = await log.replayPendingStableRoutes(
                         distinctId: "returning-customer"
                     )
                     expect(replayed).to(beTrue())
-                    await expect { await received.names }.to(equal([
-                        "older-retained", "newer-buffered",
-                    ]))
-                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                    await expect { await received.names }.toEventually(equal([
+                        "newer-buffered", "older-retained",
+                    ]), timeout: .seconds(3))
+                    await expect { mockStore.pendingStableRouteIds }
+                        .toEventually(beEmpty(), timeout: .seconds(3))
                 }
 
                 it("settles recovery while a released route captures new stable events") {
@@ -265,9 +301,12 @@ final class EventLogTests: AsyncSpec {
                     await expect { mockStore.pendingStableRouteIds }.toEventually(beEmpty())
                 }
 
-                it("still fails recovery when a route left by a prior process cannot be delivered") {
+                it("keeps a prior process's refused route pending for the queue's retry") {
+                    let accepting = AdmissionGeneration(0)
                     let reservation = log.reserveCommittedAdmission { 1 }
-                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { _, _ in false }
+                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { _, _ in
+                        accepting.value == 1
+                    }
                     try await log.configure(configuration: testConfig)
                     let stored = try StoredEvent(
                         id: "unsettled-prior-route", name: "prior-process-route",
@@ -281,8 +320,15 @@ final class EventLogTests: AsyncSpec {
 
                     let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
 
-                    expect(recovered).to(beFalse())
+                    // The refused route is queue-owned work, so recovery does
+                    // not report a failure that would discard the journal.
+                    expect(recovered).to(beTrue())
                     expect(mockStore.pendingStableRouteIds).to(contain(stored.id))
+                    let buffered = await log.bufferedCommittedRouteCount
+                    expect(buffered).to(equal(1))
+                    accepting.set(1)
+                    await expect { mockStore.pendingStableRouteIds }
+                        .toEventually(beEmpty(), timeout: .seconds(3))
                 }
 
                 it("replays a stable local route left pending by a prior process") {
@@ -323,16 +369,27 @@ final class EventLogTests: AsyncSpec {
                     expect(mockStore.pendingStableRouteIds).to(beEmpty())
                 }
 
-                it("reports failed delivery even when storage produced no durable route receipt") {
+                it("retains a refused delivery even when storage produced no durable route receipt") {
+                    let accepting = AdmissionGeneration(0)
+                    let delivered = ReceivedEvents()
                     let reservation = log.reserveCommittedAdmission { 1 }
-                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { _, _ in false }
+                    await log.subscribeAcknowledgingCommitted(reservation: reservation) { event, _ in
+                        guard accepting.value == 1 else { return false }
+                        await delivered.append(event.name)
+                        return true
+                    }
                     try await log.configure(configuration: testConfig)
                     mockStore.shouldFailStore = true
                     log.track("undurable-route")
                     await log.drain()
                     expect(mockStore.pendingStableRouteIds).to(beEmpty())
-                    let recovered = await log.replayPendingStableRoutes(distinctId: mockIdentity.getDistinctId())
-                    expect(recovered).to(beFalse())
+                    let drained = await log.drainCommittedRouting()
+                    expect(drained).to(beFalse())
+                    let buffered = await log.bufferedCommittedRouteCount
+                    expect(buffered).to(equal(1))
+                    accepting.set(1)
+                    await expect { await delivered.names }
+                        .toEventually(equal(["undurable-route"]), timeout: .seconds(3))
                 }
 
                 it("retains failed subscriber delivery and prevents later routes overtaking it") {
@@ -360,9 +417,11 @@ final class EventLogTests: AsyncSpec {
                     allow.set(1)
                     let recovered = await log.replayPendingStableRoutes(distinctId: "customer-a")
                     expect(recovered).to(beTrue())
+                    await expect { await later.names }
+                        .toEventually(equal(["first", "second"]), timeout: .seconds(3))
                     await expect { await earlier.names }.to(equal(["first", "second"]))
-                    await expect { await later.names }.to(equal(["first", "second"]))
-                    expect(mockStore.pendingStableRouteIds).to(beEmpty())
+                    await expect { mockStore.pendingStableRouteIds }
+                        .toEventually(beEmpty(), timeout: .seconds(3))
                 }
 
                 it("retries a failed stable-route acknowledgement without rerouting") {
@@ -401,10 +460,12 @@ final class EventLogTests: AsyncSpec {
                         request.eventId,
                     ]))
                     mockStore.shouldFailStableRouteAcknowledgement = false
+                    // The queue's one-second timer retries only the acknowledgement.
+                    await expect { mockStore.pendingCommittedRoutes }
+                        .toEventually(beEmpty(), timeout: .seconds(3))
                     let recovered = await log.drainCommittedRouting()
 
                     expect(recovered).to(beTrue())
-                    expect(mockStore.pendingCommittedRoutes).to(beEmpty())
                     expect(mockStore.pendingStableRouteIds).to(beEmpty())
                     await expect { await received.names }.to(equal([
                         "route-with-transient-ack-failure",
@@ -549,8 +610,9 @@ final class EventLogTests: AsyncSpec {
                     let stableId = "stable-before-later"
                     mockStore.suspendStableCaptureAfterCommit(id: stableId)
                     defer { mockStore.resumeStableCaptureAfterCommit(id: stableId) }
+                    let finishedCapture = ReceivedEvents()
                     let stableTask = Task {
-                        await log.captureAndRouteSystemEvent(
+                        let capture = await log.captureAndRouteSystemEvent(
                             .init(
                                 name: JourneyEvents.journeyStarted,
                                 properties: nil,
@@ -558,20 +620,36 @@ final class EventLogTests: AsyncSpec {
                                 distinctId: "customer-a"
                             )
                         )
+                        await finishedCapture.append(capture == nil ? "failed" : "done")
                     }
                     await expect {
                         mockStore.isStableCaptureAfterCommitWaiting(id: stableId)
-                    }.toEventually(beTrue(), timeout: .seconds(1))
+                    }.toEventually(beTrue(), timeout: .seconds(10))
 
+                    guard mockStore.isStableCaptureAfterCommitWaiting(id: stableId) else {
+                        stableTask.cancel()
+                        return // The failed gate assertion must not run a different interleaving.
+                    }
                     log.track("later", properties: nil, userProperties: nil, userPropertiesSetOnce: nil)
                     await expect {
                         mockStore.storedEvents.contains { $0.name == "later" }
-                    }.toEventually(beTrue(), timeout: .seconds(1))
+                    }.toEventually(beTrue(), timeout: .seconds(10))
+                    // A stored row is earlier than its route publication. Drain
+                    // that publication before releasing the older commit, so
+                    // the intended out-of-order resolution is deterministic.
+                    await log.drain()
+                    guard mockStore.storedEvents.contains(where: { $0.name == "later" }) else {
+                        stableTask.cancel()
+                        return
+                    }
                     await expect { await received.names }.to(equal([]))
 
                     mockStore.resumeStableCaptureAfterCommit(id: stableId)
-                    guard await stableTask.value != nil else {
-                        return fail("Expected stable capture")
+                    await expect { await finishedCapture.names }
+                        .toEventually(equal(["done"]), timeout: .seconds(10))
+                    guard await finishedCapture.names == ["done"] else {
+                        stableTask.cancel()
+                        return
                     }
                     await log.drain()
 

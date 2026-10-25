@@ -1191,6 +1191,7 @@ struct JourneyRunJournal {
         _ id: String,
         expectedStepId: String,
         expectedPark: JourneyRun.Park,
+        advancingTo: (stepId: String, context: ArmedJourney.Context)? = nil,
         admission: JourneyCommitAdmission
     ) async throws -> JourneyRun? {
         let file = file
@@ -1205,6 +1206,12 @@ struct JourneyRunJournal {
                   park.wakeAt == expectedPark.wakeAt,
                   park.anchorAt == expectedPark.anchorAt,
                   park.pendingEvent == expectedPark.pendingEvent else { return nil }
+            // Timed controls persist their selected outlet in this same
+            // transaction. A failed write must keep the original checkpoint.
+            if let advancingTo {
+                run.stepId = advancingTo.stepId
+                run.context = .init(event: advancingTo.context.event, responses: [:])
+            }
             run.park = nil
             run.nativeSnapshot = nil
             state.runs[id] = run

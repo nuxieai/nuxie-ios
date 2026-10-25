@@ -3,6 +3,16 @@ import Foundation
 /// Evaluates one authenticated flat-leg transition. The caller persists every
 /// advance or park before evaluating another step or dispatching an effect.
 struct JourneyControlExecutor {
+    /// Route only inputs this parked control can consume. Conditions are still
+    /// evaluated against restored values when the ordered operation executes.
+    func takesEvent(named name: String, step: Journey.Step) throws -> Bool {
+        guard let action = step.action, JourneyActionType(action: action) == .waitUntil else { return false }
+        switch try decode(CompiledWait.self, action).trigger {
+        case .responseChange: return false
+        case .event(let expected, _), .eventOrResponseChange(let expected, _): return name == expected
+        }
+    }
+
     struct Checkpoint: Codable, Equatable, Sendable {
         let anchorAtMillis: Int64
         let wakeAtMillis: Int64

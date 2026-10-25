@@ -16,6 +16,68 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     }
 
     private var conversionAcknowledgements: Set<String> = []
+    private var deadlineHandler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?
+    private let journeyQueue = OrderedCustomerQueue()
+    public func queuedJourneyRetryKeys() async -> [JourneyQueueKey] { await journeyQueue.retryingJourneyKeys() }
+
+    public func performJourneyWork(_ request: JourneyWorkRequest) async -> Bool {
+        await journeyQueue.submit(key: request.key,
+            lane: request.runId.map { "run:\($0)" } ?? "work:\(request.key.id)",
+            parent: request.eventPlan ? JourneyQueueContext.event : nil, anchor: JourneyQueueContext.key,
+            afterFailure: request.afterFailure, bypassesHold: request.bypassesHold,
+            cancelsWithJourney: request.cancelsWithJourney, operation: request.operation)
+    }
+    public func enqueueJourneyWork(_ request: JourneyWorkRequest) async {
+        _ = await journeyQueue.submit(key: request.key,
+            lane: request.runId.map { "run:\($0)" } ?? "work:\(request.key.id)",
+            anchor: JourneyQueueContext.key, afterFailure: request.afterFailure,
+            bypassesHold: request.bypassesHold, cancelsWithJourney: request.cancelsWithJourney,
+            waitForAttempt: false, operation: request.operation)
+    }
+    public func bindJourneyWork(runId: String) async {
+        if let key = JourneyQueueContext.key { await journeyQueue.bind(key, runId: runId) }
+    }
+    public func registerJourneyRun(runId: String, journeyId: String, distinctId: String) async {
+        await journeyQueue.registerRun(runId: runId, journeyId: journeyId, distinctId: distinctId)
+    }
+    public func reserveJourneyCapturePosition(eventId: String, distinctId: String) async {
+        if let key = JourneyQueueContext.key {
+            await journeyQueue.reserveCapture(.init(distinctId: distinctId, id: "event:\(eventId)"), from: key)
+        }
+    }
+    public func releaseJourneyCapturePosition(eventId: String, distinctId: String) async {
+        await journeyQueue.releaseCapture(.init(distinctId: distinctId, id: "event:\(eventId)"))
+    }
+    public func cancelJourneyWork(distinctId: String) async { await journeyQueue.cancel(distinctId: distinctId) }
+    public func cancelJourneyWorkAndWait(distinctId: String) async {
+        await journeyQueue.cancel(distinctId: distinctId, waitForAttempts: true)
+    }
+    public func completedJourneyEventPlan() async -> Bool {
+        guard let event = JourneyQueueContext.event, JourneyQueueContext.key == event else { return false }
+        return await journeyQueue.completedPlan(for: event)
+    }
+    private var _stagedJourneyInputs: [String: StagedJourneyInput] = [:]
+    public var stagedJourneyInputs: [StagedJourneyInput] { lock.withLock { Array(_stagedJourneyInputs.values) } }
+    public func stageJourneyInputs(_ inputs: [StagedJourneyInput]) {
+        lock.withLock { for input in inputs { _stagedJourneyInputs[input.eventId] = input } }
+    }
+    public func deliverAcceptedCaptures() async {
+        await journeyQueue.settle(excluding: JourneyQueueContext.key)
+    }
+    public func releaseJourneyInputs(eventIds: [String]) {
+        lock.withLock { for eventId in eventIds { _stagedJourneyInputs.removeValue(forKey: eventId) } }
+    }
+    public func setJourneyDeadlineHandler(_ handler: (@Sendable (JourneyDeadline) async -> JourneyQueueResult)?) async {
+        lock.withLock { deadlineHandler = handler }
+    }
+    public func enqueueJourneyDeadline(_ deadline: JourneyDeadline) async {
+        let handler = lock.withLock { deadlineHandler }
+        let key = JourneyQueueKey(distinctId: deadline.distinctId,
+            id: "deadline:\(deadline.runId):\(deadline.stepId):\(deadline.anchorAt?.timeIntervalSince1970 ?? -1):\(deadline.wakeAt.timeIntervalSince1970)")
+        _ = await journeyQueue.submit(key: key, kind: .deadline(deadline.wakeAt), lane: "run:\(deadline.runId)", waitForAttempt: false) {
+            await handler?(deadline) ?? .done
+        }
+    }
     private var boundConversionScope: JourneyStorageScope?
     public func bindConversionAuthority(_ scope: JourneyStorageScope) async throws {
         try lock.withLock {
@@ -855,6 +917,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
             // `identity` is wired once by MockFactory and survives resets.
             _routedEvents.removeAll()
             conversionAcknowledgements.removeAll()
+            deadlineHandler = nil
             _trackedEvents.removeAll()
             _eventHandlers.removeAll()
             _preparedTriggerBeforeSend = nil
@@ -1007,6 +1070,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
     // MARK: - Cleanup
 
     public func close() async {
+        await journeyQueue.close()
         // Mock implementation: just reset state
         reset()
     }
@@ -1019,6 +1083,7 @@ public final class MockEventLog: EventLogProtocol, @unchecked Sendable {
         }
         let handler = lock.withLock { _drainHandler }
         await handler?()
+        await journeyQueue.settle(excluding: JourneyQueueContext.key)
     }
 
     public func drainCommittedRouting() async -> Bool {
