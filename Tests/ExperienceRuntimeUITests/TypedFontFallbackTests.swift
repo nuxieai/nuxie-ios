@@ -91,10 +91,10 @@ final class TypedFontFallbackTests: XCTestCase {
                 let ink = try emojiInk(crop, scale: scaleX)
                 let pixelArea = scaleX * scaleY
                 XCTAssertGreaterThan(ink.total, Int(2000 * pixelArea / 9),
-                    "The committed first field must contain all three colour emoji")
+                    "The committed first field must contain all three color emoji")
                 for (index, count) in ink.columns.enumerated() {
                     XCTAssertGreaterThan(count, Int(500 * pixelArea / 9),
-                        "Emoji column \(index + 1) must contain colour artwork")
+                        "Emoji column \(index + 1) must contain color artwork")
                 }
                 XCTAssertGreaterThan(ink.skinTone, Int(500 * pixelArea / 9),
                     "The third emoji must be a brown thumb, not a yellow thumb followed by a separate modifier")

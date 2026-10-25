@@ -99,7 +99,7 @@ final class ExperienceShellShimmerView: UIView {
     ) {
         configuredBackgroundColor = backgroundColor
         configuredPalette = palette
-        // An overlay, not a repaint. Blending the authored colour into the
+        // An overlay, not a repaint. Blending the authored color into the
         // stops painted it a second time over the ground already beneath, so a
         // translucent background darkened wherever the shimmer sat.
         //

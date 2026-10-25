@@ -2,7 +2,7 @@
 
 These `.bin` resources preserve the original encoded bytes. Apple's PNG resource copier can rewrite `.png` files, which would change the representation under test.
 
-The original neighbour PNGs have two pixels and one unfiltered row. Packed palette fixtures have four pixels per row; the interlaced fixture repeats that row four times through the seven Adam7 passes. Expected native bytes are sRGB RGBA with each straight colour channel multiplied by its own alpha once and rounded to 8 bits. Browser canvas samples over black independently agree with their premultiplied RGB values.
+The original neighbour PNGs have two pixels and one unfiltered row. Packed palette fixtures have four pixels per row; the interlaced fixture repeats that row four times through the seven Adam7 passes. Expected native bytes are sRGB RGBA with each straight color channel multiplied by its own alpha once and rounded to 8 bits. Browser canvas samples over black independently agree with their premultiplied RGB values.
 
 | File | Encoded samples or palette entries | Expected native RGBA |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ The original neighbour PNGs have two pixels and one unfiltered row. Packed palet
 | decoder-jpeg | Constant 8 by 8 neutral RGB block (128,128,128), quality 100, no chroma subsampling | (128,128,128,255) at every pixel |
 | decoder-indexed-profile-alpha | PLTE (17,34,51), (255,64,32); tRNS 255,180; embedded sRGB ICC profile | (17,34,51,255), (180,45,23,180) |
 
-For example, the translucent red pixel gives red 255*180/255=180, green round(64*180/255)=45 and blue round(32*180/255)=23. The 16-bit samples are the corresponding 8-bit values multiplied by 257. The greyscale sample gives round(204*128/255)=102 in each colour channel. The JPEG's constant block has a zero level-shifted DC coefficient and no AC coefficients, so it decodes to neutral 128.
+For example, the translucent red pixel gives red 255*180/255=180, green round(64*180/255)=45 and blue round(32*180/255)=23. The 16-bit samples are the corresponding 8-bit values multiplied by 257. The greyscale sample gives round(204*128/255)=102 in each color channel. The JPEG's constant block has a zero level-shifted DC coefficient and no AC coefficients, so it decodes to neutral 128.
 
 | Additional file | Encoded samples | Expected native RGBA |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ For example, the translucent red pixel gives red 255*180/255=180, green round(64
 | decoder-indexed-interlaced-alpha | Same 2-bit row repeated at y=0,1,2,3, interlace method 1 (Adam7) | Same four pixels on every row |
 | decoder-indexed-display-p3-alpha | Embedded Display P3 ICC; PLTE (128,128,128), (255,128,0); tRNS 128,180 | (64,64,64,128), (180,84,0,180), tolerance 1 for ICC rounding |
 
-Display P3 uses the sRGB transfer curve. Linearizing (255,128,0), multiplying by the Display P3 to sRGB primary matrix, clipping to the sRGB gamut and applying the transfer curve gives approximately (255,119,0). Multiplication by 180/255 gives (180,84,0). Neutral grey retains its channels and gives round(128*128/255)=64. This expectation comes from the encoded profile and source colours, independently of ImageIO output.
+Display P3 uses the sRGB transfer curve. Linearizing (255,128,0), multiplying by the Display P3 to sRGB primary matrix, clipping to the sRGB gamut and applying the transfer curve gives approximately (255,119,0). Multiplication by 180/255 gives (180,84,0). Neutral grey retains its channels and gives round(128*128/255)=64. This expectation comes from the encoded profile and source colors, independently of ImageIO output.
 
 `translucent-indexed-green.bin` retains the original 512 by 512 palette PNG without Apple's PNG resource copying. Its straight palette entry is (0,255,0), with tRNS alpha 180. The central native pixel must be (0,180,0,180).
 
@@ -30,9 +30,9 @@ The built-in process probe uses the 120 encoded bytes of `decoder-indexed-2bit-a
 
 ## Wide 8-bit palette picture
 
-`decoder-indexed-wide-8bit-alpha.bin` is 256 by 64, indexed colour type 3, encoded bit depth 8, noninterlaced and tagged sRGB. PLTE has 192 entries: three bands of 64 entries with straight RGB (255,64,32), (32,192,96) and (64,128,255). Each band has tRNS alpha round(step*255/63), step 0 through 63. The unfiltered index at (x,y) is min(floor(y/22),2)*64 + floor(x*63/255). Thus the file has 64 distinct alpha levels, including zero and full opacity.
+`decoder-indexed-wide-8bit-alpha.bin` is 256 by 64, indexed color type 3, encoded bit depth 8, noninterlaced and tagged sRGB. PLTE has 192 entries: three bands of 64 entries with straight RGB (255,64,32), (32,192,96) and (64,128,255). Each band has tRNS alpha round(step*255/63), step 0 through 63. The unfiltered index at (x,y) is min(floor(y/22),2)*64 + floor(x*63/255). Thus the file has 64 distinct alpha levels, including zero and full opacity.
 
-The expected bytes below come from the actual file's index, PLTE and tRNS. Each RGB byte is floor((colour*alpha+127)/255). The XCTest reads PLTE and tRNS independently of ImageIO and checks all 15 samples exactly.
+The expected bytes below come from the actual file's index, PLTE and tRNS. Each RGB byte is floor((color*alpha+127)/255). The XCTest reads PLTE and tRNS independently of ImageIO and checks all 15 samples exactly.
 
 | y | x=0 | x=64 | x=128 | x=192 | x=255 |
 | --- | --- | --- | --- | --- | --- |
@@ -42,4 +42,4 @@ The expected bytes below come from the actual file's index, PLTE and tRNS. Each 
 
 ## Matched path controls
 
-The `decoder-path-*` files hold the colour and sample order fixed while changing encoded bit depth, palette entry count or tRNS length. Every PLTE colour is (255,64,32). The two-entry controls use alpha 64,128 at bit depths 1,2,4,8. The four-entry controls compare tRNS [180] (three implicit opaque entries) with [180,255,255,255], at depths 2 and 8. The sixteen-entry controls have tRNS [0,64,128,255] and twelve implicit opaque entries, at depths 4 and 8. The eight-bit one-entry control has alpha 180. Rows cycle through the palette, so every entry is exercised. The test draws the original ImageIO image as a control and compares the SDK decoder against the independent one-product expectation.
+The `decoder-path-*` files hold the color and sample order fixed while changing encoded bit depth, palette entry count or tRNS length. Every PLTE color is (255,64,32). The two-entry controls use alpha 64,128 at bit depths 1,2,4,8. The four-entry controls compare tRNS [180] (three implicit opaque entries) with [180,255,255,255], at depths 2 and 8. The sixteen-entry controls have tRNS [0,64,128,255] and twelve implicit opaque entries, at depths 4 and 8. The eight-bit one-entry control has alpha 180. Rows cycle through the palette, so every entry is exercised. The test draws the original ImageIO image as a control and compares the SDK decoder against the independent one-product expectation.

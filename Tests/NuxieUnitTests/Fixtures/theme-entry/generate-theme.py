@@ -1,4 +1,4 @@
-"""SDK regression fixture: a colour bound to the `Theme` global, with `env.colorScheme`.
+"""SDK regression fixture: a color bound to the `Theme` global, with `env.colorScheme`.
 File names are distinct from env-entry's because SwiftPM flattens processed test resources.
 Wire keys: runtime a237fc817 defs/upstream-runtime. No compiler/build dependency.
 """

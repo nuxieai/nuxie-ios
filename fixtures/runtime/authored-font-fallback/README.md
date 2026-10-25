@@ -17,9 +17,9 @@ The published-text regression observes the actual C fallback hook and compares
 its selected PostScript names with CoreText. It also checks visible native ink.
 The typed two-field form qualifies Japanese, Arabic, Hebrew, Hindi, Latin,
 emoji and symbols after focus moves. Ordinary and typed emoji must contain
-saturated colour ink on every OS version. CoreText supplies PNG glyph pictures
-for colour fallback faces, including Apple emjc strikes that the runtime cannot
+saturated color ink on every OS version. CoreText supplies PNG glyph pictures
+for color fallback faces, including Apple emjc strikes that the runtime cannot
 decode itself; monochrome outlines do not satisfy the emoji checks.
-Outline glyphs within a colour face (such as `#` and unpaired regional
-indicators) keep using the text-colour path callback. A picture is accepted
+Outline glyphs within a color face (such as `#` and unpaired regional
+indicators) keep using the text-color path callback. A picture is accepted
 only when its pixels are identical under black and white CoreText fills.

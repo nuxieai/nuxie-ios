@@ -36,8 +36,8 @@ environment also declares numeric `fontScale` with default 1. An unrelated root
 SDK-authored dark mode regression, written by `generate-theme.py` from the runtime's
 pinned wire keys (no compiler or editor dependency). The `theme` artboard has
 one 100-point square whose fill is data-bound to the global `Theme.surface`
-colour. `Theme` has authored instances `light` (`0xFFF2F2F7`, first and the
-default) and `dark` (`0xFF1C1C1E`). The fill's own colour is green, which shows
+color. `Theme` has authored instances `light` (`0xFFF2F2F7`, first and the
+default) and `dark` (`0xFF1C1C1E`). The fill's own color is green, which shows
 only if the binding is lost. Without a host binding the runtime draws the
 default `light` instance, so the `dark` cases prove the host's choice. The
 global `env` declares `colorScheme` as a `light`, `dark` enum. Tests prove the
