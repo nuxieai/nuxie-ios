@@ -211,8 +211,9 @@ final class PreparedJourneyArtifacts: @unchecked Sendable {
     }
 }
 
-/// Owns cached video files for every prepared or presented use, including pause.
-final class JourneyReleaseVideoFileLease: @unchecked Sendable {
+/// Every mounted owner retains this protection independently of profile/store
+/// eviction, including while its native retirement continues after a timeout.
+final class JourneyReleaseArtifactFileLease: @unchecked Sendable {
     private let root: URL
     private let protectionID: UUID
 
@@ -225,6 +226,8 @@ final class JourneyReleaseVideoFileLease: @unchecked Sendable {
         JourneyReleaseCacheProtectionRegistry.shared.unregister(protectionID, root: root)
     }
 }
+
+typealias JourneyReleaseVideoFileLease = JourneyReleaseArtifactFileLease
 
 struct AuthenticatedJourneyReleaseID: Codable, Equatable, Hashable, Sendable {
     let identity: JourneyReleaseIdentity
@@ -1033,9 +1036,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
             guard let artifact = asset.artifact, objectsByKey[artifact.key] != nil else { return nil }
             return artifact.sha256
         })
-        let videoLease = videoDigests.isEmpty ? nil : try JourneyReleaseVideoFileLease(
-            digests: videoDigests, root: cacheDirectory
-        )
+        let artifactLease = try JourneyReleaseArtifactFileLease(digests: Set(objectsByDigest.keys), root: cacheDirectory)
+        let videoLease = videoDigests.isEmpty ? nil : artifactLease
         let payloadsByScreenID = try Dictionary(uniqueKeysWithValues: render.screens.map {
             screen in
             let renderPlan = try Self.runtimePlan(
@@ -1052,7 +1054,8 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                 definition: authority.definition,
                 sceneBytes: sceneBytes,
                 assets: runtimeAssets,
-                videoFileLease: videoLease
+                videoFileLease: videoLease,
+                artifactFileLease: artifactLease
             ))
         })
         return PreparedRuntimeRelease(

@@ -597,6 +597,10 @@ final class JourneyExperienceLoaderTests: JourneyTestCase {
         try await evictionStore.enforceCacheBudget(protecting: [])
         XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(retained.fileURL).path))
         XCTAssertNotNil(artifact.payload.videoFileLease)
+        XCTAssertNotNil(artifact.payload.artifactFileLease)
+        let protected = try JourneyReleaseCacheProtectionRegistry.shared.protectedDigests(root: directory)
+        XCTAssertTrue(protected.contains(SHA256Provider.hexDigest(sceneBytes)),
+            "The mounted release lease must protect its scene as well as video files")
 
         // A different authenticated release cannot invalidate another screen's
         // leased, correctly content-addressed video through inconsistent metadata.

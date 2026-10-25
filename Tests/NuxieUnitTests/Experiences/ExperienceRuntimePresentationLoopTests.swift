@@ -7,6 +7,37 @@ import XCTest
 
 final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     @MainActor
+    func testTimelinePauseStillSettlesAcceptedSourceWorkAtZeroWithoutNavigation() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+        try await loop.advanceZeroDelta()
+        let stepCount = await recorder.steps().count
+        let renderCount = await recorder.renderDispositions().count
+        await recorder.holdNextQueuedWork()
+        // Same request as an accepted response write. No coordinator, page
+        // navigation, lifecycle phase or native editing focus is involved.
+        XCTAssertTrue(loop.enqueue(.init { .work(requestsFrame: true) }))
+        let held = await recorder.waitForOperation(named: "queued")
+        XCTAssertTrue(held)
+        loop.setInputEnabled(false)
+        loop.setTimelineActive(false)
+        XCTAssertFalse(loop.hasCompletedLatestFrame)
+        await recorder.releaseQueuedWork()
+        let reflected = await recorder.waitForStepCount(stepCount + 1)
+        XCTAssertTrue(reflected, "Pausing time does not discard an accepted write's zero-delta update")
+        let steps = await recorder.steps()
+        XCTAssertEqual(steps.count, stepCount + 1)
+        XCTAssertEqual(steps.last?.elapsedSeconds, 0)
+        let renders = await recorder.renderDispositions().count
+        XCTAssertEqual(renders, renderCount, "The paused surface presents nothing new")
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testFreezeEndsSubmittedTouchesAndRetiresKeysSilentlyBeforePageWork() async throws {
         try await assertInputTermination(cover: false)
     }
@@ -1370,6 +1401,34 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let finalNames = await recorder.operationNames()
         XCTAssertEqual(finalNames.filter { $0 == "detach" }.count, 0)
         XCTAssertEqual(finalNames.filter { $0 == "close" }.count, 1)
+        _ = window
+    }
+
+    @MainActor
+    func testRetirementTimeoutReturnsHostFailureButKeepsSessionUntilFrameRetires() async throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.setCompletionMode(.held)
+        let (window, view) = makePresentationSurface()
+        var errors: [Error] = []
+        let loop = makeLoop(recorder: recorder, view: view, onError: { errors.append($0) })
+        loop.retirementTimeoutNanoseconds = 1_000_000
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let rendered = await recorder.waitForOperation(named: "render")
+        XCTAssertTrue(rendered)
+        await loop.shutdown()
+        XCTAssertEqual(errors.first as? ExperienceRuntimeRetirementError, .timedOut)
+        XCTAssertTrue(loop.needsSessionCleanup, "A timeout cannot release a live native owner")
+        await loop.shutdown()
+        let waiting = await recorder.operationNames()
+        XCTAssertFalse(waiting.contains("close"), "A retry joins retirement instead of closing under a live frame")
+        XCTAssertEqual(errors.count, 1)
+        await recorder.releaseFrames()
+        await loop.retireSession()
+        XCTAssertFalse(loop.needsSessionCleanup)
+        let retired = await recorder.operationNames()
+        XCTAssertEqual(retired.filter { $0 == "close" }.count, 1)
         _ = window
     }
 

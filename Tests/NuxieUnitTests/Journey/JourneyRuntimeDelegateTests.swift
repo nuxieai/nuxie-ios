@@ -1070,6 +1070,50 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         XCTAssertEqual(outcomeCount, 0)
     }
 
+    func testNavigationDismissalCheckpointJoinsAndReusesEveryOutcome() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        for outcome in [JourneyScreenDismissalResult.handled, .completed, .rejected] {
+            let gate = JourneyScreenCommitGate()
+            let calls = JourneyOutcomeCallRecorder()
+            let request = JourneyPresentationRequest(fences: testPresentationFences(), release: release,
+                delivery: snapshot.profile.delivery, screenId: "screen_welcome",
+                owner: .init(journeyId: "journey", distinctId: "customer"), reservation: nil,
+                onScreenDismissed: { screen, _, _ in
+                    await calls.record(outcome: .dismissed, screenId: screen)
+                    await gate.suspend()
+                    return outcome
+                }, onEmissionBatch: { _, _ in true }, onOutcome: { _, _ in true })
+            let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+            let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version_golden") }
+            let first = Task { @MainActor in
+                await delegate.experienceViewController(controller, willDismissScreen: "screen_welcome",
+                    revealingScreenId: "screen_details", method: "navigate")
+            }
+            await gate.waitUntilEntered()
+            let second = Task { @MainActor in
+                await delegate.experienceViewController(controller, willDismissScreen: "screen_welcome",
+                    revealingScreenId: "screen_details", method: "navigate")
+            }
+            let before = await calls.count()
+            XCTAssertEqual(before, 1)
+            await gate.release()
+            let results = await [first.value, second.value]
+            XCTAssertEqual(results, [outcome, outcome])
+            // A retried navigation and the subsequent hidden notification reuse
+            // the same durable checkpoint, including terminal outcomes.
+            let retry = await delegate.experienceViewController(controller, willDismissScreen: "screen_welcome",
+                revealingScreenId: "screen_details", method: "navigate")
+            XCTAssertEqual(retry, outcome)
+            await delegate.experienceViewController(controller, didDismissScreen: "screen_welcome",
+                revealingScreenId: "screen_details", method: "navigate")
+            let total = await calls.count()
+            XCTAssertEqual(total, 1)
+        }
+    }
+
     func testRuntimeDelegateEnablesScreenEmissionsOnlyAfterLifecycleCommit() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)
