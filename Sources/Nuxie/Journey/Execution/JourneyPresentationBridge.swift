@@ -317,6 +317,8 @@ final class JourneyRuntimeDelegate {
     private var pendingBackNavigation: (target: String, steps: Int, history: [String]?)?
     private var dismissedSurfaceScreenId: String?
     private var screenDismissalWasRejected = false
+    private var preparedDismissal: (source: String, target: String?, method: String,
+        task: Task<JourneyScreenDismissalResult, Never>)?
     private var topLevelScreenDismissalWasProcessed = false
     private var hostDismissalRequested = false
     private var presentationIsRevealed = false
@@ -406,6 +408,7 @@ final class JourneyRuntimeDelegate {
             return
         }
         activeScreenId = screenId
+        preparedDismissal = nil
         await controller.configureScreenEmissionRun(
             screenControlScope(screenId: screenId)
         )
@@ -417,6 +420,37 @@ final class JourneyRuntimeDelegate {
         revealingScreenId: String?,
         method: String
     ) async {
+        // Native Back can close intermediate layers on its way to the final
+        // target. Their hidden notification still acknowledges this departure.
+        if let prepared = preparedDismissal, prepared.source == screenId {
+            _ = await prepared.task.value
+            return
+        }
+        _ = await processScreenDismissal(controller, screenId: screenId,
+            revealingScreenId: revealingScreenId, method: method)
+    }
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        willDismissScreen screenId: String,
+        revealingScreenId: String?,
+        method: String
+    ) async -> JourneyScreenDismissalResult {
+        if let prepared = preparedDismissal, prepared.source == screenId,
+           prepared.target == revealingScreenId, prepared.method == method {
+            return await prepared.task.value
+        }
+        guard !resolved else { return .completed }
+        let task = Task { @MainActor in
+            await self.processScreenDismissal(controller, screenId: screenId,
+                revealingScreenId: revealingScreenId, method: method)
+        }
+        preparedDismissal = (screenId, revealingScreenId, method, task)
+        return await task.value
+    }
+
+    private func processScreenDismissal(_ controller: ExperienceViewController, screenId: String,
+        revealingScreenId: String?, method: String) async -> JourneyScreenDismissalResult {
         if hostDismissalRequested, revealingScreenId == nil {
             // Host surface control is its own authored input. Teardown still
             // closes the native screen, but routing `$screen_dismissed` here
@@ -425,7 +459,7 @@ final class JourneyRuntimeDelegate {
             pendingBackNavigation = nil
             activeScreenId = nil
             await controller.configureScreenEmissionRun(nil)
-            return
+            return .handled
         }
         let result = await onScreenDismissed(
             screenId,
@@ -477,6 +511,7 @@ final class JourneyRuntimeDelegate {
                 )
             }
         }
+        return result
     }
 
     func experienceViewController(

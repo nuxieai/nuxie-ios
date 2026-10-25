@@ -201,6 +201,8 @@ final class ExperienceScreenViewController: UIViewController {
     /// SDK mutation can be rejected without poisoning the presentation lane.
     var onRuntimeFailure: ((Error) -> Void)?
     var onPageStep: ((ExperienceInteractivePage.Step) -> Void)?
+    // Observes real completion waits without replacing their watchdog or streams.
+    var onExitCompletionWait: (() -> Void)?
     // Internal seams for height routing probes when native fixtures have no
     // qualified intrinsic height. Ordinary measurement/publication still owns the guards.
     var pageContentHeightQuery: (@MainActor () async throws -> Float?)?
@@ -837,14 +839,7 @@ final class ExperienceScreenViewController: UIViewController {
         let reachable = Set(nextHistory.screenIDs)
         let operations = ExperiencePageStep.Operations(
             setInputEnabled: { [self] enabled in
-                pageStepInProgress = !enabled
-                loop.setInputEnabled(enabled && !coveredByLayer)
-                view.isUserInteractionEnabled = enabled && !coveredByLayer
-                textInputOverlayBridge.setStepInProgress(!enabled)
-                if !enabled {
-                    clearHardwareKeys()
-                    semanticContainer.clear()
-                } else { loop.setTimelineActive(!coveredByLayer); updatePresentationVisibility() }
+                setPageInputEnabled(enabled)
             }, prepare: { [self] in
                 guard isEligible(), rowBindings[targetID] != nil else { throw CancellationError() }
                 await layer.beginPresentationStep()
@@ -862,7 +857,8 @@ final class ExperienceScreenViewController: UIViewController {
             }, present: {
                 loop.setTimelineActive(true)
                 try await loop.advanceZeroDelta(awaitsPresentation: true)
-            }, wait: { streams, milliseconds in
+            }, wait: { [self] streams, milliseconds in
+                onExitCompletionWait?()
                 await ExperienceScreenExitWatchdog.wait(for: streams, watchdogMilliseconds: milliseconds)
             }, release: {
                 for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
@@ -913,6 +909,23 @@ final class ExperienceScreenViewController: UIViewController {
         for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
     }
 
+    func setPageInputEnabled(_ enabled: Bool, pausingTimeline: Bool = false) {
+        pageStepInProgress = !enabled
+        presentationLoop?.setInputEnabled(enabled && !coveredByLayer)
+        view.isUserInteractionEnabled = enabled && !coveredByLayer
+        textInputOverlayBridge.setStepInProgress(!enabled)
+        if !enabled {
+            // A durable checkpoint may wait indefinitely before the step starts.
+            // Keep the source's last frame, without playing an exit underneath it.
+            if pausingTimeline { presentationLoop?.setTimelineActive(false) }
+            clearHardwareKeys()
+            semanticContainer.clear()
+        } else {
+            presentationLoop?.setTimelineActive(!coveredByLayer)
+            updatePresentationVisibility()
+        }
+    }
+
     private func didPresentDrawable(_ drawable: ExperienceRuntimePresentedDrawable) {
         guard !didReportFirstPresentation else { return }
         didReportFirstPresentation = true
@@ -930,36 +943,39 @@ final class ExperienceScreenViewController: UIViewController {
 
     func shutdownInteractiveScreen() async {
         shutdownInvocationCount += 1
-        if let shutdownTask {
-            await shutdownTask.value
-            return
+        if shutdownTask == nil {
+            // Strong ownership is intentional: this controller owns its release
+            // lease until all native work actually retires, even after timeout.
+            shutdownTask = Task<Void, Never> { @MainActor [self] in
+                self.isShuttingDown = true
+                await self.runValues.removeSaveDisplayObserver(id: self.saveDisplayObserverID)
+                let loop = self.presentationLoop
+                let layer = self.interactivePage
+                self.presentationLoop = nil
+                self.interactiveScreen = nil
+                self.interactivePage = nil
+                self.rowBindings.removeAll()
+                self.rowScreens.removeAll()
+                self.lifecycleIncludesExitReason = false
+                self.finishExitWaiters()
+                self.semanticContainer.clear()
+                self.semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
+                self.textInputOverlayBridge.clear()
+                self.videoCaptionOverlay.update([])
+                self.videoCaptionOverlay.isHidden = true
+                await loop?.retireSession()
+                if let loop, loop.needsSessionCleanup { self.presentationLoop = loop }
+                if loop == nil {
+                    do { try await layer?.close() }
+                    catch { self.handleTerminalFailure(error) }
+                }
+                self.isShuttingDown = false
+            }
         }
-        let task = Task<Void, Never> { @MainActor [weak self] in
-            guard let self else { return }
-            self.isShuttingDown = true
-            await self.runValues.removeSaveDisplayObserver(id: self.saveDisplayObserverID)
-            let loop = self.presentationLoop
-            let layer = self.interactivePage
-            self.presentationLoop = nil
-            self.interactiveScreen = nil
-            self.interactivePage = nil
-            self.rowBindings.removeAll()
-            self.rowScreens.removeAll()
-            self.lifecycleIncludesExitReason = false
-            self.finishExitWaiters()
-            self.semanticContainer.clear()
-            self.semanticFocusLifecycle = ExperienceSemanticFocusLifecycle()
-            self.textInputOverlayBridge.clear()
-            self.videoCaptionOverlay.update([])
-            self.videoCaptionOverlay.isHidden = true
-            await loop?.shutdown()
-            if let loop, loop.needsSessionCleanup { self.presentationLoop = loop }
-            if loop == nil { try? await layer?.close() }
-            self.isShuttingDown = false
-        }
-        shutdownTask = task
-        await task.value
-        shutdownTask = nil
+        guard let task = shutdownTask else { return }
+        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        catch { handleTerminalFailure(error) }
+        if !isShuttingDown { shutdownTask = nil }
     }
 
     func setContentHidden(_ hidden: Bool) {
@@ -1170,6 +1186,7 @@ final class ExperienceScreenViewController: UIViewController {
 
         guard let watchdogMilliseconds = plan.watchdogMilliseconds,
               let waiter else { return }
+        onExitCompletionWait?()
         await ExperienceScreenExitWatchdog.wait(
             for: waiter.stream,
             watchdogMilliseconds: watchdogMilliseconds
@@ -1829,7 +1846,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func handleTerminalFailure(_ error: Error) {
-        guard !isShuttingDown, runtimeFailure == nil else { return }
+        guard (!isShuttingDown || error is ExperienceRuntimeRetirementError), runtimeFailure == nil else { return }
         runtimeFailure = error
         videoCaptionOverlay.update([])
         videoCaptionOverlay.isHidden = true

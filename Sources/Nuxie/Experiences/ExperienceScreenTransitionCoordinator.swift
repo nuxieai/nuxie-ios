@@ -8,17 +8,22 @@ final class ExperienceNativePageTransition {
     private var state: State
     private var startTask: Task<Void, Never>?
     private var finishTask: Task<Void, Never>?
+    private var cancellationTask: Task<Void, Never>?
+    var retirementTimeoutNanoseconds = ExperienceRuntimeRetirement.timeoutNanoseconds
     @TaskLocal private static var executing: ObjectIdentifier?
     private let start: () async -> Void
     private let finish: () async -> Void
     private let abandon: () async -> Void
+    private let onRetirementFailure: (Error) -> Void
 
-    init(interactive: Bool, start: @escaping () async -> Void,
+    init(interactive: Bool, onRetirementFailure: @escaping (Error) -> Void = { LogError("Native page abort failed: \($0)") },
+         start: @escaping () async -> Void,
          finish: @escaping () async -> Void, abandon: @escaping () async -> Void = {}) {
         state = interactive ? .deciding : .ready
         self.start = start
         self.finish = finish
         self.abandon = abandon
+        self.onRetirementFailure = onRetirementFailure
     }
 
     func begin() async {
@@ -54,6 +59,17 @@ final class ExperienceNativePageTransition {
     }
 
     func cancel() async {
+        if state == .cancelled || state == .committed { return }
+        if cancellationTask == nil {
+            cancellationTask = Task { @MainActor in await self.cancelUnbounded() }
+        }
+        guard let task = cancellationTask else { return }
+        do {
+            try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds) { await task.value }
+        } catch { onRetirementFailure(error) }
+    }
+
+    private func cancelUnbounded() async {
         if state == .committing {
             if Self.executing != ObjectIdentifier(self) { await finishTask?.value }
             return
@@ -108,6 +124,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         _ context: ExperienceScreenHiddenContext
     ) async -> Void
     private let onScreenActive: (_ screenId: String) async -> Void
+    private let onScreenWillNavigate: (_ source: String, _ target: String) async -> JourneyScreenDismissalResult
     private let onProductsResolved: (_ products: [StoreProduct]) -> Void
     private let onProductsUnavailable: (_ screenId: String) async -> Void
     private let onRuntimeFailure: (_ screenId: String, _ error: Error) -> Void
@@ -175,6 +192,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private var installationTask: Task<Void, Error>?
     private var navigationTask: Task<Void, Never>?
     private var teardownTask: Task<Void, Never>?
+    private var exitRetirementTask: Task<Void, Never>?
+    private var pageDeparture: (controller: ObjectIdentifier, source: String, target: String,
+        task: Task<JourneyScreenDismissalResult, Never>)?
     private var navigationRequests: [NavigationRequest] = []
     /// Set when teardown begins: no drain may start and queued requests fail
     /// fast, so a cancelled task's completion cannot restart navigation.
@@ -213,6 +233,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             _ screenId: String,
             _ context: ExperienceScreenHiddenContext
         ) async -> Void,
+        onScreenWillNavigate: @escaping (_ source: String, _ target: String) async -> JourneyScreenDismissalResult = { _, _ in .handled },
         onScreenActive: @escaping (_ screenId: String) async -> Void,
         onProductsResolved: @escaping (_ products: [StoreProduct]) -> Void,
         onProductsUnavailable: @escaping (_ screenId: String) async -> Void,
@@ -228,6 +249,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
         self.onScreenHidden = onScreenHidden
+        self.onScreenWillNavigate = onScreenWillNavigate
         self.onScreenActive = onScreenActive
         self.onProductsResolved = onProductsResolved
         self.onProductsUnavailable = onProductsUnavailable
@@ -380,6 +402,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     func exitActiveScreenForTeardown(reason: CloseReason?, alreadyDismissed: Bool = false) async {
+        if exitRetirementTask == nil {
+            exitRetirementTask = Task { @MainActor in
+                await self.exitActiveScreenForTeardownUnbounded(reason: reason, alreadyDismissed: alreadyDismissed)
+            }
+        }
+        guard let task = exitRetirementTask else { return }
+        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        catch { onRuntimeFailure(activeScreenId ?? initialScreenID, error) }
+    }
+
+    private func exitActiveScreenForTeardownUnbounded(reason: CloseReason?, alreadyDismissed: Bool) async {
         // Revoke navigation admission, fail queued requests, then cancel and
         // drain the in-flight task: a suspended exit handshake or watchdog
         // must not resume - nor may a queued request restart the drain - and
@@ -418,17 +451,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
 
     func tearDown() async {
         if lifecycle == .tornDown { return }
-        if let teardownTask {
-            await teardownTask.value
-            return
+        if teardownTask == nil {
+            teardownTask = Task { @MainActor in await self.performTearDown() }
         }
-        let task = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.performTearDown()
-        }
-        teardownTask = task
-        await task.value
-        teardownTask = nil
+        guard let task = teardownTask else { return }
+        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        catch { onRuntimeFailure(activeScreenId ?? initialScreenID, error) }
+        if lifecycle == .tornDown { teardownTask = nil }
     }
 
     private func performTearDown() async {
@@ -738,6 +767,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     isBack: request.backLayer != nil,
                     backSteps: request.backSteps
                 )
+                if didNavigate { pageDeparture = nil }
                 await discardUncommittedController()
                 let completed = lifecycle == .installed && !Task.isCancelled
                     && !navigationAdmissionRevoked && didNavigate
@@ -809,6 +839,27 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let container = presentationLayer
         let backLocation = isBack ? pageBackLocation(steps: backSteps) : nil
         let lower = backLocation.flatMap { nativePages.indices.contains($0.page) ? nativePages[$0.page] : nil }
+        let opensLayer = !isBack && (spec.kind == .push || spec.kind == .modal)
+        if !opensLayer && (source.screenId != screenID || lower.map({ $0 !== source }) == true) {
+            // Settle the durable Journey checkpoint before any exit or page step.
+            // Opening a layer only covers its presenter; it is not a dismissal.
+            source.setPageInputEnabled(false, pausingTimeline: true)
+            let task: Task<JourneyScreenDismissalResult, Never>
+            if let prepared = pageDeparture, prepared.controller == ObjectIdentifier(source),
+               prepared.source == source.screenId, prepared.target == screenID {
+                task = prepared.task
+            } else {
+                let sourceID = source.screenId
+                task = Task { @MainActor in
+                    return await self.onScreenWillNavigate(sourceID, screenID)
+                }
+                pageDeparture = (controller: ObjectIdentifier(source), source: sourceID, target: screenID, task: task)
+            }
+            let result = await task.value
+            guard result == .handled, lifecycle == .installed, !Task.isCancelled,
+                  !navigationAdmissionRevoked, activeController === source else { return false }
+            source.setPageInputEnabled(true)
+        }
         if isBack, let lower, lower !== source {
             try await ExperiencePageBack.perform(cut: {
                 if lower.screenId != screenID || lower.pageHistory.entries.count - 1 != backLocation?.entry {
@@ -831,7 +882,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     guard let navigation = lower.navigationController else { throw CancellationError() }
                     if navigation.topViewController !== lower {
                         let leaving = self.activeController
-                        await leaving?.performExitHandshake(reduceMotion: reduceMotion, exitReason: .navigation)
+                        if let leaving {
+                            await leaving.performExitHandshake(reduceMotion: reduceMotion, exitReason: .navigation)
+                        }
                         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                             self.animateNavigationControllerOperation(screenId: screenID, completion: { result, _ in
                                 if result.reachedTarget { continuation.resume() }
@@ -868,7 +921,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             try await target.configurePushedPresentationHeight(from: source, availableSize: available)
         }
         try await target.preparePagePresentationPhase(.entering, reduceMotion: reduceMotion)
-        try await source.preparePagePresentationPhase(.exiting, reduceMotion: reduceMotion)
         let transition = pageTransition(revealing: target, covering: source, interactive: false)
         await transition.begin()
         let completed: Bool
@@ -895,7 +947,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             await transition.cancel()
             return false
         }
-        await onScreenHidden(source.screenId, .navigation(revealingScreenId: screenID))
         await transition.commit()
         return true
     }
@@ -907,7 +958,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                         covering outgoing: ExperienceScreenViewController?, interactive: Bool,
                         announce: Bool = true) -> ExperienceNativePageTransition {
         let previous = page.pageLifecycleSnapshot
-        return ExperienceNativePageTransition(interactive: interactive, start: { [weak self] in
+        return ExperienceNativePageTransition(interactive: interactive, onRetirementFailure: { [weak self] error in
+            self?.onRuntimeFailure(page.screenId, error)
+        }, start: { [weak self] in
             guard let self, self.lifecycle == .installed else { return }
             await self.revealPage(page, starting: true)
         }, finish: { [weak self] in

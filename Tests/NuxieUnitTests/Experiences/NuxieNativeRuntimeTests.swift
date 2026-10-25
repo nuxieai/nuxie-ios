@@ -915,6 +915,24 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
+    func testExecutorShutdownDoesNotJoinAWedgedNativeJobAndStillDrainsAcceptedCleanup() async {
+        let executor = NuxieRuntimePinnedThreadExecutor()
+        let entered = expectation(description: "native job entered")
+        let cleanup = expectation(description: "accepted cleanup eventually runs")
+        let release = DispatchSemaphore(value: 0)
+        executor.enqueue { entered.fulfill(); release.wait() }
+        executor.enqueue { cleanup.fulfill() }
+        await fulfillment(of: [entered], timeout: 1)
+        executor.shutdown()
+        // This line is unreachable with the old unbounded stopAndWait join.
+        release.signal()
+        await fulfillment(of: [cleanup], timeout: 1)
+        do {
+            _ = try await executor.call { 1 }
+            XCTFail("Shutdown must reject newly submitted work")
+        } catch { XCTAssertEqual(error as? NuxieRuntimeExecutorError, .closed) }
+    }
+
     func testExecutorCanReleaseItsLastOwnerOnTheWorkerThread() async {
         let released = expectation(description: "executor released on its worker")
         let holder = RuntimeExecutorHolder(NuxieRuntimePinnedThreadExecutor())

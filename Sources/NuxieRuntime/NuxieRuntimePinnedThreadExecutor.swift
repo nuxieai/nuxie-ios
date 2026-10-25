@@ -12,10 +12,8 @@ package enum NuxieRuntimeExecutorError: Error, Equatable, Sendable {
 package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
     private final class Worker: @unchecked Sendable {
         private let condition = NSCondition()
-        private let stopped = DispatchSemaphore(value: 0)
         private var jobs: [@Sendable () -> Void] = []
         private var isStopping = false
-        private var workerThread: pthread_t?
 
         func submit(_ job: @escaping @Sendable () -> Void) -> Bool {
             condition.lock()
@@ -33,26 +31,16 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
         }
 
         func run() {
-            condition.lock()
-            workerThread = pthread_self()
-            condition.unlock()
             while let job = nextJob() {
                 job()
             }
-            stopped.signal()
         }
 
-        func stopAndWait() {
+        func requestStop() {
             condition.lock()
-            let shouldSignal = !isStopping
-            let isWorkerThread = workerThread.map { pthread_equal($0, pthread_self()) != 0 }
-                ?? false
             isStopping = true
             condition.broadcast()
             condition.unlock()
-            if shouldSignal, !isWorkerThread {
-                stopped.wait()
-            }
         }
 
         private func nextJob() -> (@Sendable () -> Void)? {
@@ -82,7 +70,7 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
     }
 
     deinit {
-        worker.stopAndWait()
+        worker.requestStop()
     }
 
     package func call<T: Sendable>(
@@ -114,6 +102,8 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
     package var queuedJobCountForTesting: Int { worker.queuedJobCount }
 
     package func shutdown() {
-        worker.stopAndWait()
+        // A wedged driver must not block the releasing host thread. The worker
+        // still drains accepted jobs, retaining every captured native owner.
+        worker.requestStop()
     }
 }
