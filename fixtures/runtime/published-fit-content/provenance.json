@@ -1,6 +1,6 @@
 {
-  "compilerSource": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
-  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "compilerSource": "081909fa864006b398b4e6ec1a107e8f995ffeac",
+  "cleanParentHead": "081909fa864006b398b4e6ec1a107e8f995ffeac",
   "source": "tools/sdk-fixtures/sheets/published-fit-content",
   "sources": {
     "tools/sdk-fixtures/sheets/published-fit-content/experience.json": {
@@ -41,7 +41,7 @@
     "tools/sdk-fixtures/sheets/published-fit-content",
     "tools/sdk-fixtures/sheets/parla-large/experience.json",
     "<output-root>",
-    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+    "081909fa864006b398b4e6ec1a107e8f995ffeac"
   ],
   "commands": [
     [
@@ -53,7 +53,7 @@
       "tools/sdk-fixtures/sheets/published-fit-content",
       "tools/sdk-fixtures/sheets/parla-large/experience.json",
       "<output-root>",
-      "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+      "081909fa864006b398b4e6ec1a107e8f995ffeac"
     ],
     [
       "bash",
