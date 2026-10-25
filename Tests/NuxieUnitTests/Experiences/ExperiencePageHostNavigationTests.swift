@@ -1,5 +1,7 @@
 #if canImport(UIKit) && NUXIE_HOSTED_INPUT_TESTS
 import UIKit
+import QuartzCore
+import Metal
 import XCTest
 @testable import NuxieTestSupport
 @testable import NuxieRuntime
@@ -7,6 +9,260 @@ import XCTest
 
 @MainActor
 final class ExperiencePageHostNavigationTests: JourneyTestCase {
+    func testNativePageAbortTimesOutWithoutAbandoningItsPendingNativeWork() async {
+        let entered = expectation(description: "native reveal is waiting")
+        let abandoned = expectation(description: "native reveal eventually retires")
+        var release: CheckedContinuation<Void, Never>?
+        var errors: [Error] = []
+        let transition = ExperienceNativePageTransition(interactive: false,
+            onRetirementFailure: { errors.append($0) }, start: {
+                entered.fulfill()
+                await withCheckedContinuation { release = $0 }
+            }, finish: {}, abandon: { abandoned.fulfill() })
+        transition.retirementTimeoutNanoseconds = 1_000_000
+        let begin = Task { @MainActor in await transition.begin() }
+        await fulfillment(of: [entered], timeout: 1)
+        await transition.cancel()
+        XCTAssertEqual(errors.first as? ExperienceRuntimeRetirementError, .timedOut)
+        release?.resume(); release = nil
+        await begin.value
+        await fulfillment(of: [abandoned], timeout: 1)
+        await transition.cancel()
+        XCTAssertEqual(errors.count, 1)
+    }
+
+    func testPublishedResponseNavigationDrawsNothingNewUntilDismissalCheckpointSettles() async throws {
+        let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("forms-saves")
+        let (experience, artifact) = try await authenticatedFixtureArtifact(at: directory,
+            profileBytes: signedReleaseEntryProfileBytes(fixture: directory, host: "checkpoint-page.nuxie.test"))
+        let payload = artifact.payload
+        let source = try FixturePageRow.screenID("feedback", in: payload.renderPlan)
+        let destination = try FixturePageRow.screenID("welcome", in: payload.renderPlan)
+        let entered = expectation(description: "source dismissal checkpoint is waiting")
+        var release: CheckedContinuation<JourneyScreenDismissalResult, Never>?
+        var checkpoints = 0
+        defer { release?.resume(returning: .rejected) }
+        try await withCoordinator(presentation: (experience, artifact), initialScreenID: source, onWillNavigate: { from, to in
+            XCTAssertEqual(from, source)
+            XCTAssertEqual(to, destination)
+            checkpoints += 1
+            entered.fulfill()
+            return await withCheckedContinuation { release = $0 }
+        }) { coordinator, controller, _, _ in
+            let page = try XCTUnwrap(controller.interactivePage)
+            let loop = try XCTUnwrap(Mirror(reflecting: controller).children
+                .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+            XCTAssertTrue(controller.applyValue(path: .init(path: "experience/responses:feedback/comment"),
+                value: "edited response", screenId: source, instanceId: nil))
+            // applyValue admits FIFO work; it does not wait for the write's
+            // zero-delta reflection or presentation. Settle it before navigation.
+            try await loop.advanceZeroDelta(awaitsPresentation: true)
+            let editedRow = try await FixturePageRow.resolve(page, screenID: source).snapshot
+            let editedForm = try fixtureRowReference("experience/responses:feedback", in: editedRow)
+            XCTAssertEqual(editedRow.values.first { $0.ownerInstanceID == editedForm && $0.name == "comment" }?.value,
+                .bytes(Data("edited response".utf8)))
+            XCTAssertEqual(checkpoints, 0, "The edit settles without any navigation checkpoint")
+            await page.recordLifecycleWrites()
+            var deliveredSteps = 0
+            controller.onPageStep = { _ in deliveredSteps += 1 }
+            let finished = self.expectation(description: "navigation finished")
+            XCTAssertTrue(coordinator.navigate(to: destination, transition: ["type": "none"]) { result, _ in
+                XCTAssertTrue(result.reachedTarget)
+                finished.fulfill()
+            })
+            await self.fulfillment(of: [entered], timeout: 5)
+            let phasesAtCheckpoint = await page.lifecycleWriteLog
+            let mountedAtCheckpoint = await page.mountedScreenIDs
+            XCTAssertEqual(phasesAtCheckpoint, [], "No exit or incoming lifecycle write before the checkpoint")
+            XCTAssertEqual(mountedAtCheckpoint, [source])
+            // A source frame accepted just before the timeline pause may still
+            // be retiring. Wait for lane quiescence, never for pixels to match.
+            let idleDeadline = Date().addingTimeInterval(5)
+            while !controller.hasCompletedLatestFrame, Date() < idleDeadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(controller.hasCompletedLatestFrame, "The source lane must settle before the pixel baseline")
+            let elapsedAtBaseline = controller.timelineElapsedSeconds
+            let stepsAtBaseline = deliveredSteps
+            let surface = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? ExperienceRuntimeSurfaceView }.first)
+            // Use the current device-pixel size and scale, without resizing the
+            // live renderer. This is the same readback seam as the F6 count test.
+            @MainActor func pixels() async throws -> Data {
+                let width = Int(surface.metalLayer.drawableSize.width)
+                let height = Int(surface.metalLayer.drawableSize.height)
+                XCTAssertGreaterThan(width, 0); XCTAssertGreaterThan(height, 0)
+                let device = try await page.runtime.metalDevice().value
+                let layer = CAMetalLayer()
+                layer.device = device; layer.pixelFormat = .bgra8Unorm; layer.framebufferOnly = false
+                layer.drawableSize = CGSize(width: width, height: height)
+                let drawable = try XCTUnwrap(layer.nextDrawable())
+                let stride = (width * 4 + 255) & ~255
+                let buffer = try XCTUnwrap(device.makeBuffer(length: stride * height, options: .storageModeShared))
+                let rendered = self.expectation(description: "checkpoint pixel readback")
+                let scale = Float(surface.runtimeDisplayScale)
+                let target = NuxieNativeDrawable(drawable)
+                let readback = NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride)
+                // Read back on the same lane as accepted writes and source
+                // steps, without requesting another advance or presentation.
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    loop.enqueue(.init {
+                        let frame = try await page.runtime.renderFrame(layoutScaleFactor: scale,
+                            drawable: .available(target), readback: readback, completion: { rendered.fulfill() })
+                        return .work(requestsFrame: false) {
+                            XCTAssertEqual(frame.outcome.disposition, .presented)
+                        }
+                    }, completion: { continuation.resume(with: $0) })
+                }
+                await self.fulfillment(of: [rendered], timeout: 5)
+                var data = Data()
+                for row in 0..<height {
+                    data.append(buffer.contents().assumingMemoryBound(to: UInt8.self) + row * stride, count: width * 4)
+                }
+                return data
+            }
+            let before = try await pixels()
+            controller.advance(delta: 1 / 60)
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let waiting = try await pixels()
+            XCTAssertTrue(waiting == before, "Zero changed pixels while the source checkpoint waits")
+            XCTAssertEqual(controller.timelineElapsedSeconds, elapsedAtBaseline)
+            XCTAssertEqual(deliveredSteps, stepsAtBaseline, "No source advance during the settled checkpoint wait")
+            let phasesWhileWaiting = await page.lifecycleWriteLog
+            XCTAssertEqual(phasesWhileWaiting, [], "No lifecycle or page step starts while the checkpoint waits")
+            XCTAssertEqual(controller.screenId, source)
+            XCTAssertFalse(controller.view.isUserInteractionEnabled)
+            let mounted = await page.mountedScreenIDs
+            XCTAssertEqual(mounted, [source], "No incoming expansion or step_begin before the checkpoint")
+            let resume = release; release = nil; resume?.resume(returning: .handled)
+            await self.fulfillment(of: [finished], timeout: 5)
+            let row = try await FixturePageRow.resolve(page, screenID: destination).snapshot
+            let form = try fixtureRowReference("experience/responses:feedback", in: row)
+            XCTAssertEqual(row.values.first { $0.ownerInstanceID == form && $0.name == "comment" }?.value,
+                .bytes(Data("edited response".utf8)))
+            XCTAssertEqual(checkpoints, 1, "Navigation must not commit the dismissal twice")
+        }
+    }
+
+    func testHandledCheckpointLeavesTheOnlyExitAndWaitToThePageStep() async throws {
+        let entered = expectation(description: "checkpoint before any exit")
+        var release: CheckedContinuation<JourneyScreenDismissalResult, Never>?
+        defer { release?.resume(returning: .rejected) }
+        try await withCoordinator(onWillNavigate: { _, _ in
+            entered.fulfill()
+            return await withCheckedContinuation { release = $0 }
+        }) { coordinator, controller, _, _ in
+            let page = try XCTUnwrap(controller.interactivePage)
+            await page.recordLifecycleWrites()
+            var waits = 0
+            controller.onExitCompletionWait = { waits += 1 }
+            let finished = self.expectation(description: "handled step finished")
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { result, _ in
+                XCTAssertTrue(result.reachedTarget)
+                finished.fulfill()
+            })
+            await self.fulfillment(of: [entered], timeout: 5)
+            let pendingWrites = await page.lifecycleWriteLog
+            XCTAssertEqual(pendingWrites, [])
+            XCTAssertEqual(controller.lifecyclePhase, .active)
+            XCTAssertEqual(waits, 0)
+            let resume = release; release = nil; resume?.resume(returning: .handled)
+            await self.fulfillment(of: [finished], timeout: 5)
+            let writes = await page.lifecycleWriteLog ?? []
+            XCTAssertEqual(writes.filter { $0.phase == .exiting }, [.init(screenID: "A", phase: .exiting)])
+            XCTAssertEqual(waits, 1, "The page transition owns the only completion wait")
+        }
+    }
+
+    func testTerminalDismissalCheckpointNeverStartsIncomingPageStep() async throws {
+        for outcome in [JourneyScreenDismissalResult.completed, .rejected] {
+            try await withCoordinator(onWillNavigate: { _, _ in outcome }) { coordinator, controller, _, _ in
+                let page = try XCTUnwrap(controller.interactivePage)
+                await page.recordLifecycleWrites()
+                var waits = 0
+                controller.onExitCompletionWait = { waits += 1 }
+                let finished = self.expectation(description: "terminal navigation result")
+                XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "none"]) { result, _ in
+                    XCTAssertFalse(result.reachedTarget); finished.fulfill()
+                })
+                await self.fulfillment(of: [finished], timeout: 5)
+                XCTAssertEqual(controller.screenId, "A")
+                XCTAssertEqual(controller.lifecyclePhase, .active)
+                let mounted = await controller.interactivePage?.mountedScreenIDs
+                XCTAssertEqual(mounted, ["A"])
+                let writes = await page.lifecycleWriteLog
+                XCTAssertEqual(writes, [], "Terminal checkpoint outcomes must never write exiting")
+                XCTAssertEqual(waits, 0)
+            }
+        }
+    }
+
+    func testOpeningPushOrModalNeverDismissesItsPresentingScreen() async throws {
+        let transitions: [[String: Any]] = [
+            ["type": "push"],
+            ["type": "modal", "present": "sheet"],
+            ["type": "modal", "present": "fullscreen"]
+        ]
+        for transition in transitions {
+            try await withCoordinator(onWillNavigate: { _, _ in
+                XCTFail("Opening a layer must not checkpoint its presenter")
+                return .rejected
+            }) { coordinator, presenter, probe, _ in
+                let page = try XCTUnwrap(presenter.interactivePage)
+                let before = try await page.snapshot(screenID: "A").rootInstanceID
+                await page.recordLifecycleWrites()
+                probe.lifecycle.removeAll()
+                try await self.navigate(coordinator, to: "B", transition: transition)
+                XCTAssertFalse(probe.lifecycle.contains("hidden:A"), "No didDismissScreen when a layer opens")
+                XCTAssertEqual(presenter.screenId, "A")
+                let active = await page.activeScreenID
+                let mounted = await page.mountedScreenIDs
+                let after = try await page.snapshot(screenID: "A").rootInstanceID
+                let writes = await page.lifecycleWriteLog ?? []
+                XCTAssertEqual(active, "A", "Coverage preserves the presenter's selected active row")
+                XCTAssertEqual(mounted, ["A"])
+                XCTAssertEqual(before, after)
+                XCTAssertFalse(writes.contains { $0.phase == .exiting })
+                XCTAssertFalse(presenter.view.isUserInteractionEnabled)
+                XCTAssertEqual(coordinator.activeScreenId, "B")
+            }
+        }
+    }
+
+    func testBackAcrossPagesCheckpointsBeforeTheUpperPagesSingleExit() async throws {
+        let transitions: [[String: Any]] = [["type": "push"], ["type": "modal", "present": "sheet"]]
+        for transition in transitions {
+            var upperPage: ExperienceInteractivePage?
+            var checkpoints = 0
+            try await withCoordinator(onWillNavigate: { from, to in
+                checkpoints += 1
+                XCTAssertEqual(from, "B")
+                XCTAssertEqual(to, "A")
+                guard let page = upperPage else {
+                    XCTFail("Back must checkpoint the mounted upper page")
+                    return .rejected
+                }
+                let writes = await page.lifecycleWriteLog
+                XCTAssertEqual(writes, [], "Back checkpoints before the upper page exits")
+                return .handled
+            }) { coordinator, lower, _, _ in
+                try await self.navigate(coordinator, to: "B", transition: transition)
+                let navigation = transition["type"] as? String == "push"
+                    ? lower.navigationController : coordinator.topPresentedLayer as? UINavigationController
+                let upper = try XCTUnwrap(navigation?.topViewController as? ExperienceScreenViewController)
+                let page = try XCTUnwrap(upper.interactivePage)
+                upperPage = page
+                await page.recordLifecycleWrites()
+                XCTAssertEqual(checkpoints, 0)
+                try await self.back(coordinator, to: "A")
+                let writes = await page.lifecycleWriteLog ?? []
+                XCTAssertEqual(writes.filter { $0.phase == .exiting }, [.init(screenID: "B", phase: .exiting)])
+                XCTAssertEqual(checkpoints, 1)
+                XCTAssertEqual(lower.lifecyclePhase, .active)
+                XCTAssertEqual(coordinator.activeScreenId, "A")
+            }
+        }
+    }
+
     func testRealCompletionsForwardBackAndRevisitUseOneControllerAndPlayer() async throws {
         try await withCoordinator { coordinator, controller, probe, preparation in
             XCTAssertTrue(controller.isPageController)
@@ -937,23 +1193,35 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         withExtendedLifetime(service) {}
     }
 
-    private func withCoordinator(payload suppliedPayload: AuthenticatedRuntimePayload? = nil,
+    private func withCoordinator(presentation suppliedPresentation: (Experience, LoadedExperienceArtifact)? = nil,
+        payload suppliedPayload: AuthenticatedRuntimePayload? = nil,
+        initialScreenID: String? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil,
+        onWillNavigate: @escaping @MainActor (String, String) async -> JourneyScreenDismissalResult = { _, _ in .handled },
         onActive: (@MainActor (String) async -> Void)? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
-        let payload: AuthenticatedRuntimePayload
-        if let suppliedPayload { payload = suppliedPayload }
-        else { payload = try await hostedLiveMovePayload() }
-        let root = experiencePreparationRepositoryRoot()
-        let experience = Experience(id: "layer-host", versionId: "layer-version", buildId: "layer-build",
-            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
-            behaviorPresentationScreens: [:], assetBaseURL: root, journey: payload.journey, definition: payload.definition)
-        let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
-            sceneURL: root.appendingPathComponent("fixtures/runtime/page-host-live-moves/page2.riv"), sceneBytes: payload.sceneBytes,
-            assetURLsByUniqueName: [:], source: .cache, payload: payload,
-            interactivePreparation: .init(cache: hostedLiveMovePreparationCache(), provenance: UUID().uuidString, payload: payload),
-            products: [], resourceMetrics: .zero, productResolver: productResolver)
-        let preparation = try await acquired.interactivePreparation.preparation()
+        let experience: Experience
+        let artifact: LoadedExperienceArtifact
+        if let suppliedPresentation {
+            // Keep signed acquisition's resource bindings and ordinary preparation.
+            experience = suppliedPresentation.0
+            artifact = suppliedPresentation.1
+        } else {
+            let payload: AuthenticatedRuntimePayload
+            if let suppliedPayload { payload = suppliedPayload }
+            else { payload = try await hostedLiveMovePayload() }
+            let root = experiencePreparationRepositoryRoot()
+            experience = Experience(id: "layer-host", versionId: "layer-version", buildId: "layer-build",
+                artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+                behaviorPresentationScreens: [:], assetBaseURL: root, journey: payload.journey, definition: payload.definition)
+            let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+                sceneURL: root.appendingPathComponent("fixtures/runtime/page-host-live-moves/page2.riv"), sceneBytes: payload.sceneBytes,
+                assetURLsByUniqueName: [:], source: .cache, payload: payload,
+                interactivePreparation: .init(cache: hostedLiveMovePreparationCache(), provenance: UUID().uuidString, payload: payload),
+                products: [], resourceMetrics: .zero, productResolver: productResolver)
+            artifact = .init(acquired: acquired)
+        }
+        let preparation = try await artifact.acquired.interactivePreparation.preparation()
         let host = UIViewController()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let oldKey = scene.windows.first(where: \.isKeyWindow)
@@ -964,10 +1232,12 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         host.modalPresentationStyle = .fullScreen
         await withCheckedContinuation { continuation in presenter.present(host, animated: false) { continuation.resume() } }
         let probe = LayerHostProbe()
-        let coordinator = ExperienceScreenTransitionCoordinator(experience: experience, artifact: .init(acquired: acquired),
+        let coordinator = ExperienceScreenTransitionCoordinator(experience: experience, artifact: artifact,
+            initialScreenID: initialScreenID,
             hostViewController: host, screenDelegate: probe,
             onPresentedScreenDismissed: { _, _ in },
             onScreenHidden: { id, _ in probe.lifecycle.append("hidden:\(id)") },
+            onScreenWillNavigate: onWillNavigate,
             onScreenActive: { id in
                 probe.lifecycle.append("active:\(id)")
                 await onActive?(id)

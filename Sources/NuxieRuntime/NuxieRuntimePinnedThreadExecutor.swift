@@ -11,7 +11,7 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
 
     package init() {}
 
-    deinit { native.shutdown() }
+    deinit { native.close() }
 
     package func call<T: Sendable>(
         _ operation: @escaping @Sendable () throws -> T
@@ -41,6 +41,10 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
 
     package var queuedJobCountForTesting: Int { native.pendingCount }
 
-    package func shutdown() { native.shutdown() }
+    package func shutdown() {
+        // A wedged driver must not block the releasing host thread. The worker
+        // still drains accepted jobs, retaining every captured native owner.
+        native.close()
+    }
 }
 #endif

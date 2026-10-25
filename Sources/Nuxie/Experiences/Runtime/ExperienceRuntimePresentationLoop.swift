@@ -700,7 +700,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var inFlightFrameIDs: Set<UInt64> = []
     private var terminalError: Error?
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
-    private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
+    private var retirementTask: Task<Void, Never>?
+    var retirementTimeoutNanoseconds = ExperienceRuntimeRetirement.timeoutNanoseconds
 
     init(
         session: ExperienceRuntimePresentationSession,
@@ -815,11 +816,26 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     func shutdown() async {
-        if isShuttingDown {
-            await waitForShutdownToFinish()
-            return
-        }
-        guard isStarted || operationInFlight || sessionIsOpen else { return }
+        guard let task = beginRetirement() else { return }
+        do {
+            try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds) {
+                await task.value
+            }
+        } catch { reportTerminal(error) }
+    }
+
+    /// Used only inside a bounded, owning retirement task. Joining this work
+    /// retains the session and its resources after the host deadline expires.
+    func retireSession() async {
+        guard let task = beginRetirement() else { return }
+        await task.value
+    }
+
+    private func beginRetirement() -> Task<Void, Never>? {
+        if let retirementTask { return retirementTask }
+        guard isStarted || operationInFlight || sessionIsOpen else { return nil }
+        // Fence admission and cancel queued work in the caller's MainActor
+        // turn. Only draining accepted work and native cleanup may be deferred.
         isShuttingDown = true
         endActiveInput()
         lifecycleGeneration &+= 1
@@ -838,6 +854,15 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         invalidateDisplayLink()
         removeApplicationObservers()
         surfaceView?.runtimeObserver = nil
+        let task = Task { @MainActor in
+            await self.finishRetirement()
+            self.retirementTask = nil
+        }
+        retirementTask = task
+        return task
+    }
+
+    private func finishRetirement() async {
         await waitForStartToFinish()
         await waitForOperationToFinish()
         await waitForFramesToFinish()
@@ -861,7 +886,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         surfaceView?.metalLayer.device = nil
         lastAppliedSize = nil
         isShuttingDown = false
-        resumeShutdownWaiters()
     }
 
     /// Queues product work behind all previously accepted native operations.
@@ -1599,22 +1623,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
     }
 
-    private func waitForShutdownToFinish() async {
-        guard isShuttingDown else { return }
-        await withCheckedContinuation { shutdownWaiters.append($0) }
-    }
-
     private func resumeIdleWaiters() {
         let waiters = idleWaiters
         idleWaiters.removeAll()
         waiters.forEach { $0.resume() }
     }
 
-    private func resumeShutdownWaiters() {
-        let waiters = shutdownWaiters
-        shutdownWaiters.removeAll()
-        waiters.forEach { $0.resume() }
-    }
 }
 
 extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserver {

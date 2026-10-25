@@ -25,6 +25,7 @@ struct AuthenticatedRuntimePayload: Sendable {
     let sceneBytes: Data
     let assets: [AuthenticatedRuntimeAsset]
     let videoFileLease: JourneyReleaseVideoFileLease?
+    let artifactFileLease: JourneyReleaseArtifactFileLease?
 
     init(
         valuePolicy: JourneyReleaseValuePolicy = .init(state: [:], responses: [:], ruleGroups: []),
@@ -35,7 +36,8 @@ struct AuthenticatedRuntimePayload: Sendable {
         definition: ExperienceDefinition? = nil,
         sceneBytes: Data,
         assets: [AuthenticatedRuntimeAsset],
-        videoFileLease: JourneyReleaseVideoFileLease? = nil
+        videoFileLease: JourneyReleaseVideoFileLease? = nil,
+        artifactFileLease: JourneyReleaseArtifactFileLease? = nil
     ) {
         self.valuePolicy = valuePolicy
         self.authenticatedKeyID = authenticatedKeyID
@@ -46,6 +48,7 @@ struct AuthenticatedRuntimePayload: Sendable {
         self.sceneBytes = sceneBytes
         self.assets = assets
         self.videoFileLease = videoFileLease
+        self.artifactFileLease = artifactFileLease ?? videoFileLease
     }
 }
 

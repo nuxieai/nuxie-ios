@@ -95,6 +95,13 @@ protocol ExperienceRuntimeDelegate: AnyObject {
 
     func experienceViewController(
         _ controller: ExperienceViewController,
+        willDismissScreen screenId: String,
+        revealingScreenId: String?,
+        method: String
+    ) async -> JourneyScreenDismissalResult
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
         didFailToResolveProductsFor screenId: String
     ) async
 
@@ -213,6 +220,13 @@ extension ExperienceRuntimeDelegate {
         revealingScreenId: String?,
         method: String
     ) async {}
+
+    func experienceViewController(
+        _ controller: ExperienceViewController,
+        willDismissScreen screenId: String,
+        revealingScreenId: String?,
+        method: String
+    ) async -> JourneyScreenDismissalResult { .handled }
 
     func experienceViewController(
         _ controller: ExperienceViewController,
@@ -461,6 +475,8 @@ class ExperienceViewController: NuxiePlatformViewController {
     private var presentationRevealTask: Task<Void, Never>?
     private var runtimePreparationGeneration: UInt64 = 0
     private var runtimeShutdownTask: Task<Void, Never>?
+    private var hostRetirementTask: Task<Void, Never>?
+    private var dismissalRetirementTask: Task<Void, Never>?
     private var runtimeShutdownID: UUID?
     private var presentationTraceToken: ExperiencePresentationTraceToken?
     private var presentationInitialScreenID: String?
@@ -801,6 +817,18 @@ class ExperienceViewController: NuxiePlatformViewController {
     /// Every show builds a new controller, so a later show opens an entirely
     /// new native ownership graph.
     func shutdownRuntime() async {
+        if hostRetirementTask == nil {
+            hostRetirementTask = Task { @MainActor in
+                await self.shutdownRuntimeUnbounded()
+                self.hostRetirementTask = nil
+            }
+        }
+        guard let task = hostRetirementTask else { return }
+        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        catch { reportRetirementFailure(error) }
+    }
+
+    private func shutdownRuntimeUnbounded() async {
         dismissalTask?.cancel()
         dismissalTask = nil
         releasePresentationWarmReservation()
@@ -844,6 +872,18 @@ class ExperienceViewController: NuxiePlatformViewController {
     }
 
     func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {
+        if dismissalRetirementTask == nil {
+            dismissalRetirementTask = Task { @MainActor in
+                await self.prepareForDismissalUnbounded(reason: reason, alreadyDismissed: alreadyDismissed)
+                self.dismissalRetirementTask = nil
+            }
+        }
+        guard let task = dismissalRetirementTask else { return }
+        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        catch { reportRetirementFailure(error) }
+    }
+
+    private func prepareForDismissalUnbounded(reason: CloseReason?, alreadyDismissed: Bool) async {
         #if canImport(UIKit)
         resolveInitialContentHeight(ready: false)
         #endif
@@ -856,7 +896,8 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     private func joinRuntimeShutdown() async {
         if let runtimeShutdownTask {
-            await runtimeShutdownTask.value
+            do { try await ExperienceRuntimeRetirement.wait { await runtimeShutdownTask.value } }
+            catch { reportRetirementFailure(error) }
             return
         }
 
@@ -874,7 +915,13 @@ class ExperienceViewController: NuxiePlatformViewController {
         }
         runtimeShutdownID = shutdownID
         runtimeShutdownTask = task
-        await task.value
+        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        catch { reportRetirementFailure(error) }
+    }
+
+    private func reportRetirementFailure(_ error: Error) {
+        LogError("ExperienceViewController: native retirement failed: \(error)")
+        viewModel.handleLoadingFailed(error)
     }
 
     private func performRuntimeShutdown() async {
@@ -1333,6 +1380,11 @@ class ExperienceViewController: NuxiePlatformViewController {
                             context: context,
                             generation: generation
                         )
+                    },
+                    onScreenWillNavigate: { [weak self] source, target in
+                        guard let self, self.runtimeSession.isReady(generation) else { return .rejected }
+                        return await self.runtimeDelegate?.experienceViewController(self,
+                            willDismissScreen: source, revealingScreenId: target, method: "navigate") ?? .handled
                     },
                     onScreenActive: { [weak self] screenId in
                         await self?.handleNativeScreenActive(

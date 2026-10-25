@@ -4392,12 +4392,10 @@ final class NuxieNativeExecutor: @unchecked Sendable {
         return count
     }
 
-    func shutdown() {
+    /// Stops admission without joining the worker, which still drains accepted work.
+    func close() {
         guard let handle else { return }
         _ = nux_executor_close(handle)
-        var terminated = false
-        // WrongThread is intentional when the final Swift owner dies in a job.
-        _ = nux_executor_wait(handle, UInt64.max, &terminated)
     }
 }
 

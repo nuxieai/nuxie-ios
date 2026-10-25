@@ -48,7 +48,15 @@ actor ExperienceInteractivePage {
     var retainedScreenIDs: Set<String> { Set(rows.keys) }
     var mountedScreenIDs: [String] { rowList.screenIDs }
     private var closed = false
+    private var retirementTask: Task<Void, Error>?
     private(set) var activeScreenID: String?
+    // Opt-in probe of committed lifecycle writes, including standalone handshakes.
+    struct LifecycleWrite: Equatable, Sendable {
+        let screenID: String
+        let phase: ExperienceScreenLifecyclePhase
+    }
+    private(set) var lifecycleWriteLog: [LifecycleWrite]?
+    func recordLifecycleWrites() { lifecycleWriteLog = [] }
     private var activeRowReference: NuxieNativeViewModelReference?
     private(set) var videoPlayback: ExperienceVideoPlayback?
     private nonisolated let layoutBounds = ExperienceLayoutBounds(.zero)
@@ -437,6 +445,7 @@ actor ExperienceInteractivePage {
         }
         _ = try await runtime.mutateViewModel(mutations)
         for (id, lifecycle) in updated { rows[id]?.lifecycle = lifecycle }
+        lifecycleWriteLog?.append(contentsOf: phases.map { .init(screenID: $0.0, phase: $0.1) })
     }
 
     func applyLifecycleSnapshot(_ snapshot: ExperienceScreenLifecycleSnapshot, screenID: String) async throws {
@@ -452,6 +461,7 @@ actor ExperienceInteractivePage {
 
     private func storeLifecycle(_ snapshot: ExperienceScreenLifecycleSnapshot, screenID: String) {
         rows[screenID]?.lifecycle = .init(snapshot: snapshot)
+        lifecycleWriteLog?.append(.init(screenID: screenID, phase: snapshot.phase))
     }
 
     func applyJourneyState(_ command: ExperienceInteractiveStateCommand, screenID: String,
@@ -705,7 +715,16 @@ actor ExperienceInteractivePage {
     }
 
     func close() async throws {
-        try await gate.withLock { [self] in try await closeLocked() }
+        let task: Task<Void, Error>
+        if let retirementTask { task = retirementTask }
+        else {
+            task = Task {
+                defer { self.retirementTask = nil }
+                try await self.gate.withLock { [self] in try await closeLocked() }
+            }
+            retirementTask = task
+        }
+        try await ExperienceRuntimeRetirement.wait { try await task.value }
     }
 
     private func closeLocked() async throws {

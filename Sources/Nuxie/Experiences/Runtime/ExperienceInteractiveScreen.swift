@@ -1138,11 +1138,10 @@ final class ExperiencePresentationWarmReservation: @unchecked Sendable {
 
 /// Releases evicted native preparations away from the caller's thread.
 ///
-/// A prepared release owns a native executor whose deinit waits for accepted
-/// work to drain when called outside its worker thread.
-/// The final reference must never drop on the cache actor's cooperative
-/// thread or on the main thread, so evicted entries are handed here and
-/// released on a serial utility queue.
+/// Executor release requests a stop without joining a stalled worker;
+/// accepted native cleanup remains owned by that worker until it runs.
+/// Other preparation resources still retire on this serial utility queue,
+/// keeping their final release off the cache actor and the main thread.
 enum NativePreparationDisposer {
     /// Internal so a test can hold it to observe where the last release lands.
     static let queue = DispatchQueue(
