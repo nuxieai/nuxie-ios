@@ -1,6 +1,6 @@
 {
-  "compilerSource": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
-  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
+  "compilerSource": "081909fa864006b398b4e6ec1a107e8f995ffeac",
+  "cleanParentHead": "081909fa864006b398b4e6ec1a107e8f995ffeac",
   "source": "tests/fixtures/e2e-experience-files/presentation-sheets",
   "sources": {
     "tests/fixtures/e2e-experience-files/presentation-sheets/experience.json": {
@@ -44,8 +44,8 @@
       "sizeBytes": 78
     },
     "tests/fixtures/e2e-experience-files/presentation-sheets/styles/common.css": {
-      "sha256": "adf438ce267bafa336c84c4a6bbf234f85b5868ab26d0c77f85c86efe06bc318",
-      "sizeBytes": 661
+      "sha256": "b9a24f8bc1dd66b1a3f8e23b35c789b45d0cb195ccdecae21cbec70ccb9af851",
+      "sizeBytes": 685
     },
     "tools/sdk-fixtures/sheets/parla-large/experience.json": {
       "sha256": "8de24a5eb47447eea880a440c1b5847cd8d47ccf24aadd83abed0a1dc0987bcb",
@@ -65,7 +65,7 @@
     "tools/sdk-fixtures/sheets/published-fit-content",
     "tools/sdk-fixtures/sheets/parla-large/experience.json",
     "<output-root>",
-    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+    "081909fa864006b398b4e6ec1a107e8f995ffeac"
   ],
   "commands": [
     [
@@ -77,7 +77,7 @@
       "tools/sdk-fixtures/sheets/published-fit-content",
       "tools/sdk-fixtures/sheets/parla-large/experience.json",
       "<output-root>",
-      "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+      "081909fa864006b398b4e6ec1a107e8f995ffeac"
     ]
   ],
   "signing": {
@@ -130,44 +130,51 @@
           "closedby": "any"
         }
       }
+    ],
+    "migratedForCompiler2b": [
+      {
+        "old": "Only Lesson explicitly used border-box; Offer and Saved inherited common main width 100% plus padding with content-box sizing. Offer also authors height 100% plus vertical padding.",
+        "new": "Shared styles/common.css main authors box-sizing: border-box for Lesson, Offer and Saved; Lesson's duplicate declaration is removed. All three selected roots must carry boxSizing border-box in both Parla variants.",
+        "why": "Magic Move lead diagnoses the same fixture sizing assumption as phase 13. The phase 14 ios-medium.png and ios-large-swipe-blocked.png show Offer text clipped at the right edge and Save below the bottom. Target: Save this offer fully inside both sheets and body text wrapping within their width; no new rendering measurements are claimed."
+      }
     ]
   },
   "files": {
     "release-entry.json": {
-      "sha256": "aef6f71b23b6e9f541c6a23f2091a7d3463000dc292e244978edc173513694c9",
+      "sha256": "b5d0ef31ae175b5393c4064aaba50fcf8cbd25280ab5298f3db9d1aeda2d31b3",
       "sizeBytes": 13017
     },
     "descriptor.json": {
-      "sha256": "2f6911be29ce83083e4dfaa9eebba49074d7d23d99d8c531d2928864c7db523b",
+      "sha256": "7cf9b30fa2df934328568691cfd917138fdb9e864dbe8f0c6f7355672f5210a4",
       "sizeBytes": 9112
     },
     "publish-source.json": {
-      "sha256": "c10a72efb9b10ee95666731017808c033bdfe3cfa2194ff85b8f6f0fa1bc4399",
-      "sizeBytes": 72020
+      "sha256": "12cea17416ab4aa3f9cea6eff4a9f29698b849d7fa417545fe2c77da0d6b832d",
+      "sizeBytes": 72155
     },
-    "renders/sha256/a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a.nux": {
-      "sha256": "a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a",
-      "sizeBytes": 13376
+    "renders/sha256/5c1ad114f1dd0333b14877dc9c10122df70d46978d3d5684b08ba389d7e54eb7.nux": {
+      "sha256": "5c1ad114f1dd0333b14877dc9c10122df70d46978d3d5684b08ba389d7e54eb7",
+      "sizeBytes": 13397
     },
     "assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": {
       "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
       "sizeBytes": 879708
     },
     "variants/large/release-entry.json": {
-      "sha256": "92c2dc6b2f0bcc27f6a0da10084991e0b30ec2bd056d64e2df4c6c4438b9942c",
+      "sha256": "0d2315a8b26876010a283ba2abeaa401189c2640f9edaa6729cb4e2775270cc7",
       "sizeBytes": 13017
     },
     "variants/large/descriptor.json": {
-      "sha256": "c5ae8aedab6feb776bd6f28231e0415a7dd180a511394721f80cd431931d9db4",
+      "sha256": "e28b5686963a75ad14b1f4e96f87307dc46bda5c6667f4f71530d074b776fdea",
       "sizeBytes": 9112
     },
     "variants/large/publish-source.json": {
-      "sha256": "23960904b64bfb9e914082de934d4aa3ad77dc5caf4cf5231ea36ae4c4630f56",
-      "sizeBytes": 72662
+      "sha256": "e0d15e6585660cba5803f6ea05dbfdd805e6c11fcd75636ba5d2279cf957272c",
+      "sizeBytes": 72797
     },
-    "variants/large/renders/sha256/a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a.nux": {
-      "sha256": "a9f26af8cc367065fca96434a940e88d1f4afe29efeb1e95db59d8025c2e693a",
-      "sizeBytes": 13376
+    "variants/large/renders/sha256/5c1ad114f1dd0333b14877dc9c10122df70d46978d3d5684b08ba389d7e54eb7.nux": {
+      "sha256": "5c1ad114f1dd0333b14877dc9c10122df70d46978d3d5684b08ba389d7e54eb7",
+      "sizeBytes": 13397
     },
     "variants/large/assets/sha256/4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf.ttf": {
       "sha256": "4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf",
