@@ -68,7 +68,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: top), 100)
             }
             XCTAssertGreaterThan(ordinaryTextColorInk(frame.pixels, top: 464), 100,
-                "Emoji must draw saturated colour artwork, independent of the OS bitmap format")
+                "Emoji must draw saturated color artwork, independent of the OS bitmap format")
             // CoreText may select LastResort artwork for U+10FFFF, as rive-ios permits.
             XCTAssertGreaterThan(ordinaryTextInk(frame.pixels, top: 680), 100,
                 "The primary Latin face must keep drawing")
@@ -1633,8 +1633,8 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         let a = index < alpha.count ? Int(alpha[index]) : 255
         var pixel: [UInt8] = []
         for channel in 0..<3 {
-            let colour = Int(palette[index * 3 + channel])
-            pixel.append(UInt8((colour * a + 127) / 255))
+            let color = Int(palette[index * 3 + channel])
+            pixel.append(UInt8((color * a + 127) / 255))
         }
         pixel.append(UInt8(a))
         return pixel

@@ -219,9 +219,9 @@ package enum ExperienceRuntimeFontFallbackProvider {
                     .contains { bytes[$0] != 0 }
             }
             guard hasInk, let comparison = draw(fill: 1) else { return nil }
-            // A colour face also contains ordinary outlines (e.g. # and
-            // unpaired regional indicators). Preserve their text-colour path:
-            // true colour artwork is independent of the context's fill.
+            // A color face also contains ordinary outlines (e.g. # and
+            // unpaired regional indicators). Preserve their text-color path:
+            // true color artwork is independent of the context's fill.
             let samePixels = withExtendedLifetime((bitmap, comparison)) {
                 guard let first = bitmap.data, let second = comparison.data else { return false }
                 let count = bitmap.bytesPerRow * bitmap.height

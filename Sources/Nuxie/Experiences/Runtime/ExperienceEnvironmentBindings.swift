@@ -4,7 +4,7 @@ import NuxieRuntime
 
 /// Resolves only slots declared by an artifact, preserving older env schemas.
 struct ExperienceEnvironmentBindings: Sendable {
-    /// The global whose authored `light` and `dark` instances carry an Experience's themed colours.
+    /// The global whose authored `light` and `dark` instances carry an Experience's themed colors.
     static let themeGlobalName = "Theme"
 
     private let properties: [String: NuxieNativeViewModelCatalog.Property]

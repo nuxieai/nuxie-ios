@@ -1879,7 +1879,7 @@ actor ExperienceInteractiveScreen {
                     safeArea: initialSafeArea, colorScheme: initialColorScheme)
                 if !mutations.isEmpty { _ = try await runtime.mutateViewModel(mutations) }
             }
-            // The first frame draws themed colours from the instance for the device's appearance.
+            // The first frame draws themed colors from the instance for the device's appearance.
             if let initialColorScheme, environmentBindings.themeSelection(for: initialColorScheme) != nil {
                 _ = try await runtime.bindGlobalViewModel(named: ExperienceEnvironmentBindings.themeGlobalName,
                     authoredInstanceNamed: initialColorScheme.label)
@@ -1991,7 +1991,7 @@ actor ExperienceInteractiveScreen {
         return try await operationGate.withLock { try await runtime.snapshot(environmentReference) }
     }
 
-    /// Writes the declared env slots. A colour scheme also binds the matching `Theme` instance,
+    /// Writes the declared env slots. A color scheme also binds the matching `Theme` instance,
     /// in the same serialized operation, so the next step draws both together.
     func updateEnvironment(reduceMotion: Bool? = nil, fontScale: Double? = nil,
                            safeArea: ExperienceSafeAreaInsets? = nil,

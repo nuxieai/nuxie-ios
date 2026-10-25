@@ -44,7 +44,7 @@ final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
     func testPictureCallbackDoesNotEmitForMissingOrInklessGlyphs() throws {
         let font = try selected("😀")
         let space = glyph(0x20, in: font)
-        XCTAssertNotEqual(space, 0, "The colour face must have a real space glyph")
+        XCTAssertNotEqual(space, 0, "The color face must have a real space glyph")
         let owner = ExperienceRuntimeFontFallbackProvider.OutlineFont(font)
         let context = Unmanaged.passRetained(owner)
         let callbacks = ExperienceRuntimeFontFallbackProvider.callbacks(for: owner, context: context.toOpaque())
@@ -125,7 +125,7 @@ final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
                     let rgb = [actual[$0], actual[$0 + 1], actual[$0 + 2]]
                     return Int(rgb.max()!) - Int(rgb.min()!) > 50 && actual[$0 + 3] > 100
                 }.count
-                XCTAssertGreaterThan(saturated, 100, "The PNG must contain colour artwork")
+                XCTAssertGreaterThan(saturated, 100, "The PNG must contain color artwork")
             }
         }
     }
@@ -154,7 +154,7 @@ final class ExperienceRuntimeFontFallbackProviderTests: XCTestCase {
                 guard let context else { return }
                 Unmanaged<PictureAnswer>.fromOpaque(context).takeUnretainedValue().calls += 1
             }, sinkContext)
-            XCTAssertEqual(answer.calls, 0, "Text-colour ink must not become a black picture for \(text)")
+            XCTAssertEqual(answer.calls, 0, "Text-color ink must not become a black picture for \(text)")
             try XCTUnwrap(callbacks.get_path)(callbacks.user_data, glyph, nil, 0, { context, _, _ in
                 guard let context else { return }
                 Unmanaged<PictureAnswer>.fromOpaque(context).takeUnretainedValue().calls += 1
