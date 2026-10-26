@@ -28,7 +28,7 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
 
             let cut = try await move(page, "B", "A", nil,
                 reachable: keepingB ? ["A", "B"] : ["A"], isBack: true)
-            XCTAssertEqual(cut.advanceCount, 0, "The cut must not add an ordinary settling step")
+            XCTAssertEqual(cut.advanceCount, 1, "Route (a): the cut settles the woken row with one zero-time step")
             XCTAssertEqual(cut.completionWaitCount, 0)
             await assertRows(page, keepingB ? ["A", "B"] : ["A"], collapsed: keepingB ? ["B"] : [])
             let removed = await page.isRowRemoved(screenID: "B")

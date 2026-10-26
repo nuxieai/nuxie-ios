@@ -322,6 +322,7 @@ actor ExperienceInteractivePage {
         guard let mapped = payload.renderPlan.screens.first(where: { $0.screenId == target }) else {
             throw ExperienceInteractiveScreenError.screenNotFound(target)
         }
+        var settled: Step?
         for change in changes {
             switch change {
             case .take:
@@ -344,6 +345,8 @@ actor ExperienceInteractivePage {
                 var next = rowList
                 try await applyRowMutation(next.take(target))
                 rowList = next
+            case .settle:
+                settled = try await stepLocked(pointers: [], elapsedSeconds: 0, correlationID: 0)
             case .phases(let phases, let transition):
                 try await setPhasesLocked(phases, transition: transition, reduceMotion: reduceMotion, exitReason: .navigation)
                 if phases.contains(where: { $0.1 == .active }) { await videoPlayback?.setStepInProgress(false) }
@@ -360,7 +363,7 @@ actor ExperienceInteractivePage {
                 rowList = next
             }
         }
-        return nil
+        return settled
     }
 
     @discardableResult
