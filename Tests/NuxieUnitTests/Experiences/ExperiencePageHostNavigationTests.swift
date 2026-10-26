@@ -952,6 +952,30 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testCloseDuringAStepLandsTheStepThenExitsTheScreenItLandedOn() async throws {
+        try await withCoordinator { coordinator, controller, probe, _ in
+            let forward = expectation(description: "forward finishes")
+            var result: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { navigated, _ in
+                result = navigated
+                forward.fulfill()
+            })
+            let deadline = Date().addingTimeInterval(2)
+            while controller.lifecyclePhase != .exiting, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(controller.lifecyclePhase, .exiting, "The close must arrive during the step")
+            probe.lifecycle.removeAll()
+            await coordinator.exitActiveScreenForTeardown(reason: nil)
+            await fulfillment(of: [forward], timeout: 5)
+            XCTAssertEqual(result, .navigated, "A step under way lands; nothing is undone halfway")
+            XCTAssertEqual(controller.screenId, "B")
+            XCTAssertTrue(probe.events.contains("B:nx_enter_done:t1"))
+            XCTAssertEqual(probe.lifecycle, ["hidden:A", "active:B", "hidden:B"])
+            XCTAssertEqual(controller.lifecyclePhase, .hidden)
+        }
+    }
+
     func testStackedSheetsAndSwipeDismissalKeepEachLayerIndependent() async throws {
         try await withLifecycleCoordinator { coordinator, base, probe, preparation in
             try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet", "height": "medium"])

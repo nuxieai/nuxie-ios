@@ -77,107 +77,6 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
         }
     }
 
-    func testCancelledBackCutRebuildsRemovedSourceFromItsFrozenSnapshot() async throws {
-        try await withLiveMovePage { page in
-            try await move(page, "A", "B", "t1")
-            // Compare two rebuilt generations: their seeded child handles are
-            // intentionally retained, unlike a fresh schema-default graph.
-            try await move(page, "B", "A", "back", reachable: ["A"])
-            try await move(page, "A", "B", "t1")
-            let before = try await page.snapshot(screenID: "B")
-            let old = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: before.rootInstanceID))
-            _ = try await page.runtime.mutateViewModel([.setNumber(instance: old, path: "offset", value: 42)])
-            let steadyCount = try await page.runtime.retainedViewModelCount
-            do {
-                try await backCut(page, "B", "A", reachable: ["A"], cancelAfterRetirement: true)
-                XCTFail("The cut must cancel after removing its source")
-            } catch is CancellationError {}
-            await assertRows(page, ["A"], collapsed: [])
-            let removed = await page.isRowRemoved(screenID: "B")
-            XCTAssertTrue(removed)
-            let frozen = try await page.snapshot(screenID: "B")
-            XCTAssertEqual(frozen.rootInstanceID, old.rawValue)
-            await page.runtime.recordRowWrites()
-
-            try await page.restoreCancelledStep(source: "B", target: "A", reachable: ["A", "B"], reduceMotion: false)
-            await assertRows(page, ["B", "A"], collapsed: ["A"])
-            let rebuilt = try await page.snapshot(screenID: "B")
-            XCTAssertNotEqual(rebuilt.rootInstanceID, old.rawValue)
-            XCTAssertEqual(rebuilt.values.first {
-                $0.ownerInstanceID == rebuilt.rootInstanceID && $0.name == "offset"
-            }?.value, .number(42))
-            let stillRemoved = await page.isRowRemoved(screenID: "B")
-            XCTAssertFalse(stillRemoved)
-            let snapshotIDs = await page.runtime.removedRowSnapshotIDs
-            XCTAssertTrue(snapshotIDs.isDisjoint(with: frozen.rowOwnedInstanceIDs))
-            do {
-                _ = try await page.runtime.mutateViewModel([.setNumber(instance: old, path: "offset", value: 999)])
-                XCTFail("Rollback must not revive the removed generation's write authority")
-            } catch NuxieNativeRuntimeError.invalidNativeValue(let message) {
-                XCTAssertEqual(message, "R6b: removed page row")
-            }
-            let writes = await page.runtime.rowWriteLog
-            XCTAssertTrue(Set(writes).isDisjoint(with: frozen.rowOwnedInstanceIDs))
-            let restoredCount = try await page.runtime.retainedViewModelCount
-            XCTAssertEqual(restoredCount, steadyCount, "Rollback must replace, not leak, the removed row's handles")
-        }
-    }
-
-    func testCancelledSkippingBackKeepsMiddleSnapshotForTheNextBack() async throws {
-        // page2 has only A/B. The same fixture family supplies R2 as C in page40;
-        // leave its other 37 Screens unprepared and unmounted.
-        try await withLiveMovePage(count: 40) { page in
-            let c = liveMoveScreen(2)
-            let history: Set<String> = ["A", "B", c]
-            try await move(page, "A", "B", nil, reachable: history)
-            let originalB = try await page.snapshot(screenID: "B")
-            let b = try XCTUnwrap(NuxieNativeViewModelReference(rawValue: originalB.rootInstanceID))
-            _ = try await page.runtime.mutateViewModel([.setNumber(instance: b, path: "offset", value: 73)])
-            try await move(page, "B", c, nil, reachable: history)
-            let originalC = try await page.snapshot(screenID: c)
-            await assertRows(page, ["A", "B", c], collapsed: ["A", "B"])
-            do {
-                try await backCut(page, c, "A", reachable: ["A"], cancelAfterRetirement: true)
-                XCTFail("The skipping cut must cancel after retiring B and C")
-            } catch is CancellationError {}
-            await assertRows(page, ["A"], collapsed: [])
-            let removedB = await page.isRowRemoved(screenID: "B")
-            let removedC = await page.isRowRemoved(screenID: c)
-            XCTAssertTrue(removedB)
-            XCTAssertTrue(removedC)
-            let frozenB = try await page.snapshot(screenID: "B")
-
-            try await page.restoreCancelledStep(source: c, target: "A", reachable: history, reduceMotion: false)
-            await assertRows(page, [c, "A"], collapsed: ["A"])
-            let rebuiltC = try await page.snapshot(screenID: c)
-            XCTAssertNotEqual(rebuiltC.rootInstanceID, originalC.rootInstanceID)
-            let cStillRemoved = await page.isRowRemoved(screenID: c)
-            XCTAssertFalse(cStillRemoved)
-            let bStillRemoved = await page.isRowRemoved(screenID: "B")
-            XCTAssertTrue(bStillRemoved)
-            let retainedB = try await page.snapshot(screenID: "B")
-            XCTAssertEqual(retainedB, frozenB)
-            let retainedSnapshots = await page.runtime.removedRowSnapshotIDs
-            XCTAssertTrue(frozenB.rowOwnedInstanceIDs.isSubset(of: retainedSnapshots))
-
-            var inspectedIncoming = false
-            try await backCut(page, c, "B", reachable: ["A", "B"], onIncoming: {
-                // Inspect before retirement removes C, so R3's relative order is visible.
-                await assertRows(page, ["B", c, "A"], collapsed: ["A"])
-                inspectedIncoming = true
-            })
-            XCTAssertTrue(inspectedIncoming)
-            await assertRows(page, ["B", "A"], collapsed: ["A"])
-            let rebuiltB = try await page.snapshot(screenID: "B")
-            XCTAssertNotEqual(rebuiltB.rootInstanceID, originalB.rootInstanceID)
-            XCTAssertEqual(rebuiltB.values.first {
-                $0.ownerInstanceID == rebuiltB.rootInstanceID && $0.name == "offset"
-            }?.value, .number(73))
-            let bRemovedAfterBack = await page.isRowRemoved(screenID: "B")
-            XCTAssertFalse(bRemovedAfterBack)
-        }
-    }
-
     func testRepeatedBackRevisitsKeepNativeHandleCountBounded() async throws {
         try await withLiveMovePage { page in
             var baseline: Int?
@@ -465,12 +364,10 @@ private func assertRows(_ page: ExperienceInteractivePage, _ expected: [String],
     } catch { XCTFail("Cannot inspect native row order: \(error)", file: file, line: line) }
 }
 
-/// Exercise the ordinary unnamed Back cut, with an optional failure at the
-/// same post-retirement boundary that the controller's catch must roll back.
+/// Exercise the ordinary unnamed Back cut.
 @MainActor
 private func backCut(_ page: ExperienceInteractivePage, _ source: String, _ target: String,
-                     reachable: Set<String>, cancelAfterRetirement: Bool = false,
-                     onIncoming: (() async throws -> Void)? = nil) async throws {
+                     reachable: Set<String>, onIncoming: (() async throws -> Void)? = nil) async throws {
     try await ExperiencePageStep.perform(source: source, target: target, style: .none,
         isBack: true, plan: nil, exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false,
         operations: .init(setInputEnabled: { _ in }, prepare: {
@@ -483,7 +380,6 @@ private func backCut(_ page: ExperienceInteractivePage, _ source: String, _ targ
                 _ = try await page.apply([change], source: source, target: target,
                     reachable: reachable, reduceMotion: false)
                 if change == .expand { try await onIncoming?() }
-                if change == .retire && cancelAfterRetirement { throw CancellationError() }
             }
         }, present: { _ = try await page.step(elapsedSeconds: 0) }, wait: { _, _ in },
         release: {}, hidden: {}, active: { try await page.selectActiveRow(target) },

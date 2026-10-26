@@ -808,8 +808,11 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
+    /// `isEligible` admits the step before its first change. From then on the step
+    /// runs to the end while `isLive` holds; nothing is undone halfway.
     func navigatePage(to targetID: String, spec: ExperienceScreenTransitionSpec, isBack: Bool,
                        reduceMotion: Bool, backSteps: Int? = nil, coveredCut: Bool = false, isEligible: @escaping () -> Bool,
+                       isLive: @escaping () -> Bool,
                        onHidden: @escaping () async -> Void, onActive: @escaping () async -> Void) async throws {
         guard let layer = interactivePage, let loop = presentationLoop,
               let target = artifact.renderPlan.screens.first(where: { $0.screenId == targetID }) else {
@@ -841,14 +844,14 @@ final class ExperienceScreenViewController: UIViewController {
             setInputEnabled: { [self] enabled in
                 setPageInputEnabled(enabled)
             }, prepare: { [self] in
-                guard isEligible(), rowBindings[targetID] != nil else { throw CancellationError() }
+                guard isEligible(), isLive(), rowBindings[targetID] != nil else { throw CancellationError() }
                 await layer.beginPresentationStep()
             }, register: { id, name in
                 let waiter = try await layer.registerCompletion(screenID: id, eventName: name)
                 waiters.append((id, waiter))
                 return waiter.events
             }, batch: { [self] changes in
-                guard isEligible() else { throw CancellationError() }
+                guard isLive() else { throw CancellationError() }
                 try await pageWork {
                     try await layer.apply(changes, source: sourceID, target: targetID,
                         reachable: reachable, reduceMotion: reduceMotion)
@@ -864,7 +867,7 @@ final class ExperienceScreenViewController: UIViewController {
                 for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
                 waiters.removeAll()
             }, hidden: onHidden, active: { [self] in
-                guard isEligible(), runtimeFailure == nil, !isShuttingDown else { throw CancellationError() }
+                guard isLive(), runtimeFailure == nil, !isShuttingDown else { throw CancellationError() }
                 try await layer.selectActiveRow(targetID)
                 screen = target
                 interactiveScreen = rowBindings[targetID]
@@ -880,7 +883,7 @@ final class ExperienceScreenViewController: UIViewController {
                 try await loop.advanceZeroDelta()
                 await onActive()
             }, drain: {
-                guard isEligible() else { throw CancellationError() }
+                guard isLive() else { throw CancellationError() }
                 // Completion waits for result delivery, not merely native advancement.
                 try await loop.advanceZeroDelta()
             })
@@ -890,20 +893,9 @@ final class ExperienceScreenViewController: UIViewController {
                 reduceMotion: reduceMotion, coveredCut: coveredCut, operations: operations)
         } catch {
             for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
-            // A cancelled drain may have mounted its destination without committing navigation.
-            if isEligible(), runtimeFailure == nil, !isShuttingDown {
-                let reachable = Set(pageHistory.screenIDs)
-                try? await pageWork {
-                    try await layer.restoreCancelledStep(source: sourceID, target: targetID,
-                        reachable: reachable, reduceMotion: reduceMotion)
-                }
-                if let restored = try? await layer.binding(screenID: sourceID) {
-                    rowBindings[sourceID] = restored
-                    interactiveScreen = restored
-                    bindTextInputs(to: restored, loop: loop, preservingNativeFields: false)
-                }
-                await activate(reduceMotion: reduceMotion)
-            }
+            // A step stops early only when its page is leaving, which discards it.
+            // Any other failure leaves the rows mid-step, so it ends the page.
+            if !(error is CancellationError) { handleTerminalFailure(error) }
             throw error
         }
         for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }

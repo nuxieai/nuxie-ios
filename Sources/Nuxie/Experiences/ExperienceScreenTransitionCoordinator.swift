@@ -413,16 +413,19 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func exitActiveScreenForTeardownUnbounded(reason: CloseReason?, alreadyDismissed: Bool) async {
-        // Revoke navigation admission, fail queued requests, then cancel and
-        // drain the in-flight task: a suspended exit handshake or watchdog
-        // must not resume - nor may a queued request restart the drain - and
-        // mount a destination after the teardown hidden event.
+        // Revoke navigation admission and fail queued requests: no queued
+        // request may restart the drain and mount a destination after the
+        // teardown hidden event. A page step already under way lands first,
+        // and the dismissal exits the Screen it landed on, at most the step's
+        // watchdog later; nothing is undone halfway. Other navigation, and a
+        // dismissal raised by the step's own callbacks, is cancelled.
         navigationAdmissionRevoked = true
         let queuedRequests = navigationRequests
         navigationRequests.removeAll()
         queuedRequests.forEach { $0.completion(.failed, $0.screenId) }
         if let navigationTask {
-            navigationTask.cancel()
+            let landsPageStep = activeController?.isPageController == true && !Self.isOnNavigationDrainTask
+            if !landsPageStep { navigationTask.cancel() }
             // Awaiting our own task would deadlock when dismissal is driven
             // from a lifecycle callback executing inside the drain; the
             // revoked admission and cancellation make the drain exit on its
@@ -761,6 +764,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     request.completion(presentationLayer !== sourceLayer ? .superseded : .failed, request.screenId)
                     continue
                 }
+                let pageStep = activeController?.isPageController == true
                 let didNavigate = try await performMountedNavigation(
                     to: request.screenId,
                     transition: request.rawTransition,
@@ -769,8 +773,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 )
                 if didNavigate { pageDeparture = nil }
                 await discardUncommittedController()
+                // A page step that started lands even after admission is revoked.
                 let completed = lifecycle == .installed && !Task.isCancelled
-                    && !navigationAdmissionRevoked && didNavigate
+                    && (!navigationAdmissionRevoked || pageStep) && didNavigate
                 request.completion(
                     completed ? .navigated : (presentationLayer !== sourceLayer ? .superseded : .failed),
                     request.screenId
@@ -869,6 +874,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     try await lower.navigatePage(to: screenID, spec: .none, isBack: true, reduceMotion: true,
                         backSteps: lower.pageHistory.entries.count - 1 - (backLocation?.entry ?? 0), coveredCut: true,
                         isEligible: { self.lifecycle == .installed && !self.navigationAdmissionRevoked },
+                        isLive: { self.lifecycle == .installed },
                         onHidden: {}, onActive: {})
                 }
             }, pop: {
@@ -907,6 +913,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             try await source.navigatePage(to: screenID, spec: spec, isBack: isBack, reduceMotion: reduceMotion,
                 backSteps: backSteps, isEligible: { self.lifecycle == .installed && !self.navigationAdmissionRevoked
                     && self.activeController === source && !self.terminalScreenIds.contains(screenID) },
+                isLive: { self.lifecycle == .installed && self.activeController === source },
                 onHidden: { await self.onScreenHidden(sourceID, .navigation(revealingScreenId: screenID)) },
                 onActive: { await self.onScreenActive(screenID) })
             return true
