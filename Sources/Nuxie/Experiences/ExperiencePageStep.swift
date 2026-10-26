@@ -91,12 +91,14 @@ enum ExperiencePageStep {
             try await operations.batch([.end(name), hidden, .retire, active])
         } else {
             let outgoingName = plan?.outgoingCompletionEventName ?? exit.completionEventName
-            let outgoing = try await outgoingName.asyncMap { try await operations.register(source, $0) }
+            var outgoing: AsyncStream<Void>?
+            if let outgoingName { outgoing = try await operations.register(source, outgoingName) }
             try await operations.batch([leaving])
             if let outgoing {
                 try await waitForFrame([outgoing], duration: plan?.watchdogMilliseconds ?? exit.watchdogMilliseconds ?? 250)
             }
-            let incomingCompletion = try await plan.asyncMap { try await operations.register(target, $0.incomingCompletionEventName) }
+            var incomingCompletion: AsyncStream<Void>?
+            if let plan { incomingCompletion = try await operations.register(target, plan.incomingCompletionEventName) }
             try await operations.batch(incoming + [entering, .begin(name), hidden, .retire])
             if let incomingCompletion, let plan {
                 try await waitForFrame([incomingCompletion], duration: plan.watchdogMilliseconds)
