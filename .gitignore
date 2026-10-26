@@ -121,3 +121,5 @@ Examples/*/*.xcworkspace
 
 # Buildkite evidence and exported native products
 /output/
+/.nuxie/homelab/
+/.nuxie/homelab-timings/

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -22,6 +23,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cache import startup_options
 from launcher import executable as installed_bazelisk
+from simulator_selection import select_simulator
 
 ROOT = Path(__file__).resolve().parents[2]
 PLATFORMS = {
@@ -249,6 +251,11 @@ def stage_framework_dependencies(target: str, flags: list[str], sdk_platform: st
     return dependencies
 
 
+def default_test_simulator(device=None, version=None):
+    inventory = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "--json"], text=True))
+    return select_simulator(inventory, device_name=device, os_version=version)
+
+
 def test_options(args, sdk_platform):
     flags = []
     selectors = [args.test_filter] if args.test_filter else []
@@ -284,6 +291,8 @@ def test_options(args, sdk_platform):
             runtime, selected = matches[0]
             device = selected["name"]
             version = runtime.split(".iOS-", 1)[1].replace("-", ".")
+        if not device or not version:
+            version, device = default_test_simulator(device, version)
         if device:
             flags.append("--ios_simulator_device=" + device)
         if version:
@@ -505,6 +514,28 @@ def prepare(args: argparse.Namespace) -> None:
     print(output / "sdk-artifacts.json")
 
 
+def pool_dispatch(args):
+    """Keep the full frontend, output queries and XCTest verification together."""
+    if args.command == "plan" or os.environ.get("_NUXIE_POOL_NESTED") == "1":
+        return None
+    directory = Path.home() / ".local/share/nuxie-homelab"
+    installed = directory / "sdk-task.py"
+    if not installed.is_file():
+        if (Path.home() / ".config/nuxie/homelab-cluster.json").is_file():
+            raise ValueError("Installed build pool needs SDK task support; update its client")
+        return None
+    spec = importlib.util.spec_from_file_location("nuxie_sdk_task", installed)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    outputs = {}
+    if args.command == "build":
+        sdk_platform = (args.platform or ["ios-simulator"])[0]
+        name = f".bazel-artifacts/build/{sdk_platform}/{args.configuration}"
+        outputs[name] = ROOT / name
+    elif args.command == "prepare":
+        outputs[".bazel-artifacts/prepared"] = Path(args.output).expanduser().resolve()
+    return module.route(ROOT, sys.argv[1:], platform="macos", outputs=outputs)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -518,6 +549,7 @@ def main() -> None:
             if command == "prepare":
                 sub.add_argument("--allow-dirty", action="store_true", help="Prepare development artifacts with dirty state and source digest")
         elif command == "test":
+            sub.add_argument("--gate", action="store_true", help="Run the complete SDK make test gate on the selected host")
             sub.add_argument("--suite", choices=[*SUITES, "all"], default="all")
             sub.add_argument("--scheme", choices=SCHEMES)
             sub.add_argument("--test-filter")
@@ -531,6 +563,18 @@ def main() -> None:
     if args.platform and len(args.platform) != len(set(args.platform)):
         parser.error("Each platform may be requested only once")
     try:
+        status = pool_dispatch(args)
+        if status is not None:
+            if status: raise SystemExit(status)
+            return
+        if args.command == "test" and args.gate:
+            overrides = []
+            if args.destination:
+                overrides.append("TEST_DESTINATION=" + args.destination)
+            if args.xcodebuild_test_flags:
+                overrides.append("XCODEBUILD_TEST_FLAGS=" + args.xcodebuild_test_flags)
+            run(["make", "_test-sdk-gate", *overrides])
+            return
         if args.command == "prepare":
             prepare(args)
         elif args.command == "plan":
