@@ -62,7 +62,6 @@ actor ExperienceInteractivePage {
     private nonisolated let layoutBounds = ExperienceLayoutBounds(.zero)
     nonisolated var artboardBounds: CGRect { layoutBounds.read() }
     var collapsedScreenIDs: Set<String> { rowList.collapsed }
-    private var liveStep: (artboard: String, name: String?)?
     private var currentReduceMotion: Bool
 
     private init(runtime: NuxieNativeRuntime, contract: NativeExperiencePageHost,
@@ -353,10 +352,8 @@ actor ExperienceInteractivePage {
             case .begin(let name):
                 // Only contracts with native live-move records can begin a step.
                 if contract.hasLiveMoves { try await runtime.stepBegin(incomingScreen: mapped.artboardName, stepName: name.map { contract.stepNames[$0] ?? $0 }) }
-                liveStep = (mapped.artboardName, name)
             case .end(let name):
                 if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: mapped.artboardName, stepName: name.map { contract.stepNames[$0] ?? $0 }) }
-                liveStep = nil
             case .retire:
                 var next = rowList
                 for mutation in next.retire(active: target, reachable: reachable) { try await applyRowMutation(mutation) }
@@ -364,24 +361,6 @@ actor ExperienceInteractivePage {
             }
         }
         return settled
-    }
-
-    @discardableResult
-    func restoreCancelledStep(source: String, target: String, reachable: Set<String>, reduceMotion: Bool) async throws -> Step? {
-        try await gate.withLock { [self] in
-            try await restoreCancelledStepLocked(source: source, target: target, reachable: reachable, reduceMotion: reduceMotion)
-        }
-    }
-
-    private func restoreCancelledStepLocked(source: String, target: String, reachable: Set<String>, reduceMotion: Bool) async throws -> Step? {
-        if let liveStep {
-            if contract.hasLiveMoves { try await runtime.stepEnd(incomingScreen: liveStep.artboard, stepName: liveStep.name.map { contract.stepNames[$0] ?? $0 }) }
-            self.liveStep = nil
-        }
-        // Bring borrowed instances home before any rollback removes their destination.
-        return try await applyLocked([.take, .position(isBack: true), .expand, .begin(nil), .end(nil),
-            .phases([(target, .hidden), (source, .active)], ""), .retire], source: target, target: source,
-            reachable: reachable, reduceMotion: reduceMotion)
     }
 
     private func applyRowMutation(_ mutation: ExperiencePageRows.Mutation) async throws {

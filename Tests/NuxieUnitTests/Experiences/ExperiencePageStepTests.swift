@@ -390,6 +390,7 @@ final class ExperiencePageStepTests: XCTestCase {
         XCTAssertTrue(probe.order.isEmpty)
     }
 
+    /// A step stops early only when its page is leaving (S1c): it is discarded, never undone.
     func testCancellationDoesNotEndRetireOrActivate() async throws {
         let probe = PageStepProbe()
         let enteredWait = expectation(description: "wait")
