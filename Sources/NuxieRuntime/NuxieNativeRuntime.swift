@@ -960,8 +960,9 @@ package actor NuxieNativeRuntime {
     package func recordRowWrites() { recordsRowWrites = true; rowWriteLog.removeAll() }
 
     /// Rebuilds owned topology with new identities; never attaches a removed child.
-    /// Triggers and opaque authored assets retain schema defaults.
-    package func seedRow(_ root: NuxieNativeViewModelReference, from snapshot: NuxieNativeViewModelSnapshot) async throws -> [NuxieNativeViewModelReference] {
+    /// Triggers and opaque authored assets retain schema defaults. Returns each
+    /// rebuilt instance, `root` included, by its identity in `snapshot`.
+    package func seedRow(_ root: NuxieNativeViewModelReference, from snapshot: NuxieNativeViewModelSnapshot) async throws -> [UInt64: NuxieNativeViewModelReference] {
         let catalog = try await viewModelCatalog()
         let owned = snapshot.rowOwnedInstanceIDs
         var replacements = [snapshot.rootInstanceID: root]
@@ -1002,7 +1003,7 @@ package actor NuxieNativeRuntime {
                 }
             }
             _ = try await mutateViewModel(writes)
-            return allocated
+            return replacements
         } catch {
             try? await releaseViewModels(allocated)
             throw error

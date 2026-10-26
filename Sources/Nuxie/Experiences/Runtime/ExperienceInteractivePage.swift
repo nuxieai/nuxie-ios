@@ -198,6 +198,8 @@ actor ExperienceInteractivePage {
             }
             let resolvedScreen = JourneyScreen(id: screenID, defaultViewModelName: schemaName,
                 defaultInstanceId: screen.defaultInstanceId)
+            var identities: [ExperienceInteractiveViewModelIdentity: UInt64] = [:]
+            if retained != nil, let previous { identities = await previous.binding.identitySnapshotIDs() }
             let reference = try await runtime.makeViewModel(schemaIndex: schema)
             do {
                 let binding = try await ExperienceInteractiveScreen.openPrepared(payload: payload,
@@ -205,7 +207,8 @@ actor ExperienceInteractivePage {
                     screenID: screenID, products: previous?.products ?? products, player: .defaultScene,
                     pixelWidth: 1, pixelHeight: 1, initialReduceMotion: nil, initialFontScale: nil, initialSafeArea: nil,
                     initialColorScheme: nil, rowRuntime: runtime, rowReference: reference, operationGate: gate,
-                    rowVideoPlayback: videoPlayback, rowScreen: resolvedScreen, retainedRowSnapshot: retained)
+                    rowVideoPlayback: videoPlayback, rowScreen: resolvedScreen, retainedRowSnapshot: retained,
+                    retainedIdentities: identities)
                 await binding.setRowStepper { [weak self] pointers, focus, elapsed, correlation, capturesText in
                     guard let self else { throw CancellationError() }
                     let step = try await self.stepFromRow(screenID: screenID, reference: reference,

@@ -1160,7 +1160,10 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             let schema = try XCTUnwrap(snapshot.instances.first { $0.id == root.rawValue }?.schemaIndex)
             let replacement = try await runtime.makeViewModel(schemaIndex: schema)
             let before = try await runtime.retainedViewModelCount
-            let children = try await runtime.seedRow(replacement, from: snapshot)
+            let rebuilt = try await runtime.seedRow(replacement, from: snapshot)
+            XCTAssertEqual(rebuilt[snapshot.rootInstanceID], replacement)
+            XCTAssertNotNil(rebuilt[nested.rawValue], "The retained child keeps its old identity as its key")
+            let children = rebuilt.filter { $0.key != snapshot.rootInstanceID }.map(\.value)
             XCTAssertFalse(children.isEmpty)
             XCTAssertEqual(children.count, snapshot.rowOwnedInstanceIDs.count - 1)
             let after = try await runtime.retainedViewModelCount
@@ -1172,7 +1175,7 @@ final class NuxieNativeRuntimeTests: XCTestCase {
                 if case .referencedInstance(let id) = field.value { return id }
                 return nil
             })
-            XCTAssertTrue(children.contains { $0.rawValue == childID })
+            XCTAssertEqual(rebuilt[nested.rawValue]?.rawValue, childID)
             XCTAssertNotEqual(childID, nested.rawValue)
             XCTAssertEqual(seeded.values.first { $0.ownerInstanceID == childID && $0.name == "String" }?.value,
                 .bytes(Data("retained child".utf8)))

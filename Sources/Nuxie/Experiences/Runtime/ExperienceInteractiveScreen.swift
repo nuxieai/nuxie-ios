@@ -1908,7 +1908,8 @@ actor ExperienceInteractiveScreen {
         operationGate: ExperienceInteractiveOperationGate = ExperienceInteractiveOperationGate(),
         rowVideoPlayback: ExperienceVideoPlayback? = nil,
         rowScreen: JourneyScreen? = nil,
-        retainedRowSnapshot: NuxieNativeViewModelSnapshot? = nil
+        retainedRowSnapshot: NuxieNativeViewModelSnapshot? = nil,
+        retainedIdentities: [ExperienceInteractiveViewModelIdentity: UInt64] = [:]
     ) async throws -> ExperienceInteractiveScreen {
         let screenID = requestedScreenID ?? payload.renderPlan.entry.screenId
         guard let manifestScreen = payload.renderPlan.screens.first(where: {
@@ -2005,10 +2006,11 @@ actor ExperienceInteractiveScreen {
             throw error
         }
 
+        var seededHandles: [UInt64: NuxieNativeViewModelReference] = [:]
         if let retainedRowSnapshot, let rowReference {
             do {
-                let seeded = try await runtime.seedRow(rowReference, from: retainedRowSnapshot)
-                await rowHandles.record(seeded)
+                seededHandles = try await runtime.seedRow(rowReference, from: retainedRowSnapshot)
+                await rowHandles.record(seededHandles.filter { $0.key != retainedRowSnapshot.rootInstanceID }.map(\.value))
                 // Snapshot identities are writable only while their native
                 // handles remain owned by this generation. Removal takes and
                 // releases this same set along with the root.
@@ -2029,16 +2031,45 @@ actor ExperienceInteractiveScreen {
         var snapshotTopology = ExperienceInteractiveSnapshotTopology()
         var trackedLists = ExperienceInteractiveTrackedListPlanner()
         var latestSnapshot: NuxieNativeViewModelSnapshot?
+        // A seeded row's children are its own native handles, as allocated
+        // children are on a first visit, and answer to the removed row's names.
+        let seededReferences = Set(seededHandles.values.compactMap {
+            ExperienceInteractiveViewModelReference(rawValue: $0.rawValue)
+        })
+        var viewModelsByIdentity = initialState.viewModelsByIdentity
+        for (identity, snapshotID) in retainedIdentities where viewModelsByIdentity[identity] == nil {
+            if let reference = seededHandles[snapshotID].flatMap({
+                ExperienceInteractiveViewModelReference(rawValue: $0.rawValue)
+            }) { viewModelsByIdentity[identity] = reference }
+        }
         do {
             if let rootReference = initialState.rootReference {
                 let snapshot = try await runtime.snapshot(NuxieNativeViewModelReference(rawValue: rootReference.rawValue)!)
                 latestSnapshot = snapshot
+                var preferredViewModels = initialState.viewModelsByProperty
+                var preferredLists = initialState.itemsByList
+                for value in snapshot.values {
+                    guard let owner = ExperienceInteractiveViewModelReference(rawValue: value.ownerInstanceID),
+                          seededReferences.contains(owner) else { continue }
+                    switch value.value {
+                    case .referencedInstance(let id):
+                        if let child = ExperienceInteractiveViewModelReference(rawValue: id), seededReferences.contains(child) {
+                            preferredViewModels[.init(owner: owner, path: value.name)] = child
+                        }
+                    case .list(let ids):
+                        let items = ids.compactMap(ExperienceInteractiveViewModelReference.init(rawValue:))
+                        if items.count == ids.count, items.allSatisfy(seededReferences.contains) {
+                            preferredLists[.init(owner: owner, path: value.name)] = items
+                        }
+                    default: break
+                    }
+                }
                 trackedLists = try snapshotTopology.reconcile(
                     snapshot: snapshot,
                     rootReference: rootReference,
-                    preferredLists: initialState.itemsByList,
-                    preferredViewModels: initialState.viewModelsByProperty,
-                    preservingReferences: Set(initialState.schemaIndexByViewModel.keys),
+                    preferredLists: preferredLists,
+                    preferredViewModels: preferredViewModels,
+                    preservingReferences: Set(initialState.schemaIndexByViewModel.keys).union(seededReferences),
                     schemaIndexByReference: &schemaIndexByViewModel
                 )
             }
@@ -2081,9 +2112,9 @@ actor ExperienceInteractiveScreen {
                 payload.definition?.declaredEventNamesByScreen[screenID] ?? [],
             textInputs: textInputs,
             imageIDsByName: imageIDsByName,
-            viewModelsByIdentity: initialState.viewModelsByIdentity,
+            viewModelsByIdentity: viewModelsByIdentity,
             schemaIndexByViewModel: schemaIndexByViewModel,
-            settableViewModels: Set(initialState.schemaIndexByViewModel.keys),
+            settableViewModels: Set(initialState.schemaIndexByViewModel.keys).union(seededReferences),
             viewModelCatalog: initialState.catalog,
             listIndexPathsBySchema: initialState.listIndexPathsBySchema,
             rootViewModelReference: initialState.rootReference,
@@ -2151,6 +2182,12 @@ actor ExperienceInteractiveScreen {
     func markRowRemoved(_ snapshot: NuxieNativeViewModelSnapshot) {
         removedRowSnapshot = snapshot
         latestSnapshot = snapshot
+    }
+
+    /// The snapshot instance each name resolved to while mounted, so the row
+    /// a revisit seeds answers to the same `vmInstanceId` and `instanceName`.
+    func identitySnapshotIDs() -> [ExperienceInteractiveViewModelIdentity: UInt64] {
+        viewModelsByIdentity.compactMapValues { snapshotTopology.snapshotID(for: $0) }
     }
 
     // The page already holds operationGate. Never reacquire it or close shared resources.
