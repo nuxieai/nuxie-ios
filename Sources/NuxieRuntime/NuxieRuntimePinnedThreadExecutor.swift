@@ -1,96 +1,25 @@
 import Foundation
-import Darwin
 
 package enum NuxieRuntimeExecutorError: Error, Equatable, Sendable {
     case closed
 }
 
-/// Owns the dedicated OS-thread lane required by portable C ABI handles.
-///
-/// Native file, player, view-model, result, and renderer handles are created,
-/// used, and released only from this lane.
+/// Swift result delivery over the runtime's CommandQueue-owned native thread.
 package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
-    private final class Worker: @unchecked Sendable {
-        private let condition = NSCondition()
-        private let stopped = DispatchSemaphore(value: 0)
-        private var jobs: [@Sendable () -> Void] = []
-        private var isStopping = false
-        private var workerThread: pthread_t?
+    private let native = NuxieNativeExecutor()
 
-        func submit(_ job: @escaping @Sendable () -> Void) -> Bool {
-            condition.lock()
-            defer { condition.unlock() }
-            guard !isStopping else { return false }
-            jobs.append(job)
-            condition.signal()
-            return true
-        }
+    package init() {}
 
-        var queuedJobCount: Int {
-            condition.lock()
-            defer { condition.unlock() }
-            return jobs.count
-        }
-
-        func run() {
-            condition.lock()
-            workerThread = pthread_self()
-            condition.unlock()
-            while let job = nextJob() {
-                job()
-            }
-            stopped.signal()
-        }
-
-        func stopAndWait() {
-            condition.lock()
-            let shouldSignal = !isStopping
-            let isWorkerThread = workerThread.map { pthread_equal($0, pthread_self()) != 0 }
-                ?? false
-            isStopping = true
-            condition.broadcast()
-            condition.unlock()
-            if shouldSignal, !isWorkerThread {
-                stopped.wait()
-            }
-        }
-
-        private func nextJob() -> (@Sendable () -> Void)? {
-            condition.lock()
-            defer { condition.unlock() }
-            while jobs.isEmpty, !isStopping {
-                condition.wait()
-            }
-            if !jobs.isEmpty {
-                return jobs.removeFirst()
-            }
-            return nil
-        }
-    }
-
-    private let worker: Worker
-    private let thread: Thread
-
-    package init() {
-        let worker = Worker()
-        self.worker = worker
-        let thread = Thread { worker.run() }
-        thread.name = "com.nuxie.runtime.apple.native"
-        thread.qualityOfService = .default
-        self.thread = thread
-        thread.start()
-    }
-
-    deinit {
-        worker.stopAndWait()
-    }
+    deinit { native.shutdown() }
 
     package func call<T: Sendable>(
         _ operation: @escaping @Sendable () throws -> T
     ) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
-            guard worker.submit({
+            guard native.submit({
                 continuation.resume(with: Result(catching: operation))
+            }, abandoned: {
+                continuation.resume(throwing: NuxieRuntimeExecutorError.closed)
             }) else {
                 continuation.resume(throwing: NuxieRuntimeExecutorError.closed)
                 return
@@ -98,8 +27,6 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
         }
     }
 
-    /// Runs the final lane-confined operation and then stops the lane even when
-    /// that operation reports a consuming native destruction failure.
     package func callThenShutdown<T: Sendable>(
         _ operation: @escaping @Sendable () throws -> T
     ) async throws -> T {
@@ -108,12 +35,10 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
     }
 
     package func enqueue(_ operation: @escaping @Sendable () -> Void) {
-        _ = worker.submit(operation)
+        _ = native.submit(operation, abandoned: {})
     }
 
-    package var queuedJobCountForTesting: Int { worker.queuedJobCount }
+    package var queuedJobCountForTesting: Int { native.pendingCount }
 
-    package func shutdown() {
-        worker.stopAndWait()
-    }
+    package func shutdown() { native.shutdown() }
 }
