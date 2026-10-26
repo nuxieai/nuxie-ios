@@ -323,6 +323,10 @@ final class JourneyRuntimeDelegate {
     private var hostDismissalRequested = false
     private var presentationIsRevealed = false
     private var presentationEpoch: UInt64 = 0
+    /// A page step records the leave before its exit plays, so nothing is
+    /// undone halfway. The leaving Screen keeps sending until the revealed
+    /// Screen is active; its exit's events and saves land after that record.
+    private var leavingScreen: (screenId: String, presentationEpoch: UInt64)?
     private var commerceProjections: [String: (effectId: String, screenId: String)] = [:]
     private var resolved = false
     private var resolutionWaiters: [CheckedContinuation<Bool, Never>]?
@@ -371,6 +375,7 @@ final class JourneyRuntimeDelegate {
     ) async {
         let becameVisible = activeScreenId != screenId
         presentationEpoch &+= 1
+        leavingScreen = nil
         dismissedSurfaceScreenId = nil
         screenDismissalWasRejected = false
         topLevelScreenDismissalWasProcessed = false
@@ -443,14 +448,16 @@ final class JourneyRuntimeDelegate {
         guard !resolved else { return .completed }
         let task = Task { @MainActor in
             await self.processScreenDismissal(controller, screenId: screenId,
-                revealingScreenId: revealingScreenId, method: method)
+                revealingScreenId: revealingScreenId, method: method, keepsLeavingSender: true)
         }
         preparedDismissal = (screenId, revealingScreenId, method, task)
         return await task.value
     }
 
     private func processScreenDismissal(_ controller: ExperienceViewController, screenId: String,
-        revealingScreenId: String?, method: String) async -> JourneyScreenDismissalResult {
+        revealingScreenId: String?, method: String,
+        keepsLeavingSender: Bool = false) async -> JourneyScreenDismissalResult {
+        let wasSending = activeScreenId == screenId
         if hostDismissalRequested, revealingScreenId == nil {
             // Host surface control is its own authored input. Teardown still
             // closes the native screen, but routing `$screen_dismissed` here
@@ -495,6 +502,9 @@ final class JourneyRuntimeDelegate {
         }
         switch result {
         case .handled:
+            if keepsLeavingSender, wasSending, revealingScreenId != nil {
+                leavingScreen = (screenId, presentationEpoch)
+            }
             await controller.configureScreenEmissionRun(
                 revealingScreenId.map(screenControlScope(screenId:))
             )
@@ -520,7 +530,7 @@ final class JourneyRuntimeDelegate {
         run: ScreenEmissionRun
     ) async -> Bool {
         guard !resolved, run.journeyId == journeyId,
-              save.screenID == activeScreenId, run.presentationEpoch == presentationEpoch,
+              sends(screenId: save.screenID, presentationEpoch: run.presentationEpoch),
               let onResponseSave else { return false }
         return await onResponseSave(save)
     }
@@ -532,11 +542,15 @@ final class JourneyRuntimeDelegate {
     ) async -> Bool {
         guard !resolved,
               batch.journeyId == journeyId,
-              batch.source.screenId == activeScreenId,
-              batch.presentationEpoch == presentationEpoch else {
+              sends(screenId: batch.source.screenId, presentationEpoch: batch.presentationEpoch) else {
             return false
         }
         return await onEmissionBatch(batch, frameSources)
+    }
+
+    private func sends(screenId: String, presentationEpoch epoch: UInt64) -> Bool {
+        if screenId == activeScreenId { return epoch == presentationEpoch }
+        return leavingScreen.map { $0.screenId == screenId && $0.presentationEpoch == epoch } ?? false
     }
 
     func experienceViewController(
