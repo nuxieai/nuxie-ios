@@ -1058,6 +1058,51 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         }
     }
 
+    func testRemovedPageRowRetiresItsEditorsWhileKeptRowsKeepTheirs() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        defer { bridge.clear() }
+        let first = makePlan(secure: false, screenID: "A")
+        let second = makePlan(secure: false, screenID: "B")
+        let plan = NativeExperienceRenderPlan(identity: first.identity, scene: first.scene,
+            entry: .init(screenId: "A"), pageHost: .init(artboardName: "$nuxie.page", listPath: "screens"),
+            screens: [], transitions: [], textInputs: first.textInputs + second.textInputs, images: [], fonts: [])
+        var revision: UInt64 = 0
+        @discardableResult
+        func land(on id: String, rows: [String: UInt64], showing nodes: [UInt32]?,
+                  preserving: Bool = true) throws -> [UInt32: UIView] {
+            bridge.setStepInProgress(true)
+            bridge.bind(screenID: id, preservingNativeFields: preserving, renderPlan: plan,
+                surfaceView: surface, artboardBounds: surface.bounds,
+                semanticTextWriter: { _, _, _, done in done(.accepted) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "x", ownerInstanceID: 1))) })
+            bridge.setPageRows(rows)
+            bridge.setStepInProgress(false)
+            presentField(on: bridge)
+            guard let nodes else { return [:] }
+            revision += 1
+            return bridge.applySemantics(try nativeCapture(ids: nodes, secure: false, revision: revision))
+        }
+        let fieldA = try XCTUnwrap(try land(on: "A", rows: ["A": 1], showing: [1], preserving: false)[1])
+        // Field 1 moves into B beside B's own field 2.
+        var shown = try land(on: "B", rows: ["A": 1, "B": 1], showing: [1, 2])
+        XCTAssertTrue(shown[1] === fieldA)
+        let fieldB = try XCTUnwrap(shown[2])
+        shown = try land(on: "A", rows: ["A": 1], showing: [1])
+        XCTAssertTrue(shown[1] === fieldA, "The moved field returns to the row that kept it")
+        XCTAssertNil(fieldB.superview, "Back removed B's row, so its editor retires")
+        shown = try land(on: "B", rows: ["A": 1, "B": 2], showing: [3])
+        let revisited = try XCTUnwrap(shown[3])
+        XCTAssertNotNil(fieldA.superview, "A's row is kept, so its editor waits")
+        XCTAssertTrue(fieldA.isHidden)
+        // Back lands with no capture before the next revisit.
+        try land(on: "A", rows: ["A": 1], showing: nil)
+        shown = try land(on: "B", rows: ["A": 1, "B": 3], showing: [4])
+        XCTAssertNotNil(shown[4])
+        XCTAssertNil(revisited.superview, "A revisit's new row replaces the old row's editor")
+        XCTAssertNotNil(fieldA.superview)
+    }
+
     func testPageDeclarationChangeRestylesRetainedControlAtTheSamePlacement() throws {
         for multiline in [false, true] {
             let bridge = ExperienceTextInputOverlayBridge()

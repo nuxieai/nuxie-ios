@@ -155,6 +155,8 @@ final class ExperienceScreenViewController: UIViewController {
     private(set) var interactivePage: ExperienceInteractivePage?
     private var rowScreens: [String: JourneyScreen] = [:]
     private var rowBindings: [String: ExperienceInteractiveScreen] = [:]
+    /// Counts each Screen's rows, so editors can tell a revisit's row from the removed one.
+    private var rowGenerations: [String: UInt64] = [:]
     private var heldRowWrites: [String: [ExperienceInteractiveStateCommand]] = [:]
     private(set) var pageHistory: ExperiencePageHistory
     private var pageStepInProgress = false
@@ -587,6 +589,7 @@ final class ExperienceScreenViewController: UIViewController {
             interactivePage = layer
             interactive = try await layer.prepareRow(screenID: screenId, products: artifact.acquired.products)
             rowBindings[screenId] = interactive
+            rowGenerations[screenId, default: 0] += 1
             rowScreens[screenId] = try await layer.screen(screenID: screenId)
             try await layer.insert(screenID: screenId, at: 0)
             let entering = lifecycleState.move(to: .entering)
@@ -709,6 +712,7 @@ final class ExperienceScreenViewController: UIViewController {
             try await loop.start()
             configureTextInputCallbacks()
             bindTextInputs(to: interactive, loop: loop)
+            await publishPageRows()
             refreshTextInputLayouts()
             syncSafeAreaInsets(force: true)
             syncColorScheme()
@@ -733,10 +737,23 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
+    /// Editors of a removed or replaced row retire instead of waiting hidden.
+    private func publishPageRows() async {
+        guard let interactivePage else { return }
+        var rows: [String: UInt64] = [:]
+        for (id, generation) in rowGenerations where rowBindings[id] != nil {
+            if !(await interactivePage.isRowRemoved(screenID: id)) { rows[id] = generation }
+        }
+        textInputOverlayBridge.setPageRows(rows)
+    }
+
     func preparePageRow(screenID: String, products: [StoreProduct]) async throws {
         guard let interactivePage else { throw ExperienceInteractiveScreenControllerError.unavailable }
-        rowBindings[screenID] = try await interactivePage.prepareRow(screenID: screenID, products: products)
+        let row = try await interactivePage.prepareRow(screenID: screenID, products: products)
+        if rowBindings[screenID] !== row { rowGenerations[screenID, default: 0] += 1 }
+        rowBindings[screenID] = row
         rowScreens[screenID] = try await interactivePage.screen(screenID: screenID)
+        await publishPageRows()
         // Writes held while Back had removed this Screen reach its new row, seeded first (R6b).
         if heldRowWrites[screenID] != nil { _ = enqueueRowWrite(nil, screenID: screenID) }
     }
@@ -781,6 +798,7 @@ final class ExperienceScreenViewController: UIViewController {
                 try await pageWork {
                     try await layer.apply([.retire], source: sourceID, target: targetID, reachable: reachable, reduceMotion: reduceMotion)
                 }
+                await publishPageRows()
             }
             return
         }
@@ -835,6 +853,7 @@ final class ExperienceScreenViewController: UIViewController {
                 if let interactiveScreen {
                     bindTextInputs(to: interactiveScreen, loop: loop, preservingNativeFields: true)
                 }
+                await publishPageRows()
                 try await loop.advanceZeroDelta()
                 await onActive()
             }, drain: {

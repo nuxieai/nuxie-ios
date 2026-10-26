@@ -379,6 +379,8 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         var offsetWriteInFlight = false
         var lastOffset: CGPoint? = .zero
         var offsetAttemptCaptureID: UUID?
+        /// The page row generation that last showed this field.
+        var row: UInt64?
 
         init(target: InputTarget, input: NativeExperienceTextInput, control: Control) {
             self.target = target
@@ -393,6 +395,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var semanticContentOffsetWriter: SemanticContentOffsetWriter?
     private var semanticTextReader: SemanticTextReader?
     private var preservesPageFields = false
+    private var pageRows: [String: UInt64] = [:]
     private var stepInProgress = false
     private var nativeInputs: [NativeExperienceTextInput] = []
     private var metricsSnapshot: ExperienceInteractiveViewModelSnapshot?
@@ -624,6 +627,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                     installControl(for: binding, on: surfaceView)
                 }
                 binding.nativeGeometry = occurrence.geometry
+                binding.row = pageRows[input.screenId]
                 if let snapshot = metricsSnapshot {
                     metricsByTarget[target] = ExperienceTextInputMetricsResolver(snapshot: snapshot).metrics(
                         xPath: input.geometry.xPath,
@@ -632,11 +636,18 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             }
         }
         for target in Array(bindingsByTarget.keys) where !stepInProgress && target.nodeID != nil && !presented.contains(target) {
-            if preservesPageFields {
+            if preservesPageFields, bindingsByTarget[target].map(isOnKeptRow) == true {
                 bindingsByTarget[target]?.control.view.isHidden = true
             } else { retireNativeInput(target) }
         }
         invalidMetricIDs = Set(bindingsByTarget.keys).subtracting(metricsByTarget.keys)
+    }
+
+    /// A row that Back removed, or that a revisit replaced, never shows its
+    /// occurrences again: the new row has its own.
+    private func isOnKeptRow(_ binding: Binding) -> Bool {
+        guard let row = binding.row else { return true }
+        return pageRows[binding.input.screenId] == row
     }
 
     private func installControl(for binding: Binding, on surfaceView: UIView) {
@@ -803,6 +814,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         semanticContentOffsetWriter = nil
         semanticTextReader = nil
         nativeInputs.removeAll()
+        pageRows.removeAll()
         metricsSnapshot = nil
         metricsByTarget.removeAll()
         invalidMetricIDs.removeAll()
@@ -834,6 +846,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
             restoreAcceptedText(binding)
         }
     }
+
+    /// The generation each kept page row shows, by Screen; a removed row is absent.
+    func setPageRows(_ rows: [String: UInt64]) { pageRows = rows }
 
     /// Input freezes during a move while semantic node identities keep their views and focus.
     func setStepInProgress(_ value: Bool) {
