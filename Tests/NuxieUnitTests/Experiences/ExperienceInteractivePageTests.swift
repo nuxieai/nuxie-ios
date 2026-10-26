@@ -3,6 +3,9 @@ import Foundation
 import XCTest
 @testable import NuxieRuntime
 @_spi(Testing) @testable import Nuxie
+#if SWIFT_PACKAGE
+@testable import NuxieTestSupport
+#endif
 
 final class ExperienceInteractivePageTests: XCTestCase {
     #if canImport(UIKit) && canImport(QuartzCore)
@@ -150,6 +153,48 @@ final class ExperienceInteractivePageTests: XCTestCase {
             XCTAssertNotEqual(after.rootInstanceID, before.rootInstanceID)
             XCTAssertEqual(try self.number(after, "keptValue"), 42)
         }
+    }
+
+    func testRevisitedRowAnswersToItsChildrensNames() async throws {
+        let (_, artifact) = try await TestExperienceRuntimeFixture.purchase(navigation: true)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: artifact.payload)
+        let page = try await preparation.openPage(pixelWidth: 390, pixelHeight: 844)
+        func renamePlan(_ placement: String) async throws {
+            _ = try await page.applyJourneyState(.value(.init(viewModelName: "Plan", instanceID: "plan.first",
+                instanceName: nil, path: "placementId", value: .string(placement))), screenID: "screen")
+        }
+        func shownPlacement() async throws -> String? {
+            let snapshot = try await page.snapshot(screenID: "screen")
+            func value(_ owner: UInt64, _ name: String) -> NuxieNativeViewModelValue? {
+                snapshot.values.first { $0.ownerInstanceID == owner && $0.name == name }?.value
+            }
+            guard case .referencedInstance(let plan) = value(snapshot.rootInstanceID, "first"),
+                  case .bytes(let bytes) = value(plan, "placementId") else { return nil }
+            return String(decoding: bytes, as: UTF8.self)
+        }
+        do {
+            try await page.insert(screenID: "screen", at: 0)
+            _ = try await page.step(elapsedSeconds: 0)
+            try await renamePlan("plan:weekly")
+            let renamed = try await shownPlacement()
+            XCTAssertEqual(renamed, "plan:weekly", "On a first visit the shown plan answers to its vmInstanceId")
+            let original = try await page.snapshot(screenID: "screen").rootInstanceID
+            try await page.remove(screenID: "screen")
+            _ = try await page.step(elapsedSeconds: 0)
+            try await page.insert(screenID: "screen", at: 0)
+            _ = try await page.step(elapsedSeconds: 0)
+            let revisitedRoot = try await page.snapshot(screenID: "screen").rootInstanceID
+            XCTAssertNotEqual(revisitedRoot, original, "Back removed the row, so the revisit seeds a new one")
+            let kept = try await shownPlacement()
+            XCTAssertEqual(kept, "plan:weekly")
+            let before = try await page.runtime.retainedViewModelCount
+            try await renamePlan("plan:daily")
+            let revisited = try await shownPlacement()
+            XCTAssertEqual(revisited, "plan:daily", "The seeded row's plan answers to the same name")
+            let after = try await page.runtime.retainedViewModelCount
+            XCTAssertEqual(after, before, "The write reaches the shown plan, not a detached copy")
+            try await page.close()
+        } catch { try? await page.close(); throw error }
     }
 
     func testRowsRunTheirDefaultMachinesAndKeepValuesAcrossRemovalAndRevisit() async throws {
