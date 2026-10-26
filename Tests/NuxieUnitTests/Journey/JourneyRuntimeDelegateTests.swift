@@ -1114,6 +1114,50 @@ final class JourneyRuntimeDelegateTests: JourneyTestCase {
         }
     }
 
+    func testPageStepLeavingScreenSendsUntilTheRevealedScreenIsActive() async throws {
+        let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
+        let snapshot = try await authenticatedRenderedSnapshot(fixture)
+        let arm = try XCTUnwrap(snapshot.profile.armedLegs.first)
+        let release = try XCTUnwrap(snapshot.releasesByDigest[arm.reference.descriptorSha256])
+        let recorder = JourneyEmissionBatchRecorder()
+        let request = JourneyPresentationRequest(fences: testPresentationFences(), release: release,
+            delivery: snapshot.profile.delivery, screenId: "screen_welcome",
+            owner: .init(journeyId: "journey", distinctId: "customer"), reservation: nil,
+            onResponseSave: { _ in true },
+            onEmissionBatch: { batch, _ in await recorder.accept(batch) }, onOutcome: { _, _ in true })
+        let delegate = await MainActor.run { JourneyRuntimeDelegate(request: request) }
+        let controller = await MainActor.run { MockExperienceViewController(mockExperienceVersionId: "version_golden") }
+        func emit(_ id: String, epoch: UInt64) async -> Bool {
+            await delegate.experienceViewController(controller, didEmitScreenEmissionBatch:
+                presentationBatch(request: request, presentationEpoch: epoch, invocationId: id, emissions: []))
+        }
+        func save(epoch: UInt64) async -> Bool {
+            await delegate.experienceViewController(controller, didRequestResponseSave: .init(
+                request: .init(form: "survey", awaitTrigger: nil, answers: .init()),
+                screenID: "screen_welcome", onConfirmed: {}),
+                run: .init(journeyId: "journey", executionOwnershipEpoch: 0, lifecycleGeneration: 0,
+                    presentationEpoch: epoch))
+        }
+        await delegate.experienceViewController(controller, didChangeScreen: "screen_welcome")
+        let left = await delegate.experienceViewController(controller, willDismissScreen: "screen_welcome",
+            revealingScreenId: "screen_details", method: "navigate")
+        XCTAssertEqual(left, .handled)
+        // The Journey recorded the leave at epoch 2, and then the exit plays.
+        let exitEvent = await emit("exit", epoch: 2)
+        let exitSave = await save(epoch: 2)
+        let beforeLeave = await emit("before-leave", epoch: 1)
+        XCTAssertTrue(exitEvent, "The exit's events reach the Journey after the leave is recorded")
+        XCTAssertTrue(exitSave, "So do its saved answers")
+        XCTAssertFalse(beforeLeave, "A batch from before the leave stays stale")
+        await delegate.experienceViewController(controller, didChangeScreen: "screen_details")
+        let lateEvent = await emit("late", epoch: 2)
+        let lateSave = await save(epoch: 2)
+        XCTAssertFalse(lateEvent, "The revealed Screen is active, so the leaving one stops sending")
+        XCTAssertFalse(lateSave)
+        let invocationIds = await recorder.invocationIds()
+        XCTAssertEqual(invocationIds, ["exit"])
+    }
+
     func testRuntimeDelegateEnablesScreenEmissionsOnlyAfterLifecycleCommit() async throws {
         let fixture = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         let snapshot = try await authenticatedRenderedSnapshot(fixture)
