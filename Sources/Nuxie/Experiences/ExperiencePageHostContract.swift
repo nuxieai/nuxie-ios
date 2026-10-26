@@ -19,7 +19,7 @@ struct NativeExperiencePageHost: Equatable, Sendable {
     let stepNames: [String: String]
 
     // Non-published shapes are constructed by tests, never decoded from a release.
-    // Nil machine/model preserve the older interim fixtures' inferred names.
+    // Nil machine/model use the inferred names those test shapes rely on.
     init(artboardName: String, listPath: String, machineName: String? = nil,
          modelName: String? = nil, hasLiveMoves: Bool = false,
          initialRows: InitialRows = .requireEmpty, stepNames: [String: String] = [:]) {
