@@ -104,17 +104,17 @@ final class ExperiencePageStepTests: XCTestCase {
         let probe = PageStepProbe()
         try await probe.perform(style: .none, reduced: true, coveredCut: true, isBack: true)
         XCTAssertEqual(probe.batches, [[.phases([("A", .hidden), ("B", .hidden)], ""),
-            .take, .position(isBack: true), .expand, .begin(nil), .end(nil), .retire]])
+            .take, .position(isBack: true), .expand, .settle, .begin(nil), .end(nil), .retire]])
         XCTAssertFalse(probe.order.contains("present"))
     }
 
-    func testTogetherStepExpandsBeforePhasesAndBeginWithoutAdvancing() async throws {
+    func testTogetherStepExpandsAndSettlesBeforePhasesAndBegin() async throws {
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade] {
             let probe = PageStepProbe()
             try await probe.perform(style: style)
             XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "register:B:enter",
                 "batch", "present", "wait:2:700", "release", "batch", "hidden", "active", "input:true"])
-            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .expand, .phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair")], [.end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
+            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .expand, .settle, .phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair")], [.end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
         }
     }
 
@@ -123,7 +123,7 @@ final class ExperiencePageStepTests: XCTestCase {
         try await probe.perform(style: .none)
         XCTAssertEqual(probe.order, ["input:false", "prepare", "register:A:exit", "batch", "present", "wait:1:700", "release",
             "register:B:enter", "batch", "present", "wait:1:700", "release", "batch", "hidden", "active", "input:true"])
-        XCTAssertEqual(probe.batches[1], [.take, .position(isBack: false), .expand, .phases([("B", .entering)], "pair"), .begin("pair"),
+        XCTAssertEqual(probe.batches[1], [.take, .position(isBack: false), .expand, .settle, .phases([("B", .entering)], "pair"), .begin("pair"),
             .phases([("A", .hidden)], ""), .retire])
         XCTAssertEqual(probe.batches[2], [.end("pair"), .phases([("B", .active)], "")])
         XCTAssertEqual(probe.registrationsAtRetirement, [["B": 1]],
@@ -150,7 +150,7 @@ final class ExperiencePageStepTests: XCTestCase {
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade, .none] {
             let probe = PageStepProbe()
             try await probe.perform(style: style, reduced: true)
-            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .expand, .phases([("A", .exiting)], "pair"), .phases([("B", .entering)], "pair"),
+            XCTAssertEqual(probe.batches, [[.take, .position(isBack: false), .expand, .settle, .phases([("A", .exiting)], "pair"), .phases([("B", .entering)], "pair"),
                 .begin("pair"), .end("pair"), .phases([("A", .hidden)], ""), .retire, .phases([("B", .active)], "")]])
             XCTAssertFalse(probe.order.contains("present"))
         }
@@ -167,7 +167,7 @@ final class ExperiencePageStepTests: XCTestCase {
         }
     }
 
-    func testPendingEventsAndCommandsDeliverOnceOnFirstFrameAfterExpansionAndBegin() async throws {
+    func testPendingEventsAndCommandsDeliverOnceAtTheSettleStepBeforePhasesAndBegin() async throws {
         let probe = PageStepProbe()
         var operations = probe.operations
         var order: [String] = []
@@ -180,15 +180,20 @@ final class ExperiencePageStepTests: XCTestCase {
                 switch change {
                 case .position: order.append("mutate")
                 case .expand: order.append("expand")
-                case .phases: order.append("phases")
+                case .settle:
+                    // Route (a): the settle is an ordinary zero-time step and
+                    // delivers whatever output is pending, once.
+                    order.append("settle")
+                    deliveredEvents += pendingEvents
+                    deliveredCommands += pendingCommands
+                    pendingEvents.removeAll()
+                    pendingCommands.removeAll()
+                case .phases:
+                    order.append("phases")
+                    XCTAssertEqual(deliveredEvents, ["row-event"], "The incoming row settles before its phase write")
                 case .begin: order.append("begin")
                 default: break
                 }
-            }
-            // Native begin/end/collapse do not dispatch their pending output.
-            if !order.contains("frame") {
-                XCTAssertTrue(deliveredEvents.isEmpty)
-                XCTAssertTrue(deliveredCommands.isEmpty)
             }
         }
         operations.present = {
@@ -202,7 +207,7 @@ final class ExperiencePageStepTests: XCTestCase {
             plan: PageStepProbe.plan, exit: .init(declaration: nil, reduceMotion: false),
             reduceMotion: false, operations: operations)
         try await operations.present()
-        XCTAssertEqual(Array(order.prefix(5)), ["mutate", "expand", "phases", "begin", "frame"])
+        XCTAssertEqual(Array(order.prefix(6)), ["mutate", "expand", "settle", "phases", "begin", "frame"])
         XCTAssertEqual(deliveredEvents, ["row-event"])
         XCTAssertEqual(deliveredCommands, ["command-1", "command-2"])
     }
@@ -451,8 +456,8 @@ final class ExperiencePageStepTests: XCTestCase {
                 reduceMotion: false, operations: probe.operations)
             let batch = try XCTUnwrap(probe.batches.first { $0.contains(.begin("pair")) })
             XCTAssertTrue(batch.contains { if case .phases = $0 { return true }; return false })
-            XCTAssertEqual(Array(batch.prefix(3)), [.take, .position(isBack: true), .expand])
-            guard case .phases = batch[3] else { return XCTFail("Phases must follow expansion") }
+            XCTAssertEqual(Array(batch.prefix(4)), [.take, .position(isBack: true), .expand, .settle])
+            guard case .phases = batch[4] else { return XCTFail("Phases must follow the settle step") }
             XCTAssertLessThan(try XCTUnwrap(batch.firstIndex(of: .position(isBack: true))),
                               try XCTUnwrap(batch.firstIndex(of: .begin("pair"))))
             if style != .none {

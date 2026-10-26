@@ -7,6 +7,9 @@ enum ExperiencePageStep {
         case take
         case position(isBack: Bool)
         case expand
+        /// Route (a): one ordinary zero-time step after the incoming row is
+        /// placed and woken, so its machine settles before the phase writes.
+        case settle
         case phases([(String, ExperienceScreenLifecyclePhase)], String)
         case begin(String?)
         case end(String?)
@@ -14,7 +17,7 @@ enum ExperiencePageStep {
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             switch (lhs, rhs) {
-            case (.take, .take), (.retire, .retire), (.expand, .expand): return true
+            case (.take, .take), (.retire, .retire), (.expand, .expand), (.settle, .settle): return true
             case let (.position(a), .position(b)): return a == b
             case let (.begin(a), .begin(b)), let (.end(a), .end(b)): return a == b
             case let (.phases(a, x), .phases(b, y)):
@@ -74,7 +77,7 @@ enum ExperiencePageStep {
             await operations.release()
         }
 
-        let incoming: [Change] = [.take, .position(isBack: isBack), .expand]
+        let incoming: [Change] = [.take, .position(isBack: isBack), .expand, .settle]
         if coveredCut {
             try await operations.batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
                 .begin(nil), .end(nil), .retire])

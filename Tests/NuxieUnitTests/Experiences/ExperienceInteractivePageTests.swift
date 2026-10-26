@@ -247,6 +247,18 @@ final class ExperienceInteractivePageTests: XCTestCase {
     }
 
     @MainActor
+    func testSettleRunsOneOrdinaryZeroTimeStepAfterExpansion() async throws {
+        try await withLiveMovePage(initialA: false) { layer in
+            try await layer.insert(screenID: "A", at: 0)
+            let settled = try await layer.apply([.take, .position(isBack: false), .expand, .settle],
+                source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
+            let step = try XCTUnwrap(settled, "Route (a): settle returns its step for ordinary delivery")
+            XCTAssertEqual(step.mountedScreenIDs, ["A", "B"])
+            XCTAssertEqual(Set(step.rows.keys), ["A", "B"])
+        }
+    }
+
+    @MainActor
     func testInsertAndMoveExpandWithoutAnInterveningStep() async throws {
         try await withLiveMovePage(initialA: false) { layer in
             try await layer.insert(screenID: "A", at: 0)
