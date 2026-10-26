@@ -24,6 +24,16 @@ class SimulatorSelectionTests(unittest.TestCase):
         inventory["runtimes"][1]["isAvailable"] = False
         self.assertEqual(select_simulator(inventory), ("27.0", "iPhone 17 Pro"))
 
+    def test_explicit_duo_keeps_the_requested_viewport(self):
+        self.assertEqual(select_simulator(self.inventory(), device_name="iPhone Duo"), ("27.1", "iPhone Duo"))
+
+    def test_explicit_ipad_is_selected_from_supported_device_types(self):
+        inventory = self.inventory()
+        inventory['runtimes'][1]['supportedDeviceTypes'].append({'identifier': 'ipad'})
+        inventory['devicetypes'].append({'identifier': 'ipad', 'name': 'iPad Pro', 'productFamily': 'iPad',
+                                      'minRuntimeVersion': 27 << 16, 'maxRuntimeVersion': 0xffffffff})
+        self.assertEqual(select_simulator(inventory, device_name='iPad Pro'), ('27.1', 'iPad Pro'))
+
     def test_duo_only_runtime_does_not_admit_an_incompatible_ordinary_phone(self):
         inventory = self.inventory()
         inventory["runtimes"][1]["supportedDeviceTypes"] = [{"identifier": "duo"}]

@@ -17,10 +17,10 @@ def select_simulator(inventory, device_name=None, os_version=None):
         parts += [0] * (3 - len(parts))
         version = (parts[0] << 16) | (parts[1] << 8) | parts[2]
         devices = [device for device in inventory["devicetypes"]
-                   if device.get("productFamily") == "iPhone"
+                   if (device_name is not None or device.get("productFamily") == "iPhone")
                    and (device_name is None or device["name"] == device_name)
                    and device["identifier"] in supported
-                   and "Duo" not in device["name"]
+                   and (device_name is not None or "Duo" not in device["name"])
                    and device["minRuntimeVersion"] <= version <= device["maxRuntimeVersion"]]
         if devices:
             preferred = next((device for device in devices if device["name"] == "iPhone 17 Pro"), None)
