@@ -138,7 +138,9 @@ struct ExperiencePageHistory {
     }
 
     mutating func back(to screenID: String, steps: Int? = nil) {
-        if let steps, steps > 0, entries.count > steps, entries[entries.count - 1 - steps].screenID == screenID {
+        // Steps past the first Screen are not taken, so an earlier visit to the target is not mistaken for it.
+        if let steps = steps.map({ min($0, entries.count - 1) }), steps > 0,
+           entries[entries.count - 1 - steps].screenID == screenID {
             entries.removeLast(steps)
         } else if let index = entries.dropLast().lastIndex(where: { $0.screenID == screenID }) {
             entries = Array(entries.prefix(index + 1))
