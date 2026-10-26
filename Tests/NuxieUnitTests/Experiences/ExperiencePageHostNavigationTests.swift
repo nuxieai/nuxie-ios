@@ -1014,6 +1014,38 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         XCTAssertEqual(controller.lifecyclePhase, .active, file: file, line: line)
     }
 
+    /// A pushed or presented page mounts entering. As a pushed Screen did
+    /// before the page host, its timeline runs through UIKit's presentation.
+    func testANewPagesTimelineRunsThroughItsNativePresentation() async throws {
+        let payload = try await hostedLiveMovePayload()
+        let root = experiencePreparationRepositoryRoot()
+        let experience = Experience(id: "layer-host", versionId: "layer-version", buildId: "layer-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+            behaviorPresentationScreens: [:], assetBaseURL: root, journey: payload.journey, definition: payload.definition)
+        let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+            sceneURL: root.appendingPathComponent("fixtures/runtime/page-host-live-moves/page2.riv"), sceneBytes: payload.sceneBytes,
+            assetURLsByUniqueName: [:], source: .cache, payload: payload,
+            interactivePreparation: .init(cache: hostedLiveMovePreparationCache(), provenance: UUID().uuidString, payload: payload),
+            products: [], resourceMetrics: .zero)
+        let run = ExperienceRunValues()
+        let controller = ExperienceScreenViewController(experience: experience, artifact: .init(acquired: acquired),
+            screen: try XCTUnwrap(payload.renderPlan.screens.first { $0.screenId == "B" }), runValues: run,
+            reduceMotion: false, usesSystemDisplayLink: false, delegate: nil)
+        addTeardownBlock { @MainActor in await controller.shutdownInteractiveScreen(); await run.retire() }
+        controller.loadViewIfNeeded()
+        try await controller.mountInteractiveScreen(hostTraits: nil)
+        let loop = try XCTUnwrap(Mirror(reflecting: controller).children
+            .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+        func timelineIsActive() throws -> Bool {
+            try XCTUnwrap(Mirror(reflecting: loop).children.first { $0.label == "isTimelineActive" }?.value as? Bool)
+        }
+        XCTAssertEqual(controller.lifecyclePhase, .entering)
+        XCTAssertFalse(try timelineIsActive(), "Mounting holds the page at its first frame")
+        try await controller.preparePagePresentationPhase(.entering, reduceMotion: false)
+        XCTAssertEqual(controller.lifecyclePhase, .entering)
+        XCTAssertTrue(try timelineIsActive(), "UIKit's presentation plays the entering page")
+    }
+
     func testDuplicateScreenPagesReceiveEnvironmentAndShutdownExactlyOnce() async throws {
         try await withCoordinator { coordinator, base, _, _ in
             try await navigate(coordinator, to: "A", transition: ["type": "push"])
