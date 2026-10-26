@@ -7,6 +7,26 @@ continues to pin Quick, Nimble, and their transitive test dependencies.
 
 ## Worktree caches
 
+When the Nuxie homelab client is installed, `make test` and this frontend's
+`build`, `test` and `prepare` commands run on an automatically selected compatible
+pool Mac. The whole invocation stays together there: source preparation, Bazel,
+output queries, XCTest verification and the complete `make test` gate. No
+worktree-specific wrapper installation is needed. The selected host uses its own
+Xcode and simulator installation, sharing its compiler cache and reserving its
+normal local-build CPU/memory budget.
+
+Explicit simulator UUIDs are translated to device/runtime requirements before
+placement. Unavailable runtimes cause a refusal before execution. The Apple
+rules own their disposable test simulators; other simulators stay untouched.
+Physical-device qualification still requires a device-connected host.
+
+Requested frameworks and prepared distributions are delivered atomically to
+their original caller paths. The request's logs, test XML, available XCResult
+archives and profiles live under `.nuxie/homelab/<request>/`. A failed test
+returns its failure without falling back to a local build. A configured pool
+with an outdated SDK-task client fails clearly and needs a client update.
+Without a configured pool the frontend retains its ordinary local behavior.
+
 Bazel shares action products, dependency downloads, and fetched repositories
 with `nuxie-runtime` and the other Nuxie SDKs under `~/.cache/nuxie/bazel`.
 Each checkout has its own output base, `bazel-*` links, and prepared SDK outputs.

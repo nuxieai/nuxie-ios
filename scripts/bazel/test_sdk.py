@@ -340,12 +340,39 @@ class NativeCommandSelectionTests(unittest.TestCase):
                     self.assertNotIn("Shutdown", result.stdout)
 
     def command(self, argv):
-        with patch("sys.argv", ["sdk.py", *argv]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
+        with patch.object(sdk, "default_test_simulator", return_value=("27.1", "iPhone 17 Pro")), patch.object(sdk, "pool_dispatch", return_value=None), patch("sys.argv", ["sdk.py", *argv]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
                 patch.object(sdk, "run") as run, patch.object(sdk, "publish_build"), \
                 patch.object(sdk, "verify_test_results"), \
                 patch.object(sdk.platform, "machine", return_value="arm64"):
             sdk.main()
             return run.call_args.args[0]
+
+    def test_pool_dispatch_keeps_suite_filter_and_remote_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            installed = home / '.local/share/nuxie-homelab'; installed.mkdir(parents=True)
+            receipt = home / 'received.json'
+            (installed / 'sdk-task.py').write_text(
+                'import json\nfrom pathlib import Path\n'
+                'def route(root, arguments, **kwargs):\n'
+                ' Path(' + repr(str(receipt)) + ').write_text(json.dumps({"arguments": arguments, "platform": kwargs["platform"]}))\n'
+                ' return 17\n')
+            args = ['test', '--suite', 'hosted-input', '--test-filter', 'Module/Class/test']
+            with patch.object(Path, 'home', return_value=home), patch('sys.argv', ['sdk.py', *args]), \
+                    patch.dict(os.environ, {'_NUXIE_POOL_NESTED': '0'}), patch.object(sdk, 'run') as run:
+                with self.assertRaises(SystemExit) as result: sdk.main()
+                self.assertEqual(result.exception.code, 17)
+                run.assert_not_called()
+            self.assertEqual(json.loads(receipt.read_text()), {'arguments': args, 'platform': 'macos'})
+
+    def test_nested_pool_frontend_does_not_submit_itself_again(self):
+        with patch.dict(os.environ, {'_NUXIE_POOL_NESTED': '1'}):
+            self.assertIsNone(sdk.pool_dispatch(type('Args', (), {'command': 'test'})()))
+
+    def test_direct_test_frontend_selects_a_supported_host_simulator(self):
+        command = self.command(['test', '--suite', 'unit'])
+        self.assertIn('--ios_simulator_device=iPhone 17 Pro', command)
+        self.assertIn('--ios_simulator_version=27.1', command)
 
     def test_macos_default_build_selects_macos_framework(self):
         command = self.command(["build", "--platform", "macos"])
@@ -382,7 +409,7 @@ class NativeCommandSelectionTests(unittest.TestCase):
         self.assertIn("--ios_simulator_version=26.5", command)
 
     def test_all_suites_keep_macos_compilation_separate_from_ios(self):
-        with patch("sys.argv", ["sdk.py", "test"]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
+        with patch.object(sdk, "default_test_simulator", return_value=("27.1", "iPhone 17 Pro")), patch.object(sdk, "pool_dispatch", return_value=None), patch("sys.argv", ["sdk.py", "test"]), patch.object(sdk, "bazel_command", return_value=["bazel"]), \
                 patch.object(sdk, "verify_test_results"), \
                 patch.object(sdk, "run") as run, patch.object(sdk.platform, "machine", return_value="arm64"):
             sdk.main()

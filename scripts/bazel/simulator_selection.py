@@ -3,10 +3,11 @@ import json
 import subprocess
 
 
-def select_simulator(inventory):
+def select_simulator(inventory, device_name=None, os_version=None):
     runtimes = sorted(
         (runtime for runtime in inventory["runtimes"]
-         if runtime.get("isAvailable") and ".iOS-" in runtime["identifier"]),
+         if runtime.get("isAvailable") and ".iOS-" in runtime["identifier"]
+         and (os_version in (None, "latest", runtime["version"]))),
         key=lambda runtime: tuple(int(part) for part in runtime["version"].split(".")),
         reverse=True,
     )
@@ -17,6 +18,7 @@ def select_simulator(inventory):
         version = (parts[0] << 16) | (parts[1] << 8) | parts[2]
         devices = [device for device in inventory["devicetypes"]
                    if device.get("productFamily") == "iPhone"
+                   and (device_name is None or device["name"] == device_name)
                    and device["identifier"] in supported
                    and "Duo" not in device["name"]
                    and device["minRuntimeVersion"] <= version <= device["maxRuntimeVersion"]]

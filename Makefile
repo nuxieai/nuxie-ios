@@ -312,7 +312,13 @@ test-flow-runtime-ui: test-experience-runtime-ui
 
 # The holistic gate: iOS unit + focused native-runtime + hosted UIKit input + integration
 # (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
-test-all: check-presentation-schema bazel-contract-test check-sdk-guidance check-provider-adapters check-event-catalog
+test-all:
+	@scripts/bazel/sdk.sh test --gate \
+		$(if $(filter command line environment override,$(origin TEST_DESTINATION) $(origin TEST_SIMULATOR_NAME) $(origin TEST_SIMULATOR_OS)),--destination '$(TEST_DESTINATION)') \
+		$(if $(XCODEBUILD_TEST_FLAGS),--xcodebuild-test-flags='$(XCODEBUILD_TEST_FLAGS)')
+
+.PHONY: _test-sdk-gate
+_test-sdk-gate: check-presentation-schema bazel-contract-test check-sdk-guidance check-provider-adapters check-event-catalog
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
 	@$(MAKE) test-experience-input
