@@ -140,6 +140,19 @@
       ]
     },
     {
+      "name": "Back with more steps than the page has lands on its first visit, not a later visit to the same Screen",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "forward": "A", "transition": { "kind": "magic-move", "id": "t3" } },
+        { "forward": "C", "transition": null,
+          "expect": { "history": [["A", "B", "A", "C"]], "rows": ["B", "A", "C"], "collapsed": ["B", "A"], "removed": [] } },
+        { "back": 9,
+          "expect": { "target": "A", "plays": { "kind": "magic-move", "id": "pair-ca" },
+                      "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B", "C"] } }
+      ]
+    },
+    {
       "name": "Back from a pushed page's root pops to the page below without changing it",
       "first": "A",
       "operations": [
