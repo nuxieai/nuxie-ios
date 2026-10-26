@@ -346,7 +346,8 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             try await navigate(coordinator, to: "B")
             let returnedB = try await layer.snapshot(screenID: "B")
             XCTAssertNotEqual(returnedB.rootInstanceID, firstB.rootInstanceID)
-            XCTAssertEqual(rootValue("offset", in: returnedB), .number(42))
+            XCTAssertEqual(rootValue("offset", in: returnedB), .number(999),
+                "Writes made while Back had removed B reach its new row, in order, after its retained values")
             let writes = await layer.runtime.rowWriteLog
             XCTAssertFalse(writes.contains(firstB.rootInstanceID), "Queued values and cached snapshots must not write to removed B")
             XCTAssertTrue(coordinator.applySnapshot(.init(values: [
@@ -369,13 +370,18 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             let b = try await layer.snapshot(screenID: "B")
             XCTAssertEqual(rootValue("offset", in: a), .number(42))
             XCTAssertEqual(rootValue("offset", in: b), .number(42))
+            await layer.runtime.recordRowWrites()
             XCTAssertTrue(coordinator.applyValue(path: .init(path: "offset"), value: 84,
                 screenId: nil, instanceId: nil))
             try await navigate(coordinator, to: "B")
             let nextA = try await layer.snapshot(screenID: "A")
             let nextB = try await layer.snapshot(screenID: "B")
             XCTAssertEqual(rootValue("offset", in: nextA), .number(84))
-            XCTAssertEqual(rootValue("offset", in: nextB), .number(42), "R6b: broadcasts do not change a removed row's frozen values")
+            XCTAssertNotEqual(nextB.rootInstanceID, b.rootInstanceID)
+            XCTAssertEqual(rootValue("offset", in: nextB), .number(84),
+                "A broadcast made while Back had removed B reaches its new row after its retained values")
+            let writes = await layer.runtime.rowWriteLog
+            XCTAssertFalse(writes.contains(b.rootInstanceID), "R6b: a broadcast never writes to removed B")
         }
     }
 
