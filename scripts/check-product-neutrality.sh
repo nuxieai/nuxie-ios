@@ -28,7 +28,34 @@ if git grep -nE "$prohibited" -- \
   ':!fixtures/runtime/earlier-cuts/forms-saves-9ff6ee3e21/provenance.json' \
   ':!fixtures/runtime/forms-saves/provenance.json' \
   ':!fixtures/runtime/forms-saves/goals/NOTES.md' \
-  ':!fixtures/runtime/forms-saves/goals/provenance.json'
+  ':!fixtures/runtime/forms-saves/goals/provenance.json' \
+  ':!Tests/ExperienceRuntimeHostApp/Fixtures/animation-event/provenance.json' \
+  ':!Tests/ExperienceRuntimeHostApp/Fixtures/external-image/provenance.json' \
+  ':!Tests/ExperienceRuntimeHostApp/Fixtures/font-converter/provenance.json' \
+  ':!Tests/ExperienceRuntimeHostApp/Fixtures/multi-screen/provenance.json' \
+  ':!Tests/ExperienceRuntimeHostApp/Fixtures/scripted-resources/provenance.json' \
+  ':!Tests/ExperienceRuntimeHostApp/Fixtures/video-captions/provenance.json' \
+  ':!fixtures/journeys/rendered-purchase-absolute/provenance.json' \
+  ':!fixtures/journeys/rendered-purchase-navigation/provenance.json' \
+  ':!fixtures/journeys/rendered-purchase-scopes/provenance.json' \
+  ':!fixtures/journeys/rendered-screen-control-condition/provenance.json' \
+  ':!fixtures/journeys/rendered-screen-control-error/provenance.json' \
+  ':!fixtures/journeys/rendered-screen-control/provenance.json' \
+  ':!fixtures/journeys/rendered-semantic-roles/descriptor.json' \
+  ':!fixtures/journeys/rendered-semantic-roles/provenance.json' \
+  ':!fixtures/journeys/rendered-semantic-roles/release.json' \
+  ':!fixtures/journeys/rendered-semantic-roles/renders/sha256/f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539.nux' \
+  ':!fixtures/journeys/rendered-semantic-roles/report.json' \
+  ':!fixtures/journeys/rendered-semantic-roles/screen.riv' \
+  ':!fixtures/journeys/rendered-semantic-screen-control-condition/provenance.json' \
+  ':!fixtures/journeys/rendered-semantic-screen-control-error/provenance.json' \
+  ':!fixtures/journeys/rendered-semantic-screen-control/provenance.json' \
+  ':!fixtures/journeys/rendered-text-input/provenance.json' \
+  ':!fixtures/runtime/await-values/provenance.json' \
+  ':!fixtures/runtime/choices-set/provenance.json' \
+  ':!fixtures/runtime/emit-values/provenance.json' \
+  ':!fixtures/runtime/script-tap/provenance.json' \
+  ':!fixtures/runtime/system-font-axes/provenance.json'
 then
   echo "The public SDK contains Editor-product-specific support. Keep that harness in nuxie-dev." >&2
   exit 1
