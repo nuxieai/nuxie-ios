@@ -369,6 +369,18 @@ class NativeCommandSelectionTests(unittest.TestCase):
         with patch.dict(os.environ, {'_NUXIE_POOL_NESTED': '1'}):
             self.assertIsNone(sdk.pool_dispatch(type('Args', (), {'command': 'test'})()))
 
+    def test_pool_preparation_keeps_the_local_output_ownership_guard(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(sdk, 'ROOT', root):
+                args = argparse.Namespace(output=str(root))
+                with self.assertRaisesRegex(ValueError, 'dedicated artifact output'):
+                    sdk.preparation_output(args)
+                output = root / 'foreign'; output.mkdir(); (output/'mine').write_text('keep')
+                args.output = str(output)
+                with self.assertRaises(ValueError): sdk.preparation_output(args)
+                self.assertEqual((output/'mine').read_text(), 'keep')
+
     def test_direct_test_frontend_selects_a_supported_host_simulator(self):
         command = self.command(['test', '--suite', 'unit'])
         self.assertIn('--ios_simulator_device=iPhone 17 Pro', command)

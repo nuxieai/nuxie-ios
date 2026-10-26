@@ -429,13 +429,18 @@ def source_identity(excluded: list[Path]) -> tuple[str, bool, str]:
     return revision, dirty, digest
 
 
-def prepare(args: argparse.Namespace) -> None:
+def preparation_output(args: argparse.Namespace) -> Path:
     if os.environ.get("NUXIE_RUNTIME_USE_LOCAL", ""):
         raise ValueError("Distribution preparation requires the pinned release; use build/test for a local runtime")
     output = Path(args.output).expanduser().resolve()
-    if output == ROOT or ROOT.is_relative_to(output):
+    if ROOT.resolve().is_relative_to(output):
         raise ValueError("Choose a dedicated artifact output directory")
     check_owned_output(output)
+    return output
+
+
+def prepare(args: argparse.Namespace) -> None:
+    output = preparation_output(args)
     revision, dirty, source_digest = source_identity([output])
     if dirty and not getattr(args, "allow_dirty", False):
         raise ValueError("SDK distribution preparation requires committed source; --allow-dirty is for development artifacts")
@@ -532,7 +537,7 @@ def pool_dispatch(args):
         name = f".bazel-artifacts/build/{sdk_platform}/{args.configuration}"
         outputs[name] = ROOT / name
     elif args.command == "prepare":
-        outputs[".bazel-artifacts/prepared"] = Path(args.output).expanduser().resolve()
+        outputs[".bazel-artifacts/prepared"] = preparation_output(args)
     return module.route(ROOT, sys.argv[1:], platform="macos", outputs=outputs)
 
 
