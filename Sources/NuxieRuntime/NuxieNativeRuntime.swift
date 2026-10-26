@@ -4074,4 +4074,79 @@ extension NuxieNativeRuntime {
     }
 }
 
+/// The only C-facing executor adapter. Native code owns admission, FIFO work,
+/// the pinned thread, and draining; Swift owns continuation and closure lifetime.
+final class NuxieNativeExecutor: @unchecked Sendable {
+    private final class Job {
+        private var operation: (@Sendable () -> Void)?
+        private var abandoned: (@Sendable () -> Void)?
+
+        init(_ operation: @escaping @Sendable () -> Void,
+             abandoned: @escaping @Sendable () -> Void) {
+            self.operation = operation
+            self.abandoned = abandoned
+        }
+
+        func run() {
+            let body = operation
+            operation = nil
+            abandoned = nil
+            autoreleasepool { body?() }
+        }
+
+        func release() {
+            operation = nil
+            let callback = abandoned
+            abandoned = nil
+            callback?()
+        }
+    }
+
+    private let handle: OpaquePointer?
+
+    init() {
+        var handle: OpaquePointer?
+        let status = nux_executor_new(&handle)
+        self.handle = status == NUX_STATUS_OK.rawValue ? handle : nil
+    }
+
+    deinit {
+        if let handle { nux_executor_release(handle) }
+    }
+
+    func submit(_ operation: @escaping @Sendable () -> Void,
+                abandoned: @escaping @Sendable () -> Void) -> Bool {
+        guard let handle else { return false }
+        let context = Unmanaged.passRetained(Job(operation, abandoned: abandoned)).toOpaque()
+        let status = nux_executor_submit(handle, context, { context in
+            guard let context else { return }
+            Unmanaged<Job>.fromOpaque(context).takeUnretainedValue().run()
+        }, { context in
+            guard let context else { return }
+            Unmanaged<Job>.fromOpaque(context).takeRetainedValue().release()
+        })
+        if status != NUX_STATUS_OK.rawValue {
+            // Rejected work never transferred ownership; the caller resolves it.
+            Unmanaged<Job>.fromOpaque(context).release()
+            return false
+        }
+        return true
+    }
+
+    var pendingCount: Int {
+        guard let handle else { return 0 }
+        var count = 0
+        _ = nux_executor_pending_count(handle, &count)
+        return count
+    }
+
+    func shutdown() {
+        guard let handle else { return }
+        _ = nux_executor_close(handle)
+        var terminated = false
+        // WrongThread is intentional when the final Swift owner dies in a job.
+        _ = nux_executor_wait(handle, UInt64.max, &terminated)
+    }
+}
+
 #endif

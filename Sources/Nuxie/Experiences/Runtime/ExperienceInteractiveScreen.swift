@@ -1136,8 +1136,8 @@ final class ExperiencePresentationWarmReservation: @unchecked Sendable {
 
 /// Releases evicted native preparations away from the caller's thread.
 ///
-/// A prepared release owns a pinned native thread whose deinit joins that
-/// thread (`NuxieRuntimePinnedThreadExecutor.deinit` calls `stopAndWait`).
+/// A prepared release owns a native executor whose deinit waits for accepted
+/// work to drain when called outside its worker thread.
 /// The final reference must never drop on the cache actor's cooperative
 /// thread or on the main thread, so evicted entries are handed here and
 /// released on a serial utility queue.
