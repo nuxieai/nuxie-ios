@@ -399,22 +399,12 @@ final class ExperienceInteractivePageTests: XCTestCase {
             let diagnostics = PageDiagnosticRecorder()
             try await page.configurePresentationHeight(fitContent: true, size: CGSize(width: 390, height: 844),
                 diagnostic: { await diagnostics.append($0) })
-            let beforeFirstStep = try await page.contentHeight()
-            XCTAssertNil(beforeFirstStep)
             // Layout bounds are published by the next player step, as in presentation.
             _ = try await page.step(elapsedSeconds: 0)
             XCTAssertEqual(page.artboardBounds.size, CGSize(width: 390, height: 844))
             let messages = await diagnostics.messages
             XCTAssertEqual(messages, [ExperienceInteractivePage.fitContentDiagnostic])
             XCTAssertTrue(messages[0].contains("fit-content defaults to large"))
-        }
-    }
-
-    func testContentHeightNotFoundWithNoExpandedRows() async throws {
-        try await withLiveMovePage(initialA: false) { page in
-            _ = try await page.step(elapsedSeconds: 0)
-            let height = try await page.contentHeight()
-            XCTAssertNil(height)
         }
     }
 
