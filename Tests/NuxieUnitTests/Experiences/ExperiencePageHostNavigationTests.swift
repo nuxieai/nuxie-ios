@@ -681,6 +681,47 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testAMoveAskedForWhileAHostPopSettlesWaitsForTheRevealedPage() async throws {
+        final class Box {
+            var coordinator: ExperienceScreenTransitionCoordinator?
+            var asked: XCTestExpectation?
+            var result: ExperienceScreenNavigationResult?
+            var log: [String] = []
+        }
+        let box = Box()
+        try await withCoordinator(onWillNavigate: { source, target in
+            box.log.append("leave:\(source)>\(target)")
+            return .handled
+        }, onActive: { id in box.log.append("active:\(id)") }, onHidden: { id in
+            box.log.append("hidden:\(id)")
+            // Like a Journey that routes the popped Screen's hidden notice to a
+            // move, then keeps working before it returns.
+            guard id == "B", let coordinator = box.coordinator, let asked = box.asked else { return }
+            box.asked = nil
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { result, _ in
+                box.result = result
+                asked.fulfill()
+            })
+            let deadline = Date().addingTimeInterval(2)
+            while box.result == nil, !box.log.contains(where: { $0.hasPrefix("leave:") }), Date() < deadline {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }) { coordinator, base, _, _ in
+            box.coordinator = coordinator
+            try await navigate(coordinator, to: "B", transition: ["type": "push"])
+            let navigation = try XCTUnwrap(base.navigationController)
+            box.log.removeAll()
+            let asked = expectation(description: "the move asked for during the pop lands")
+            box.asked = asked
+            navigation.popViewController(animated: false)
+            await fulfillment(of: [asked], timeout: 10)
+            XCTAssertEqual(box.result, .navigated)
+            XCTAssertEqual(box.log, ["hidden:B", "active:A", "leave:A>B", "hidden:A", "active:B"],
+                "The pop activates A before the move it was asked for leaves A")
+            XCTAssertEqual(base.screenId, "B")
+        }
+    }
+
     func testHostPopAnnouncesTheRevealedPageOnce() async throws {
         try await withLifecycleCoordinator { coordinator, base, probe, _ in
             let before = base.lifecycleAppearances
@@ -1136,7 +1177,8 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         initialScreenID: String? = nil,
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil,
         onWillNavigate: @escaping @MainActor (String, String) async -> JourneyScreenDismissalResult = { _, _ in .handled },
-        onActive: (@MainActor (String) async -> Void)? = nil, _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
+        onActive: (@MainActor (String) async -> Void)? = nil, onHidden: (@MainActor (String) async -> Void)? = nil,
+        _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
         let experience: Experience
         let artifact: LoadedExperienceArtifact
@@ -1174,7 +1216,10 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             initialScreenID: initialScreenID,
             hostViewController: host, screenDelegate: probe,
             onPresentedScreenDismissed: { _, _ in },
-            onScreenHidden: { id, _ in probe.lifecycle.append("hidden:\(id)") },
+            onScreenHidden: { id, _ in
+                probe.lifecycle.append("hidden:\(id)")
+                await onHidden?(id)
+            },
             onScreenWillNavigate: onWillNavigate,
             onScreenActive: { id in
                 probe.lifecycle.append("active:\(id)")
