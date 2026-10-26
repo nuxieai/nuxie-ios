@@ -125,7 +125,8 @@ struct ExperiencePageHistory {
     func backTransition(steps: Int, target: String? = nil,
                         declarations: [NativeExperienceTransition] = []) -> ExperienceScreenTransitionSpec {
         guard let entry = entries.last else { return .none }
-        if steps == 1 { return entry.transition }
+        // Steps past the page's first Screen are not taken: a Back that goes one Screen reverses it (B2).
+        if min(steps, entries.count - 1) <= 1 { return entry.transition }
         if let target, let pair = declarations.first(where: {
             $0.isDefaultPair && $0.sourceScreenId == entry.screenID && $0.destinationScreenId == target
         }) { return .init(kind: .magicMove, transitionId: pair.id) }

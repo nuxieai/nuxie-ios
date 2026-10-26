@@ -1,0 +1,209 @@
+{
+  "suite": "page-back",
+  "version": 1,
+  "notes": [
+    "In-page Back, as one table of page states against inputs (ledger B1 to B4, R3b, R4 to R7, P7).",
+    "Each case starts from pages[0] = [first Screen] and replays its operations in order.",
+    "forward: an in-page step to a Screen with the published transition it ran ({kind, id}, or null for a cut).",
+    "push: opens a new native page whose root is the Screen.",
+    "back: a Journey back with steps. The target is the steps-th Screen before the current one across every page's history, clamped to the first.",
+    "plays: what the step plays. For an in-page Back it is the forward transition it reverses (B2), the default pair for that ordered (from, to) pair (B3), or null for a cut. Steps past the first Screen are not taken, so a Back that goes one Screen is B2 whatever its steps.",
+    "stays: the active Screen does not change. Nothing plays; a Back still trims the history and removes the rows it no longer reaches.",
+    "acrossPages: the Back lands on a lower page. cutsLowerPage says whether that page first cuts, covered, to the target (P7).",
+    "rows and collapsed: the landing page's list order and sleeping rows after the step. removed: the rows the step removed, in any order.",
+    "Queued Back and close during a step need the coordinator. They are listed in hostedCells with the test that proves them."
+  ],
+  "declarations": [
+    { "id": "t1", "from": "A", "to": "B", "defaultPair": false },
+    { "id": "t2", "from": "B", "to": "C", "defaultPair": false },
+    { "id": "t3", "from": "B", "to": "A", "defaultPair": false },
+    { "id": "pair-ca", "from": "C", "to": "A", "defaultPair": true }
+  ],
+  "cases": [
+    {
+      "name": "forward appends the new Screen on top and sleeps the one it left",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" },
+          "expect": { "history": [["A", "B"]], "rows": ["A", "B"], "collapsed": ["A"], "removed": [] } }
+      ]
+    },
+    {
+      "name": "forward to the Screen already showing does nothing",
+      "first": "A",
+      "operations": [
+        { "forward": "A", "transition": null,
+          "expect": { "stays": true, "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": [] } }
+      ]
+    },
+    {
+      "name": "Back reverses the move that ran and removes the Screen it left",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "back": 1,
+          "expect": { "target": "A", "plays": { "kind": "magic-move", "id": "t1" },
+                      "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B"] } }
+      ]
+    },
+    {
+      "name": "Back after a cut is a cut",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": null },
+        { "back": 1,
+          "expect": { "target": "A", "plays": null, "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B"] } }
+      ]
+    },
+    {
+      "name": "Back after a fade reverses the fade",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "fade", "id": "t1" } },
+        { "back": 1,
+          "expect": { "target": "A", "plays": { "kind": "fade", "id": "t1" }, "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B"] } }
+      ]
+    },
+    {
+      "name": "a Back that skips a Screen plays the default pair it joins and removes both",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "forward": "C", "transition": { "kind": "magic-move", "id": "t2" },
+          "expect": { "history": [["A", "B", "C"]], "rows": ["A", "B", "C"], "collapsed": ["A", "B"], "removed": [] } },
+        { "back": 2,
+          "expect": { "target": "A", "plays": { "kind": "magic-move", "id": "pair-ca" },
+                      "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B", "C"] } }
+      ]
+    },
+    {
+      "name": "a Back that skips a Screen with no default pair for that direction is a cut",
+      "first": "B",
+      "operations": [
+        { "forward": "C", "transition": { "kind": "magic-move", "id": "t2" } },
+        { "forward": "A", "transition": null },
+        { "back": 2,
+          "expect": { "target": "B", "plays": null, "history": [["B"]], "rows": ["B"], "collapsed": [], "removed": ["A", "C"] } }
+      ]
+    },
+    {
+      "name": "a default pair plays only in its own direction",
+      "first": "C",
+      "operations": [
+        { "forward": "B", "transition": null },
+        { "forward": "A", "transition": { "kind": "magic-move", "id": "t3" } },
+        { "back": 2,
+          "expect": { "target": "C", "plays": null, "history": [["C"]], "rows": ["C"], "collapsed": [], "removed": ["A", "B"] } }
+      ]
+    },
+    {
+      "name": "a repeated visit moves the kept row on top, and Back wakes the row below it",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "forward": "A", "transition": { "kind": "magic-move", "id": "t3" },
+          "expect": { "history": [["A", "B", "A"]], "rows": ["B", "A"], "collapsed": ["B"], "removed": [] } },
+        { "back": 1,
+          "expect": { "target": "B", "plays": { "kind": "magic-move", "id": "t3" },
+                      "history": [["A", "B"]], "rows": ["B", "A"], "collapsed": ["A"], "removed": [] } }
+      ]
+    },
+    {
+      "name": "Back to the same Screen at an earlier visit trims history and plays nothing",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "forward": "A", "transition": { "kind": "magic-move", "id": "t3" } },
+        { "back": 2,
+          "expect": { "target": "A", "stays": true, "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B"] } }
+      ]
+    },
+    {
+      "name": "Back with more steps than the page has reverses the one move that exists",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "back": 5,
+          "expect": { "target": "A", "plays": { "kind": "magic-move", "id": "t1" },
+                      "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B"] } }
+      ]
+    },
+    {
+      "name": "Back with more steps than the page has, past a skipped Screen, plays the default pair",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "forward": "C", "transition": { "kind": "magic-move", "id": "t2" } },
+        { "back": 9,
+          "expect": { "target": "A", "plays": { "kind": "magic-move", "id": "pair-ca" },
+                      "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B", "C"] } }
+      ]
+    },
+    {
+      "name": "Back from a pushed page's root pops to the page below without changing it",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "push": "C" },
+        { "back": 1,
+          "expect": { "target": "B", "acrossPages": { "page": 0, "cutsLowerPage": false, "pops": 1 },
+                      "history": [["A", "B"]] } }
+      ]
+    },
+    {
+      "name": "Back past a pushed page cuts the covered page first, then pops",
+      "first": "A",
+      "operations": [
+        { "forward": "B", "transition": { "kind": "magic-move", "id": "t1" } },
+        { "push": "C" },
+        { "back": 2,
+          "expect": { "target": "A", "acrossPages": { "page": 0, "cutsLowerPage": true, "pops": 1 },
+                      "history": [["A"]], "rows": ["A"], "collapsed": [], "removed": ["B"] } }
+      ]
+    },
+    {
+      "name": "Back inside a pushed page stays in that page",
+      "first": "A",
+      "operations": [
+        { "push": "B" },
+        { "forward": "C", "transition": { "kind": "magic-move", "id": "t2" } },
+        { "back": 1,
+          "expect": { "target": "B", "plays": { "kind": "magic-move", "id": "t2" },
+                      "history": [["A"], ["B"]], "rows": ["B"], "collapsed": [], "removed": ["C"] } }
+      ]
+    },
+    {
+      "name": "Back from a pushed page's second Screen to the page below pops without a cut",
+      "first": "A",
+      "operations": [
+        { "push": "B" },
+        { "forward": "C", "transition": { "kind": "magic-move", "id": "t2" } },
+        { "back": 2,
+          "expect": { "target": "A", "acrossPages": { "page": 0, "cutsLowerPage": false, "pops": 1 },
+                      "history": [["A"]] } }
+      ]
+    },
+    {
+      "name": "Back beyond every page lands on the first Screen",
+      "first": "A",
+      "operations": [
+        { "push": "B" },
+        { "back": 7,
+          "expect": { "target": "A", "acrossPages": { "page": 0, "cutsLowerPage": false, "pops": 1 },
+                      "history": [["A"]] } }
+      ]
+    }
+  ],
+  "hostedCells": [
+    { "cell": "a Back requested during a step waits for it and reverses the pair that finished",
+      "ios": "ExperiencePageHostNavigationTests.testBackRequestedDuringAStepQueuesAndReversesThePairThatFinishes" },
+    { "cell": "a navigation requested during a step waits; navigating to the active Screen completes as already active",
+      "ios": "ExperiencePageHostNavigationTests.testNavigationRequestedDuringStepQueuesAndSelfNavigationCompletesAlreadyActive" },
+    { "cell": "a close during a step lands the step, then exits the Screen it landed on",
+      "ios": "ExperiencePageHostNavigationTests.testCloseDuringAStepLandsTheStepThenExitsTheScreenItLandedOn" },
+    { "cell": "a sheet swiped away during a step supersedes the step, and the page below navigates normally",
+      "ios": "ExperiencePageHostNavigationTests.testSwipeDuringAnUnpresentedPhaseSupersedesNavigationAndReleasesTheDrain" },
+    { "cell": "Back across a push trims the covered page before the pop",
+      "ios": "ExperiencePageHostNavigationTests.testPushOpensNewPageAndSkippingBackCutsCoveredLowerPageBeforePop" }
+  ]
+}
