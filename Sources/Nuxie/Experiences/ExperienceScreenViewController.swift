@@ -155,6 +155,7 @@ final class ExperienceScreenViewController: UIViewController {
     private(set) var interactivePage: ExperienceInteractivePage?
     private var rowScreens: [String: JourneyScreen] = [:]
     private var rowBindings: [String: ExperienceInteractiveScreen] = [:]
+    private var heldRowWrites: [String: [ExperienceInteractiveStateCommand]] = [:]
     private(set) var pageHistory: ExperiencePageHistory
     private var pageStepInProgress = false
     weak var orientationHost: UIViewController?
@@ -736,6 +737,8 @@ final class ExperienceScreenViewController: UIViewController {
         guard let interactivePage else { throw ExperienceInteractiveScreenControllerError.unavailable }
         rowBindings[screenID] = try await interactivePage.prepareRow(screenID: screenID, products: products)
         rowScreens[screenID] = try await interactivePage.screen(screenID: screenID)
+        // Writes held while Back had removed this Screen reach its new row, seeded first (R6b).
+        if heldRowWrites[screenID] != nil { _ = enqueueRowWrite(nil, screenID: screenID) }
     }
 
     private func deliverPageStep(_ step: ExperienceInteractivePage.Step) async {
@@ -1248,20 +1251,15 @@ final class ExperienceScreenViewController: UIViewController {
         logFailure: Bool = true,
         reduceMotion: Bool? = nil,
         requestsFrame: Bool = true,
-        completion: (@MainActor @Sendable (Result<Void, Error>) -> Void)? = nil,
-        screenID: String? = nil
+        completion: (@MainActor @Sendable (Result<Void, Error>) -> Void)? = nil
     ) -> Bool {
         guard !isShuttingDown,
               runtimeFailure == nil,
-              let interactiveScreen = screenID.flatMap({ rowBindings[$0] }) ?? interactiveScreen,
+              let interactiveScreen,
               let presentationLoop else { return false }
-        let sourceID = screenID ?? screenId
+        let sourceID = screenId
         return presentationLoop.enqueue(
             ExperienceRuntimePresentationQueuedWork {
-                // Work accepted before retirement must not write through the old binding.
-                guard !(await interactiveScreen.isRemovedPageRow) else {
-                    return .work(requestsFrame: false) {}
-                }
                 try await interactiveScreen.updateEnvironment(reduceMotion: reduceMotion)
                 let result = try await interactiveScreen.applyStateCommand(command)
                 return .work(requestsFrame: requestsFrame) { [weak self = self] in
@@ -1275,6 +1273,50 @@ final class ExperienceScreenViewController: UIViewController {
                 completion?(result)
             }
         )
+    }
+
+    /// A Journey write to one page row. The row is looked up when the write runs,
+    /// because a revisit may have replaced it. A removed row takes no writes (R6b):
+    /// they wait, in order, and reach the Screen's next row before any later write.
+    /// A nil command only delivers the writes that are waiting.
+    private func enqueueRowWrite(_ command: ExperienceInteractiveStateCommand?, screenID: String) -> Bool {
+        guard !isShuttingDown, runtimeFailure == nil, rowBindings[screenID] != nil,
+              let presentationLoop else { return false }
+        return presentationLoop.enqueue(
+            ExperienceRuntimePresentationQueuedWork { [weak self] in
+                guard let row = await self?.rowBindings[screenID] else { return .work(requestsFrame: false) {} }
+                if await row.isRemovedPageRow {
+                    return .work(requestsFrame: false) { [weak self] in
+                        self?.holdRowWrite(command, screenID: screenID, removedRow: row)
+                    }
+                }
+                let commands = (await self?.takeHeldRowWrites(screenID) ?? []) + (command.map { [$0] } ?? [])
+                guard !commands.isEmpty else { return .work(requestsFrame: false) {} }
+                try await row.updateEnvironment(reduceMotion: nil)
+                var applied: [ExperienceInteractiveEffect] = []
+                for pending in commands { applied += try await row.applyStateCommand(pending).effects }
+                let effects = applied
+                return .work(requestsFrame: true) { [weak self] in
+                    await self?.deliverStep(effects: effects, screenID: screenID)
+                }
+            },
+            completion: { [weak self] result in
+                if case .failure(let error) = result { self?.logRejectedState(error) }
+            }
+        )
+    }
+
+    private func holdRowWrite(_ command: ExperienceInteractiveStateCommand?, screenID: String,
+                              removedRow: ExperienceInteractiveScreen) {
+        if let command { heldRowWrites[screenID, default: []].append(command) }
+        // A revisit may have seeded the next row while this write was looking.
+        if rowBindings[screenID] !== removedRow, heldRowWrites[screenID] != nil {
+            _ = enqueueRowWrite(nil, screenID: screenID)
+        }
+    }
+
+    private func takeHeldRowWrites(_ screenID: String) -> [ExperienceInteractiveStateCommand] {
+        heldRowWrites.removeValue(forKey: screenID) ?? []
     }
 
     private func journeyScreen(for id: String?) -> JourneyScreen? {
@@ -1304,7 +1346,7 @@ final class ExperienceScreenViewController: UIViewController {
                 accepted = true
                 continue
             }
-            accepted = enqueueStateCommand(filtered, screenID: id) || accepted
+            accepted = enqueueRowWrite(filtered, screenID: id) || accepted
         }
         return accepted
     }
