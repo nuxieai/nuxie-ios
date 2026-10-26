@@ -537,8 +537,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let catalog = await file.viewModelCatalog()
         let envSchema = try XCTUnwrap(catalog.schemas.first { $0.name == "env" })
         XCTAssertTrue(envSchema.isGlobal)
-        // Compiler 2b carries the full on-canvas environment contract.
-        // Parent tools/rive-compiler/scene-shared/src/env_schema.rs: ENV_ON_CANVAS.
+        // Compiler 2b carries the full on-canvas environment contract (its ENV_ON_CANVAS list).
         XCTAssertEqual(Set(catalog.properties.filter { $0.schemaIndex == envSchema.index }.map(\.name)),
             Set(["reduceMotion", "fontScale", "safeArea", "width", "height", "fold", "layout", "colorScheme"]))
         let run = ExperienceRunValues()
