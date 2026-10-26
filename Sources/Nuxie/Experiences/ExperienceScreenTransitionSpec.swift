@@ -77,7 +77,7 @@ struct ExperienceScreenTransitionSpec: Equatable, Sendable {
             })
     }
 
-    /// Page Back uses history at execution time. Older primitive fades have no compiled step.
+    /// Page Back uses history at execution time. A fade with no published transition ID has no compiled step.
     static func pageTransition(raw: Any?, sourceScreenID: String, isBack: Bool,
                                inferredBack: Self = .none,
                                diagnostic: (String) -> Void = { LogWarning("\($0, privacy: .publicValue)") }) -> Self {
