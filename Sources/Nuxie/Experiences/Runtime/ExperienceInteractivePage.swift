@@ -532,10 +532,15 @@ actor ExperienceInteractivePage {
             else if let graph = snapshot.rooted(at: identity) { graphs[identity] = graph }
             else { graphs[identity] = try await runtime.snapshot(row.reference) }
         }
+        let activeIdentity = activeRowReference?.rawValue
         let eventOwners: [UInt64?] = result.events.map { event in
             guard let source = event.sourceViewModelInstanceID else { return nil }
             let matches = graphs.filter { $0.value.instances.contains(where: { $0.id == source }) }
-            return matches.count == 1 ? matches.first?.key : nil
+            if matches.count == 1 { return matches.first?.key }
+            // An instance several rows link, such as an item of a shared Experience
+            // list, belongs to the Screen on top when it is one of them (F1).
+            if let activeIdentity, matches[activeIdentity] != nil { return activeIdentity }
+            return nil
         }
         var projected: [String: ExperienceInteractiveStepResult] = [:]
         for (id, row) in currentRows {

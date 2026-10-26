@@ -355,6 +355,59 @@ final class ExperienceInteractivePageTests: XCTestCase {
         }
     }
 
+    #if os(iOS)
+    // The published input Screens use system fonts, which come from UIKit.
+    /// An emit from an instance both rows link, such as an item of a shared
+    /// Experience list, goes to the Screen on top (F1), never to nobody.
+    func testEventFromAnInstanceBothRowsLinkGoesToTheScreenOnTop() async throws {
+        let bytes = try Data(contentsOf: experiencePreparationRepositoryRoot()
+            .appendingPathComponent("fixtures/runtime/layer-host-input/layer-host.riv"))
+        let base = try SharedValuesFixture.payload(directory: PublishedInputFixture.directory,
+            screens: ["input", "greeting"], scene: bytes)
+        let payload = AuthenticatedRuntimePayload(authenticatedKeyID: base.authenticatedKeyID,
+            requiredCapabilities: base.requiredCapabilities,
+            renderPlan: .init(identity: base.renderPlan.identity, scene: base.renderPlan.scene,
+                entry: base.renderPlan.entry, pageHost: .init(artboardName: "LayerList", listPath: "screens"),
+                screens: base.renderPlan.screens, transitions: [], textInputs: [], images: [], fonts: [],
+                systemFonts: base.renderPlan.systemFonts),
+            journey: base.journey, sceneBytes: bytes, assets: base.assets)
+        let preparation = try await ExperienceInteractivePreparation.prepare(payload: payload)
+        // The run's values are the shared Experience instance every row links.
+        let run = ExperienceRunValues()
+        addTeardownBlock { await run.retire() }
+        let page = try await preparation.openPage(runValues: run, pixelWidth: 390, pixelHeight: 844)
+        do {
+            try await page.insert(screenID: "input", at: 0)
+            try await page.insert(screenID: "greeting", at: 1)
+            let input = try await page.snapshot(screenID: "input")
+            let greeting = try await page.snapshot(screenID: "greeting")
+            let shared = Set(input.instances.map(\.id)).intersection(greeting.instances.map(\.id))
+            let source = try XCTUnwrap(shared.first, "Both published Screens link the shared Experience instance")
+            let event = NuxieNativeEvent(localIndex: 0, coreType: 128, name: "picked", url: "", target: "",
+                delay: 0, properties: [], sourceViewModelInstanceID: source)
+            let native = NuxieNativePlayerStepResult(keepGoing: false, pointerHits: [], stateChanges: [],
+                events: [event], hostCommands: [], viewModelChanges: [])
+            func reports(_ step: ExperienceInteractivePage.Step, _ screenID: String) -> Bool {
+                step.rows[screenID]?.effects.contains {
+                    if case .reportedEvent(let reported) = $0.kind { return reported.name == "picked" }
+                    return false
+                } ?? false
+            }
+            for (top, below) in [("greeting", "input"), ("input", "greeting")] {
+                try await page.selectActiveRow(top)
+                let step = try await page.projectCapturedStep(native, snapshot: try await page.runtime.snapshot())
+                XCTAssertTrue(step.unattributedEvents.isEmpty, "top \(top)")
+                XCTAssertTrue(reports(step, top), "top \(top)")
+                XCTAssertFalse(reports(step, below), "top \(top)")
+            }
+            try await page.close()
+        } catch {
+            try? await page.close()
+            throw error
+        }
+    }
+    #endif
+
     func testJourneyReservedWritesAreStrippedPerRow() async throws {
         try await withLayer { layer, _ in
             for (id, index, name, alias) in [("screen_1", 0, "Runtime", "row-a"), ("screen_2", 1, "Runtime_Upsell", "row-b")] {
