@@ -137,6 +137,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private var preparingModal = false
     private var shownPages: [ObjectIdentifier: [ExperienceScreenViewController]] = [:]
     private var nativePageTransitionInProgress = false
+    /// UIKit has shown a page whose pop is still hiding the old page and activating the revealed one.
+    private var settlingNativePops = 0
     private weak var closingLayer: UIViewController?
 
     var hasPresentedLayer: Bool { navigationLayers.count > 1 }
@@ -707,7 +709,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func startNavigationDrainIfNeeded() {
-        guard !navigationAdmissionRevoked, !nativePageTransitionInProgress,
+        guard !navigationAdmissionRevoked, !nativePageTransitionInProgress, settlingNativePops == 0,
               navigationTask == nil,
               lifecycle == .installed,
               !navigationRequests.isEmpty else {
@@ -1017,6 +1019,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let removed = (shownPages[key] ?? []).filter { old in !pages.contains { $0 === old } }
         shownPages[key] = pages
         nativePageTransitionInProgress = false
+        // A move the hidden notice asks for waits until the revealed page is active.
+        settlingNativePops += 1
         let drain = navigationTask
         let page = viewController as? ExperienceScreenViewController
         let transition = platformTransitions.removeValue(forKey: key)
@@ -1036,6 +1040,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 }
             }
             for outgoing in removed { await outgoing.shutdownInteractiveScreen() }
+            self.settlingNativePops -= 1
             self.startNavigationDrainIfNeeded()
         }
     }
