@@ -1032,7 +1032,11 @@ final class ExperienceScreenViewController: UIViewController {
     func preparePagePresentationPhase(_ phase: ExperienceScreenLifecyclePhase, reduceMotion: Bool) async throws {
         guard let page = interactivePage else { throw ExperienceInteractiveScreenControllerError.unavailable }
         let id = screenId
-        if phase == .entering, lifecycleState.phase == .entering { return }
+        if phase == .entering, lifecycleState.phase == .entering {
+            // A page mounted entering plays through UIKit's presentation with no second entering edge.
+            presentationLoop?.setTimelineActive(true)
+            return
+        }
         try await pageWork {
             guard !(await page.isRowRemoved(screenID: id)) else { throw CancellationError() }
             try await page.setPhases([(id, phase)], reduceMotion: reduceMotion)
