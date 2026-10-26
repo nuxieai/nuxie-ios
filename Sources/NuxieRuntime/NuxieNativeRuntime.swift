@@ -1152,11 +1152,6 @@ package actor NuxieNativeRuntime {
         return try await executor.call { try state.renderer.copyDevice() }
     }
 
-    package func contentHeight() async throws -> Float? {
-        let state = try requireState()
-        return try await executor.call { try state.player.contentHeight() }
-    }
-
     package func stepBegin(incomingScreen: String, stepName: String?) async throws {
         let state = try requireState()
         try await executor.call { try state.player.stepBegin(incomingScreen: incomingScreen, stepName: stepName) }
@@ -2995,14 +2990,6 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
             var value = view
             return try withUnsafePointer(to: &value, body)
         }
-    }
-
-    func contentHeight() throws -> Float? {
-        var height: Float = 0
-        let status = nux_player_content_height(try owned.require(), &height)
-        if status == NUX_STATUS_NOT_FOUND.rawValue { return nil }
-        try requireOK(status, operation: "read page content height")
-        return height
     }
 
     func stepBegin(incomingScreen: String, stepName: String?) throws {

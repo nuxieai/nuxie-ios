@@ -922,11 +922,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let modal = spec.kind == .modal
         let stacksSheet = modal && opensStackedSheet(spec.presentation)
         let available = container?.view.bounds.size ?? target.view.bounds.size
-        if modal {
-            try await target.configurePresentationHeight(spec.presentation, target: target, availableSize: available)
-        } else {
-            try await target.configurePushedPresentationHeight(from: source, availableSize: available)
-        }
+        try await target.configurePresentationHeight(modal ? spec.presentation : .init(kind: .fullscreen),
+            target: target, availableSize: available)
         try await target.preparePagePresentationPhase(.entering, reduceMotion: reduceMotion)
         let transition = pageTransition(revealing: target, covering: source, interactive: false)
         await transition.begin()

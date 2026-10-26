@@ -44,7 +44,6 @@ actor ExperienceInteractivePage {
     private let environmentBindings: ExperienceEnvironmentBindings
     private var rows: [String: Row] = [:]
     private var rowList = ExperiencePageRows()
-    private var hasStepped = false
     var retainedScreenIDs: Set<String> { Set(rows.keys) }
     var mountedScreenIDs: [String] { rowList.screenIDs }
     private var closed = false
@@ -275,15 +274,6 @@ actor ExperienceInteractivePage {
         }
         if size.width > 0, size.height > 0 {
             try await setLayoutSize(width: Float(size.width), height: Float(size.height))
-        }
-    }
-
-    /// No height is valid before the first ordinary step. Reading never advances.
-    func contentHeight() async throws -> Float? {
-        try await gate.withLock { [self] in
-            try await requireOpen()
-            guard await hasStepped else { return nil }
-            return try await runtime.contentHeight()
         }
     }
 
@@ -520,7 +510,6 @@ actor ExperienceInteractivePage {
         try requireOpen()
         let frame = try await runtime.stepWithSnapshot(pointers: pointers, focusInputs: focusInputs, elapsedSeconds: elapsedSeconds,
             correlationID: correlationID)
-        hasStepped = true
         layoutBounds.update(size: try await runtime.layoutSize())
         try await videoPlayback?.resizeViewport(bounds: artboardBounds)
         let videoActive = try await videoPlayback?.tick() ?? false

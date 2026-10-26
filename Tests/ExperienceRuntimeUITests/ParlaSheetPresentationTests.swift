@@ -34,7 +34,9 @@ final class ParlaSheetPresentationTests: XCTestCase {
         try tap("Save this offer", observations: afterSwipe, app: app)
         let saved = screen("scr_screens_ssaved", app: app)
         waitForPresentation(saved)
-        XCTAssertLessThan(saved.frame.height, largeFrame.height)
+        XCTExpectFailure(Self.pageFitContent) {
+            XCTAssertLessThan(saved.frame.height, largeFrame.height)
+        }
         _ = try capture("ios-large-fit-content", text: "Saved!")
         swipeSheet(saved, app: app)
         _ = try capture("ios-large-revealed", text: "Special offer")
@@ -75,11 +77,13 @@ final class ParlaSheetPresentationTests: XCTestCase {
 
         let saved = screen("scr_screens_ssaved", app: app)
         waitForPresentation(saved)
-        XCTAssertLessThan(saved.frame.height, mediumFrame.height)
-        XCTAssertGreaterThan(saved.frame.minY, mediumFrame.minY)
         let savedText = try capture("ios-fit-content", text: "Saved!")
-        XCTAssertTrue(savedText.contains { $0.topCandidates(1).first?.string == "Special offer" },
-            "The retained Offer sheet must remain visibly painted beneath Saved")
+        XCTExpectFailure(Self.pageFitContent) {
+            XCTAssertLessThan(saved.frame.height, mediumFrame.height)
+            XCTAssertGreaterThan(saved.frame.minY, mediumFrame.minY)
+            XCTAssertTrue(savedText.contains { $0.topCandidates(1).first?.string == "Special offer" },
+                "The retained Offer sheet must remain visibly painted beneath Saved")
+        }
         try tap("Back to learning", observations: savedText, app: app)
         XCTAssertTrue(offer.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertFalse(saved.exists)
@@ -98,6 +102,10 @@ final class ParlaSheetPresentationTests: XCTestCase {
         XCTAssertEqual(lesson.frame, fullscreenFrame)
         _ = try capture("ios-medium-dismissed", text: "Say hello")
     }
+
+    /// Parla is a page release, and a page in a fit-content sheet opens at the
+    /// large detent (ledger F5) until page content heights land.
+    private static let pageFitContent = "UNIV-5595: a page in a fit-content sheet opens large until the second page host PR"
 
     private func screen(_ id: String, app: XCUIApplication) -> XCUIElement {
         app.otherElements.matching(identifier: "nuxie-experience-surface")

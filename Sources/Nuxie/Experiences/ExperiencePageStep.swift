@@ -113,36 +113,6 @@ enum ExperiencePageStep {
     }
 }
 
-/// F5: read after every ordinary visible frame, never
-/// while covered. Nil (including NOT_FOUND) selects the large sheet fallback.
-@MainActor
-final class ExperiencePageContentMeasurement {
-    private(set) var height: Float?
-    private var enabled = false
-    private var revision = 0
-    var covered = false {
-        didSet { if covered != oldValue { revision += 1 } }
-    }
-
-    func configure(enabled: Bool) {
-        self.enabled = enabled
-        height = nil
-        revision += 1
-    }
-
-    @discardableResult
-    func update(query: () async throws -> Float?) async throws -> Bool {
-        guard enabled, !covered else { return false }
-        let revision = self.revision
-        let value = try await query()
-        guard enabled, !covered, revision == self.revision else { return false }
-        let next = value.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
-        guard next != height else { return false }
-        height = next
-        return true
-    }
-}
-
 struct ExperiencePageHistory {
     struct Entry {
         let screenID: String

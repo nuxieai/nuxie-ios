@@ -203,10 +203,6 @@ final class ExperienceScreenViewController: UIViewController {
     var onPageStep: ((ExperienceInteractivePage.Step) -> Void)?
     // Observes real completion waits without replacing their watchdog or streams.
     var onExitCompletionWait: (() -> Void)?
-    // Internal seams for height routing probes when native fixtures have no
-    // qualified intrinsic height. Ordinary measurement/publication still owns the guards.
-    var pageContentHeightQuery: (@MainActor () async throws -> Float?)?
-    var onContentHeightPublished: (@MainActor (UIViewController, CGFloat) -> Void)?
     var onSemanticCapture: ((NuxieNativeSemanticCapture) -> Void)?
     var hasCompletedLatestFrame: Bool { presentationLoop?.hasCompletedLatestFrame ?? false }
     var hasDeliveredLatestSemanticFrame: Bool { presentationLoop?.hasDeliveredLatestSemanticFrame ?? false }
@@ -429,9 +425,7 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private weak var heightPresentationTarget: UIViewController?
-    private var heightPresentation = ExperienceLayerPresentation(kind: .fullscreen)
     private var measuresContentHeight = false
-    private let pageContentMeasurement = ExperiencePageContentMeasurement()
     private var availablePresentationHeight: CGFloat?
     private var coveredByLayer = false
 
@@ -465,9 +459,6 @@ final class ExperienceScreenViewController: UIViewController {
         presentationLoop?.setInputEnabled(true)
         presentationLoop?.setTimelineActive(true)
         await activate(reduceMotion: reduceMotion)
-        // Another page in this sheet may have changed the shared target since
-        // our last frame. Reclaim it through the same change-only publisher.
-        publishContentHeight()
         updatePresentationVisibility()
     }
 
@@ -475,7 +466,6 @@ final class ExperienceScreenViewController: UIViewController {
 
     func setCoveredByLayer(_ covered: Bool) {
         coveredByLayer = covered
-        pageContentMeasurement.covered = covered
         if interactivePage == nil { interactiveScreen?.setCoveredByLayer(covered) }
         view.isUserInteractionEnabled = !covered && !pageStepInProgress
         textInputOverlayBridge.setHidden(contentHidden || covered)
@@ -486,16 +476,15 @@ final class ExperienceScreenViewController: UIViewController {
 
     func configurePresentationHeight(_ presentation: ExperienceLayerPresentation,
                                      target: UIViewController, availableSize: CGSize) async throws {
-        heightPresentation = presentation
         heightPresentationTarget = target
         availablePresentationHeight = availableSize.height
         lastPresentedHeight = nil
         if let interactivePage {
-            measuresContentHeight = presentation.fitsContent
-            pageContentMeasurement.configure(enabled: presentation.fitsContent)
+            // F5: a page sheet keeps the large detent until page content heights land (UNIV-5595).
             try await interactivePage.configurePresentationHeight(fitContent: presentation.fitsContent, size: availableSize)
             if presentation.fitsContent {
-                publishContentHeight()
+                target.preferredContentSize.height = 0
+                ExperienceLayerPresentationConfigurator.updateContentHeight(target, height: 0)
             }
             return
         }
@@ -513,17 +502,6 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    func configurePushedPresentationHeight(from source: ExperienceScreenViewController,
-                                          availableSize: CGSize) async throws {
-        guard source.heightPresentation.fitsContent, let target = source.heightPresentationTarget else {
-            try await configurePresentationHeight(.init(kind: .fullscreen), target: self, availableSize: availableSize)
-            return
-        }
-        let size = CGSize(width: availableSize.width,
-            height: source.availablePresentationHeight ?? availableSize.height)
-        try await configurePresentationHeight(source.heightPresentation, target: target, availableSize: size)
-    }
-
     func setHeightPresentationTarget(_ target: UIViewController) {
         heightPresentationTarget = target
         lastPresentedHeight = nil
@@ -532,26 +510,12 @@ final class ExperienceScreenViewController: UIViewController {
 
     private func publishContentHeight() {
         guard measuresContentHeight, let target = heightPresentationTarget,
-              !coveredByLayer else { return }
-        let height: CGFloat
-        if interactivePage != nil {
-            // Zero selects the existing native large-detent fallback.
-            height = pageContentMeasurement.height.map { CGFloat($0) } ?? 0
-        } else {
-            guard let measured = interactiveScreen?.intrinsicPresentationHeight,
-                  measured.isFinite, measured > 0 else { return }
-            height = measured
-        }
-        guard lastPresentedHeight != height || target.preferredContentSize.height != height else { return }
-        // A pushed page can finish measurement before UIKit installs it. Its
-        // cached height belongs to the sheet only once that page is on top.
-        if isPageController, target !== self, navigationController == nil { return }
-        if let navigationController, navigationController.topViewController !== self { return }
+              let height = interactiveScreen?.intrinsicPresentationHeight,
+              height.isFinite, height > 0, lastPresentedHeight != height else { return }
         if let navigation = target as? UINavigationController,
            navigation.topViewController !== self { return }
         lastPresentedHeight = height
         ExperienceLayerPresentationConfigurator.updateContentHeight(target, height: height)
-        onContentHeightPublished?(target, height)
     }
 
     override func viewDidLayoutSubviews() {
@@ -775,18 +739,6 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func deliverPageStep(_ step: ExperienceInteractivePage.Step) async {
-        if let page = interactivePage {
-            do {
-                let measured = try await pageContentMeasurement.update(query: {
-                    if let pageContentHeightQuery { return try await pageContentHeightQuery() }
-                    return try await page.contentHeight()
-                })
-                if measured {
-                    if pageContentMeasurement.height == nil { LogWarning("\(ExperienceInteractivePage.fitContentDiagnostic)") }
-                    publishContentHeight()
-                }
-            } catch { handleTerminalFailure(error) }
-        }
         onPageStep?(step)
         for id in step.rows.keys.sorted() {
             if let row = step.rows[id] { await deliverStep(effects: row.effects, screenID: id) }
