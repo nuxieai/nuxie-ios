@@ -101,6 +101,11 @@ let package = Package(
             path: "Tests/NuxieTestSupport"
         ),
         .testTarget(
+            name: "NuxieRuntimeExecutorTests",
+            dependencies: ["NuxieRuntime"],
+            path: "Tests/NuxieRuntimeExecutorTests"
+        ),
+        .testTarget(
             name: "NuxieUnitTests",
             dependencies: [
                 "Nuxie",

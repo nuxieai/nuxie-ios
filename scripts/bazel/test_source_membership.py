@@ -85,6 +85,18 @@ def bazel_sources(target):
 
 
 class AuthoredTestSourceMembershipTests(unittest.TestCase):
+    def test_executor_sources_match_both_authored_platform_targets(self):
+        expected = {"Tests/NuxieRuntimeExecutorTests/NuxieRuntimeExecutorTests.swift"}
+        for source_target, bundle_target in [
+            ("runtime_executor_test_sources", "NuxieRuntimeExecutorTests"),
+            ("mac_runtime_executor_test_sources", "NuxieRuntimeExecutorMacTests"),
+        ]:
+            with self.subTest(target=bundle_target):
+                self.assertEqual(set(bazel_sources(source_target)), expected)
+                self.assertEqual(set(project_sources(bundle_target)), expected)
+        self.assertTrue(expected.isdisjoint(bazel_sources("unit_test_sources")))
+        self.assertTrue(expected.isdisjoint(bazel_sources("mac_unit_test_sources")))
+
     def test_hosted_sources_match_the_authored_xcode_target(self):
         actual = bazel_sources("experience_input_test_sources")
         self.assertEqual(len(actual), len(set(actual)), "Repeated Swift source in the hosted target")

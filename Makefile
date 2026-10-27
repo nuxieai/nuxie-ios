@@ -1,4 +1,4 @@
-.PHONY: test-video test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: test-runtime-executor test-macos-runtime-executor test-video test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
 
 XCODEGEN_STAMP := .xcodegen.stamp
 .DEFAULT_GOAL := help
@@ -64,6 +64,8 @@ help:
 	@echo "  test-unit        - Run unit tests"
 	@echo "  test-video       - Run hosted video tests (TEST_DESTINATION selects simulator or device)"
 	@echo "  test-storekit    - Run real StoreKitTest native-purchase qualification (Xcode 26.6+)"
+	@echo "  test-runtime-executor - Run runtime-only executor lifecycle tests on iOS"
+	@echo "  test-macos-runtime-executor - Run runtime-only executor lifecycle tests on macOS"
 	@echo "  test-native-runtime - Test the Swift-owned runtime and product harness"
 	@echo "  test-runtime-reference-ui - Prove first-frame presentation in the standalone app"
 	@echo "  test-macos-unit  - Run unit tests on macOS"
@@ -278,6 +280,12 @@ test-unit: test-xcode
 test-storekit: check-storekit-test-toolchain
 	@NUXIE_STOREKIT_REQUIRE_AVAILABLE=$(STOREKIT_REQUIRE_AVAILABLE) scripts/bazel/sdk.sh test --suite storekit --destination '$(TEST_DESTINATION)' --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
 
+test-runtime-executor:
+	@scripts/bazel/sdk.sh test --suite runtime-executor --destination '$(TEST_DESTINATION)' --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
+
+test-macos-runtime-executor:
+	@scripts/bazel/sdk.sh test --suite macos-runtime-executor --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
+
 test-native-runtime:
 	@scripts/bazel/sdk.sh test --suite native-runtime --destination '$(TEST_DESTINATION)' --xcodebuild-test-flags="$(XCODEBUILD_TEST_FLAGS)"
 
@@ -305,7 +313,8 @@ test-experience-runtime-ui:
 test-flow-runtime-ui: test-experience-runtime-ui
 
 # The holistic gate: iOS unit + focused native-runtime + hosted UIKit input + integration
-# (orchestration + conformance-fixture runners live in these schemes) + macOS unit.
+# (orchestration + conformance-fixture runners live in these schemes) + macOS unit
+# + dedicated runtime executor lifecycle tests on both platforms.
 test-all:
 	@scripts/bazel/sdk.sh test --gate \
 		$(if $(filter command line environment override,$(origin TEST_DESTINATION) $(origin TEST_SIMULATOR_NAME) $(origin TEST_SIMULATOR_OS)),--destination '$(TEST_DESTINATION)') \
@@ -315,9 +324,11 @@ test-all:
 _test-sdk-gate: check-presentation-schema bazel-contract-test check-sdk-guidance check-provider-adapters check-event-catalog
 	@$(MAKE) test-unit
 	@$(MAKE) test-native-runtime
+	@$(MAKE) test-runtime-executor
 	@$(MAKE) test-experience-input
 	@$(MAKE) test-integration
 	@$(MAKE) test-macos-unit
+	@$(MAKE) test-macos-runtime-executor
 
 # `make test` IS the holistic gate — running less locally is opt-in
 # (test-unit / test-integration / test-macos-unit directly).

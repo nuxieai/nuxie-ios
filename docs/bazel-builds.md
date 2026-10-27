@@ -54,13 +54,21 @@ scripts/bazel/sdk.sh build --platform ios-simulator
 scripts/bazel/sdk.sh build --platform ios-device --configuration Release
 scripts/bazel/sdk.sh test --suite unit
 scripts/bazel/sdk.sh test --suite native-runtime
+scripts/bazel/sdk.sh test --suite runtime-executor
+scripts/bazel/sdk.sh test --suite macos-runtime-executor
 scripts/bazel/sdk.sh test --suite hosted-input
 scripts/bazel/sdk.sh test --suite integration
 scripts/bazel/sdk.sh test --suite macos-unit
 ```
 
-`test` defaults to iOS unit, hosted input, integration, and macOS unit. The
-focused native-runtime selector retains all three existing runtime classes.
+`test` and `make test` run iOS unit, focused native-runtime, hosted input,
+integration, macOS unit, and the dedicated executor lifecycle suites on both
+platforms. Run `make test-runtime-executor` or `make test-macos-runtime-executor`
+for just the nine executor lifecycle tests. These targets depend only on
+`NuxieRuntime` and XCTest: they use the real native queue without the SDK,
+Quick/Nimble, test-support module, or rendering fixtures. XcodeGen exposes
+`NuxieRuntimeExecutorTests` and `NuxieRuntimeExecutorMacTests` schemes; SwiftPM
+exposes the shared `NuxieRuntimeExecutorTests` test target.
 StoreKit, video, runtime/reference UI, and E2E suites are separate selectors.
 Use `--test-filter Module/Class[/method]` for a targeted run (the frontend
 converts Xcode selectors to XCTest's Swift `Module.Class[/method]` identifiers) and
@@ -162,7 +170,7 @@ distribution authority.
 
 ## Retained target names
 
-All twenty XcodeGen target names have a Bazel counterpart. Configure iOS targets
+All XcodeGen target names have a Bazel counterpart. Configure iOS targets
 with `--config=ios-simulator` or `--config=ios-device`, and macOS targets with
 `--config=macos`. `//:sdk_ios_device` and `//:sdk_ios_simulator` additionally expose
 platform-bound framework artifacts.
@@ -172,6 +180,7 @@ platform-bound framework artifacts.
 | `NuxieRuntime`, `NuxieRuntimeMac` | Swift runtime adapter and Mac alias |
 | `NuxieSDK`, `NuxieSDKMac` | SDK dynamic frameworks, including Swift import modules |
 | `NuxieTestSupportiOS`, `NuxieTestSupportMac` | Shared test-support module aliases |
+| `NuxieRuntimeExecutorTests`, `NuxieRuntimeExecutorMacTests` | Runtime-only executor lifecycle XCTest bundles |
 | `NuxieSDKUnitTests` | Hostless UIKit and native Metal XCTest bundle |
 | `NuxieSDKMacUnitTests`, `NuxieSDKIntegrationTests` | Unhosted XCTest bundles |
 | `NuxieVideoDeviceTests`, `NuxieExperienceInputTests` | Hosted runtime/input XCTest bundles |
