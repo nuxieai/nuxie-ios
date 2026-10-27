@@ -890,6 +890,8 @@ final class ExperienceScreenViewController: UIViewController {
                 guard isLive() else { throw CancellationError() }
                 // Completion waits for result delivery, not merely native advancement.
                 try await loop.advanceZeroDelta()
+            }, veil: { [self] in
+                textInputOverlayBridge.veil()
             })
         do {
             try await ExperiencePageStep.perform(source: sourceID, target: targetID, style: spec.kind,

@@ -121,6 +121,45 @@ extension JourneyTestCase {
     }
 }
 
+extension JourneyTestCase {
+    /// Calmly v2 as the simulator played it: plans, welcome and session, with a
+    /// "Your name" field on plans and welcome. Its pictures have no bytes and draw nothing.
+    func calmlyFieldsPresentation() throws -> (Experience, LoadedExperienceArtifact) {
+        let root = experiencePreparationRepositoryRoot()
+        let directory = root.appendingPathComponent("fixtures/runtime/page-host-text-fields")
+        let data = try Data(contentsOf: directory.appendingPathComponent("descriptor.json"))
+        let descriptor = try JSONDecoder().decode(JourneyReleaseDescriptor.self, from: data)
+        let plan = try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: descriptor)
+        let sceneURL = directory.appendingPathComponent("scene.riv")
+        let scene = try Data(contentsOf: sceneURL)
+        XCTAssertEqual(SHA256Provider.hexDigest(scene), plan.scene.sha256)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let values = try object["viewModelValues"].map {
+            try JSONDecoder().decode([JourneyViewModelValue].self, from: JSONSerialization.data(withJSONObject: $0))
+        }
+        let payload = AuthenticatedRuntimePayload(valuePolicy: descriptor.valuePolicy,
+            authenticatedKeyID: "TEST_ONLY_DEV_KEYPAIR", requiredCapabilities: ["system-fonts"], renderPlan: plan,
+            journey: JourneyDocument(screens: descriptor.leg.screens.map {
+                .init(id: $0.id, defaultViewModelName: $0.defaultViewModelName, defaultInstanceId: $0.defaultInstanceId)
+            }, viewModelValues: values),
+            sceneBytes: scene,
+            assets: try plan.images.map {
+                AuthenticatedRuntimeAsset(kind: .image, authoredAssetID: try XCTUnwrap(UInt32(exactly: $0.authoredAssetId)),
+                    assetUniqueName: $0.assetUniqueName, sourceKey: $0.location.contentAddressedPath,
+                    contentType: $0.contentType, sha256: $0.sha256, required: false, bytes: nil)
+            })
+        let experience = Experience(id: "calmly", versionId: "calmly-v2", buildId: "calmly-build",
+            artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
+            behaviorPresentationScreens: [:], assetBaseURL: root, journey: payload.journey, definition: payload.definition)
+        let acquired = AcquiredExperienceArtifact(identity: .init(experienceId: experience.id, buildId: experience.buildId),
+            sceneURL: sceneURL, sceneBytes: scene, assetURLsByUniqueName: [:], source: .cache, payload: payload,
+            interactivePreparation: .init(cache: ExperienceInteractivePreparationCache(), provenance: UUID().uuidString,
+                payload: payload),
+            products: [], resourceMetrics: .zero)
+        return (experience, .init(acquired: acquired))
+    }
+}
+
 func hostedLiveMovePreparationCache() -> ExperienceInteractivePreparationCache {
     ExperienceInteractivePreparationCache(preparePayload: { payload, catalog in
         let assets = catalog

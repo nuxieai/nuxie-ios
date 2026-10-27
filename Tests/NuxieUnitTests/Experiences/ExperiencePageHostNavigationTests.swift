@@ -1576,6 +1576,168 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    // MARK: Fields during a step (UNIV-5597)
+
+    private enum Calmly {
+        static let plans = "scr_screens_splans"
+        static let welcome = "scr_screens_swelcome"
+        static let session = "scr_screens_ssession"
+        static let magicMove: [String: Any] = ["type": "magic-move", "transitionId": "step-1"]
+        static let fade: [String: Any] = ["type": "fade", "transitionId": "step-2"]
+        static let cut: [String: Any] = ["type": "none"]
+    }
+
+    private func textControls(_ view: UIView) -> [UIView] {
+        let own = view.accessibilityIdentifier?.hasPrefix("nuxie-text-input-") == true ? [view] : []
+        return own + view.subviews.flatMap(textControls)
+    }
+
+    private func draws(_ control: UIView) -> Bool {
+        control.window != nil && control.mask == nil && !control.isHidden && control.alpha > 0
+    }
+
+    private func drawingFields(_ controller: ExperienceScreenViewController) -> [UIView] {
+        textControls(controller.view).filter(draws)
+    }
+
+    private func settle(_ controller: ExperienceScreenViewController, file: StaticString = #filePath, line: UInt = #line,
+                        until predicate: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !predicate(), Date() < deadline {
+            controller.advance(delta: 1 / 60)
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(predicate(), file: file, line: line)
+    }
+
+    /// What a person could see of the fields at one moment of a step.
+    private final class FieldSample {
+        var controls = 0
+        var drawing = 0
+    }
+
+    private func sampleFields(_ controller: ExperienceScreenViewController) -> FieldSample {
+        let sample = FieldSample()
+        let controls = textControls(controller.view).filter { $0.window != nil }
+        sample.controls = controls.count
+        sample.drawing = controls.filter(draws).count
+        return sample
+    }
+
+    func testAMagicMoveDrawsNoFieldUntilTheLandedScreenIsPublished() async throws {
+        var arrival: FieldSample?
+        var controllerRef: ExperienceScreenViewController?
+        try await withCoordinator(presentation: try calmlyFieldsPresentation(), initialScreenID: Calmly.plans, onActive: { id in
+            if id == Calmly.welcome, let controller = controllerRef { arrival = self.sampleFields(controller) }
+        }) { coordinator, controller, _, _ in
+            controllerRef = controller
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            let field = try XCTUnwrap(drawingFields(controller).first)
+            XCTAssertTrue(field.becomeFirstResponder())
+            var inFlight: FieldSample?
+            controller.onExitCompletionWait = { [unowned controller] in
+                controller.onExitCompletionWait = nil
+                inFlight = self.sampleFields(controller)
+            }
+            let before = field.convert(field.bounds, to: nil)
+            try await navigate(coordinator, to: Calmly.welcome, transition: Calmly.magicMove)
+            let flight = try XCTUnwrap(inFlight, "The step waits on its exit")
+            XCTAssertGreaterThan(flight.controls, 0)
+            XCTAssertEqual(flight.drawing, 0, "No placeholder or caret is drawn at the old spot during the move")
+            XCTAssertEqual(arrival?.drawing, 0, "Input hasn't returned when the landed Screen becomes active")
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            let landed = try XCTUnwrap(drawingFields(controller).first)
+            XCTAssertNotEqual(landed.convert(landed.bounds, to: nil), before, "The field draws at its landed spot")
+        }
+    }
+
+    func testAFadeDrawsNoLeavingFieldOverTheNextScreen() async throws {
+        try await assertLeavingFieldIsNeverDrawn(transition: Calmly.fade)
+    }
+
+    func testACutDrawsNoLeavingFieldOverTheNextScreen() async throws {
+        try await assertLeavingFieldIsNeverDrawn(transition: Calmly.cut)
+    }
+
+    private func assertLeavingFieldIsNeverDrawn(transition: [String: Any], file: StaticString = #filePath,
+                                                line: UInt = #line) async throws {
+        var arrival: FieldSample?
+        var controllerRef: ExperienceScreenViewController?
+        try await withCoordinator(presentation: try calmlyFieldsPresentation(), initialScreenID: Calmly.welcome, onActive: { id in
+            if id == Calmly.session, let controller = controllerRef { arrival = self.sampleFields(controller) }
+        }) { coordinator, controller, _, _ in
+            controllerRef = controller
+            try await settle(controller, file: file, line: line) { !drawingFields(controller).isEmpty }
+            var inFlight: FieldSample?
+            controller.onExitCompletionWait = { [unowned controller] in
+                controller.onExitCompletionWait = nil
+                inFlight = self.sampleFields(controller)
+            }
+            try await navigate(coordinator, to: Calmly.session, transition: transition)
+            if let inFlight {
+                XCTAssertEqual(inFlight.drawing, 0, "The leaving field isn't drawn during the step", file: file, line: line)
+            }
+            let landing = try XCTUnwrap(arrival, file: file, line: line)
+            XCTAssertGreaterThan(landing.controls, 0, "The leaving field is still bound when the next Screen becomes active",
+                file: file, line: line)
+            XCTAssertEqual(landing.drawing, 0, "It isn't drawn over the next Screen", file: file, line: line)
+            try await settle(controller, file: file, line: line) {
+                controller.hasDeliveredLatestSemanticFrame && textControls(controller.view).allSatisfy { $0.window == nil || $0.isHidden }
+            }
+            XCTAssertTrue(drawingFields(controller).isEmpty, file: file, line: line)
+        }
+    }
+
+    func testReduceMotionDrawsNoFieldUntilEachLandedScreenIsPublished() async throws {
+        var arrivals: [String: FieldSample] = [:]
+        var controllerRef: ExperienceScreenViewController?
+        try await withCoordinator(presentation: try calmlyFieldsPresentation(), initialScreenID: Calmly.plans, onActive: { id in
+            if let controller = controllerRef { arrivals[id] = self.sampleFields(controller) }
+        }) { coordinator, controller, _, _ in
+            await coordinator.updateReduceMotion(true)
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            controllerRef = controller
+            try await navigate(coordinator, to: Calmly.welcome, transition: Calmly.magicMove)
+            XCTAssertGreaterThan(arrivals[Calmly.welcome]?.controls ?? 0, 0)
+            XCTAssertEqual(arrivals[Calmly.welcome]?.drawing, 0)
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            try await back(coordinator, to: Calmly.plans)
+            XCTAssertGreaterThan(arrivals[Calmly.plans]?.controls ?? 0, 0)
+            XCTAssertEqual(arrivals[Calmly.plans]?.drawing, 0, "Back under reduce motion veils too")
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+        }
+    }
+
+    func testBackToAScreenWithAFieldDrawsItOnlyOnceItIsPublished() async throws {
+        var arrival: FieldSample?
+        var controllerRef: ExperienceScreenViewController?
+        try await withCoordinator(presentation: try calmlyFieldsPresentation(), initialScreenID: Calmly.welcome, onActive: { id in
+            if id == Calmly.welcome, let controller = controllerRef { arrival = self.sampleFields(controller) }
+        }) { coordinator, controller, _, _ in
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            try await navigate(coordinator, to: Calmly.session, transition: Calmly.fade)
+            try await settle(controller) { controller.hasDeliveredLatestSemanticFrame && drawingFields(controller).isEmpty }
+            controllerRef = controller
+            try await back(coordinator, to: Calmly.welcome)
+            XCTAssertEqual(arrival?.drawing, 0, "The returning field waits for its publication")
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+        }
+    }
+
+    func testTheCoveredCutUnderASheetEndsWithTheFieldDrawnOnTheRevealedPage() async throws {
+        try await withCoordinator(presentation: try calmlyFieldsPresentation(), initialScreenID: Calmly.plans) { coordinator, controller, _, _ in
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            try await navigate(coordinator, to: Calmly.welcome, transition: Calmly.magicMove)
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            try await navigate(coordinator, to: Calmly.session, transition: ["type": "modal", "present": "sheet"])
+            try await back(coordinator, to: Calmly.plans, steps: 2)
+            XCTAssertEqual(controller.screenId, Calmly.plans)
+            try await settle(controller) { !drawingFields(controller).isEmpty }
+            XCTAssertTrue(textControls(controller.view).filter { $0.window != nil && !$0.isHidden }.allSatisfy { $0.mask == nil },
+                "The veil lifts on the revealed page")
+        }
+    }
+
     private func navigate(_ coordinator: ExperienceScreenTransitionCoordinator, to id: String, transition: Any? = nil) async throws {
         let result: ExperienceScreenNavigationResult = await withCheckedContinuation { continuation in
             if !coordinator.navigate(to: id, transition: transition, completion: { result, _ in continuation.resume(returning: result) }) {

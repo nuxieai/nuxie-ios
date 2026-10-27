@@ -1287,6 +1287,176 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertEqual(field.text, "kept")
     }
 
+    func testVeilHidesEveryControlWhileFocusStays() throws {
+        for multiline in [false, true] {
+            let bridge = ExperienceTextInputOverlayBridge()
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+            let host = UIViewController()
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { bridge.clear(); window.isHidden = true }
+            let surface = host.view!
+            bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false, multiline: multiline), surfaceView: surface,
+                artboardBounds: surface.bounds, semanticTextWriter: { _, _, _, done in done(.accepted) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "kept", ownerInstanceID: 1))) })
+            presentField(on: bridge)
+            let controls = bridge.applySemantics(try nativeCapture(ids: [1, 2], secure: false, multiline: multiline))
+            let focused = try XCTUnwrap(controls[1])
+            let other = try XCTUnwrap(controls[2])
+            XCTAssertTrue(focused.becomeFirstResponder())
+            XCTAssertNil(focused.mask)
+            bridge.setStepInProgress(true)
+            bridge.veil()
+            XCTAssertNotNil(focused.mask, "multiline \(multiline): the focused control draws nothing")
+            XCTAssertNotNil(other.mask, "multiline \(multiline): every bound control draws nothing")
+            XCTAssertTrue(focused.isFirstResponder, "multiline \(multiline): the veil keeps focus and the keyboard")
+        }
+    }
+
+    func testControlsMadeDuringAStepAreVeiledBeforeTheyDraw() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        defer { bridge.clear() }
+        let first = makePlan(secure: false, multiline: false, screenID: "A")
+        let second = makePlan(secure: false, multiline: true, screenID: "B")
+        let plan = NativeExperienceRenderPlan(identity: first.identity, scene: first.scene,
+            entry: .init(screenId: "A"), pageHost: .init(artboardName: "$nuxie.page", listPath: "screens"),
+            screens: [], transitions: [], textInputs: first.textInputs + second.textInputs, images: [], fonts: [])
+        func bind(_ id: String, preserving: Bool) {
+            bridge.bind(screenID: id, preservingNativeFields: preserving, renderPlan: plan,
+                surfaceView: surface, artboardBounds: surface.bounds,
+                semanticTextWriter: { _, _, _, done in done(.accepted) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "x", ownerInstanceID: 1))) })
+        }
+        bind("A", preserving: false)
+        presentField(on: bridge)
+        let original = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1] as? UITextField)
+        bridge.setStepInProgress(true)
+        bridge.veil()
+        _ = bridge.applySemantics(try nativeCapture(ids: [1, 2], secure: false, revision: 2))
+        let occurrence = try XCTUnwrap(control(2, on: surface))
+        XCTAssertNotNil(occurrence.mask, "A control for a new occurrence is veiled before it draws")
+
+        bind("B", preserving: true)
+        _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false, revision: 3, multiline: true))
+        XCTAssertNil(original.superview)
+        let replacement = try XCTUnwrap(control(1, on: surface) as? UITextView)
+        XCTAssertNotNil(replacement.mask, "A control swapped mid-step is veiled before it draws")
+    }
+
+    func testVeilOutlivesInputComingBackUntilTheFirstFullPass() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { bridge.clear(); window.isHidden = true }
+        let surface = host.view!
+        let first = makePlan(secure: false, screenID: "A")
+        let second = makePlan(secure: false, screenID: "B")
+        let plan = NativeExperienceRenderPlan(identity: first.identity, scene: first.scene,
+            entry: .init(screenId: "A"), pageHost: .init(artboardName: "$nuxie.page", listPath: "screens"),
+            screens: [], transitions: [], textInputs: first.textInputs + second.textInputs, images: [], fonts: [])
+        func bind(_ id: String, preserving: Bool) {
+            bridge.bind(screenID: id, preservingNativeFields: preserving, renderPlan: plan,
+                surfaceView: surface, artboardBounds: surface.bounds,
+                semanticTextWriter: { _, _, _, done in done(.accepted) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "x", ownerInstanceID: 1))) })
+        }
+        func drawn(_ view: UIView) -> Bool { view.superview != nil && view.mask == nil && !view.isHidden }
+        bind("A", preserving: false)
+        bridge.setPageRows(["A": 1])
+        presentField(on: bridge)
+        let leaving = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1])
+        XCTAssertTrue(leaving.becomeFirstResponder())
+        XCTAssertTrue(drawn(leaving))
+        // A fade from A to B: A's field is not on B.
+        bridge.setStepInProgress(true)
+        bridge.veil()
+        bind("B", preserving: true)
+        bridge.setPageRows(["A": 1, "B": 1])
+        bridge.setStepInProgress(false)
+        XCTAssertNotNil(leaving.mask, "Input coming back does not lift the veil")
+        XCTAssertFalse(drawn(leaving), "The field the move left is not drawn before the next capture")
+        let landed = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [2], secure: false, revision: 2))[2])
+        XCTAssertFalse(drawn(leaving), "The field the move left is not drawn after the first full pass")
+        XCTAssertTrue(drawn(landed), "The landed field draws once its read returns")
+    }
+
+    func testATapInTheVeilsTailLandsOnTheFieldAndKeepsTheKeyboard() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { bridge.clear(); window.isHidden = true }
+        let surface = host.view!
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false), surfaceView: surface,
+            artboardBounds: surface.bounds, semanticTextWriter: { _, _, _, done in done(.accepted) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: "kept", ownerInstanceID: 1))) })
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1])
+        XCTAssertTrue(field.becomeFirstResponder())
+        // The move carries the field, then input comes back before the next capture.
+        bridge.setStepInProgress(true)
+        bridge.veil()
+        _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false, revision: 2))
+        bridge.setStepInProgress(false)
+        XCTAssertNotNil(field.mask)
+        let center = field.convert(CGPoint(x: field.bounds.midX, y: field.bounds.midY), to: surface)
+        let hit = try XCTUnwrap(surface.hitTest(center, with: nil))
+        XCTAssertTrue(hit === field || hit.isDescendant(of: field), "A tap on a veiled field lands on the field")
+        let dismiss = try XCTUnwrap(surface.gestureRecognizers?.first {
+            $0 is UITapGestureRecognizer && $0.delegate === bridge
+        })
+        XCTAssertFalse(bridge.gestureRecognizer(dismiss, shouldReceive: TouchOnView(hit)),
+            "The keyboard-dismiss tap refuses a touch on the field")
+        XCTAssertTrue(field.isFirstResponder)
+    }
+
+    func testHidingAPageMidStepKeepsTheVeilForItsRebuiltControls() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        defer { bridge.clear() }
+        bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false), surfaceView: surface,
+            artboardBounds: surface.bounds, semanticTextWriter: { _, _, _, done in done(.accepted) },
+            semanticTextReader: { _, _, done in done(.success(.init(text: "kept", ownerInstanceID: 1))) })
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try nativeCapture(ids: [1], secure: false))[1])
+        bridge.setStepInProgress(true)
+        bridge.veil()
+        bridge.setHidden(true)
+        XCTAssertNil(field.superview, "Hiding retires every occurrence")
+        bridge.setHidden(false)
+        _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false, revision: 2))
+        let rebuilt = try XCTUnwrap(control(1, on: surface))
+        XCTAssertFalse(rebuilt === field)
+        XCTAssertNotNil(rebuilt.mask, "A page shown again mid-step does not draw from the step's frozen state")
+    }
+
+    func testClearEndsTheVeil() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        defer { bridge.clear() }
+        func bind() {
+            bridge.bind(screenID: "screen", renderPlan: makePlan(secure: false), surfaceView: surface,
+                artboardBounds: surface.bounds, semanticTextWriter: { _, _, _, done in done(.accepted) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "kept", ownerInstanceID: 1))) })
+            presentField(on: bridge)
+        }
+        bind()
+        _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false))
+        bridge.setStepInProgress(true)
+        bridge.veil()
+        bridge.clear()
+        bind()
+        // A checkpoint turns input off before a step, with no veil, so this capture takes the early return.
+        bridge.setStepInProgress(true)
+        _ = bridge.applySemantics(try nativeCapture(ids: [1], secure: false, revision: 2))
+        let fresh = try XCTUnwrap(control(1, on: surface))
+        XCTAssertNil(fresh.mask, "A veil from before clear() does not carry to the next binding")
+    }
+
     func testMovedFieldIdentityUsesSemanticNodeRatherThanAuthoredInputID() {
         let before = ExperienceTextInputOverlayBridge.InputTarget(inputID: "source", nodeID: 42)
         let after = ExperienceTextInputOverlayBridge.InputTarget(inputID: "destination", nodeID: 42)
@@ -1838,6 +2008,10 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
     }
 
     /// These tests isolate semantic ownership; geometry is an explicit frame fixture.
+    private func control(_ node: UInt32, on surface: UIView) -> UIView? {
+        surface.subviews.first { $0.accessibilityIdentifier == "nuxie-text-input-input-\(node)" }
+    }
+
     private func presentField(on bridge: ExperienceTextInputOverlayBridge, textRunName: String = "run") {
         bridge.update(frame: .init(snapshot: .init(rootInstanceID: 1, instances: [], values: []),
             geometry: .captured([textRunName: .init(renderRevision: 1,
@@ -1872,5 +2046,12 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
                 layout: .init(transform: .identity, bounds: CGRect(x: 0, y: 0, width: 100, height: 40)),
                 firstBaseline: nil, obscured: flags & NuxieNativeSemanticNode.obscured != 0, multiline: false))]])
     }
+}
+
+/// A touch delivered to a chosen view, for gesture recognizer delegates.
+private final class TouchOnView: UITouch {
+    private let touched: UIView?
+    init(_ view: UIView?) { touched = view; super.init() }
+    override var view: UIView? { touched }
 }
 #endif
