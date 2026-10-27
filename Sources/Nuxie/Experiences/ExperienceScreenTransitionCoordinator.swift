@@ -10,6 +10,7 @@ final class ExperienceNativePageTransition {
     private var finishTask: Task<Void, Never>?
     private var cancellationTask: Task<Void, Never>?
     var retirementTimeoutNanoseconds = ExperienceRuntimeRetirement.timeoutNanoseconds
+    var authoredTime: ExperienceAuthoredTime?
     @TaskLocal private static var executing: ObjectIdentifier?
     private let start: () async -> Void
     private let finish: () async -> Void
@@ -65,7 +66,8 @@ final class ExperienceNativePageTransition {
         }
         guard let task = cancellationTask else { return }
         do {
-            try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds) { await task.value }
+            try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds,
+                authoredTime: authoredTime) { await task.value }
         } catch { onRetirementFailure(error) }
     }
 
@@ -84,7 +86,9 @@ final class ExperienceNativePageTransition {
 }
 
 @MainActor
-final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentationControllerDelegate, UINavigationControllerDelegate {
+/// Every move, a person's included, holds one queue slot until it has fully
+/// landed (nuxie-handoff pages/magic-move/design-reset/sdk-ios-move-queue.md).
+final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentationControllerDelegate {
     typealias Completion = (
         _ result: ExperienceScreenNavigationResult,
         _ screenId: String
@@ -106,6 +110,18 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         var backSteps: Int = 1
         var dismissLayer: Bool = false
         var admissionLayer: UIViewController? = nil
+        /// A sheet the person is swiping away; it lands, or not, when UIKit says how the swipe ended.
+        var swipe: ObjectIdentifier? = nil
+        /// A VoiceOver escape asked for during a move; where it goes is worked out when it starts.
+        var escape = false
+    }
+
+    private enum SwipeEnd { case finished, cancelled }
+
+    /// A swipe from UIKit's commitment (`WillDismiss`) until UIKit reports its end.
+    private final class Swipe {
+        var end: SwipeEnd?
+        var waiters: [CheckedContinuation<SwipeEnd, Never>] = []
     }
 
     private weak var hostViewController: UIViewController?
@@ -135,10 +151,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     // Owned only while a navigation transaction mounts a controller, before stack insertion.
     private var preparedController: ExperienceScreenViewController?
     private var preparingModal = false
-    private var shownPages: [ObjectIdentifier: [ExperienceScreenViewController]] = [:]
-    private var nativePageTransitionInProgress = false
-    /// UIKit has shown a page whose pop is still hiding the old page and activating the revealed one.
-    private var settlingNativePops = 0
+    private var swipes: [ObjectIdentifier: Swipe] = [:]
     private weak var closingLayer: UIViewController?
 
     var hasPresentedLayer: Bool { navigationLayers.count > 1 }
@@ -187,6 +200,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
     private var mountingControllersByScreenId: [String: ExperienceScreenViewController] = [:]
     private let videoDecoderPool: ExperienceVideoDecoderPool?
+    private let authoredTime: ExperienceAuthoredTime
+    /// The native time a close or teardown may take; tests shorten it.
+    var retirementTimeoutNanoseconds = ExperienceRuntimeRetirement.timeoutNanoseconds
     private var latestSnapshot: ExperienceViewModelSnapshot?
     private var contentHidden = true
     private var terminalScreenIds: Set<String> = []
@@ -225,6 +241,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         initialScreenID: String? = nil,
         presentationDiagnosticsEnabled: Bool = false,
         videoDecoderPool: ExperienceVideoDecoderPool? = nil,
+        authoredTime: ExperienceAuthoredTime = ExperienceAuthoredTime(),
         hostViewController: UIViewController,
         screenDelegate: ExperienceScreenViewControllerDelegate,
         onPresentedScreenDismissed: @escaping (
@@ -247,6 +264,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         self.initialScreenID = initialScreenID ?? artifact.renderPlan.entry.screenId
         self.presentationDiagnosticsEnabled = presentationDiagnosticsEnabled
         self.videoDecoderPool = videoDecoderPool
+        self.authoredTime = authoredTime
         self.hostViewController = hostViewController
         self.screenDelegate = screenDelegate
         self.onPresentedScreenDismissed = onPresentedScreenDismissed
@@ -338,8 +356,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let navigation = ExperienceLayerNavigationController(rootViewController: entryController)
         navigation.orientationHost = hostViewController
         navigation.setNavigationBarHidden(true, animated: false)
-        navigation.delegate = self
-        shownPages[ObjectIdentifier(navigation)] = [entryController]
+        navigation.onEscape = { [weak self] in self?.performEscape() ?? false }
         navigationController = navigation
         navigationController.view.translatesAutoresizingMaskIntoConstraints = false
         navigationController.view.backgroundColor = .clear
@@ -410,7 +427,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             }
         }
         guard let task = exitRetirementTask else { return }
-        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        do { try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds,
+            authoredTime: authoredTime) { await task.value } }
         catch { onRuntimeFailure(activeScreenId ?? initialScreenID, error) }
     }
 
@@ -421,10 +439,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         // and the dismissal exits the Screen it landed on, at most the step's
         // watchdog later; nothing is undone halfway. Other navigation, and a
         // dismissal raised by the step's own callbacks, is cancelled.
-        navigationAdmissionRevoked = true
-        let queuedRequests = navigationRequests
-        navigationRequests.removeAll()
-        queuedRequests.forEach { $0.completion(.failed, $0.screenId) }
+        revokeNavigationAdmission()
         if let navigationTask {
             let landsPageStep = activeController?.isPageController == true && !Self.isOnNavigationDrainTask
             if !landsPageStep { navigationTask.cancel() }
@@ -454,13 +469,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         await onScreenHidden(activeScreenId, .teardown(reason: reason))
     }
 
+    private func revokeNavigationAdmission() {
+        navigationAdmissionRevoked = true
+        let queuedRequests = navigationRequests
+        navigationRequests.removeAll()
+        queuedRequests.forEach { $0.completion(.failed, $0.screenId) }
+    }
+
     func tearDown() async {
         if lifecycle == .tornDown { return }
         if teardownTask == nil {
             teardownTask = Task { @MainActor in await self.performTearDown() }
         }
         guard let task = teardownTask else { return }
-        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        do { try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds,
+            authoredTime: authoredTime) { await task.value } }
         catch { onRuntimeFailure(activeScreenId ?? initialScreenID, error) }
         if lifecycle == .tornDown { teardownTask = nil }
     }
@@ -511,7 +534,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             base.removeFromParent()
         }
         navigationLayers.removeAll()
-        shownPages.removeAll()
+        let pendingSwipes = swipes.keys
+        for id in pendingSwipes { releaseSwipeWaiters(id) }
+        swipes.removeAll()
 
         mountingControllersByScreenId.removeAll()
         latestSnapshot = nil
@@ -691,6 +716,38 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         return true
     }
 
+    /// A VoiceOver escape is the person's Back 1, so the Journey is asked first.
+    /// At the root of a sheet it may dismiss, it closes that sheet. It returns
+    /// false when there is nowhere to go, so VoiceOver passes the escape on.
+    func performEscape() -> Bool {
+        guard lifecycle == .installed, !navigationAdmissionRevoked, let screenId = activeScreenId else { return false }
+        let request: NavigationRequest
+        if navigationTask != nil || !navigationRequests.isEmpty {
+            // Like a tap on Back during a move, it waits its turn.
+            request = NavigationRequest(screenId: screenId, rawTransition: nil, completion: { _, _ in }, escape: true)
+        } else {
+            guard let resolved = escapeRequest() else { return false }
+            request = resolved
+        }
+        navigationRequests.append(request)
+        startNavigationDrainIfNeeded()
+        return true
+    }
+
+    /// Back 1 while the top layer has somewhere to go back to; at the root of a
+    /// sheet the person may dismiss, a close of that sheet.
+    private func escapeRequest() -> NavigationRequest? {
+        guard let layer = presentationLayer, let screenId = activeScreenId else { return nil }
+        if (layerScreenIds.last?.count ?? 0) > 1, let target = backTarget(steps: 1), target != screenId {
+            return NavigationRequest(screenId: target,
+                rawTransition: activeController?.isPageController == true ? nil : ["type": "push"],
+                completion: { _, _ in }, backLayer: layer)
+        }
+        guard hasPresentedLayer, !layer.isModalInPresentation else { return nil }
+        return NavigationRequest(screenId: screenId, rawTransition: nil, completion: { _, _ in },
+            backLayer: layer, dismissLayer: true)
+    }
+
     /// Authored dismissal joins the navigation lane and keeps the native layer
     /// alive until the top screen's declared exit completes. A dismiss issued from
     /// a screen belongs to that screen's layer: when the person has already closed
@@ -709,7 +766,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     private func startNavigationDrainIfNeeded() {
-        guard !navigationAdmissionRevoked, !nativePageTransitionInProgress, settlingNativePops == 0,
+        guard !navigationAdmissionRevoked,
               navigationTask == nil,
               lifecycle == .installed,
               !navigationRequests.isEmpty else {
@@ -728,85 +785,106 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
               !navigationAdmissionRevoked,
               !Task.isCancelled,
               !navigationRequests.isEmpty {
-            var request = navigationRequests.removeFirst()
-            if request.backLayer != nil, !request.dismissLayer, activeController?.isPageController == true,
-               let target = backTarget(steps: request.backSteps) { request.screenId = target }
-            if let admitted = request.admissionLayer,
-               !navigationLayers.contains(where: { $0 === admitted }) {
-                request.completion(.superseded, request.screenId)
+            let request = navigationRequests.removeFirst()
+            if let swiped = request.swipe {
+                await landSwipe(swiped)
                 continue
             }
-            if let backLayer = request.backLayer,
-               (backLayer !== presentationLayer || (!request.dismissLayer && backTarget(steps: request.backSteps) != request.screenId)) {
-                request.completion(.superseded, request.screenId)
+            if request.escape {
+                if let resolved = escapeRequest() { navigationRequests.insert(resolved, at: 0) }
                 continue
             }
-            let sourceLayer = presentationLayer
-            do {
-                if request.dismissLayer {
-                    let closed = await performAuthoredLayerDismissal()
-                    request.completion(closed ? .navigated : .superseded, request.screenId)
-                    continue
-                }
-                let spec = ExperienceScreenTransitionSpec(raw: request.rawTransition)
-                if activeController?.isPageController == true, activeScreenId == request.screenId,
-                   spec.kind != .modal, spec.kind != .push, request.backLayer == nil {
-                    request.completion(.alreadyActive, request.screenId)
-                    continue
-                }
-                let opensLayer = request.backLayer == nil && spec.kind == .modal
-                preparingModal = opensLayer
-                if request.backLayer == nil || activeController?.isPageController != true {
-                    _ = try await ensureScreenController(for: request.screenId,
-                        opensPage: activeController?.isPageController == true && (spec.kind == .push || spec.kind == .modal))
-                }
-                guard lifecycle == .installed, !Task.isCancelled,
-                      !navigationAdmissionRevoked, presentationLayer === sourceLayer else {
-                    await discardUncommittedController()
-                    request.completion(presentationLayer !== sourceLayer ? .superseded : .failed, request.screenId)
-                    continue
-                }
-                let pageStep = activeController?.isPageController == true
-                let didNavigate = try await performMountedNavigation(
-                    to: request.screenId,
-                    transition: request.rawTransition,
-                    isBack: request.backLayer != nil,
-                    backSteps: request.backSteps
-                )
-                if didNavigate { pageDeparture = nil }
-                await discardUncommittedController()
-                // A page step that started lands even after admission is revoked.
-                let completed = lifecycle == .installed && !Task.isCancelled
-                    && (!navigationAdmissionRevoked || pageStep) && didNavigate
-                request.completion(
-                    completed ? .navigated : (presentationLayer !== sourceLayer ? .superseded : .failed),
-                    request.screenId
-                )
-            } catch {
-                await discardUncommittedController()
-                if presentationLayer !== sourceLayer {
-                    request.completion(.superseded, request.screenId)
-                    continue
-                }
-                if case ExperienceError.productsUnavailable = error {
-                    request.completion(.productsUnavailable, request.screenId)
-                    for queued in navigationRequests {
-                        queued.completion(.failed, queued.screenId)
-                    }
-                    navigationRequests.removeAll()
-                    await onProductsUnavailable(request.screenId)
-                    break
-                }
-                LogWarning(
-                    "ExperienceScreenTransitionCoordinator: failed to navigate to screen \(request.screenId): \(error)"
-                )
-                request.completion(presentationLayer !== sourceLayer ? .superseded : .failed, request.screenId)
+            let before = allScreenControllers
+            let keepsDraining = await perform(request)
+            // A move has landed only once every page it removed is shut down.
+            for page in before where !page.hasStartedShutdown && !allScreenControllers.contains(where: { $0 === page }) {
+                await page.shutdownInteractiveScreen()
             }
+            if !keepsDraining { break }
         }
         navigationTask = nil
         if lifecycle == .installed, !navigationRequests.isEmpty {
             startNavigationDrainIfNeeded()
         }
+    }
+
+    /// Runs one queued move; false stops the drain.
+    private func perform(_ queued: NavigationRequest) async -> Bool {
+        var request = queued
+        if request.backLayer != nil, !request.dismissLayer, activeController?.isPageController == true,
+           let target = backTarget(steps: request.backSteps) { request.screenId = target }
+        if let admitted = request.admissionLayer,
+           !navigationLayers.contains(where: { $0 === admitted }) {
+            request.completion(.superseded, request.screenId)
+            return true
+        }
+        if let backLayer = request.backLayer,
+           (backLayer !== presentationLayer || (!request.dismissLayer && backTarget(steps: request.backSteps) != request.screenId)) {
+            request.completion(.superseded, request.screenId)
+            return true
+        }
+        let sourceLayer = presentationLayer
+        do {
+            if request.dismissLayer {
+                let closed = await performAuthoredLayerDismissal()
+                request.completion(closed ? .navigated : .superseded, request.screenId)
+                return true
+            }
+            let spec = ExperienceScreenTransitionSpec(raw: request.rawTransition)
+            if activeController?.isPageController == true, activeScreenId == request.screenId,
+               spec.kind != .modal, spec.kind != .push, request.backLayer == nil {
+                request.completion(.alreadyActive, request.screenId)
+                return true
+            }
+            let opensLayer = request.backLayer == nil && spec.kind == .modal
+            preparingModal = opensLayer
+            if request.backLayer == nil || activeController?.isPageController != true {
+                _ = try await ensureScreenController(for: request.screenId,
+                    opensPage: activeController?.isPageController == true && (spec.kind == .push || spec.kind == .modal))
+            }
+            guard lifecycle == .installed, !Task.isCancelled,
+                  !navigationAdmissionRevoked, presentationLayer === sourceLayer else {
+                await discardUncommittedController()
+                request.completion(presentationLayer !== sourceLayer ? .superseded : .failed, request.screenId)
+                return true
+            }
+            let pageStep = activeController?.isPageController == true
+            let didNavigate = try await performMountedNavigation(
+                to: request.screenId,
+                transition: request.rawTransition,
+                isBack: request.backLayer != nil,
+                backSteps: request.backSteps
+            )
+            if didNavigate { pageDeparture = nil }
+            await discardUncommittedController()
+            // A page step that started lands even after admission is revoked.
+            let completed = lifecycle == .installed && !Task.isCancelled
+                && (!navigationAdmissionRevoked || pageStep) && didNavigate
+            request.completion(
+                completed ? .navigated : (presentationLayer !== sourceLayer ? .superseded : .failed),
+                request.screenId
+            )
+        } catch {
+            await discardUncommittedController()
+            if presentationLayer !== sourceLayer {
+                request.completion(.superseded, request.screenId)
+                return true
+            }
+            if case ExperienceError.productsUnavailable = error {
+                request.completion(.productsUnavailable, request.screenId)
+                for queued in navigationRequests {
+                    queued.completion(.failed, queued.screenId)
+                }
+                navigationRequests.removeAll()
+                await onProductsUnavailable(request.screenId)
+                return false
+            }
+            LogWarning(
+                "ExperienceScreenTransitionCoordinator: failed to navigate to screen \(request.screenId): \(error)"
+            )
+            request.completion(presentationLayer !== sourceLayer ? .superseded : .failed, request.screenId)
+        }
+        return true
     }
 
     private func performMountedNavigation(
@@ -964,7 +1042,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                         covering outgoing: ExperienceScreenViewController?, interactive: Bool,
                         announce: Bool = true) -> ExperienceNativePageTransition {
         let previous = page.pageLifecycleSnapshot
-        return ExperienceNativePageTransition(interactive: interactive, onRetirementFailure: { [weak self] error in
+        let transition = ExperienceNativePageTransition(interactive: interactive, onRetirementFailure: { [weak self] error in
             self?.onRuntimeFailure(page.screenId, error)
         }, start: { [weak self] in
             guard let self, self.lifecycle == .installed else { return }
@@ -978,6 +1056,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             await self.coverPage(page, restoring: previous.phase == .hidden ? previous : nil)
             if let outgoing { await self.revealPage(outgoing, announce: false) }
         })
+        transition.authoredTime = authoredTime
+        return transition
     }
 
     private func observe(_ transition: ExperienceNativePageTransition,
@@ -994,54 +1074,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             let cancelled = context.isCancelled
             Task { @MainActor in
                 if cancelled { await transition.cancel() }
-                // Successful completion is committed by didShow/didDismiss, after stack bookkeeping.
+                // Successful completion is committed by the move or swipe that lands, after stack bookkeeping.
             }
-        }
-    }
-
-    func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController,
-                              animated: Bool) {
-        guard navigationTask == nil,
-              let page = viewController as? ExperienceScreenViewController, page.isPageController else { return }
-        nativePageTransitionInProgress = true
-        guard page.lifecyclePhase == .hidden else { return }
-        let platform = navigationController.transitionCoordinator
-        let outgoing = shownPages[ObjectIdentifier(navigationController)]?.last
-        let transition = pageTransition(revealing: page, covering: outgoing, interactive: platform?.isInteractive == true)
-        platformTransitions[ObjectIdentifier(navigationController)] = transition
-        observe(transition, coordinator: platform)
-    }
-
-    func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController,
-                              animated: Bool) {
-        let key = ObjectIdentifier(navigationController)
-        let pages = navigationController.viewControllers.compactMap { $0 as? ExperienceScreenViewController }
-        let removed = (shownPages[key] ?? []).filter { old in !pages.contains { $0 === old } }
-        shownPages[key] = pages
-        nativePageTransitionInProgress = false
-        // A move the hidden notice asks for waits until the revealed page is active.
-        settlingNativePops += 1
-        let drain = navigationTask
-        let page = viewController as? ExperienceScreenViewController
-        let transition = platformTransitions.removeValue(forKey: key)
-        Task { @MainActor in
-            if removed.isEmpty { await transition?.cancel() }
-            if let drain { await drain.value }
-            else if self.lifecycle == .installed, !removed.isEmpty, let page, page.isPageController {
-                for outgoing in removed {
-                    await outgoing.markExiting(reduceMotion: self.reduceMotionEnabled, exitReason: .navigation)
-                    await self.coverPage(outgoing)
-                    await self.onScreenHidden(outgoing.screenId, .navigation(revealingScreenId: page.screenId))
-                }
-                if let transition { await transition.commit() }
-                else {
-                    let fallback = self.pageTransition(revealing: page, covering: nil, interactive: false)
-                    await fallback.commit()
-                }
-            }
-            for outgoing in removed { await outgoing.shutdownInteractiveScreen() }
-            self.settlingNativePops -= 1
-            self.startNavigationDrainIfNeeded()
         }
     }
 
@@ -1240,11 +1274,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 )
                 _ = await (outgoingPhase, incomingPhase)
             },
-            awaitCompletion: {
-                await ExperienceScreenExitWatchdog.wait(
-                    for: [outgoingWaiter.stream, incomingWaiter.stream],
-                    watchdogMilliseconds: plan.watchdogMilliseconds
-                )
+            awaitCompletion: { [authoredTime] in
+                await ExperienceAuthoredTime.during(authoredTime) {
+                    await ExperienceScreenExitWatchdog.wait(
+                        for: [outgoingWaiter.stream, incomingWaiter.stream],
+                        watchdogMilliseconds: plan.watchdogMilliseconds
+                    )
+                }
             },
             finalize: {
                 // A destination whose runtime failed while completions were
@@ -1336,6 +1372,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             videoDecoderPool: videoDecoderPool,
             delegate: screenDelegate
         )
+        controller.authoredTime = authoredTime
         mountingControllersByScreenId[screenId] = controller
         defer {
             if mountingControllersByScreenId[screenId] === controller {
@@ -1473,8 +1510,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let navigation = ExperienceLayerNavigationController(rootViewController: controller)
         navigation.orientationHost = hostViewController
         navigation.setNavigationBarHidden(true, animated: false)
-        navigation.delegate = self
-        shownPages[ObjectIdentifier(navigation)] = [controller]
+        navigation.onEscape = { [weak self] in self?.performEscape() ?? false }
+        navigation.onAppear = { [weak self, weak navigation] in
+            if let self, let navigation { self.layerDidAppear(navigation) }
+        }
         layer = navigation
         layer.view.backgroundColor = UIColor(nuxieRGBAHex: experience.behaviorPresentation.backgroundColor)
         let configurator = ExperienceLayerPresentationConfigurator(presentation: presentation)
@@ -1547,11 +1586,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     }
 
     nonisolated func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        _ = MainActor.assumeIsolated {
-            Task { @MainActor [weak self] in
-                await self?.handlePresentedControllerDidDismiss(presentationController)
-            }
-        }
+        MainActor.assumeIsolated { handlePresentedControllerDidDismiss(presentationController) }
     }
 
     private func performAuthoredLayerDismissal(activateRevealedPage: Bool = true) async -> Bool {
@@ -1572,9 +1607,26 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
             platformTransitions[ObjectIdentifier(layer)] = transition
             await transition.begin()
         }
+        let id = ObjectIdentifier(layer)
+        if swipes[id] != nil {
+            // The person is already swiping this sheet away: this move takes the
+            // swipe over and lands on UIKit's end instead of dismissing again.
+            navigationRequests.removeAll { $0.swipe == id }
+            let end = await swipeEnd(id)
+            swipes.removeValue(forKey: id)
+            if end == .finished || layer.presentingViewController == nil {
+                await finishLayerDismissal(layer, controller: controller, alreadyDismissed: true,
+                    activateRevealedPage: activateRevealedPage)
+                closingLayer = nil
+                return true
+            }
+        }
         layer.presentationController?.delegate = nil
-        await withCheckedContinuation { continuation in
-            layer.presentingViewController?.dismiss(animated: !reduceMotionEnabled) { continuation.resume() }
+        // Never wait on a presenter that has already let the sheet go.
+        if let presenter = layer.presentingViewController {
+            await withCheckedContinuation { continuation in
+                presenter.dismiss(animated: !reduceMotionEnabled) { continuation.resume() }
+            }
         }
         await finishLayerDismissal(layer, controller: controller, alreadyDismissed: false,
             activateRevealedPage: activateRevealedPage)
@@ -1588,18 +1640,110 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         return (layer as? UINavigationController)?.topViewController as? ExperienceScreenViewController
     }
 
+    /// UIKit's question takes nothing, since it may never dismiss: a swipe may
+    /// start only while no move runs or waits.
+    var acceptsSwipe: Bool {
+        lifecycle == .installed && !navigationAdmissionRevoked && navigationTask == nil
+            && navigationRequests.isEmpty && swipes.isEmpty
+    }
+
+    nonisolated func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool {
+        MainActor.assumeIsolated { acceptsSwipe }
+    }
+
     nonisolated func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
         MainActor.assumeIsolated {
-            guard let page = pageBelowPresentedLayer, page.isPageController,
-                  let outgoing = activeController else { return }
             let layer = presentationController.presentedViewController
-            let platform = layer.transitionCoordinator
-            // Without a coordinator, wait for didDismiss rather than speculate.
+            guard presentationLayer === layer else { return }
+            beginSwipe(of: layer, revealsPageBelow: true)
+        }
+    }
+
+    /// UIKit has committed to a swipe. It takes the queue's slot, or waits first
+    /// in line behind the move already running, until UIKit reports its end.
+    /// `platform` lets hosted tests supply UIKit's transition coordinator.
+    func beginSwipe(of layer: UIViewController, revealsPageBelow: Bool,
+                    platform suppliedPlatform: (any UIViewControllerTransitionCoordinator)? = nil) {
+        let id = ObjectIdentifier(layer)
+        guard lifecycle == .installed, swipes[id] == nil else { return }
+        let idle = navigationTask == nil
+        swipes[id] = Swipe()
+        navigationRequests.insert(NavigationRequest(screenId: activeScreenId ?? initialScreenID, rawTransition: nil,
+            completion: { _, _ in }, swipe: id), at: 0)
+        let platform = suppliedPlatform ?? layer.transitionCoordinator
+        // Only an idle queue lets the page below start under the person's finger.
+        if idle, revealsPageBelow, let page = pageBelowPresentedLayer, page.isPageController,
+           let outgoing = activeController {
+            // Without a coordinator, wait for UIKit's end rather than speculate.
             let transition = pageTransition(revealing: page, covering: outgoing,
                 interactive: platform?.isInteractive ?? true)
-            platformTransitions[ObjectIdentifier(layer)] = transition
+            platformTransitions[id] = transition
             observe(transition, coordinator: platform)
         }
+        platform?.animate(alongsideTransition: nil) { [weak self] context in
+            guard context.isCancelled else { return }
+            MainActor.assumeIsolated { self?.endSwipe(id, .cancelled) }
+        }
+        startNavigationDrainIfNeeded()
+    }
+
+    /// The Experience's own sheet has been swiped away. The close that follows
+    /// fails anything queued during the drag before the swipe gives up its slot.
+    func closeAfterSwipe(of layer: UIViewController) {
+        revokeNavigationAdmission()
+        endSwipe(ObjectIdentifier(layer), .finished)
+    }
+
+    /// UIKit shows a sheet again when the person cancels its dismissal, with or
+    /// without a transition coordinator.
+    func layerDidAppear(_ layer: UIViewController) {
+        guard layer.presentingViewController != nil, !layer.isBeingDismissed else { return }
+        endSwipe(ObjectIdentifier(layer), .cancelled)
+    }
+
+    private func endSwipe(_ id: ObjectIdentifier, _ end: SwipeEnd) {
+        guard let swipe = swipes[id], swipe.end == nil else { return }
+        swipe.end = end
+        let waiters = swipe.waiters
+        swipe.waiters.removeAll()
+        waiters.forEach { $0.resume(returning: end) }
+    }
+
+    private func releaseSwipeWaiters(_ id: ObjectIdentifier) {
+        guard let swipe = swipes[id] else { return }
+        let waiters = swipe.waiters
+        swipe.waiters.removeAll()
+        waiters.forEach { $0.resume(returning: .cancelled) }
+    }
+
+    /// While the person holds a sheet there is no clock: the wait is authored time.
+    private func swipeEnd(_ id: ObjectIdentifier) async -> SwipeEnd {
+        guard let swipe = swipes[id] else { return .cancelled }
+        if let end = swipe.end { return end }
+        if Task.isCancelled { return .cancelled }
+        return await ExperienceAuthoredTime.during(authoredTime) {
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { swipe.waiters.append($0) }
+            } onCancel: {
+                Task { @MainActor [weak self] in self?.releaseSwipeWaiters(id) }
+            }
+        }
+    }
+
+    /// A swipe holds the slot until UIKit reports its end. A finished one lands
+    /// like a close of its layer; a cancelled one undoes the page it started.
+    private func landSwipe(_ id: ObjectIdentifier) async {
+        let end = await swipeEnd(id)
+        swipes.removeValue(forKey: id)
+        guard end == .finished else {
+            await platformTransitions.removeValue(forKey: id)?.cancel()
+            return
+        }
+        guard lifecycle == .installed,
+              let layer = navigationLayers.first(where: { ObjectIdentifier($0) == id }),
+              let controller = (layer as? ExperienceScreenViewController)
+                ?? (layer as? UINavigationController)?.topViewController as? ExperienceScreenViewController else { return }
+        await finishLayerDismissal(layer, controller: controller, alreadyDismissed: true)
     }
 
     nonisolated func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
@@ -1609,15 +1753,19 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         }
     }
 
-    private func handlePresentedControllerDidDismiss(
-        _ presentationController: UIPresentationController
-    ) async {
+    private func handlePresentedControllerDidDismiss(_ presentationController: UIPresentationController) {
         let layer = presentationController.presentedViewController
-        guard
-              hasPresentedLayer, presentationLayer === layer, closingLayer !== layer,
-              let controller = (layer as? ExperienceScreenViewController)
-                ?? (layer as? UINavigationController)?.topViewController as? ExperienceScreenViewController else { return }
-        await finishLayerDismissal(layer, controller: controller, alreadyDismissed: true)
+        let id = ObjectIdentifier(layer)
+        guard lifecycle == .installed, navigationLayers.dropFirst().contains(where: { $0 === layer }) else { return }
+        if swipes[id] == nil {
+            // UIKit removed the sheet without asking: it lands after the running
+            // move and before anything queued.
+            swipes[id] = Swipe()
+            navigationRequests.insert(NavigationRequest(screenId: activeScreenId ?? initialScreenID, rawTransition: nil,
+                completion: { _, _ in }, swipe: id), at: 0)
+        }
+        endSwipe(id, .finished)
+        startNavigationDrainIfNeeded()
     }
 
     private func finishLayerDismissal(_ layer: UIViewController,
@@ -1628,7 +1776,6 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let retiringPages = screenControllers(in: layer)
         layer.presentationController?.delegate = nil
         navigationLayers.removeLast()
-        shownPages.removeValue(forKey: ObjectIdentifier(layer))
         stackedSheetWindows.removeValue(forKey: ObjectIdentifier(layer))?.close()
         let revealingController = activeController
         if alreadyDismissed {
@@ -1845,6 +1992,24 @@ private final class ExperienceNavigationCompletion {
 @MainActor
 private final class ExperienceLayerNavigationController: UINavigationController {
     weak var orientationHost: UIViewController?
+    /// Every pop is the queue's own: an escape becomes a queued Back.
+    var onEscape: (() -> Bool)?
+    /// UIKit shows a sheet again when the person cancels its dismissal.
+    var onAppear: (() -> Void)?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // The bar is hidden, which already turns the edge swipe off; this does not rely on that.
+        interactivePopGestureRecognizer?.isEnabled = false
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        onAppear?()
+    }
+
+    override func accessibilityPerformEscape() -> Bool { onEscape?() ?? false }
+
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
         orientationHost?.supportedInterfaceOrientations ?? super.supportedInterfaceOrientations
     }

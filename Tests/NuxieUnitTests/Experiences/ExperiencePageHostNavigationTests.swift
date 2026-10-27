@@ -681,7 +681,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
-    func testAMoveAskedForWhileAHostPopSettlesWaitsForTheRevealedPage() async throws {
+    func testAMoveAskedForDuringAnEscapeWaitsForTheRevealedPageAndTheRemovedPagesShutdown() async throws {
         final class Box {
             var coordinator: ExperienceScreenTransitionCoordinator?
             var asked: XCTestExpectation?
@@ -694,53 +694,92 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             return .handled
         }, onActive: { id in box.log.append("active:\(id)") }, onHidden: { id in
             box.log.append("hidden:\(id)")
-            // Like a Journey that routes the popped Screen's hidden notice to a
-            // move, then keeps working before it returns.
+            // Like a Journey that routes the popped Screen's hidden notice to a move.
             guard id == "B", let coordinator = box.coordinator, let asked = box.asked else { return }
             box.asked = nil
             XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { result, _ in
                 box.result = result
                 asked.fulfill()
             })
-            let deadline = Date().addingTimeInterval(2)
-            while box.result == nil, !box.log.contains(where: { $0.hasPrefix("leave:") }), Date() < deadline {
-                try? await Task.sleep(nanoseconds: 10_000_000)
-            }
         }) { coordinator, base, _, _ in
             box.coordinator = coordinator
             try await navigate(coordinator, to: "B", transition: ["type": "push"])
             let navigation = try XCTUnwrap(base.navigationController)
+            let pushed = try XCTUnwrap(navigation.topViewController as? ExperienceScreenViewController)
+            XCTAssertFalse(pushed === base)
+            pushed.onShutdown = {
+                box.log.append("shutdown:B")
+                // Hold the removed page's shutdown long enough for an early move to start.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                box.log.append("released:B")
+            }
             box.log.removeAll()
-            let asked = expectation(description: "the move asked for during the pop lands")
+            let asked = expectation(description: "the move asked for during the escape lands")
             box.asked = asked
-            navigation.popViewController(animated: false)
+            XCTAssertTrue(navigation.accessibilityPerformEscape(), "VoiceOver's escape is the person's Back")
             await fulfillment(of: [asked], timeout: 10)
             XCTAssertEqual(box.result, .navigated)
-            XCTAssertEqual(box.log, ["hidden:B", "active:A", "leave:A>B", "hidden:A", "active:B"],
-                "The pop activates A before the move it was asked for leaves A")
+            XCTAssertEqual(box.log, ["leave:B>A", "hidden:B", "active:A", "shutdown:B", "released:B",
+                "leave:A>B", "hidden:A", "active:B"],
+                "The Journey is asked first, and the next move waits until the removed page is shut down")
             XCTAssertEqual(base.screenId, "B")
         }
     }
 
-    func testHostPopAnnouncesTheRevealedPageOnce() async throws {
+    func testEscapeAnnouncesTheRevealedPageOnce() async throws {
         try await withLifecycleCoordinator { coordinator, base, probe, _ in
             let before = base.lifecycleAppearances
             try await navigate(coordinator, to: "B", transition: ["type": "push"])
             let navigation = try XCTUnwrap(base.navigationController)
             probe.resetActivationRecords()
-            // Exercise the delegate path used by a completed edge swipe, outside a Journey drain.
-            navigation.popViewController(animated: false)
+            XCTAssertTrue(navigation.accessibilityPerformEscape())
             let deadline = Date().addingTimeInterval(2)
             while probe.shownScreenIDs.isEmpty, Date() < deadline {
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
-            // A repeated UIKit completion must not announce the same pop again.
-            coordinator.navigationController(navigation, didShow: base, animated: false)
             await Task.yield()
             assertActivation(probe, screenID: "A")
             try await assertTimelineAdvances(base)
             XCTAssertEqual(base.lifecyclePhase, .active)
             XCTAssertEqual(base.lifecycleAppearances, before + 1)
+            XCTAssertTrue(navigation.topViewController === base)
+        }
+    }
+
+    func testEscapeIsRefusedWithNowhereToGoWaitsDuringAMoveAndClosesASheetAtItsRoot() async throws {
+        try await withCoordinator { coordinator, base, probe, _ in
+            let navigation = try XCTUnwrap(base.navigationController)
+            XCTAssertFalse(navigation.accessibilityPerformEscape(), "With nowhere to go, VoiceOver passes the escape on")
+            let forward = expectation(description: "the step lands")
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { _, _ in
+                forward.fulfill()
+            })
+            var deadline = Date().addingTimeInterval(2)
+            while base.lifecyclePhase != .exiting, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(base.lifecyclePhase, .exiting, "The escape must arrive during the step")
+            probe.lifecycle.removeAll()
+            XCTAssertTrue(navigation.accessibilityPerformEscape(), "During a move the escape waits, like a tap on Back")
+            await fulfillment(of: [forward], timeout: 5)
+            deadline = Date().addingTimeInterval(5)
+            while probe.lifecycle.last != "active:A", Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(probe.lifecycle, ["hidden:A", "active:B", "hidden:B", "active:A"],
+                "The step lands, then the escape goes back from the Screen it landed on")
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let sheet = try XCTUnwrap(coordinator.topPresentedLayer)
+            XCTAssertTrue(sheet.accessibilityPerformEscape(), "At a sheet's root the escape closes the sheet")
+            deadline = Date().addingTimeInterval(5)
+            // The close has landed once the revealed page is active and the queue is free.
+            while coordinator.topPresentedLayer != nil || !coordinator.acceptsSwipe, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertNil(coordinator.topPresentedLayer)
+            XCTAssertTrue(coordinator.acceptsSwipe)
+            XCTAssertEqual(coordinator.layerScreenIds.count, 1)
+            XCTAssertEqual(coordinator.activeScreenId, "A")
         }
     }
 
@@ -942,7 +981,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
-    func testSwipeDuringAnUnpresentedPhaseSupersedesNavigationAndReleasesTheDrain() async throws {
+    func testASheetRemovedDuringAnUnpresentedPhaseLandsTheStepThenTheDismissal() async throws {
         try await withCoordinator { coordinator, _, _, _ in
             try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
             let sheet = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
@@ -957,23 +996,26 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                     blocked.fulfill()
                 }
             }
-            let superseded = expectation(description: "sheet navigation superseded")
-            var sheetResult: ExperienceScreenNavigationResult?
+            let landed = expectation(description: "sheet navigation lands")
+            var order: [String] = []
             XCTAssertTrue(coordinator.navigate(to: "A",
                 transition: ["type": "magic-move", "transitionId": "t1"]) { result, _ in
-                sheetResult = result
-                superseded.fulfill()
+                order.append("step:\(result)")
+                landed.fulfill()
             })
             await fulfillment(of: [blocked], timeout: 2)
-            XCTAssertNil(sheetResult)
+            XCTAssertTrue(order.isEmpty)
             let drain = try XCTUnwrap(Mirror(reflecting: coordinator).children
                 .first { $0.label == "navigationTask" }?.value as? Task<Void, Never>)
+            // UIKit removes the sheet without asking: the running step lands first.
             await withCheckedContinuation { continuation in sheet.navigationController?.dismiss(animated: false) { continuation.resume() } }
             coordinator.presentationControllerDidDismiss(presentation)
-            let deadline = Date().addingTimeInterval(2)
+            XCTAssertNotNil(coordinator.topPresentedLayer, "The dismissal waits for the running step")
+            let deadline = Date().addingTimeInterval(5)
             while coordinator.topPresentedLayer != nil, Date() < deadline {
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
+            order.append("dismissed")
             XCTAssertNil(coordinator.topPresentedLayer)
             let revealed = expectation(description: "navigation in revealed layer finishes")
             var baseResult: ExperienceScreenNavigationResult?
@@ -981,13 +1023,253 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 baseResult = result
                 revealed.fulfill()
             })
-            await fulfillment(of: [superseded, revealed], timeout: 3)
-            XCTAssertEqual(sheetResult, .superseded)
+            await fulfillment(of: [landed, revealed], timeout: 3)
+            XCTAssertEqual(order, ["step:navigated", "dismissed"])
             XCTAssertEqual(baseResult, .navigated)
             XCTAssertEqual(coordinator.activeScreenId, "B")
             // Cancellation keeps the pre-fix regression bounded after its assertions fail.
             drain.cancel()
             await drain.value
+        }
+    }
+
+    func testASwipeThatMeetsABackAcrossItsSheetLandsOnceWithoutDismissingAgain() async throws {
+        final class Box {
+            var coordinator: ExperienceScreenTransitionCoordinator?
+            var layer: UIViewController?
+            var dismissed: [String] = []
+        }
+        let box = Box()
+        try await withCoordinator(onWillNavigate: { source, target in
+            // The person's swipe commits just as the Back starts, and UIKit carries the sheet away.
+            if source == "B", target == "A", let coordinator = box.coordinator, let layer = box.layer,
+               let presentation = layer.presentationController {
+                box.layer = nil
+                coordinator.presentationControllerWillDismiss(presentation)
+                await withCheckedContinuation { continuation in layer.dismiss(animated: false) { continuation.resume() } }
+                coordinator.presentationControllerDidDismiss(presentation)
+            }
+            return .handled
+        }, onDismissed: { dismissed, revealing in
+            box.dismissed.append("\(dismissed)>\(revealing ?? "-")")
+        }) { coordinator, base, _, _ in
+            box.coordinator = coordinator
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            box.layer = try XCTUnwrap(coordinator.topPresentedLayer)
+            let landed = expectation(description: "the Back lands")
+            var result: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.back(to: "A", steps: 1) { value, _ in
+                result = value
+                landed.fulfill()
+            })
+            await fulfillment(of: [landed], timeout: 10)
+            XCTAssertNil(box.layer, "The swipe must arrive during the Back")
+            XCTAssertEqual(result, .navigated)
+            XCTAssertEqual(box.dismissed, ["B>A"], "The Back takes the swipe over: the Journey hears one dismissal")
+            XCTAssertEqual(coordinator.layerScreenIds, [["A"]])
+            XCTAssertEqual(base.lifecyclePhase, .active)
+        }
+    }
+
+    func testAMoveAskedForWhenASwipedAwaySheetLeavesWaitsForTheRevealedPage() async throws {
+        final class Box {
+            var coordinator: ExperienceScreenTransitionCoordinator?
+            var asked: XCTestExpectation?
+            var result: ExperienceScreenNavigationResult?
+            var log: [String] = []
+        }
+        let box = Box()
+        try await withCoordinator(onWillNavigate: { source, target in
+            box.log.append("leave:\(source)>\(target)")
+            return .handled
+        }, onActive: { id in box.log.append("active:\(id)") }, onHidden: { id in box.log.append("hidden:\(id)") },
+        onDismissed: { dismissed, _ in
+            box.log.append("dismissed:\(dismissed)")
+            // Like a Journey that routes the dismissal to a move, then keeps working before it returns.
+            guard let coordinator = box.coordinator, let asked = box.asked else { return }
+            box.asked = nil
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { result, _ in
+                box.result = result
+                asked.fulfill()
+            })
+            let deadline = Date().addingTimeInterval(0.5)
+            while box.result == nil, !box.log.contains(where: { $0.hasPrefix("leave:") }), Date() < deadline {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }) { coordinator, _, _, _ in
+            box.coordinator = coordinator
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let layer = try XCTUnwrap(coordinator.topPresentedLayer)
+            let presentation = try XCTUnwrap(layer.presentationController)
+            box.log.removeAll()
+            let asked = expectation(description: "the move asked for during the swipe-away lands")
+            box.asked = asked
+            XCTAssertTrue(coordinator.presentationControllerShouldDismiss(presentation))
+            coordinator.presentationControllerWillDismiss(presentation)
+            await withCheckedContinuation { continuation in layer.dismiss(animated: false) { continuation.resume() } }
+            coordinator.presentationControllerDidDismiss(presentation)
+            await fulfillment(of: [asked], timeout: 10)
+            XCTAssertEqual(box.result, .navigated)
+            XCTAssertEqual(box.log, ["dismissed:B", "active:A", "leave:A>B", "hidden:A", "active:B"],
+                "The swipe-away activates A before the move it was asked for leaves A")
+        }
+    }
+
+    func testASwipeIsRefusedWhileAMoveRunsAndAllowedOnceItLands() async throws {
+        try await withCoordinator { coordinator, _, _, _ in
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let sheet = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController as? ExperienceScreenViewController)
+            let presentation = try XCTUnwrap(sheet.navigationController?.presentationController)
+            XCTAssertTrue(coordinator.presentationControllerShouldDismiss(presentation))
+            let landed = expectation(description: "the step lands")
+            XCTAssertTrue(coordinator.navigate(to: "A", transition: ["type": "magic-move", "transitionId": "t1"]) { _, _ in
+                landed.fulfill()
+            })
+            var deadline = Date().addingTimeInterval(2)
+            while sheet.lifecyclePhase != .exiting, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(sheet.lifecyclePhase, .exiting, "The question must arrive during the step")
+            XCTAssertFalse(coordinator.presentationControllerShouldDismiss(presentation), "The sheet springs back during a move")
+            XCTAssertFalse(coordinator.acceptsSwipe, "The Experience's own sheet asks the same gate")
+            await fulfillment(of: [landed], timeout: 5)
+            deadline = Date().addingTimeInterval(2)
+            while !coordinator.acceptsSwipe, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(coordinator.presentationControllerShouldDismiss(presentation))
+        }
+    }
+
+    func testASwipeQuestionUIKitNeverFollowsUpTakesNothing() async throws {
+        try await withCoordinator { coordinator, _, _, _ in
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let presentation = try XCTUnwrap(coordinator.topPresentedLayer?.presentationController)
+            XCTAssertTrue(coordinator.presentationControllerShouldDismiss(presentation))
+            let landed = expectation(description: "the next move runs straight away")
+            var result: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "A", transition: ["type": "magic-move", "transitionId": "t1"]) { value, _ in
+                result = value
+                landed.fulfill()
+            })
+            await fulfillment(of: [landed], timeout: 5)
+            XCTAssertEqual(result, .navigated)
+            XCTAssertEqual(coordinator.activeScreenId, "A")
+        }
+    }
+
+    func testACancelledSwipeReleasesTheSlotThroughItsTransitionCoordinator() async throws {
+        try await assertCancelledSwipeReleasesTheSlot { coordinator, layer, _ in
+            let platform = DrivenTransitionCoordinator()
+            coordinator.beginSwipe(of: layer, revealsPageBelow: true, platform: platform)
+            return { platform.end(cancelled: true) }
+        }
+    }
+
+    func testACancelledSwipeReleasesTheSlotWhenUIKitShowsTheSheetAgain() async throws {
+        try await assertCancelledSwipeReleasesTheSlot { coordinator, layer, presentation in
+            // In tests UIKit has no transition coordinator: the sheet's reappearance is the cancel.
+            coordinator.presentationControllerWillDismiss(presentation)
+            return {
+                layer.beginAppearanceTransition(false, animated: false)
+                layer.beginAppearanceTransition(true, animated: false)
+                layer.endAppearanceTransition()
+            }
+        }
+    }
+
+    private func assertCancelledSwipeReleasesTheSlot(
+        _ begin: @MainActor (ExperienceScreenTransitionCoordinator, UIViewController, UIPresentationController) -> (@MainActor () -> Void)
+    ) async throws {
+        try await withCoordinator { coordinator, base, _, _ in
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let layer = try XCTUnwrap(coordinator.topPresentedLayer)
+            let presentation = try XCTUnwrap(layer.presentationController)
+            let cancel = begin(coordinator, layer, presentation)
+            XCTAssertFalse(coordinator.acceptsSwipe, "The swipe holds the slot while the finger is down")
+            let landed = expectation(description: "the move asked for during the swipe lands")
+            var result: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "A", transition: ["type": "magic-move", "transitionId": "t1"]) { value, _ in
+                result = value
+                landed.fulfill()
+            })
+            try await Task.sleep(nanoseconds: 300_000_000)
+            XCTAssertNil(result, "The move waits while the person holds the sheet")
+            cancel()
+            await fulfillment(of: [landed], timeout: 5)
+            XCTAssertEqual(result, .navigated)
+            XCTAssertTrue(coordinator.topPresentedLayer === layer, "The move ran on the sheet")
+            XCTAssertEqual(coordinator.activeScreenId, "A")
+            XCTAssertEqual(base.lifecyclePhase, .hidden, "The page below never became active")
+        }
+    }
+
+    func testTheExperiencesOwnSheetHoldsTheSlotWhileDragged() async throws {
+        try await withCoordinator { coordinator, base, _, _ in
+            // The host stands in for the Experience's own sheet (ExperienceViewController).
+            let host = try XCTUnwrap(base.navigationController?.parent)
+            coordinator.beginSwipe(of: host, revealsPageBelow: false)
+            let cancelled = expectation(description: "a move asked for during a cancelled drag runs")
+            var result: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { value, _ in
+                result = value
+                cancelled.fulfill()
+            })
+            try await Task.sleep(nanoseconds: 300_000_000)
+            XCTAssertNil(result, "The move waits while the person drags the Experience's sheet")
+            coordinator.layerDidAppear(host)
+            await fulfillment(of: [cancelled], timeout: 5)
+            XCTAssertEqual(result, .navigated)
+            let deadline = Date().addingTimeInterval(2)
+            while !coordinator.acceptsSwipe, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            coordinator.beginSwipe(of: host, revealsPageBelow: false)
+            let finished = expectation(description: "a move asked for during a finished drag fails with the close")
+            var closedResult: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "A", transition: ["type": "magic-move", "transitionId": "t1"]) { value, _ in
+                closedResult = value
+                finished.fulfill()
+            })
+            try await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertNil(closedResult)
+            coordinator.closeAfterSwipe(of: host)
+            await fulfillment(of: [finished], timeout: 2)
+            XCTAssertEqual(closedResult, .failed)
+            XCTAssertEqual(coordinator.activeScreenId, "B")
+        }
+    }
+
+    func testACloseDuringAMoveLongerThanTheNativeLimitLetsTheMoveLand() async throws {
+        try await withCoordinator { coordinator, controller, probe, _ in
+            coordinator.retirementTimeoutNanoseconds = 100_000_000
+            var withheld = false
+            controller.onPageStep = { [weak controller] _ in
+                guard let controller, controller.lifecyclePhase == .exiting, !withheld else { return }
+                withheld = true
+                // No frame reaches the screen, so each authored wait runs to its own
+                // watchdog, well past the native limit.
+                controller.setContentHidden(true)
+            }
+            let forward = expectation(description: "the step lands")
+            var result: ExperienceScreenNavigationResult?
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { value, _ in
+                result = value
+                forward.fulfill()
+            })
+            let deadline = Date().addingTimeInterval(2)
+            while !withheld, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(withheld, "The close must arrive during the step")
+            probe.lifecycle.removeAll()
+            let started = Date()
+            await coordinator.exitActiveScreenForTeardown(reason: nil)
+            await fulfillment(of: [forward], timeout: 5)
+            XCTAssertGreaterThan(Date().timeIntervalSince(started), 0.2, "The step and the close's exit outlast the native limit")
+            XCTAssertEqual(result, .navigated, "A step under way lands; nothing is undone halfway")
+            XCTAssertEqual(probe.lifecycle, ["hidden:A", "active:B", "hidden:B"])
+            coordinator.retirementTimeoutNanoseconds = ExperienceRuntimeRetirement.timeoutNanoseconds
         }
     }
 
@@ -1178,6 +1460,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         productResolver: (@Sendable (String) async throws -> [StoreProduct])? = nil,
         onWillNavigate: @escaping @MainActor (String, String) async -> JourneyScreenDismissalResult = { _, _ in .handled },
         onActive: (@MainActor (String) async -> Void)? = nil, onHidden: (@MainActor (String) async -> Void)? = nil,
+        onDismissed: (@MainActor (String, String?) async -> Void)? = nil,
         _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
         let experience: Experience
@@ -1215,7 +1498,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         let coordinator = ExperienceScreenTransitionCoordinator(experience: experience, artifact: artifact,
             initialScreenID: initialScreenID,
             hostViewController: host, screenDelegate: probe,
-            onPresentedScreenDismissed: { _, _ in },
+            onPresentedScreenDismissed: { dismissed, revealing in await onDismissed?(dismissed, revealing) },
             onScreenHidden: { id, _ in
                 probe.lifecycle.append("hidden:\(id)")
                 await onHidden?(id)
@@ -1239,6 +1522,55 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         window.isHidden = true
         oldKey?.makeKey()
 
+    }
+}
+
+/// UIKit's coordinator for a swipe the test drives: the finger lifts, then the transition ends.
+@MainActor
+private final class DrivenTransitionCoordinator: NSObject, UIViewControllerTransitionCoordinator {
+    private var interactionHandlers: [(any UIViewControllerTransitionCoordinatorContext) -> Void] = []
+    private var completions: [(any UIViewControllerTransitionCoordinatorContext) -> Void] = []
+    private(set) var isCancelled = false
+    private(set) var isInteractive = true
+    var isAnimated: Bool { true }
+    var presentationStyle: UIModalPresentationStyle { .pageSheet }
+    var initiallyInteractive: Bool { true }
+    var isInterruptible: Bool { false }
+    var transitionDuration: TimeInterval { 0.3 }
+    var percentComplete: CGFloat { 0 }
+    var completionVelocity: CGFloat { 1 }
+    var completionCurve: UIView.AnimationCurve { .easeOut }
+    let containerView = UIView()
+    var targetTransform: CGAffineTransform { .identity }
+
+    func viewController(forKey key: UITransitionContextViewControllerKey) -> UIViewController? { nil }
+    func view(forKey key: UITransitionContextViewKey) -> UIView? { nil }
+
+    func animate(alongsideTransition animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+                 completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil) -> Bool {
+        if let completion { completions.append(completion) }
+        return true
+    }
+
+    func animateAlongsideTransition(in view: UIView?,
+                                    animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+                                    completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil) -> Bool {
+        animate(alongsideTransition: animation, completion: completion)
+    }
+
+    func notifyWhenInteractionEnds(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {
+        interactionHandlers.append(handler)
+    }
+
+    func notifyWhenInteractionChanges(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {
+        interactionHandlers.append(handler)
+    }
+
+    func end(cancelled: Bool) {
+        isCancelled = cancelled
+        isInteractive = false
+        interactionHandlers.forEach { $0(self) }
+        completions.forEach { $0(self) }
     }
 }
 
