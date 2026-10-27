@@ -608,6 +608,39 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testBackAcrossTwoSheetsPlaysTheMiddleSheetsExit() async throws {
+        // No frame sends this event, so each exit waits out its whole limit.
+        let payload = try await hostedLiveMovePayload(screenExit: ["completeEventName": "never", "durationMs": 1500])
+        try await withCoordinator(payload: payload) { coordinator, _, probe, _ in
+            try await self.navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let middle = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController
+                as? ExperienceScreenViewController)
+            try await self.navigate(coordinator, to: "A", transition: ["type": "modal", "present": "sheet"])
+            final class Box { var advanced: Bool? }
+            let box = Box()
+            let sampled = self.expectation(description: "the middle sheet's exit is sampled")
+            middle.onExitCompletionWait = { [weak middle] in
+                guard let before = middle?.timelineElapsedSeconds else { return }
+                Task { @MainActor [weak middle] in
+                    let deadline = Date().addingTimeInterval(1)
+                    while let middle, middle.timelineElapsedSeconds <= before, Date() < deadline {
+                        middle.advance(delta: 1 / 60)
+                        try? await Task.sleep(nanoseconds: 20_000_000)
+                    }
+                    box.advanced = (middle?.timelineElapsedSeconds ?? before) > before
+                    sampled.fulfill()
+                }
+            }
+            probe.resetActivationRecords()
+            try await self.back(coordinator, to: "A", steps: 2)
+            await self.fulfillment(of: [sampled], timeout: 5)
+            XCTAssertEqual(box.advanced, true, "The middle sheet's exit plays while Back waits for it")
+            XCTAssertEqual(coordinator.layerScreenIds, [["A"]])
+            XCTAssertEqual(probe.lifecycle.filter { $0.hasPrefix("active:") }, ["active:A"],
+                "Back announces only the page it lands on")
+        }
+    }
+
     func testInteractiveSheetCancellationDoesNotVisitOrUncoverLowerPage() async throws {
         try await assertInteractivePageDecision(modal: true, completes: false)
     }
