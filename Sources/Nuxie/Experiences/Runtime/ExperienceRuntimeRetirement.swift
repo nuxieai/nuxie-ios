@@ -23,14 +23,16 @@ final class ExperienceAuthoredTime: @unchecked Sendable {
         return try await body()
     }
 
-    private func begin() {
+    /// Opens a span that closes in a later callback, such as a finger on a
+    /// sheet. Each `begin` needs exactly one `end`.
+    func begin() {
         lock.lock()
         running += 1
         started &+= 1
         lock.unlock()
     }
 
-    private func end() {
+    func end() {
         lock.lock()
         running -= 1
         lock.unlock()
