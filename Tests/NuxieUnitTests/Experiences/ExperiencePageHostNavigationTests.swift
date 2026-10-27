@@ -783,6 +783,33 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testEscapePopsAPushedPageThatShowsTheSameScreen() async throws {
+        try await withCoordinator { coordinator, base, _, _ in
+            let navigation = try XCTUnwrap(base.navigationController)
+            try await navigate(coordinator, to: "A", transition: ["type": "push"])
+            XCTAssertEqual(navigation.viewControllers.count, 2)
+            XCTAssertTrue(navigation.accessibilityPerformEscape(), "Back goes by position, so a page showing the same Screen pops")
+            var deadline = Date().addingTimeInterval(5)
+            while navigation.topViewController !== base || !coordinator.acceptsSwipe, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(navigation.topViewController === base)
+            XCTAssertEqual(coordinator.activeScreenId, "A")
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let sheet = try XCTUnwrap(coordinator.topPresentedLayer as? UINavigationController)
+            try await navigate(coordinator, to: "B", transition: ["type": "push"])
+            XCTAssertEqual(sheet.viewControllers.count, 2)
+            XCTAssertTrue(sheet.accessibilityPerformEscape())
+            deadline = Date().addingTimeInterval(5)
+            while sheet.viewControllers.count != 1 || !coordinator.acceptsSwipe, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertEqual(sheet.viewControllers.count, 1)
+            XCTAssertTrue(coordinator.topPresentedLayer === sheet, "The escape pops the sheet's top page and keeps the sheet")
+            XCTAssertEqual(coordinator.activeScreenId, "B")
+        }
+    }
+
     func testModalOwnsAnotherPlayerAndDismissalRevealsRetainedBase() async throws {
         try await withLifecycleCoordinator { coordinator, base, probe, preparation in
             let layer = try XCTUnwrap(base.interactivePage)
@@ -1273,6 +1300,38 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testAHeldSheetPausesTheCloseLimitOnlyUntilTheFingerLifts() async throws {
+        final class Box {
+            var failures: [Error] = []
+            var closed = false
+        }
+        let box = Box()
+        try await withCoordinator(onRuntimeFailure: { _, error in box.failures.append(error) }) { coordinator, _, _, _ in
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let layer = try XCTUnwrap(coordinator.topPresentedLayer)
+            coordinator.retirementTimeoutNanoseconds = 100_000_000
+            let platform = DrivenTransitionCoordinator()
+            coordinator.beginSwipe(of: layer, revealsPageBelow: true, platform: platform)
+            let close = Task { @MainActor in
+                await coordinator.exitActiveScreenForTeardown(reason: nil)
+                box.closed = true
+            }
+            try await Task.sleep(nanoseconds: 300_000_000)
+            XCTAssertFalse(box.closed, "While the finger holds the sheet, the close's native limit is paused")
+            XCTAssertTrue(box.failures.isEmpty)
+            platform.lift()
+            let deadline = Date().addingTimeInterval(2)
+            while !box.closed, Date() < deadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(box.closed, "Once the finger lifts, a UIKit that never finishes counts against the native limit")
+            XCTAssertEqual(box.failures.first as? ExperienceRuntimeRetirementError, .timedOut)
+            platform.end(cancelled: true)
+            await close.value
+            coordinator.retirementTimeoutNanoseconds = ExperienceRuntimeRetirement.timeoutNanoseconds
+        }
+    }
+
     func testRevisitsReuseTheRowsOriginalProductsForDisplayAndCheckout() async throws {
         let resolver = LayerProductResolver()
         try await withCoordinator(productResolver: { await resolver.resolve($0) }) { coordinator, controller, probe, _ in
@@ -1461,6 +1520,7 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         onWillNavigate: @escaping @MainActor (String, String) async -> JourneyScreenDismissalResult = { _, _ in .handled },
         onActive: (@MainActor (String) async -> Void)? = nil, onHidden: (@MainActor (String) async -> Void)? = nil,
         onDismissed: (@MainActor (String, String?) async -> Void)? = nil,
+        onRuntimeFailure: ((String, Error) -> Void)? = nil,
         _ body: @MainActor (ExperienceScreenTransitionCoordinator, ExperienceScreenViewController,
         LayerHostProbe, ExperienceInteractivePreparation) async throws -> Void) async throws {
         let experience: Experience
@@ -1509,7 +1569,9 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 await onActive?(id)
             }, onProductsResolved: { probe.checkoutProducts.append($0) },
             onProductsUnavailable: { _ in XCTFail("Unexpected product resolution failure") },
-            onRuntimeFailure: { id, error in XCTFail("\(id): \(error)") })
+            onRuntimeFailure: { id, error in
+                if let onRuntimeFailure { onRuntimeFailure(id, error) } else { XCTFail("\(id): \(error)") }
+            })
         do {
             try await coordinator.install()
             coordinator.setContentHidden(false)
@@ -1566,10 +1628,17 @@ private final class DrivenTransitionCoordinator: NSObject, UIViewControllerTrans
         interactionHandlers.append(handler)
     }
 
-    func end(cancelled: Bool) {
+    /// The finger lifts; UIKit animates the rest on its own.
+    func lift(cancelled: Bool = false) {
+        guard isInteractive else { return }
         isCancelled = cancelled
         isInteractive = false
         interactionHandlers.forEach { $0(self) }
+    }
+
+    func end(cancelled: Bool) {
+        lift(cancelled: cancelled)
+        isCancelled = cancelled
         completions.forEach { $0(self) }
     }
 }

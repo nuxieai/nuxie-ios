@@ -122,6 +122,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private final class Swipe {
         var end: SwipeEnd?
         var waiters: [CheckedContinuation<SwipeEnd, Never>] = []
+        /// The finger's hold on the sheet is authored time until it lifts.
+        private var hold: ExperienceAuthoredTime?
+
+        init(holding time: ExperienceAuthoredTime?) {
+            hold = time
+            hold?.begin()
+        }
+
+        /// What UIKit animates after the finger lifts is native time.
+        func lift() {
+            hold?.end()
+            hold = nil
+        }
+
+        deinit { lift() }
     }
 
     private weak var hostViewController: UIViewController?
@@ -738,7 +753,10 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     /// sheet the person may dismiss, a close of that sheet.
     private func escapeRequest() -> NavigationRequest? {
         guard let layer = presentationLayer, let screenId = activeScreenId else { return nil }
-        if (layerScreenIds.last?.count ?? 0) > 1, let target = backTarget(steps: 1), target != screenId {
+        if (layerScreenIds.last?.count ?? 0) > 1, let target = backTarget(steps: 1) {
+            // A pushed page may show the same Screen: a page goes back by position.
+            // The per-Screen path treats a Back to its own Screen as already there.
+            guard activeController?.isPageController == true || target != screenId else { return nil }
             return NavigationRequest(screenId: target,
                 rawTransition: activeController?.isPageController == true ? nil : ["type": "push"],
                 completion: { _, _ in }, backLayer: layer)
@@ -1667,10 +1685,17 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         let id = ObjectIdentifier(layer)
         guard lifecycle == .installed, swipes[id] == nil else { return }
         let idle = navigationTask == nil
-        swipes[id] = Swipe()
+        let platform = suppliedPlatform ?? layer.transitionCoordinator
+        // Only a swipe UIKit says a finger drives pauses the clock, since UIKit
+        // then also says when the finger lifts.
+        let holding = platform?.isInteractive == true
+        let swipe = Swipe(holding: holding ? authoredTime : nil)
+        swipes[id] = swipe
         navigationRequests.insert(NavigationRequest(screenId: activeScreenId ?? initialScreenID, rawTransition: nil,
             completion: { _, _ in }, swipe: id), at: 0)
-        let platform = suppliedPlatform ?? layer.transitionCoordinator
+        if holding {
+            platform?.notifyWhenInteractionChanges { [weak swipe] _ in swipe?.lift() }
+        }
         // Only an idle queue lets the page below start under the person's finger.
         if idle, revealsPageBelow, let page = pageBelowPresentedLayer, page.isPageController,
            let outgoing = activeController {
@@ -1704,6 +1729,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     private func endSwipe(_ id: ObjectIdentifier, _ end: SwipeEnd) {
         guard let swipe = swipes[id], swipe.end == nil else { return }
         swipe.end = end
+        swipe.lift()
         let waiters = swipe.waiters
         swipe.waiters.removeAll()
         waiters.forEach { $0.resume(returning: end) }
@@ -1716,17 +1742,15 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         waiters.forEach { $0.resume(returning: .cancelled) }
     }
 
-    /// While the person holds a sheet there is no clock: the wait is authored time.
+    /// The finger's hold pauses the clock (see `Swipe`); the rest of the wait is native time.
     private func swipeEnd(_ id: ObjectIdentifier) async -> SwipeEnd {
         guard let swipe = swipes[id] else { return .cancelled }
         if let end = swipe.end { return end }
         if Task.isCancelled { return .cancelled }
-        return await ExperienceAuthoredTime.during(authoredTime) {
-            await withTaskCancellationHandler {
-                await withCheckedContinuation { swipe.waiters.append($0) }
-            } onCancel: {
-                Task { @MainActor [weak self] in self?.releaseSwipeWaiters(id) }
-            }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { swipe.waiters.append($0) }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.releaseSwipeWaiters(id) }
         }
     }
 
@@ -1760,7 +1784,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         if swipes[id] == nil {
             // UIKit removed the sheet without asking: it lands after the running
             // move and before anything queued.
-            swipes[id] = Swipe()
+            swipes[id] = Swipe(holding: nil)
             navigationRequests.insert(NavigationRequest(screenId: activeScreenId ?? initialScreenID, rawTransition: nil,
                 completion: { _, _ in }, swipe: id), at: 0)
         }
