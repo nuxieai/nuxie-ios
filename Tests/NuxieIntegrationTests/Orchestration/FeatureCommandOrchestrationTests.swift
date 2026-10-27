@@ -125,8 +125,9 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 let mirrored = await relaunchedStack.eventLog.getRecentEvents(limit: 20)
                     .filter { $0.name == SystemEventNames.featureUsed }
                 expect(mirrored.map(\.id)).to(equal([firstWire.id]))
-                let forwardedIds = await forwarding.snapshot()
-                expect(forwardedIds).to(equal([firstWire.id]))
+                // Recovery awaits persistence; forwarding completes on its own worker.
+                await expect { await forwarding.snapshot() }
+                    .toEventually(equal([firstWire.id]), timeout: .seconds(5))
                 let balance = await MainActor.run {
                     relaunchedStack.core.featureInfo.balance("ai_generations")
                 }
@@ -198,8 +199,8 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 let mirrored = await stack.eventLog.getRecentEvents(limit: 20)
                     .filter { $0.name == SystemEventNames.featureUsed }
                 expect(mirrored.map(\.id)).to(equal([operationId]))
-                let forwardedIds = await forwarding.snapshot()
-                expect(forwardedIds).to(equal([operationId]))
+                await expect { await forwarding.snapshot() }
+                    .toEventually(equal([operationId]), timeout: .seconds(5))
                 let balance = await MainActor.run {
                     stack.core.featureInfo.balance("ai_generations")
                 }
@@ -212,8 +213,8 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                     .getRecentEvents(limit: 20)
                     .filter { $0.name == SystemEventNames.featureUsed }
                 expect(mirroredAfterSecondRecovery.map(\.id)).to(equal([operationId]))
-                let forwardedAfterSecondRecovery = await forwarding.snapshot()
-                expect(forwardedAfterSecondRecovery).to(equal([operationId]))
+                await expect { await forwarding.snapshot() }
+                    .toEventually(equal([operationId]), timeout: .seconds(5))
             }
 
             it("isolates command journals by host app and environment") {
@@ -384,6 +385,8 @@ final class FeatureCommandOrchestrationTests: AsyncSpec {
                 expect(oldMirrorProperties["before_send_anonymous_id"] as? String)
                     .to(equal("old-anonymous"))
                 expect(oldMirrorProperties["before_send_is_identified"] as? Bool).to(beTrue())
+                await expect { await forwarding.snapshot().count }
+                    .toEventually(equal(2), timeout: .seconds(5))
                 let forwardedIds = await forwarding.snapshot()
                 expect(forwardedIds.count).to(equal(2))
                 expect(Set(forwardedIds)).to(equal(Set([oldOperationId, currentOperationId])))
