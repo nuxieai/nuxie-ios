@@ -4088,10 +4088,12 @@ final class NuxieNativeExecutor: @unchecked Sendable {
         }
 
         func run() {
-            let body = operation
-            operation = nil
-            abandoned = nil
-            autoreleasepool { body?() }
+            autoreleasepool {
+                let body = operation
+                operation = nil
+                abandoned = nil
+                body?()
+            }
         }
 
         func release() {
@@ -4123,7 +4125,9 @@ final class NuxieNativeExecutor: @unchecked Sendable {
             Unmanaged<Job>.fromOpaque(context).takeUnretainedValue().run()
         }, { context in
             guard let context else { return }
-            Unmanaged<Job>.fromOpaque(context).takeRetainedValue().release()
+            autoreleasepool {
+                Unmanaged<Job>.fromOpaque(context).takeRetainedValue().release()
+            }
         })
         if status != NUX_STATUS_OK.rawValue {
             // Rejected work never transferred ownership; the caller resolves it.
