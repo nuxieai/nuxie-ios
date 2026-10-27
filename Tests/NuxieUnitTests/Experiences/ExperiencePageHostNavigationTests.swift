@@ -660,6 +660,12 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { _, _ in })
             await self.fulfillment(of: [entered], timeout: 5)
             let closed = Task { @MainActor in await coordinator.exitActiveScreenForTeardown(reason: nil) }
+            // A source frame accepted just before the hold may still be retiring with its own time.
+            let idleDeadline = Date().addingTimeInterval(5)
+            while !controller.hasCompletedLatestFrame, Date() < idleDeadline {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(controller.hasCompletedLatestFrame, "The source lane settles before the hold's baseline")
             let held = controller.timelineElapsedSeconds
             for _ in 0..<3 {
                 controller.advance(delta: 1 / 60)
