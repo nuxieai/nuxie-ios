@@ -68,7 +68,7 @@ final class AccessibilityJourneyHostViewController: UIViewController {
     }
 }
 
-private struct AccessibilityFixture {
+struct AccessibilityFixture {
     let root: URL
     let profile: Data
     let appID: String
@@ -79,6 +79,7 @@ private struct AccessibilityFixture {
         guard let resource = Bundle.main.resourceURL else { throw CocoaError(.fileNoSuchFile) }
         let arguments = ProcessInfo.processInfo.arguments
         let directory = arguments.contains("--nuxie-sheets-qualification")
+            || arguments.contains("--nuxie-launch-benchmark")
             ? (arguments.contains("--nuxie-sheets-large") ? "parla-sheets/variants/large" : "parla-sheets")
             : "rendered-semantic-roles"
         root = resource.appendingPathComponent(directory, isDirectory: true)
@@ -134,31 +135,52 @@ private struct AccessibilityFixture {
                 "entryCondition": (descriptor["leg"] as? [String: Any])?["entryCondition"] ?? [:],
                 "context": ["event": [:], "responses": [:]],
             ]],
-        ])
+        ], options: [.sortedKeys])  // Stable bytes keep the ETag stable across launches.
     }
 }
 
 /// This session never performs network requests; all unrecognized paths fail.
-private final class AccessibilityFixtureProtocol: URLProtocol, @unchecked Sendable {
+/// `--nuxie-benchmark-latency-ms <n>` holds every response for `n`
+/// milliseconds, standing in for a network round trip.
+final class AccessibilityFixtureProtocol: URLProtocol, @unchecked Sendable {
     static let fixture: Result<AccessibilityFixture, Error> = Result { try AccessibilityFixture() }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
 
+    private static let latency: TimeInterval = {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--nuxie-benchmark-latency-ms"),
+              arguments.indices.contains(index + 1),
+              let milliseconds = Double(arguments[index + 1]) else { return 0 }
+        return milliseconds / 1_000
+    }()
+
     override func startLoading() {
+        guard Self.latency > 0 else { return respond() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.latency) { [self] in respond() }
+    }
+
+    private func respond() {
         do {
             let fixture = try Self.fixture.get()
             guard let url = request.url, url.host == "semantic.sdk-fixtures.nuxie.test" else {
                 throw URLError(.unsupportedURL)
             }
-            let bytes: Data
+            var bytes: Data
+            var status = 200
             var headers = [String: String]()
             if url.path == "/profile" {
                 bytes = fixture.profile
+                let etag = "\"" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() + "\""
                 headers = ["Content-Type": "application/json", "Nuxie-App-Id": fixture.appID,
-                           "Nuxie-App-Environment": fixture.environment,
-                           "ETag": "\"" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() + "\""]
+                           "Nuxie-App-Environment": fixture.environment, "ETag": etag]
+                // Revalidation of the unchanged profile answers 304, as the server does.
+                if request.value(forHTTPHeaderField: "If-None-Match") == etag {
+                    status = 304
+                    bytes = Data()
+                }
             } else {
                 let key = String(url.path.dropFirst())
                 let file = fixture.root.appendingPathComponent(key).standardizedFileURL
@@ -170,7 +192,7 @@ private final class AccessibilityFixtureProtocol: URLProtocol, @unchecked Sendab
                 headers["Content-Type"] = contentType
             }
             headers["Content-Length"] = String(bytes.count)
-            guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers) else {
+            guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: headers) else {
                 throw URLError(.badServerResponse)
             }
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
