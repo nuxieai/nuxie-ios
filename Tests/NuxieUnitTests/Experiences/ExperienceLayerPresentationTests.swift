@@ -91,6 +91,25 @@ final class ExperienceLayerPresentationTests: XCTestCase {
         XCTAssertEqual(controller.completedDismissals, [true])
     }
 
+    func testFirstLayerDelegateAsksTheExperienceBeforeASwipeAndWhenItStarts() throws {
+        let controller = SwipeGateController()
+        let screenID = try XCTUnwrap(controller.experience.behaviorPresentationScreens.keys.first)
+        let shell = try XCTUnwrap(controller.experience.shellContract(screenId: screenID,
+            transition: ExperienceScreenTransitionSpec(kind: .modal, presentation: .init(height: .medium))))
+        let configurator = ExperienceShellPresentationConfigurator()
+        configurator.configure(controller, shell: shell)
+        let presentation = try XCTUnwrap(controller.presentationController)
+        let delegate = try XCTUnwrap(presentation.delegate)
+        controller.accepts = false
+        XCTAssertEqual(delegate.presentationControllerShouldDismiss?(presentation), false,
+            "The Experience's sheet springs back while a move runs")
+        controller.accepts = true
+        XCTAssertEqual(delegate.presentationControllerShouldDismiss?(presentation), true)
+        XCTAssertEqual(controller.swipesBegun, 0, "The question takes nothing")
+        delegate.presentationControllerWillDismiss?(presentation)
+        XCTAssertEqual(controller.swipesBegun, 1)
+    }
+
     func testFullscreenHasNoCustomDismissal() throws {
         let controller = UIViewController()
         let configurator = ExperienceLayerPresentationConfigurator(
@@ -103,6 +122,13 @@ final class ExperienceLayerPresentationTests: XCTestCase {
 }
 
 @MainActor
+private final class SwipeGateController: MockExperienceViewController {
+    var accepts = true
+    var swipesBegun = 0
+    override var acceptsInteractiveDismissal: Bool { accepts }
+    override func interactiveDismissalWillBegin() { swipesBegun += 1 }
+}
+
 private final class CompletedSheetDismissalController: MockExperienceViewController {
     var completedDismissals: [Bool] = []
     override func prepareForDismissal(reason: CloseReason? = nil, alreadyDismissed: Bool = false) async {

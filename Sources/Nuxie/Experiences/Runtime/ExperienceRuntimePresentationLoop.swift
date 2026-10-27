@@ -818,7 +818,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     func shutdown() async {
         guard let task = beginRetirement() else { return }
         do {
-            try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds) {
+            // Retiring the loop is native work alone.
+            try await ExperienceRuntimeRetirement.wait(timeoutNanoseconds: retirementTimeoutNanoseconds, authoredTime: nil) {
                 await task.value
             }
         } catch { reportTerminal(error) }

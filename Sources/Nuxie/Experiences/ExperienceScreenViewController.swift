@@ -206,6 +206,10 @@ final class ExperienceScreenViewController: UIViewController {
     var onPageStep: ((ExperienceInteractivePage.Step) -> Void)?
     // Observes real completion waits without replacing their watchdog or streams.
     var onExitCompletionWait: (() -> Void)?
+    /// Lets hosted tests hold a shutdown to see who waits for it.
+    var onShutdown: (@MainActor () async -> Void)?
+    /// The Experience's authored waits, so its retirement limits pause during them.
+    var authoredTime: ExperienceAuthoredTime?
     var onSemanticCapture: ((NuxieNativeSemanticCapture) -> Void)?
     var hasCompletedLatestFrame: Bool { presentationLoop?.hasCompletedLatestFrame ?? false }
     var hasDeliveredLatestSemanticFrame: Bool { presentationLoop?.hasDeliveredLatestSemanticFrame ?? false }
@@ -836,7 +840,7 @@ final class ExperienceScreenViewController: UIViewController {
             }, wait: { [self] streams, milliseconds in
                 onExitCompletionWait?()
                 await ExperienceScreenExitWatchdog.wait(for: streams, watchdogMilliseconds: milliseconds)
-            }, release: {
+            }, authoredTime: authoredTime, release: {
                 for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
                 waiters.removeAll()
             }, hidden: onHidden, active: { [self] in
@@ -907,8 +911,12 @@ final class ExperienceScreenViewController: UIViewController {
         )
     }
 
+    /// A coordinator retires each page once, whichever step removed it.
+    var hasStartedShutdown: Bool { shutdownInvocationCount > 0 }
+
     func shutdownInteractiveScreen() async {
         shutdownInvocationCount += 1
+        if let onShutdown { await onShutdown() }
         if shutdownTask == nil {
             // Strong ownership is intentional: this controller owns its release
             // lease until all native work actually retires, even after timeout.
@@ -939,7 +947,7 @@ final class ExperienceScreenViewController: UIViewController {
             }
         }
         guard let task = shutdownTask else { return }
-        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        do { try await ExperienceRuntimeRetirement.wait(authoredTime: authoredTime) { await task.value } }
         catch { handleTerminalFailure(error) }
         if !isShuttingDown { shutdownTask = nil }
     }
@@ -1157,10 +1165,12 @@ final class ExperienceScreenViewController: UIViewController {
         guard let watchdogMilliseconds = plan.watchdogMilliseconds,
               let waiter else { return }
         onExitCompletionWait?()
-        await ExperienceScreenExitWatchdog.wait(
-            for: waiter.stream,
-            watchdogMilliseconds: watchdogMilliseconds
-        )
+        await ExperienceAuthoredTime.during(authoredTime) {
+            await ExperienceScreenExitWatchdog.wait(
+                for: waiter.stream,
+                watchdogMilliseconds: watchdogMilliseconds
+            )
+        }
         removeCompletionWaiter(waiter)
     }
 

@@ -476,6 +476,8 @@ class ExperienceViewController: NuxiePlatformViewController {
     private var runtimePreparationGeneration: UInt64 = 0
     private var runtimeShutdownTask: Task<Void, Never>?
     private var hostRetirementTask: Task<Void, Never>?
+    /// This Experience's authored waits; its retirement limits count native time only.
+    let authoredTime = ExperienceAuthoredTime()
     private var dismissalRetirementTask: Task<Void, Never>?
     private var runtimeShutdownID: UUID?
     private var presentationTraceToken: ExperiencePresentationTraceToken?
@@ -578,6 +580,12 @@ class ExperienceViewController: NuxiePlatformViewController {
         // dismissal able to fire onClose, which releases the window and
         // records dismissal analytics.
         didInvokeClose = false
+    }
+
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // UIKit shows the sheet again when the person cancels its dismissal.
+        screenTransitionCoordinator?.layerDidAppear(self)
     }
 
     public override func viewWillDisappear(_ animated: Bool) {
@@ -824,7 +832,7 @@ class ExperienceViewController: NuxiePlatformViewController {
             }
         }
         guard let task = hostRetirementTask else { return }
-        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        do { try await ExperienceRuntimeRetirement.wait(authoredTime: authoredTime) { await task.value } }
         catch { reportRetirementFailure(error) }
     }
 
@@ -879,7 +887,7 @@ class ExperienceViewController: NuxiePlatformViewController {
             }
         }
         guard let task = dismissalRetirementTask else { return }
-        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        do { try await ExperienceRuntimeRetirement.wait(authoredTime: authoredTime) { await task.value } }
         catch { reportRetirementFailure(error) }
     }
 
@@ -896,7 +904,7 @@ class ExperienceViewController: NuxiePlatformViewController {
 
     private func joinRuntimeShutdown() async {
         if let runtimeShutdownTask {
-            do { try await ExperienceRuntimeRetirement.wait { await runtimeShutdownTask.value } }
+            do { try await ExperienceRuntimeRetirement.wait(authoredTime: authoredTime) { await runtimeShutdownTask.value } }
             catch { reportRetirementFailure(error) }
             return
         }
@@ -915,7 +923,7 @@ class ExperienceViewController: NuxiePlatformViewController {
         }
         runtimeShutdownID = shutdownID
         runtimeShutdownTask = task
-        do { try await ExperienceRuntimeRetirement.wait { await task.value } }
+        do { try await ExperienceRuntimeRetirement.wait(authoredTime: authoredTime) { await task.value } }
         catch { reportRetirementFailure(error) }
     }
 
@@ -1117,10 +1125,25 @@ class ExperienceViewController: NuxiePlatformViewController {
         }
     }
 
+    #if canImport(UIKit)
+    /// UIKit's question about the Experience's own sheet takes nothing: a swipe
+    /// may start only while no move runs or waits.
+    var acceptsInteractiveDismissal: Bool { screenTransitionCoordinator?.acceptsSwipe ?? true }
+
+    /// The person has started swiping the Experience's sheet away. The swipe
+    /// holds the move queue's slot until UIKit says how it ended.
+    func interactiveDismissalWillBegin() {
+        screenTransitionCoordinator?.beginSwipe(of: self, revealsPageBelow: false)
+    }
+    #endif
+
     /// Completes the ordinary dismissal lifecycle after UIKit has already
     /// removed an interactively dismissible sheet.
     @MainActor
     func performInteractiveDismissal(reason: CloseReason = .userDismissed) {
+        #if canImport(UIKit)
+        screenTransitionCoordinator?.closeAfterSwipe(of: self)
+        #endif
         guard !didInvokeClose, !hostDismissalRequested else { return }
         let generation = closeGeneration
         let dismissalDelegate = runtimeDelegate
@@ -1365,6 +1388,7 @@ class ExperienceViewController: NuxiePlatformViewController {
                     initialScreenID: self.presentationInitialScreenID,
                     presentationDiagnosticsEnabled: self.presentationDiagnosticsEnabled,
                     videoDecoderPool: self.videoDecoderPool,
+                    authoredTime: self.authoredTime,
                     hostViewController: self,
                     screenDelegate: self,
                     onPresentedScreenDismissed: { [weak self] dismissedScreenId, revealingScreenId in

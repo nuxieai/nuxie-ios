@@ -159,7 +159,7 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
         }
     }
 
-    func testCompletedSwipeSupersedesNavigationExitWithoutReactivatingTheRemovedLayer() async throws {
+    func testASheetRemovedDuringANavigationExitLandsTheMoveThenTheDismissal() async throws {
         try await withCoordinator(useNativeWindow: true) { coordinator, source, probe in
             try await self.navigate(coordinator, to: source.screenId,
                 transition: ["type": "modal", "present": "sheet"])
@@ -180,17 +180,20 @@ final class ExperienceScreenExitReasonControllerTests: XCTestCase {
             var result: ExperienceScreenNavigationResult?
             XCTAssertTrue(coordinator.navigate(to: "reason-target", transition: nil) { value, _ in result = value })
             try await self.waitUntil { closing.lifecyclePhase == .exiting }
+            // UIKit removes the sheet without asking: its landing waits for the running move.
             await withCheckedContinuation { continuation in sheet.dismiss(animated: false) { continuation.resume() } }
             coordinator.presentationControllerDidDismiss(presentation)
-            try await self.waitUntil { coordinator.layerScreenIds.count == 1 }
+            try await Task.sleep(nanoseconds: 200_000_000)
             XCTAssertNil(result, "The navigation exit is still held when the swipe completes")
+            XCTAssertEqual(coordinator.layerScreenIds.count, 2, "Nothing is undone halfway")
             gate.continuation.yield(())
             gate.continuation.finish()
             try await self.waitUntil { result != nil && probe.active.contains(source.screenId) }
-            XCTAssertEqual(result, .superseded)
+            XCTAssertEqual(result, .navigated)
             XCTAssertEqual(coordinator.layerScreenIds, [[source.screenId]])
             XCTAssertEqual(source.lifecyclePhase, .active)
-            XCTAssertEqual(probe.active, [source.screenId], "One routing reveal, and the removed target never activates")
+            XCTAssertEqual(probe.active, ["reason-target", source.screenId],
+                "The move lands in the sheet, then the dismissal reveals the source once")
         }
     }
     #endif

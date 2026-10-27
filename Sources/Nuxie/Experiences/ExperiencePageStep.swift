@@ -33,6 +33,8 @@ enum ExperiencePageStep {
         var batch: ([Change]) async throws -> Void
         var present: @MainActor @Sendable () async throws -> Void
         var wait: ([AsyncStream<Void>], UInt64) async -> Void
+        /// Pauses the Experience's retirement limits while the step waits on authored time.
+        var authoredTime: ExperienceAuthoredTime? = nil
         /// The step is done with every completion registered so far.
         var release: () async -> Void
         var hidden: () async -> Void
@@ -59,17 +61,19 @@ enum ExperiencePageStep {
         // Drawable starvation has its own bounded presentation wait.
         func waitForFrame(_ streams: [AsyncStream<Void>], duration: UInt64) async throws {
             do {
-                let presented = try await withThrowingTaskGroup(of: Bool.self) { group in
-                    let present = operations.present
-                    group.addTask { try await present(); return true }
-                    group.addTask { try await Task.sleep(nanoseconds: duration * 1_000_000); return false }
-                    defer { group.cancelAll() }
-                    return try await group.next() ?? false
+                try await ExperienceAuthoredTime.during(operations.authoredTime) {
+                    let presented = try await withThrowingTaskGroup(of: Bool.self) { group in
+                        let present = operations.present
+                        group.addTask { try await present(); return true }
+                        group.addTask { try await Task.sleep(nanoseconds: duration * 1_000_000); return false }
+                        defer { group.cancelAll() }
+                        return try await group.next() ?? false
+                    }
+                    try Task.checkCancellation()
+                    if presented { await operations.wait(streams, duration) }
+                    else { LogWarning("ExperiencePageStep: phase frame presentation watchdog expired") }
+                    try Task.checkCancellation()
                 }
-                try Task.checkCancellation()
-                if presented { await operations.wait(streams, duration) }
-                else { LogWarning("ExperiencePageStep: phase frame presentation watchdog expired") }
-                try Task.checkCancellation()
             } catch {
                 await operations.release()
                 throw error

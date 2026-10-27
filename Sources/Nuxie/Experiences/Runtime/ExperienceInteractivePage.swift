@@ -703,7 +703,8 @@ actor ExperienceInteractivePage {
             }
             retirementTask = task
         }
-        try await ExperienceRuntimeRetirement.wait { try await task.value }
+        // Closing the page is native work alone.
+        try await ExperienceRuntimeRetirement.wait(authoredTime: nil) { try await task.value }
     }
 
     private func closeLocked() async throws {

@@ -7,7 +7,7 @@ import XCTest
 
 final class ExperienceChoicesSetTests: XCTestCase {
     func testPublishedScriptReplacesChoicesAtomicallyAndNilKeepsRecords() async throws {
-        throw XCTSkip("UNIV-5587: this fixture's compiled responses.set helper names the empty root, which the page player binds to the page; it waits for the helper that passes its own Screen and a republished choices-set")
+        throw XCTSkip("UNIV-5579: this fixture's compiled responses.set helper names the empty root, which the page player binds to the page; the helper that passes its own Screen is on main, and this test returns when the next SDK pointer move republishes choices-set")
         let directory = SharedValuesFixture.directory.deletingLastPathComponent().appendingPathComponent("choices-set")
         let payload = try SharedValuesFixture.payload(directory: directory, screens: [])
         let preparation = try await prepareFixturePage(payload: payload)
