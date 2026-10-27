@@ -435,21 +435,46 @@ final class ExperienceScreenViewController: UIViewController {
     private var measuresContentHeight = false
     private var availablePresentationHeight: CGFloat?
     private var coveredByLayer = false
+    // A page's clock is worked out from these three facts and written nowhere else
+    // (nuxie-handoff pages/magic-move/design-reset/sdk-ios-page-clock.md).
+    private var presented = false { didSet { applyClock() } }
+    private var hiddenBelow = false { didSet { applyClock(); updatePresentationVisibility() } }
+    private var checkpointHold = false { didSet { applyClock() } }
+    private var pageClockRuns: Bool { presented && !hiddenBelow && !checkpointHold }
+    /// Under a sheet or modal: input off, clock and drawing on.
+    var isUnderLayer: Bool { coveredByLayer && !hiddenBelow }
+
+    private func applyClock() {
+        guard isPageController else { return }
+        presentationLoop?.setTimelineActive(pageClockRuns)
+    }
+
+    /// Authored time on a page whose clock cannot run only ends through its watchdog.
+    private func checkPageClock() {
+        guard isPageController, presentationLoop != nil, !pageClockRuns else { return }
+        LogWarning("ExperienceScreenViewController: page \(screenId) has authored time on a stopped clock")
+        assertionFailure("Page clock: authored time on a stopped clock")
+    }
 
     // Native-page visibility is owned here; UIKit appearance alone cannot resume
     // a retained page or distinguish it from a page beneath a sheet.
     var pageLifecycleSnapshot: ExperienceScreenLifecycleSnapshot { lifecycleState.snapshot }
 
     func coverPage(reduceMotion: Bool, restoring snapshot: ExperienceScreenLifecycleSnapshot? = nil) async {
-        presentationLoop?.setInputEnabled(false)
-        clearHardwareKeys()
-        setCoveredByLayer(true)
+        coverPageByLayer()
+        hiddenBelow = true
         if let snapshot {
-            presentationLoop?.setTimelineActive(false)
             lifecycleState = .init(snapshot: snapshot)
             await applyLifecycleSnapshot(snapshot)
             try? await presentationLoop?.advanceZeroDelta()
         } else { await hide(reduceMotion: reduceMotion) }
+    }
+
+    /// A sheet or modal opens over this page: input goes, its clock and drawing go on.
+    func coverPageByLayer() {
+        presentationLoop?.setInputEnabled(false)
+        clearHardwareKeys()
+        setCoveredByLayer(true)
     }
 
     func revealPage(reduceMotion: Bool, starting: Bool = false) async {
@@ -458,29 +483,17 @@ final class ExperienceScreenViewController: UIViewController {
                 setCoveredByLayer(false)
                 presentationLoop?.setInputEnabled(false)
                 view.isUserInteractionEnabled = false
+                hiddenBelow = false
                 await enter(reduceMotion: reduceMotion)
             }
+            checkPageClock()
             return
         }
         setCoveredByLayer(false)
+        hiddenBelow = false
         presentationLoop?.setInputEnabled(true)
-        presentationLoop?.setTimelineActive(true)
         await activate(reduceMotion: reduceMotion)
         updatePresentationVisibility()
-    }
-
-    /// Back closes this page from under a sheet it has just closed. The page
-    /// shows again as it was before the sheet covered it, with its timeline
-    /// running so its exit plays, but takes no input and is not announced.
-    func uncoverForExit(reduceMotion: Bool) async {
-        guard isPageController, coveredByLayer else { return }
-        setCoveredByLayer(false)
-        presentationLoop?.setInputEnabled(false)
-        view.isUserInteractionEnabled = false
-        presentationLoop?.setTimelineActive(true)
-        if lifecyclePhase == .hidden {
-            await applyLifecycleSnapshot(lifecycleState.move(to: .active, reduceMotion: reduceMotion))
-        }
     }
 
     var timelineElapsedSeconds: Double { presentationLoop?.timelineElapsedSeconds ?? 0 }
@@ -489,7 +502,6 @@ final class ExperienceScreenViewController: UIViewController {
         coveredByLayer = covered
         if interactivePage == nil { interactiveScreen?.setCoveredByLayer(covered) }
         view.isUserInteractionEnabled = !covered && !pageStepInProgress
-        textInputOverlayBridge.setHidden(contentHidden || covered)
         if covered { view.endEditing(true) }
         updatePresentationVisibility()
     }
@@ -709,7 +721,7 @@ final class ExperienceScreenViewController: UIViewController {
             }
         )
         presentationLoop = loop
-        loop.setPresentationVisible((controllerIsVisible || coveredByLayer) && !contentHidden)
+        loop.setPresentationVisible((controllerIsVisible || coveredByLayer) && !hiddenBelow && !contentHidden)
 
         do {
             let insets = experienceSafeAreaInsets(for: view)
@@ -734,7 +746,7 @@ final class ExperienceScreenViewController: UIViewController {
             refreshTextInputLayouts()
             syncSafeAreaInsets(force: true)
             syncColorScheme()
-            loop.setTimelineActive(false)
+            if isPageController { applyClock() } else { loop.setTimelineActive(false) }
             await applyLifecycleSnapshot(lifecycleState.snapshot)
             try? await loop.advanceZeroDelta()
         } catch {
@@ -849,9 +861,9 @@ final class ExperienceScreenViewController: UIViewController {
                 }
                 lifecycleState = await layer.state(screenID: sourceID) ?? lifecycleState
             }, present: {
-                loop.setTimelineActive(true)
                 try await loop.advanceZeroDelta(awaitsPresentation: true)
             }, wait: { [self] streams, milliseconds in
+                checkPageClock()
                 onExitCompletionWait?()
                 await ExperienceScreenExitWatchdog.wait(for: streams, watchdogMilliseconds: milliseconds)
             }, authoredTime: authoredTime, release: {
@@ -893,22 +905,22 @@ final class ExperienceScreenViewController: UIViewController {
         for (id, waiter) in waiters { await layer.removeCompletion(screenID: id, id: waiter.id) }
     }
 
-    func setPageInputEnabled(_ enabled: Bool, pausingTimeline: Bool = false) {
+    func setPageInputEnabled(_ enabled: Bool) {
         pageStepInProgress = !enabled
         presentationLoop?.setInputEnabled(enabled && !coveredByLayer)
         view.isUserInteractionEnabled = enabled && !coveredByLayer
         textInputOverlayBridge.setStepInProgress(!enabled)
         if !enabled {
-            // A durable checkpoint may wait indefinitely before the step starts.
-            // Keep the source's last frame, without playing an exit underneath it.
-            if pausingTimeline { presentationLoop?.setTimelineActive(false) }
             clearHardwareKeys()
             semanticContainer.clear()
         } else {
-            presentationLoop?.setTimelineActive(!coveredByLayer)
             updatePresentationVisibility()
         }
     }
+
+    /// A durable checkpoint may wait indefinitely before the step starts. The source
+    /// keeps its last frame until the checkpoint returns or the page starts its exit.
+    func setCheckpointHold(_ held: Bool) { checkpointHold = held }
 
     private func didPresentDrawable(_ drawable: ExperienceRuntimePresentedDrawable) {
         guard !didReportFirstPresentation else { return }
@@ -971,7 +983,6 @@ final class ExperienceScreenViewController: UIViewController {
         contentHidden = hidden
         if hidden, requiresSceneSemantics { semanticContainer.setActive(false) }
         surfaceView.isHidden = hidden
-        textInputOverlayBridge.setHidden(hidden || coveredByLayer)
         updatePresentationVisibility()
     }
 
@@ -1075,7 +1086,8 @@ final class ExperienceScreenViewController: UIViewController {
         let id = screenId
         if phase == .entering, lifecycleState.phase == .entering {
             // A page mounted entering plays through UIKit's presentation with no second entering edge.
-            presentationLoop?.setTimelineActive(true)
+            presented = true
+            checkPageClock()
             return
         }
         try await pageWork {
@@ -1084,11 +1096,15 @@ final class ExperienceScreenViewController: UIViewController {
             return nil
         }
         lifecycleState = await page.state(screenID: id) ?? lifecycleState
-        presentationLoop?.setTimelineActive(true)
+        presented = true
+        checkPageClock()
     }
 
     func enter(reduceMotion: Bool) async {
-        presentationLoop?.setTimelineActive(true)
+        if isPageController {
+            presented = true
+            checkPageClock()
+        } else { presentationLoop?.setTimelineActive(true) }
         if isPageController, lifecycleState.phase == .entering {
             await updateReduceMotion(reduceMotion)
             return
@@ -1115,7 +1131,7 @@ final class ExperienceScreenViewController: UIViewController {
 
     func hide(reduceMotion: Bool) async {
         clearHardwareKeys()
-        presentationLoop?.setTimelineActive(false)
+        if isPageController { hiddenBelow = true } else { presentationLoop?.setTimelineActive(false) }
         let snapshot = lifecycleState.move(
             to: .hidden,
             reduceMotion: reduceMotion
@@ -1163,6 +1179,9 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     func performExitHandshake(reduceMotion: Bool, exitReason: ExperienceScreenExitReason) async {
+        // A page that starts its exit is no longer waiting for the Journey to decide.
+        checkpointHold = false
+        checkPageClock()
         let plan = ExperienceScreenExitPlan(
             declaration: screen.exit,
             reduceMotion: reduceMotion
@@ -1871,11 +1890,10 @@ final class ExperienceScreenViewController: UIViewController {
         if requiresSceneSemantics {
             semanticContainer.setActive(semanticInputIsEligible && semanticFocusLifecycle.canExposeCurrentScene)
         }
-        textInputOverlayBridge.setHidden(contentHidden || coveredByLayer || !controllerIsVisible)
-        videoCaptionOverlay.isHidden = !controllerIsVisible || coveredByLayer || contentHidden || runtimeFailure != nil
+        textInputOverlayBridge.setHidden(contentHidden || hiddenBelow || runtimeFailure != nil)
+        videoCaptionOverlay.isHidden = !controllerIsVisible || hiddenBelow || contentHidden || runtimeFailure != nil
         if videoCaptionOverlay.isHidden { videoCaptionOverlay.update([]) }
-        presentationLoop?.setPresentationVisible(
-            (isPageController ? controllerIsVisible && !coveredByLayer : controllerIsVisible || coveredByLayer) && !contentHidden)
+        presentationLoop?.setPresentationVisible((controllerIsVisible || coveredByLayer) && !hiddenBelow && !contentHidden)
     }
 
     private func handleTerminalFailure(_ error: Error) {

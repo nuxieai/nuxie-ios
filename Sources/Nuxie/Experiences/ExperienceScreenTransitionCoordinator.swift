@@ -946,7 +946,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         if !opensLayer && (source.screenId != screenID || lower.map({ $0 !== source }) == true) {
             // Settle the durable Journey checkpoint before any exit or page step.
             // Opening a layer only covers its presenter; it is not a dismissal.
-            source.setPageInputEnabled(false, pausingTimeline: true)
+            source.setPageInputEnabled(false)
+            source.setCheckpointHold(true)
             let task: Task<JourneyScreenDismissalResult, Never>
             if let prepared = pageDeparture, prepared.controller == ObjectIdentifier(source),
                prepared.source == source.screenId, prepared.target == screenID {
@@ -959,6 +960,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 pageDeparture = (controller: ObjectIdentifier(source), source: sourceID, target: screenID, task: task)
             }
             let result = await task.value
+            source.setCheckpointHold(false)
             guard result == .handled, lifecycle == .installed, !Task.isCancelled,
                   !navigationAdmissionRevoked, activeController === source else { return false }
             source.setPageInputEnabled(true)
@@ -969,6 +971,9 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     guard let page = lower.interactivePage else { throw CancellationError() }
                     let products = try await page.products(screenID: screenID)
                     try await lower.preparePageRow(screenID: screenID, products: products)
+                    // A page under a sheet keeps playing, so it is hidden before its Screen changes unseen.
+                    // A trim to an earlier entry of the same Screen writes no phase and leaves it playing.
+                    if lower.screenId != screenID, lower.isUnderLayer { await self.coverPage(lower) }
                     try await lower.navigatePage(to: screenID, spec: .none, isBack: true, reduceMotion: true,
                         backSteps: lower.pageHistory.entries.count - 1 - (backLocation?.entry ?? 0), coveredCut: true,
                         isEligible: { self.lifecycle == .installed && !self.navigationAdmissionRevoked },
@@ -977,19 +982,21 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                 }
             }, pop: {
                 let transition = self.pageTransition(revealing: lower, covering: nil, interactive: false)
-                await transition.begin()
                 do {
                     while self.presentationLayer !== lower.navigationController, self.hasPresentedLayer {
-                        // Back owns activation after all modal dismissals and the final pop.
-                        guard await self.performAuthoredLayerDismissal(activateRevealedPage: false) else { throw CancellationError() }
+                        // Back owns activation after all modal dismissals and the final pop. The
+                        // destination's reveal starts where UIKit uncovers it: the last dismissal, or the pop.
+                        let uncovers = self.pageBelowPresentedLayer === lower
+                        guard await self.performAuthoredLayerDismissal(activateRevealedPage: false,
+                            beginning: uncovers ? transition : nil) else { throw CancellationError() }
                     }
                     guard let navigation = lower.navigationController else { throw CancellationError() }
                     if navigation.topViewController !== lower {
                         let leaving = self.activeController
                         if let leaving {
-                            await leaving.uncoverForExit(reduceMotion: reduceMotion)
                             await leaving.performExitHandshake(reduceMotion: reduceMotion, exitReason: .navigation)
                         }
+                        await transition.begin()
                         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                             self.animateNavigationControllerOperation(screenId: screenID, completion: { result, _ in
                                 if result.reachedTarget { continuation.resume() }
@@ -1024,7 +1031,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         try await target.configurePresentationHeight(modal ? spec.presentation : .init(kind: .fullscreen),
             target: target, availableSize: available)
         try await target.preparePagePresentationPhase(.entering, reduceMotion: reduceMotion)
-        let transition = pageTransition(revealing: target, covering: source, interactive: false)
+        let transition = pageTransition(revealing: target, covering: source, interactive: false, opensLayer: modal)
         await transition.begin()
         let completed: Bool
         do {
@@ -1059,20 +1066,26 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
     // Internal so hosted tests can drive the same UIKit decision boundary deterministically.
     func pageTransition(revealing page: ExperienceScreenViewController,
                         covering outgoing: ExperienceScreenViewController?, interactive: Bool,
-                        announce: Bool = true) -> ExperienceNativePageTransition {
+                        announce: Bool = true, opensLayer: Bool = false) -> ExperienceNativePageTransition {
         let previous = page.pageLifecycleSnapshot
+        let underLayer = page.isUnderLayer
         let transition = ExperienceNativePageTransition(interactive: interactive, onRetirementFailure: { [weak self] error in
             self?.onRuntimeFailure(page.screenId, error)
         }, start: { [weak self] in
             guard let self, self.lifecycle == .installed else { return }
+            // As on SDK main, a layer covers its presenter before UIKit presents it, so the
+            // presenter keeps drawing through the animation.
+            if opensLayer { outgoing?.coverPageByLayer() }
             await self.revealPage(page, starting: true)
         }, finish: { [weak self] in
             guard let self, self.lifecycle == .installed else { return }
-            if let outgoing { await self.coverPage(outgoing) }
+            if let outgoing, !opensLayer { await self.coverPage(outgoing) }
             await self.revealPage(page, announce: announce)
         }, abandon: { [weak self] in
             guard let self, self.lifecycle == .installed else { return }
-            await self.coverPage(page, restoring: previous.phase == .hidden ? previous : nil)
+            if previous.phase == .hidden { await self.coverPage(page, restoring: previous) }
+            else if underLayer { page.coverPageByLayer() }
+            else { await self.coverPage(page) }
             if let outgoing { await self.revealPage(outgoing, announce: false) }
         })
         transition.authoredTime = authoredTime
@@ -1608,7 +1621,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         MainActor.assumeIsolated { handlePresentedControllerDidDismiss(presentationController) }
     }
 
-    private func performAuthoredLayerDismissal(activateRevealedPage: Bool = true) async -> Bool {
+    private func performAuthoredLayerDismissal(activateRevealedPage: Bool = true,
+                                               beginning reveal: ExperienceNativePageTransition? = nil) async -> Bool {
         guard hasPresentedLayer, let layer = presentationLayer,
               let controller = activeController, closingLayer == nil else { return false }
         closingLayer = layer
@@ -1616,14 +1630,13 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         // This is an authored close, including closedby none. UIKit must not
         // remove its surface while the declared exit is still drawing.
         layer.isModalInPresentation = true
-        // Back may reach this page under a sheet it has just closed.
-        await controller.uncoverForExit(reduceMotion: reduceMotionEnabled)
         await controller.performExitHandshake(reduceMotion: reduceMotionEnabled, exitReason: .dismissed)
         guard lifecycle == .installed, !Task.isCancelled, presentationLayer === layer else {
             closingLayer = nil
             return false
         }
-        if activateRevealedPage, let revealed = pageBelowPresentedLayer, revealed.isPageController {
+        if let reveal { await reveal.begin() }
+        else if activateRevealedPage, let revealed = pageBelowPresentedLayer, revealed.isPageController {
             let transition = pageTransition(revealing: revealed, covering: controller, interactive: false)
             platformTransitions[ObjectIdentifier(layer)] = transition
             await transition.begin()
