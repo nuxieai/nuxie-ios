@@ -706,7 +706,7 @@ package actor NuxieNativePreparedFile {
                 preparedCatalog: metadata.1
             )
         } catch {
-            executor.shutdown()
+            try? await executor.shutdown()
             throw error
         }
     }
@@ -1093,7 +1093,7 @@ package actor NuxieNativeRuntime {
                 }
             }
         } catch {
-            executor.shutdown()
+            try? await executor.shutdown()
             throw error
         }
     }
@@ -1123,7 +1123,7 @@ package actor NuxieNativeRuntime {
             }
             return NuxieNativeRuntime(executor: executor, state: state)
         } catch {
-            executor.shutdown()
+            try? await executor.shutdown()
             throw error
         }
     }
@@ -4349,6 +4349,8 @@ final class NuxieNativeExecutor: @unchecked Sendable {
     }
 
     deinit {
+        // Last release closes admission and drains without blocking, including
+        // when this owner is released by a job on the native worker itself.
         if let handle { nux_executor_release(handle) }
     }
 
@@ -4384,6 +4386,30 @@ final class NuxieNativeExecutor: @unchecked Sendable {
     func close() {
         guard let handle else { return }
         _ = nux_executor_close(handle)
+    }
+
+    func shutdown(_ terminated: @escaping @Sendable () -> Void) throws {
+        guard let handle else {
+            terminated()
+            return
+        }
+        try requireOK(nux_executor_close(handle), operation: "close executor")
+        let context = Unmanaged.passRetained(Job(terminated, abandoned: {})).toOpaque()
+        // Registration after termination invokes inline; ownership transfers on
+        // success in both the inline and worker-delivered cases.
+        let status = nux_executor_on_terminated(handle, context, { context in
+            guard let context else { return }
+            Unmanaged<Job>.fromOpaque(context).takeUnretainedValue().run()
+        }, { context in
+            guard let context else { return }
+            autoreleasepool {
+                Unmanaged<Job>.fromOpaque(context).takeRetainedValue().release()
+            }
+        })
+        if status != NUX_STATUS_OK.rawValue {
+            Unmanaged<Job>.fromOpaque(context).release()
+            try requireOK(status, operation: "observe executor termination")
+        }
     }
 }
 

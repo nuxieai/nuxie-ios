@@ -902,10 +902,10 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertNotEqual(identities[0], caller)
     }
 
-    func testExecutorShutdownIsIdempotentAndRejectsNewWork() async {
+    func testExecutorShutdownIsIdempotentAndRejectsNewWork() async throws {
         let executor = NuxieRuntimePinnedThreadExecutor()
-        executor.shutdown()
-        executor.shutdown()
+        try await executor.shutdown()
+        try await executor.shutdown()
 
         do {
             _ = try await executor.call { 1 }
@@ -915,22 +915,98 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         }
     }
 
-    func testExecutorShutdownDoesNotJoinAWedgedNativeJobAndStillDrainsAcceptedCleanup() async {
+    @MainActor
+    func testExecutorShutdownSuspendsCallerUntilAcceptedWorkAndContextsDrain() async throws {
         let executor = NuxieRuntimePinnedThreadExecutor()
         let entered = expectation(description: "native job entered")
-        let cleanup = expectation(description: "accepted cleanup eventually runs")
+        let shuttingDown = expectation(description: "shutdown task started")
         let release = DispatchSemaphore(value: 0)
-        executor.enqueue { entered.fulfill(); release.wait() }
-        executor.enqueue { cleanup.fulfill() }
+        defer { release.signal() }
+        let events = RuntimeExecutorEvents()
+        executor.enqueue {
+            entered.fulfill()
+            XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+        }
+        executor.enqueue { [probe = RuntimeExecutorReleaseProbe({ events.append("released") })] in
+            withExtendedLifetime(probe) { events.append("cleanup") }
+        }
         await fulfillment(of: [entered], timeout: 1)
-        executor.shutdown()
-        // This line is unreachable with the old unbounded stopAndWait join.
+
+        let shutdown = Task { @MainActor in
+            shuttingDown.fulfill()
+            try await executor.shutdown()
+            events.append("terminated")
+        }
+        await fulfillment(of: [shuttingDown], timeout: 1)
+        // The main actor must remain free to release a blocked native operation.
+        release.signal()
+        try await shutdown.value
+        XCTAssertEqual(events.values, ["cleanup", "released", "terminated"])
+    }
+
+    func testNativeExecutorTerminationCallbacksOwnContextsAndRejectWorkDuringDrain() async throws {
+        let executor = NuxieNativeExecutor()
+        let entered = expectation(description: "native job entered")
+        let delivered = expectation(description: "termination observers delivered")
+        delivered.expectedFulfillmentCount = 2
+        delivered.assertForOverFulfill = true
+        let contextsReleased = expectation(description: "observer contexts released")
+        contextsReleased.expectedFulfillmentCount = 2
+        contextsReleased.assertForOverFulfill = true
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let events = RuntimeExecutorEvents()
+        XCTAssertTrue(executor.submit({
+            entered.fulfill()
+            XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+            events.append("drained")
+        }, abandoned: { XCTFail("Accepted job was abandoned") }))
+        await fulfillment(of: [entered], timeout: 1)
+
+        for _ in 0..<2 {
+            try executor.shutdown { [probe = RuntimeExecutorReleaseProbe({ contextsReleased.fulfill() })] in
+                withExtendedLifetime(probe) {
+                    XCTAssertEqual(events.values, ["drained"])
+                    delivered.fulfill()
+                }
+            }
+        }
+        XCTAssertFalse(executor.submit({ XCTFail("Work accepted after close") },
+            abandoned: { XCTFail("Rejected work transferred ownership") }))
+        XCTAssertTrue(events.values.isEmpty)
+        release.signal()
+        await fulfillment(of: [delivered, contextsReleased], timeout: 1)
+    }
+
+    func testExecutorSupportsConcurrentAndLateShutdownWaiters() async throws {
+        let executor = NuxieRuntimePinnedThreadExecutor()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<16 {
+                group.addTask { try await executor.shutdown() }
+            }
+            try await group.waitForAll()
+        }
+        try await executor.shutdown()
+    }
+
+    func testExecutorDeinitDoesNotBlockAndStillDrainsAcceptedCleanup() async {
+        let holder = RuntimeExecutorHolder(NuxieRuntimePinnedThreadExecutor())
+        let entered = expectation(description: "native job entered")
+        let cleanup = expectation(description: "accepted cleanup runs after owner release")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        holder.withExecutor { executor in
+            executor.enqueue {
+                entered.fulfill()
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+            }
+            executor.enqueue { cleanup.fulfill() }
+        }
+        await fulfillment(of: [entered], timeout: 1)
+        holder.clearExecutor()
+        XCTAssertFalse(holder.hasExecutor)
         release.signal()
         await fulfillment(of: [cleanup], timeout: 1)
-        do {
-            _ = try await executor.call { 1 }
-            XCTFail("Shutdown must reject newly submitted work")
-        } catch { XCTAssertEqual(error as? NuxieRuntimeExecutorError, .closed) }
     }
 
     func testExecutorCanReleaseItsLastOwnerOnTheWorkerThread() async {
@@ -947,19 +1023,33 @@ final class NuxieNativeRuntimeTests: XCTestCase {
         XCTAssertFalse(holder.hasExecutor)
     }
 
+    func testFinalExecutorOperationReturnsItsValueAfterDrainingCleanup() async throws {
+        let executor = NuxieRuntimePinnedThreadExecutor()
+        let events = RuntimeExecutorEvents()
+        let value = try await executor.callThenShutdown {
+            executor.enqueue { events.append("cleanup") }
+            return 42
+        }
+        XCTAssertEqual(value, 42)
+        XCTAssertEqual(events.values, ["cleanup"])
+    }
+
     func testFinalExecutorOperationShutsDownAfterThrowing() async {
         enum Expected: Error {
             case failure
         }
 
         let executor = NuxieRuntimePinnedThreadExecutor()
+        let events = RuntimeExecutorEvents()
         do {
             try await executor.callThenShutdown {
+                executor.enqueue { events.append("cleanup") }
                 throw Expected.failure
             }
             XCTFail("Expected the final operation to throw")
         } catch Expected.failure {
-            // The original native destruction error remains observable.
+            // The original native destruction error remains observable after drain.
+            XCTAssertEqual(events.values, ["cleanup"])
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
@@ -2130,6 +2220,21 @@ func exactComponentListFixture() throws -> Data {
         throw CocoaError(.fileReadCorruptFile)
     }
     return decoded
+}
+
+private final class RuntimeExecutorEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+
+    func append(_ event: String) { lock.withLock { events.append(event) } }
+    var values: [String] { lock.withLock { events } }
+}
+
+private final class RuntimeExecutorReleaseProbe: Sendable {
+    private let onRelease: @Sendable () -> Void
+
+    init(_ onRelease: @escaping @Sendable () -> Void) { self.onRelease = onRelease }
+    deinit { onRelease() }
 }
 
 private final class RuntimeExecutorHolder: @unchecked Sendable {
