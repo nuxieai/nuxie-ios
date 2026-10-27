@@ -987,6 +987,7 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
                     if navigation.topViewController !== lower {
                         let leaving = self.activeController
                         if let leaving {
+                            await leaving.uncoverForExit(reduceMotion: reduceMotion)
                             await leaving.performExitHandshake(reduceMotion: reduceMotion, exitReason: .navigation)
                         }
                         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -1615,6 +1616,8 @@ final class ExperienceScreenTransitionCoordinator: NSObject, UIAdaptivePresentat
         // This is an authored close, including closedby none. UIKit must not
         // remove its surface while the declared exit is still drawing.
         layer.isModalInPresentation = true
+        // Back may reach this page under a sheet it has just closed.
+        await controller.uncoverForExit(reduceMotion: reduceMotionEnabled)
         await controller.performExitHandshake(reduceMotion: reduceMotionEnabled, exitReason: .dismissed)
         guard lifecycle == .installed, !Task.isCancelled, presentationLayer === layer else {
             closingLayer = nil

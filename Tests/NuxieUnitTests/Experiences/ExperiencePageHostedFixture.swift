@@ -9,7 +9,7 @@ import XCTest
 /// Signs current V1-V4 metadata; the exporter-specific runtime contract is applied
 /// only after normal release authentication and artifact acquisition in this test file.
 extension JourneyTestCase {
-    func hostedLiveMoveFixture() throws -> JourneyPlaneProfileTestFixture {
+    func hostedLiveMoveFixture(screenExit: [String: Any]? = nil) throws -> JourneyPlaneProfileTestFixture {
         let base = try JourneyPlaneProfileTestFixture.load(entryKey: "renderedEntry")
         var root = base.root
         var entry = try XCTUnwrap((root["releases"] as? [[String: Any]])?.first)
@@ -39,7 +39,11 @@ extension JourneyTestCase {
             "renderer": "nux", "nux": ["key": "renders/sha256/\(hash).nux", "sha256": hash,
                 "sizeBytes": scene.count, "contentType": "application/vnd.nuxie.scene"],
             "assets": [], "textInputs": [],
-            "screens": ["A", "B"].map { ["id": $0, "artboardId": $0, "artboardName": $0, "width": 800, "height": 600] as [String: Any] },
+            "screens": ["A", "B"].map { id -> [String: Any] in
+                var screen: [String: Any] = ["id": id, "artboardId": id, "artboardName": id, "width": 800, "height": 600]
+                screen["exit"] = screenExit
+                return screen
+            },
             "transitions": [["id": "t1", "kind": "page", "sourceScreenId": "A", "destinationScreenId": "B",
                 "durationMs": try XCTUnwrap(lifecycle.steps["t1"]).durationMs,
                 "source": ["completeEventName": "nx_exit_done:t1"],
@@ -67,8 +71,8 @@ extension JourneyTestCase {
             publicKey: key.publicKey.rawRepresentation, root: root)
     }
 
-    func hostedLiveMovePayload() async throws -> AuthenticatedRuntimePayload {
-        let snapshot = try await authenticatedRenderedSnapshot(hostedLiveMoveFixture())
+    func hostedLiveMovePayload(screenExit: [String: Any]? = nil) async throws -> AuthenticatedRuntimePayload {
+        let snapshot = try await authenticatedRenderedSnapshot(hostedLiveMoveFixture(screenExit: screenExit))
         let release = try XCTUnwrap(snapshot.releasesByDigest.values.first)
         let scene = try Data(contentsOf: experiencePreparationRepositoryRoot().appendingPathComponent("fixtures/runtime/page-host-live-moves/page2.riv"))
         StubURLProtocol.reset()

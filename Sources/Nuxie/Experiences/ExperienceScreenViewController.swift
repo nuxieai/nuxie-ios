@@ -469,6 +469,20 @@ final class ExperienceScreenViewController: UIViewController {
         updatePresentationVisibility()
     }
 
+    /// Back closes this page from under a sheet it has just closed. The page
+    /// shows again as it was before the sheet covered it, with its timeline
+    /// running so its exit plays, but takes no input and is not announced.
+    func uncoverForExit(reduceMotion: Bool) async {
+        guard isPageController, coveredByLayer else { return }
+        setCoveredByLayer(false)
+        presentationLoop?.setInputEnabled(false)
+        view.isUserInteractionEnabled = false
+        presentationLoop?.setTimelineActive(true)
+        if lifecyclePhase == .hidden {
+            await applyLifecycleSnapshot(lifecycleState.move(to: .active, reduceMotion: reduceMotion))
+        }
+    }
+
     var timelineElapsedSeconds: Double { presentationLoop?.timelineElapsedSeconds ?? 0 }
 
     func setCoveredByLayer(_ covered: Bool) {
