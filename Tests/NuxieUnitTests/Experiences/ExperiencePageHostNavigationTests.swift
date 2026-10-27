@@ -222,6 +222,12 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 XCTAssertEqual(mounted, ["A"])
                 XCTAssertEqual(before, after)
                 XCTAssertFalse(writes.contains { $0.phase == .exiting })
+                if transition["type"] as? String == "push" {
+                    XCTAssertEqual(writes, [.init(screenID: "A", phase: .hidden)], "A push hides the page beneath it")
+                } else {
+                    XCTAssertEqual(writes, [], "A layer only takes its presenter's input")
+                    XCTAssertEqual(presenter.lifecyclePhase, .active)
+                }
                 XCTAssertFalse(presenter.view.isUserInteractionEnabled)
                 XCTAssertEqual(coordinator.activeScreenId, "B")
             }
@@ -641,6 +647,159 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         }
     }
 
+    func testACloseDuringTheJourneyCheckpointPlaysTheSourcesExit() async throws {
+        // No frame sends this event, so the exit waits out its whole limit.
+        let payload = try await hostedLiveMovePayload(screenExit: ["completeEventName": "never", "durationMs": 400])
+        let entered = expectation(description: "the checkpoint is deciding")
+        var release: CheckedContinuation<JourneyScreenDismissalResult, Never>?
+        defer { release?.resume(returning: .rejected) }
+        try await withCoordinator(payload: payload, onWillNavigate: { _, _ in
+            entered.fulfill()
+            return await withCheckedContinuation { release = $0 }
+        }) { coordinator, controller, _, _ in
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { _, _ in })
+            await self.fulfillment(of: [entered], timeout: 5)
+            let closed = Task { @MainActor in await coordinator.exitActiveScreenForTeardown(reason: nil) }
+            let held = controller.timelineElapsedSeconds
+            for _ in 0..<3 {
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            XCTAssertEqual(controller.timelineElapsedSeconds, held, "The source holds still while the Journey decides")
+            let exit = self.sampleTimeline(of: controller, duringExitOf: controller)
+            let resume = release; release = nil; resume?.resume(returning: .handled)
+            await self.fulfillment(of: [exit.sampled], timeout: 5)
+            await closed.value
+            XCTAssertEqual(exit.sample.advanced, true, "The close's exit plays once the checkpoint returns")
+        }
+    }
+
+    func testACloseFromInsideTheJourneyCheckpointPlaysTheSourcesExit() async throws {
+        let payload = try await hostedLiveMovePayload(screenExit: ["completeEventName": "never", "durationMs": 400])
+        final class Owner { weak var coordinator: ExperienceScreenTransitionCoordinator? }
+        let owner = Owner()
+        try await withCoordinator(payload: payload, onWillNavigate: { _, _ in
+            // The Journey closes the Experience from inside its own checkpoint.
+            await owner.coordinator?.exitActiveScreenForTeardown(reason: nil)
+            return .handled
+        }) { coordinator, controller, _, _ in
+            owner.coordinator = coordinator
+            let exit = self.sampleTimeline(of: controller, duringExitOf: controller)
+            let finished = self.expectation(description: "the move ends")
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "magic-move", "transitionId": "t1"]) { _, _ in
+                finished.fulfill()
+            })
+            await self.fulfillment(of: [exit.sampled, finished], timeout: 5)
+            XCTAssertEqual(exit.sample.advanced, true, "The close's exit plays while the checkpoint is still open")
+            XCTAssertEqual(controller.lifecyclePhase, .hidden)
+        }
+    }
+
+    func testBackAcrossASheetStartsTheDestinationsRevealAfterTheSheetsExit() async throws {
+        let payload = try await hostedLiveMovePayload(screenExit: ["completeEventName": "never", "durationMs": 400])
+        try await withCoordinator(payload: payload) { coordinator, base, probe, _ in
+            try await self.navigate(coordinator, to: "B", transition: ["type": "magic-move", "transitionId": "t1"])
+            try await self.navigate(coordinator, to: "A", transition: ["type": "modal", "present": "sheet"])
+            let sheet = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController
+                as? ExperienceScreenViewController)
+            let page = try XCTUnwrap(base.interactivePage)
+            await page.recordLifecycleWrites()
+            let exit = self.sampleTimeline(of: base, duringExitOf: sheet)
+            probe.lifecycle.removeAll()
+            try await self.back(coordinator, to: "A", steps: 2)
+            await self.fulfillment(of: [exit.sampled], timeout: 5)
+            XCTAssertEqual(exit.sample.phase, .hidden, "The destination's entrance waits for the sheet's exit")
+            XCTAssertEqual(exit.sample.advanced, false, "The base page holds still from its cut until its reveal")
+            XCTAssertEqual(exit.sample.drawing, false, "and shows nothing of its cut rows")
+            let writes = await page.lifecycleWriteLog ?? []
+            XCTAssertEqual(writes.filter { $0.screenID == "A" && $0.phase == .entering }.count, 1)
+            XCTAssertEqual(base.lifecyclePhase, .active)
+            XCTAssertEqual(coordinator.layerScreenIds, [["A"]])
+            XCTAssertEqual(probe.lifecycle.filter { $0.hasPrefix("active:") }, ["active:A"])
+        }
+    }
+
+    func testBackTrimmingAPageUnderASheetKeepsItRunningWithoutAnEntrance() async throws {
+        let payload = try await hostedLiveMovePayload(screenExit: ["completeEventName": "never", "durationMs": 400])
+        try await withCoordinator(payload: payload) { coordinator, base, probe, _ in
+            try await self.navigate(coordinator, to: "B")
+            try await self.navigate(coordinator, to: "A")
+            XCTAssertEqual(base.pageHistory.screenIDs, ["A", "B", "A"])
+            try await self.navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            let sheet = try XCTUnwrap((coordinator.topPresentedLayer as? UINavigationController)?.topViewController
+                as? ExperienceScreenViewController)
+            let page = try XCTUnwrap(base.interactivePage)
+            await page.recordLifecycleWrites()
+            let appearances = base.lifecycleAppearances
+            let exit = self.sampleTimeline(of: base, duringExitOf: sheet)
+            probe.lifecycle.removeAll()
+            try await self.back(coordinator, to: "A", steps: 3)
+            await self.fulfillment(of: [exit.sampled], timeout: 5)
+            XCTAssertEqual(exit.sample.phase, .active, "A trim writes no phase")
+            XCTAssertEqual(exit.sample.advanced, true, "The page keeps playing under the closing sheet")
+            XCTAssertEqual(base.pageHistory.screenIDs, ["A"])
+            let writes = await page.lifecycleWriteLog ?? []
+            XCTAssertFalse(writes.contains { $0.screenID == "A" && ($0.phase == .entering || $0.phase == .hidden) })
+            XCTAssertEqual(base.lifecycleAppearances, appearances)
+            XCTAssertEqual(probe.lifecycle.filter { $0.hasPrefix("active:") }, ["active:A"])
+        }
+    }
+
+    func testAPageUnderASheetKeepsPlayingAndReturnsWithoutItsEntrance() async throws {
+        try await withLifecycleCoordinator { coordinator, base, probe, _ in
+            let page = try XCTUnwrap(base.interactivePage)
+            let appearances = base.lifecycleAppearances
+            try await navigate(coordinator, to: "B", transition: ["type": "modal", "present": "sheet"])
+            await page.recordLifecycleWrites()
+            XCTAssertEqual(base.lifecyclePhase, .active, "A page under a sheet stays active")
+            XCTAssertFalse(base.view.isUserInteractionEnabled, "but takes no input")
+            let advanced = try await timelineAdvances(base)
+            XCTAssertTrue(advanced, "and keeps playing")
+            XCTAssertEqual(presentationIsVisible(base), true, "and drawing")
+            XCTAssertEqual(overlaysHidden(base).captions, false, "with its captions up")
+            XCTAssertEqual(overlaysHidden(base).text, false, "and its text fields")
+            probe.resetActivationRecords()
+            try await back(coordinator, to: "A")
+            let writes = await page.lifecycleWriteLog ?? []
+            XCTAssertFalse(writes.contains { $0.phase == .entering }, "It returns without its entrance")
+            XCTAssertEqual(base.lifecycleAppearances, appearances)
+            assertActivation(probe, screenID: "A")
+            try await assertTimelineAdvances(base)
+        }
+    }
+
+    func testAFullScreenModalKeepsItsPresenterDrawingThroughThePresentation() async throws {
+        try await withCoordinator { coordinator, presenter, _, _ in
+            let page = try XCTUnwrap(presenter.interactivePage)
+            await page.recordLifecycleWrites()
+            var landed = false
+            var outOfView = false
+            var stoppedDrawing = false
+            var hidTextFields = false
+            XCTAssertTrue(coordinator.navigate(to: "B", transition: ["type": "modal", "present": "fullscreen"]) { _, _ in
+                landed = true
+            })
+            let deadline = Date().addingTimeInterval(5)
+            while !landed, Date() < deadline {
+                // UIKit calls viewWillDisappear when the animation starts; the presenter stays in view until it ends.
+                if self.controllerIsVisible(presenter) == false {
+                    outOfView = true
+                    if self.presentationIsVisible(presenter) == false { stoppedDrawing = true }
+                    if self.overlaysHidden(presenter).text == true { hidTextFields = true }
+                }
+                try await Task.sleep(nanoseconds: 2_000_000)
+            }
+            XCTAssertTrue(landed)
+            XCTAssertTrue(outOfView, "UIKit animates the presentation")
+            XCTAssertFalse(stoppedDrawing, "The presenter keeps drawing while UIKit still shows it")
+            XCTAssertFalse(hidTextFields, "Its text fields stay up, as on SDK main")
+            XCTAssertEqual(self.presentationIsVisible(presenter), true)
+            XCTAssertEqual(presenter.lifecyclePhase, .active)
+            let writes = await page.lifecycleWriteLog ?? []
+            XCTAssertEqual(writes, [], "A layer only takes its presenter's input")
+        }
+    }
+
     func testInteractiveSheetCancellationDoesNotVisitOrUncoverLowerPage() async throws {
         try await assertInteractivePageDecision(modal: true, completes: false)
     }
@@ -670,21 +829,30 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             // Keeping real mounted pages makes hidden timeline/input checks observable.
             let transition = coordinator.pageTransition(revealing: lower, covering: outgoing, interactive: true)
             await transition.begin()
-            for _ in 0..<3 {
-                lower.advance(delta: 1 / 60)
-                try await Task.sleep(nanoseconds: 20_000_000)
+            if modal {
+                // As on SDK main, a page under a sheet stays active and keeps playing, without input.
+                let advanced = try await timelineAdvances(lower)
+                XCTAssertTrue(advanced)
+                XCTAssertEqual(lower.lifecyclePhase, .active)
+            } else {
+                for _ in 0..<3 {
+                    lower.advance(delta: 1 / 60)
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                }
+                XCTAssertEqual(lower.timelineElapsedSeconds, elapsed)
+                XCTAssertEqual(lower.lifecyclePhase, .hidden)
             }
-            XCTAssertEqual(lower.timelineElapsedSeconds, elapsed)
             XCTAssertEqual(lower.lifecycleAppearances, appearances)
-            XCTAssertEqual(lower.lifecyclePhase, .hidden)
             XCTAssertFalse(lower.view.isUserInteractionEnabled)
             XCTAssertEqual(outgoing.lifecyclePhase, .active)
             XCTAssertTrue(probe.shownScreenIDs.isEmpty)
             XCTAssertFalse(probe.lifecycle.contains { $0.hasPrefix("active:") })
             await transition.interactionEnded(cancelled: !completes)
+            // A page under a sheet returns without its entrance; a pushed-under page re-enters.
+            let reentries: UInt64 = modal ? 0 : 1
             if completes {
-                XCTAssertEqual(lower.lifecyclePhase, .entering)
-                XCTAssertEqual(lower.lifecycleAppearances, appearances + 1)
+                XCTAssertEqual(lower.lifecyclePhase, modal ? .active : .entering)
+                XCTAssertEqual(lower.lifecycleAppearances, appearances + reentries)
                 XCTAssertEqual(outgoing.lifecyclePhase, .active)
                 XCTAssertTrue(probe.shownScreenIDs.isEmpty)
                 let committed = await transition.commit()
@@ -693,18 +861,25 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 XCTAssertFalse(repeated)
                 XCTAssertEqual(lower.lifecyclePhase, .active)
                 XCTAssertEqual(outgoing.lifecyclePhase, .hidden)
-                XCTAssertEqual(lower.lifecycleAppearances, appearances + 1)
+                XCTAssertEqual(lower.lifecycleAppearances, appearances + reentries)
                 assertActivation(probe, screenID: "A")
             } else {
                 // Stale acceptance/completion must not revive a cancelled transition.
                 await transition.interactionEnded(cancelled: false)
                 let committed = await transition.commit()
                 XCTAssertFalse(committed)
-                lower.advance(delta: 1 / 60)
-                try await Task.sleep(nanoseconds: 20_000_000)
-                XCTAssertEqual(lower.timelineElapsedSeconds, elapsed)
+                if modal {
+                    let advanced = try await timelineAdvances(lower)
+                    XCTAssertTrue(advanced, "Cancelling leaves the page under its sheet, playing")
+                    XCTAssertEqual(lower.lifecyclePhase, .active)
+                } else {
+                    let held = lower.timelineElapsedSeconds
+                    lower.advance(delta: 1 / 60)
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                    XCTAssertEqual(lower.timelineElapsedSeconds, held)
+                    XCTAssertEqual(lower.lifecyclePhase, .hidden)
+                }
                 XCTAssertEqual(lower.lifecycleAppearances, appearances)
-                XCTAssertEqual(lower.lifecyclePhase, .hidden)
                 XCTAssertFalse(lower.view.isUserInteractionEnabled)
                 XCTAssertEqual(outgoing.lifecyclePhase, .active)
                 XCTAssertTrue(outgoing.view.isUserInteractionEnabled)
@@ -1260,7 +1435,8 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
             XCTAssertEqual(result, .navigated)
             XCTAssertTrue(coordinator.topPresentedLayer === layer, "The move ran on the sheet")
             XCTAssertEqual(coordinator.activeScreenId, "A")
-            XCTAssertEqual(base.lifecyclePhase, .hidden, "The page below never became active")
+            XCTAssertEqual(base.lifecyclePhase, .active, "The page below stays active under its sheet")
+            XCTAssertFalse(base.view.isUserInteractionEnabled, "and takes no input while the sheet stays")
         }
     }
 
@@ -1427,6 +1603,66 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         XCTAssertGreaterThan(controller.timelineElapsedSeconds, before, file: file, line: line)
         XCTAssertTrue(controller.view.isUserInteractionEnabled, file: file, line: line)
         XCTAssertEqual(controller.lifecyclePhase, .active, file: file, line: line)
+    }
+
+    private func timelineAdvances(_ controller: ExperienceScreenViewController) async throws -> Bool {
+        let before = controller.timelineElapsedSeconds
+        let deadline = Date().addingTimeInterval(1)
+        while controller.timelineElapsedSeconds <= before, Date() < deadline {
+            controller.advance(delta: 1 / 60)
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return controller.timelineElapsedSeconds > before
+    }
+
+    private final class TimelineSample {
+        var phase: ExperienceScreenLifecyclePhase?
+        var drawing: Bool?
+        var advanced: Bool?
+    }
+
+    /// From inside `exiting`'s exit wait, records `controller`'s phase and drawing, then
+    /// advances it for a while, well inside the wait, and records whether its timeline moved.
+    private func sampleTimeline(of controller: ExperienceScreenViewController,
+                                duringExitOf exiting: ExperienceScreenViewController)
+        -> (sample: TimelineSample, sampled: XCTestExpectation) {
+        let sample = TimelineSample()
+        let sampled = expectation(description: "sampled during the exit wait")
+        exiting.onExitCompletionWait = { [weak controller, weak exiting] in
+            exiting?.onExitCompletionWait = nil
+            guard let controller else { return }
+            sample.phase = controller.lifecyclePhase
+            sample.drawing = self.presentationIsVisible(controller)
+            let before = controller.timelineElapsedSeconds
+            Task { @MainActor [weak controller] in
+                let deadline = Date().addingTimeInterval(0.25)
+                while let controller, controller.timelineElapsedSeconds <= before, Date() < deadline {
+                    controller.advance(delta: 1 / 60)
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                }
+                sample.advanced = (controller?.timelineElapsedSeconds ?? before) > before
+                sampled.fulfill()
+            }
+        }
+        return (sample, sampled)
+    }
+
+    private func presentationIsVisible(_ controller: ExperienceScreenViewController) -> Bool? {
+        let loop = Mirror(reflecting: controller).children
+            .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop
+        return loop.flatMap { Mirror(reflecting: $0).children.first { $0.label == "isPresentationVisible" }?.value as? Bool }
+    }
+
+    private func controllerIsVisible(_ controller: ExperienceScreenViewController) -> Bool? {
+        Mirror(reflecting: controller).children.first { $0.label == "controllerIsVisible" }?.value as? Bool
+    }
+
+    private func overlaysHidden(_ controller: ExperienceScreenViewController) -> (captions: Bool?, text: Bool?) {
+        let children = Mirror(reflecting: controller).children
+        let captions = (children.first { $0.label == "videoCaptionOverlay" }?.value as? UIView)?.isHidden
+        let bridge = children.first { $0.label == "textInputOverlayBridge" }?.value
+        let text = bridge.flatMap { Mirror(reflecting: $0).children.first { $0.label == "hidden" }?.value as? Bool }
+        return (captions, text)
     }
 
     /// A pushed or presented page mounts entering. As a pushed Screen did
