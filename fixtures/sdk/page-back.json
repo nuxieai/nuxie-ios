@@ -214,8 +214,10 @@
       "ios": "ExperiencePageHostNavigationTests.testNavigationRequestedDuringStepQueuesAndSelfNavigationCompletesAlreadyActive" },
     { "cell": "a close during a step lands the step, then exits the Screen it landed on",
       "ios": "ExperiencePageHostNavigationTests.testCloseDuringAStepLandsTheStepThenExitsTheScreenItLandedOn" },
-    { "cell": "a sheet swiped away during a step supersedes the step, and the page below navigates normally",
-      "ios": "ExperiencePageHostNavigationTests.testSwipeDuringAnUnpresentedPhaseSupersedesNavigationAndReleasesTheDrain" },
+    { "cell": "a swipe is refused while a move runs, and allowed once it lands",
+      "ios": "ExperiencePageHostNavigationTests.testASwipeIsRefusedWhileAMoveRunsAndAllowedOnceItLands" },
+    { "cell": "a sheet the system removes during a step lands the step first, then the dismissal, and the page below navigates normally",
+      "ios": "ExperiencePageHostNavigationTests.testASheetRemovedDuringAnUnpresentedPhaseLandsTheStepThenTheDismissal" },
     { "cell": "Back across a push trims the covered page before the pop",
       "ios": "ExperiencePageHostNavigationTests.testPushOpensNewPageAndSkippingBackCutsCoveredLowerPageBeforePop" }
   ]
