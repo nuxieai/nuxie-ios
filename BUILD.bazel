@@ -167,6 +167,34 @@ macos_unit_test(
 )
 
 sdk_test_library(
+    name = "runtime_executor_test_sources",
+    module_name = "NuxieRuntimeExecutorTests",
+    srcs = glob(["Tests/NuxieRuntimeExecutorTests/**/*.swift"]),
+    deps = [":NuxieRuntime"],
+)
+ios_unit_test(
+    name = "NuxieRuntimeExecutorTests",
+    bundle_id = "com.nuxie.runtime.executor.tests",
+    minimum_os_version = "15.0",
+    runner = ":sdk_hostless_test_runner",
+    deps = [":runtime_executor_test_sources"],
+)
+
+sdk_test_library(
+    name = "mac_runtime_executor_test_sources",
+    module_name = "NuxieRuntimeExecutorMacTests",
+    srcs = glob(["Tests/NuxieRuntimeExecutorTests/**/*.swift"]),
+    deps = [":NuxieRuntime"],
+)
+macos_unit_test(
+    name = "NuxieRuntimeExecutorMacTests",
+    bundle_id = "com.nuxie.runtime.executor.macos.tests",
+    minimum_os_version = "12.0",
+    runner = ":sdk_macos_test_runner",
+    deps = [":mac_runtime_executor_test_sources"],
+)
+
+sdk_test_library(
     name = "integration_test_sources",
     module_name = "NuxieSDKIntegrationTests",
     srcs = glob(["Tests/NuxieIntegrationTests/**/*.swift"]),

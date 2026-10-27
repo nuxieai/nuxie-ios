@@ -216,6 +216,45 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: ""
       
+  NuxieRuntimeExecutorTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/NuxieRuntimeExecutorTests
+    dependencies:
+      - target: NuxieRuntime
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.executor.tests
+      SWIFT_PACKAGE_NAME: Nuxie
+      TEST_HOST: ""
+      GENERATE_INFOPLIST_FILE: YES
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+      SUPPORTS_MACCATALYST: NO
+    scheme:
+      testTargets:
+        - NuxieRuntimeExecutorTests
+      gatherCoverageData: true
+
+  NuxieRuntimeExecutorMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/NuxieRuntimeExecutorTests
+    dependencies:
+      - target: NuxieRuntimeMac
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nuxie.runtime.executor.macos.tests
+      SWIFT_PACKAGE_NAME: Nuxie
+      TEST_HOST: ""
+      GENERATE_INFOPLIST_FILE: YES
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: ""
+    scheme:
+      testTargets:
+        - NuxieRuntimeExecutorMacTests
+      gatherCoverageData: true
+
   NuxieSDKUnitTests:
     type: bundle.unit-test
     platform: iOS

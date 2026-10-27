@@ -405,6 +405,33 @@ class NativeCommandSelectionTests(unittest.TestCase):
                 run.assert_not_called()
             self.assertEqual(json.loads(receipt.read_text()), {'arguments': args, 'platform': 'macos'})
 
+    def test_pool_requires_only_xcode_for_macos_tests_and_keeps_ios_preflight(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            installed = home / ".local/share/nuxie-homelab"; installed.mkdir(parents=True)
+            receipt = home / "received.json"
+            (installed / "sdk-task.py").write_text(
+                "import json\nfrom pathlib import Path\n"
+                "def route(root, arguments, **kwargs):\n"
+                " Path(" + repr(str(receipt)) + ").write_text(json.dumps(kwargs))\n"
+                " return 0\n")
+            for arguments, requirements in [
+                (["--suite", "macos-runtime-executor"], ["xcode"]),
+                (["--scheme", "NuxieRuntimeExecutorMacTests"], ["xcode"]),
+                (["--suite", "macos-unit"], ["xcode"]),
+                (["--suite", "runtime-executor"], None),
+                (["--gate"], None),
+                (["--suite", "macos-runtime-executor", "--platform", "ios-simulator"], None),
+            ]:
+                with self.subTest(arguments=arguments), patch.object(Path, "home", return_value=home), \
+                        patch("sys.argv", ["sdk.py", "test", *arguments]), \
+                        patch.dict(os.environ, {"_NUXIE_POOL_NESTED": "0"}), patch.object(sdk, "run") as run:
+                    sdk.main()
+                    run.assert_not_called()
+                    actual = json.loads(receipt.read_text())
+                    self.assertEqual(actual, {"platform": "macos", "outputs": {},
+                        **({"requirements": requirements} if requirements is not None else {})})
+
     def test_nested_pool_frontend_does_not_submit_itself_again(self):
         with patch.dict(os.environ, {'_NUXIE_POOL_NESTED': '1'}):
             self.assertIsNone(sdk.pool_dispatch(type('Args', (), {'command': 'test'})()))
@@ -444,6 +471,24 @@ class NativeCommandSelectionTests(unittest.TestCase):
         self.assertEqual(command[-1], "//:NuxieExperienceInputTests")
         self.assertEqual(command[1], "test")
 
+    def test_executor_suites_select_runtime_only_targets_and_platforms(self):
+        for suite, target, platform in [
+            ("runtime-executor", "NuxieRuntimeExecutorTests", "ios_sim_arm64"),
+            ("macos-runtime-executor", "NuxieRuntimeExecutorMacTests", "macos_arm64"),
+        ]:
+            for selector in (["--suite", suite], ["--scheme", target]):
+                with self.subTest(selector=selector):
+                    command = self.command(["test", *selector])
+                    self.assertEqual(command[-1], "//:" + target)
+                    self.assertIn("--platforms=@apple_support//platforms:" + platform, command)
+                    self.assertFalse(any(arg.startswith("--test_filter=") for arg in command))
+                    self.assertEqual(any(arg.startswith("--ios_simulator_device=") for arg in command),
+                                     platform == "ios_sim_arm64")
+                    command = self.command(["test", *selector, "--test-filter",
+                                            target + "/NuxieRuntimeExecutorTests/testExecutorShutdownIsIdempotentAndRejectsNewWork"])
+                    self.assertIn("--test_filter=" + target +
+                                  ".NuxieRuntimeExecutorTests/testExecutorShutdownIsIdempotentAndRejectsNewWork", command)
+
     def test_focused_runtime_suite_preserves_native_and_page_classes(self):
         command = self.command(["test", "--suite", "native-runtime"])
         selector = next(arg for arg in command if arg.startswith("--test_filter="))
@@ -469,10 +514,19 @@ class NativeCommandSelectionTests(unittest.TestCase):
                 patch.object(sdk, "run") as run, patch.object(sdk.platform, "machine", return_value="arm64"):
             sdk.main()
         commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(len(commands), 5)
-        self.assertTrue(all("--platforms=@apple_support//platforms:ios_sim_arm64" in command for command in commands[:4]))
-        self.assertIn("--platforms=@apple_support//platforms:macos_arm64", commands[4])
-        self.assertEqual(commands[4][-1], "//:NuxieSDKMacUnitTests")
+        expected = [
+            ("NuxieSDKUnitTests", "ios_sim_arm64"),
+            ("NuxieSDKUnitTests", "ios_sim_arm64"),
+            ("NuxieRuntimeExecutorTests", "ios_sim_arm64"),
+            ("NuxieExperienceInputTests", "ios_sim_arm64"),
+            ("NuxieSDKIntegrationTests", "ios_sim_arm64"),
+            ("NuxieSDKMacUnitTests", "macos_arm64"),
+            ("NuxieRuntimeExecutorMacTests", "macos_arm64"),
+        ]
+        self.assertEqual(len(commands), len(expected))
+        for command, (target, platform) in zip(commands, expected):
+            self.assertEqual(command[-1], "//:" + target)
+            self.assertIn("--platforms=@apple_support//platforms:" + platform, command)
 
     def test_xcode_method_selectors_use_the_swift_runtime_class_identifier(self):
         command = self.command(["test", "--suite", "unit", "--test-filter",

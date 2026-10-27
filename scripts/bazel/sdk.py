@@ -35,6 +35,8 @@ PLATFORMS = {
 SUITES = {
     "unit": ["//:NuxieSDKUnitTests"],
     "native-runtime": ["//:NuxieSDKUnitTests"],
+    "runtime-executor": ["//:NuxieRuntimeExecutorTests"],
+    "macos-runtime-executor": ["//:NuxieRuntimeExecutorMacTests"],
     "hosted-input": ["//:NuxieExperienceInputTests"],
     "integration": ["//:NuxieSDKIntegrationTests"],
     "macos-unit": ["//:NuxieSDKMacUnitTests"],
@@ -45,6 +47,8 @@ SUITES = {
     "e2e": ["//:NuxieE2EAppTests", "//:NuxieE2EAppUITests"],
 }
 SCHEMES = {
+    "NuxieRuntimeExecutorTests": "runtime-executor",
+    "NuxieRuntimeExecutorMacTests": "macos-runtime-executor",
     "NuxieSDKUnitTests": "unit", "NuxieSDKMacUnitTests": "macos-unit",
     "NuxieSDKIntegrationTests": "integration", "NuxieExperienceInputTests": "hosted-input",
     "NuxieVideoDeviceTests": "video", "NuxieSDKStoreKitTests": "storekit",
@@ -540,7 +544,15 @@ def pool_dispatch(args):
         outputs[name] = ROOT / name
     elif args.command == "prepare":
         outputs[".bazel-artifacts/prepared"] = preparation_output(args)
-    return module.route(ROOT, sys.argv[1:], platform="macos", outputs=outputs)
+    route_options = {}
+    if args.command == "test" and not args.gate:
+        suite = SCHEMES.get(args.scheme, args.suite)
+        sdk_platform = (args.platform or ["macos" if suite.startswith("macos-") else "ios-simulator"])[0]
+        if sdk_platform == "macos":
+            # Explicit tool requirements keep native macOS suites independent
+            # of the pool's implicit iOS simulator preflight.
+            route_options["requirements"] = ["xcode"]
+    return module.route(ROOT, sys.argv[1:], platform="macos", outputs=outputs, **route_options)
 
 
 def main() -> None:
@@ -599,15 +611,15 @@ def main() -> None:
             if args.command == "test" and args.suite == "all":
                 if args.platform:
                     parser.error("Use an explicit test suite when selecting one platform")
-                for suite in ("unit", "native-runtime", "hosted-input", "integration", "macos-unit"):
-                    sdk_platform = "macos" if suite == "macos-unit" else "ios-simulator"
+                for suite in ("unit", "native-runtime", "runtime-executor", "hosted-input", "integration", "macos-unit", "macos-runtime-executor"):
+                    sdk_platform = "macos" if suite.startswith("macos-") else "ios-simulator"
                     architecture = "arm64" if platform.machine() == "arm64" else "x86_64"
                     args.suite = suite
                     flags = options(args.configuration, sdk_platform, architecture) + test_options(args, sdk_platform)
                     run(bazel_command() + ["test", *flags, *SUITES[suite]])
                     verify_test_results(SUITES[suite])
                 return
-            sdk_platform = (args.platform or ["macos" if args.command == "test" and args.suite == "macos-unit" else "ios-simulator"])[0]
+            sdk_platform = (args.platform or ["macos" if args.command == "test" and args.suite.startswith("macos-") else "ios-simulator"])[0]
             if args.platform and len(args.platform) != 1:
                 parser.error("build/test select one platform; prepare supports multiple platforms")
             architecture = "arm64" if platform.machine() == "arm64" or sdk_platform == "ios-device" else "x86_64"
