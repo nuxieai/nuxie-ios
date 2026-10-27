@@ -1408,6 +1408,11 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     }
 
     private func installDismissTapRecognizer(on view: UIView) {
+        // An in-page rebind keeps its fields without clear(), so it keeps this recognizer too.
+        if let existing = dismissTapRecognizer {
+            if existing.view === view { return }
+            existing.view?.removeGestureRecognizer(existing)
+        }
         let recognizer = UITapGestureRecognizer(
             target: self,
             action: #selector(handleDismissTap(_:))

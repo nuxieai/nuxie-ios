@@ -1058,6 +1058,29 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         }
     }
 
+    func testInPageRebindsKeepOneDismissTapThatSparesTheFields() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        defer { bridge.clear() }
+        let first = makePlan(secure: false, screenID: "A")
+        let second = makePlan(secure: false, screenID: "B")
+        let plan = NativeExperienceRenderPlan(identity: first.identity, scene: first.scene,
+            entry: .init(screenId: "A"), pageHost: .init(artboardName: "$nuxie.page", listPath: "screens"),
+            screens: [], transitions: [], textInputs: first.textInputs + second.textInputs, images: [], fonts: [])
+        func dismissTaps() -> [UIGestureRecognizer] {
+            surface.gestureRecognizers?.filter { $0 is UITapGestureRecognizer && $0.delegate === bridge } ?? []
+        }
+        for (id, preserving) in [("A", false), ("B", true), ("A", true), ("B", false)] {
+            bridge.bind(screenID: id, preservingNativeFields: preserving, renderPlan: plan,
+                surfaceView: surface, artboardBounds: surface.bounds,
+                semanticTextWriter: { _, _, _, done in done(.accepted) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "x", ownerInstanceID: 1))) })
+            // Any extra recognizer fails the delegate's identity check, so it would take
+            // taps inside a field and end editing as the person starts typing.
+            XCTAssertEqual(dismissTaps().count, 1, "One keyboard-dismiss tap after binding \(id)")
+        }
+    }
+
     func testRemovedPageRowRetiresItsEditorsWhileKeptRowsKeepTheirs() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let surface = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
