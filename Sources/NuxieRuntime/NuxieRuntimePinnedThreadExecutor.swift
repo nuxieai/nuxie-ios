@@ -4,6 +4,7 @@ package enum NuxieRuntimeExecutorError: Error, Equatable, Sendable {
     case closed
 }
 
+#if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 /// Swift result delivery over the runtime's CommandQueue-owned native thread.
 package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
     private let native = NuxieNativeExecutor()
@@ -42,3 +43,4 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
 
     package func shutdown() { native.shutdown() }
 }
+#endif
