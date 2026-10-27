@@ -1272,6 +1272,48 @@ final class ExperienceTextInputSemanticsTests: XCTestCase {
         XCTAssertNotEqual(before, .init(inputID: "source", nodeID: 43))
     }
 
+    func testAFieldAMoveCarriesToAnotherDeclarationRetriesUnderThatDeclaration() throws {
+        let bridge = ExperienceTextInputOverlayBridge()
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let template = makePlan(secure: false)
+        func input(_ id: String, screen: String) -> NativeExperienceTextInput {
+            let base = template.textInputs[0]
+            return NativeExperienceTextInput(inputId: id, screenId: screen, artboardId: base.artboardId,
+                viewNodeId: base.viewNodeId, renderedNodeId: base.renderedNodeId, textInputName: id, value: "",
+                placeholder: base.placeholder, editable: true, geometry: base.geometry, style: base.style,
+                keyboardType: nil, secureTextEntry: false, multiline: false, maxLength: nil, responseFieldKey: nil)
+        }
+        let plan = NativeExperienceRenderPlan(identity: template.identity, scene: template.scene, entry: template.entry,
+            screens: [], transitions: [], textInputs: [input("source", screen: "plans"), input("destination", screen: "welcome")],
+            images: [], fonts: [])
+        // The same semantic node, declared by the Screen the move lands on.
+        func capture(under name: String) throws -> NuxieNativeSemanticCapture {
+            let base = try nativeCapture(ids: [42], secure: false)
+            return .init(id: UUID(), tree: base.tree, fieldsByTextRun: [:], nativeInputs: [name: base.nativeInputs["editable"] ?? []])
+        }
+        var writes: [(target: ExperienceTextInputOverlayBridge.InputTarget,
+            done: @MainActor @Sendable (ExperienceSemanticTextDraft.Outcome) -> Void)] = []
+        func bind(_ screen: String, preserving: Bool) {
+            bridge.bind(screenID: screen, preservingNativeFields: preserving, renderPlan: plan, surfaceView: view,
+                artboardBounds: view.bounds,
+                semanticTextWriter: { _, target, _, done in writes.append((target, done)) },
+                semanticTextReader: { _, _, done in done(.success(.init(text: "", ownerInstanceID: 7))) })
+        }
+        bind("plans", preserving: false)
+        presentField(on: bridge)
+        let field = try XCTUnwrap(bridge.applySemantics(try capture(under: "source"))[42] as? UITextField)
+        bind("welcome", preserving: true)
+        XCTAssertTrue(bridge.applySemantics(try capture(under: "destination"))[42] === field, "The move keeps the field")
+        field.text = "Ada"
+        bridge.flushTextChange(for: field)
+        XCTAssertEqual(writes.map(\.target.inputID), ["destination"])
+        writes.removeFirst().done(.staleCapture)
+        _ = bridge.applySemantics(try capture(under: "destination"))
+        XCTAssertEqual(writes.map(\.target.inputID), ["destination"], "The retry writes to the declaration the field now edits")
+        writes.removeFirst().done(.accepted)
+        bridge.clear()
+    }
+
     func testRepeatedNativeSecureInputsReadAndWriteTheirOwnOccurrence() throws {
         let bridge = ExperienceTextInputOverlayBridge()
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))

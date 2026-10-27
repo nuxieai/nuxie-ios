@@ -590,6 +590,12 @@ final class ExperienceTextInputOverlayBridge: NSObject,
                 let binding: Binding
                 if let existing = bindingsByTarget[target] {
                     binding = existing
+                    if existing.target.inputID != target.inputID {
+                        // A move kept the node under another declaration: key the
+                        // binding by the one it now edits, so retries write there.
+                        bindingsByTarget.removeValue(forKey: target)
+                        bindingsByTarget[target] = binding
+                    }
                     binding.target = target
                     let declarationChanged = binding.input != input
                     binding.input = input
