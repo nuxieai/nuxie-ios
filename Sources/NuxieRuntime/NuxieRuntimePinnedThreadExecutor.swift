@@ -11,8 +11,6 @@ package final class NuxieRuntimePinnedThreadExecutor: @unchecked Sendable {
 
     package init() {}
 
-    deinit { native.close() }
-
     package func call<T: Sendable>(
         _ operation: @escaping @Sendable () throws -> T
     ) async throws -> T {
