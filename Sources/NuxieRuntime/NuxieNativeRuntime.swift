@@ -1062,39 +1062,34 @@ package actor NuxieNativeRuntime {
         -> [NuxieNativeFileAssetDescriptor]
     {
         let executor = NuxieRuntimePinnedThreadExecutor()
-        do {
-            return try await executor.callThenShutdown {
-                let renderer = try NuxieNativeRendererHandle(
+        return try await executor.callThenShutdown {
+            let renderer = try NuxieNativeRendererHandle(
+                executor: executor,
+                pixelWidth: 1,
+                pixelHeight: 1
+            )
+            let file: NuxieNativeFileHandle
+            do {
+                file = try NuxieNativeFileHandle(
                     executor: executor,
-                    pixelWidth: 1,
-                    pixelHeight: 1
+                    renderer: renderer,
+                    bytes: bytes,
+                    importMode: videoEnabled ? .videoInspection : .portable
                 )
-                let file: NuxieNativeFileHandle
-                do {
-                    file = try NuxieNativeFileHandle(
-                        executor: executor,
-                        renderer: renderer,
-                        bytes: bytes,
-                        importMode: videoEnabled ? .videoInspection : .portable
-                    )
-                } catch {
-                    try? renderer.close()
-                    throw error
-                }
-                do {
-                    let assets = try file.assets()
-                    try file.close()
-                    try renderer.close()
-                    return assets
-                } catch {
-                    try? file.close()
-                    try? renderer.close()
-                    throw error
-                }
+            } catch {
+                try? renderer.close()
+                throw error
             }
-        } catch {
-            try? await executor.shutdown()
-            throw error
+            do {
+                let assets = try file.assets()
+                try file.close()
+                try renderer.close()
+                return assets
+            } catch {
+                try? file.close()
+                try? renderer.close()
+                throw error
+            }
         }
     }
 
@@ -4380,12 +4375,6 @@ final class NuxieNativeExecutor: @unchecked Sendable {
         var count = 0
         _ = nux_executor_pending_count(handle, &count)
         return count
-    }
-
-    /// Stops admission without joining the worker, which still drains accepted work.
-    func close() {
-        guard let handle else { return }
-        _ = nux_executor_close(handle)
     }
 
     func shutdown(_ terminated: @escaping @Sendable () -> Void) throws {
