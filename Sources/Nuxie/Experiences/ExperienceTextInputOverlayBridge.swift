@@ -416,6 +416,9 @@ final class ExperienceTextInputOverlayBridge: NSObject,
     private var activeBuildID: String?
     private var generation: UInt64 = 0
     private var hidden = false
+    /// From a step's first batch until the first full pass after input
+    /// returns, every bound control draws nothing.
+    private var veiled = false
     private weak var activeEditingControl: UIView?
     private var keyboardShift: CGFloat = 0
     private var latestKeyboardFrame: CGRect?
@@ -574,6 +577,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
         }
         layout()
         for binding in bindingsByTarget.values { restoreFirstResponderIfNeeded(binding) }
+        liftVeil()
         return controls
     }
 
@@ -809,6 +813,7 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func clear() {
         generation &+= 1
+        veiled = false
         for target in Array(bindingsByTarget.keys) where target.nodeID != nil {
             retireNativeInput(target)
         }
@@ -886,7 +891,33 @@ final class ExperienceTextInputOverlayBridge: NSObject,
 
     func updateArtboardBounds(_ bounds: CGRect) { artboardBounds = bounds }
 
+    /// An empty mask hides what a control draws in its own tree, its
+    /// placeholder and caret, while hit testing, focus and accessibility stay.
+    private final class Veil: UIView {}
+
+    func veil() {
+        veiled = true
+        maskVeiledControls()
+    }
+
+    private func maskVeiledControls() {
+        guard veiled else { return }
+        for binding in bindingsByTarget.values where !(binding.control.view.mask is Veil) {
+            binding.control.view.mask = Veil()
+        }
+    }
+
+    private func liftVeil() {
+        guard veiled else { return }
+        veiled = false
+        for binding in bindingsByTarget.values where binding.control.view.mask is Veil {
+            binding.control.view.mask = nil
+        }
+    }
+
     func layout() {
+        // Controls created or replaced during a step are masked before they draw.
+        defer { maskVeiledControls() }
         guard let surfaceView,
               let transform = ExperienceLayoutTransform(
                   artboardBounds: artboardBounds,

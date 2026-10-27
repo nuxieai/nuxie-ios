@@ -1,0 +1,697 @@
+{
+  "identity": {
+    "appId": "app_01m5xfxkvfe8g74nfcwr65cqyr",
+    "buildId": "01m5xgmzcz4hnyyyyzqd15xh7g",
+    "environment": "test",
+    "experienceId": "xp_01m5xfzp80be1gry1s56ag6e01",
+    "experienceVersionId": "ver_01m5xgmzczfr26hg0fna3dhbzw",
+    "publishedAt": "2026-10-27T01:47:27.728Z",
+    "publishedAtSeq": 2,
+    "versionNumber": 2
+  },
+  "leg": {
+    "completionOutputs": {},
+    "entryCondition": {
+      "eventName": "calmly_demo",
+      "type": "event"
+    },
+    "entryStepId": "2f94bc616981a8124a650234efcc29f16bb4816a04a86ec635b2fc6c2bb16282",
+    "facts": {
+      "experimentIds": [],
+      "propertyKeys": [],
+      "segmentIds": []
+    },
+    "id": "4ec88de632f2b868254d4052b1cf4da1fdbff3f55daeae1f13f5b17ebb784762",
+    "inputs": {
+      "eventFields": [],
+      "responseFields": []
+    },
+    "offers": [],
+    "outputs": [],
+    "policy": {
+      "entry": {
+        "frequency": {
+          "type": "every_match"
+        },
+        "trigger": {
+          "eventName": "calmly_demo",
+          "type": "event"
+        }
+      },
+      "exitWhenAny": []
+    },
+    "routes": [
+      {
+        "entryStepId": "21cd5284dacb0d602bae9508f8ce160f08baaafc1db86ff53db9eafdedd1cd0c",
+        "eventName": "choose",
+        "host": {
+          "kind": "screen",
+          "screenId": "scr_screens_splans"
+        }
+      },
+      {
+        "entryStepId": "2de9566cbacca7bf6e279241f2cfa71ab4379f23d7885aa16d9a24e78f514379",
+        "eventName": "back",
+        "host": {
+          "kind": "screen",
+          "screenId": "scr_screens_ssession"
+        }
+      },
+      {
+        "entryStepId": "b13a7b59e201fce081c7338f73e1f2a5e55368613cac59b8527d361bfb2b6771",
+        "eventName": "back",
+        "host": {
+          "kind": "screen",
+          "screenId": "scr_screens_swelcome"
+        }
+      },
+      {
+        "entryStepId": "06f908626c669489caef2a9fcba588f3cbdd3003cf5fcef75c97e1ef72cd391d",
+        "eventName": "begin",
+        "host": {
+          "kind": "screen",
+          "screenId": "scr_screens_swelcome"
+        }
+      }
+    ],
+    "schemaVersion": "nuxie.experience-planes.v1",
+    "screens": [
+      {
+        "defaultInstanceId": "vmi_runtime_scr_screens_splans",
+        "defaultViewModelName": "vm_runtime_root_scr_screens_splans",
+        "id": "scr_screens_splans",
+        "responseCaptures": []
+      },
+      {
+        "defaultInstanceId": "vmi_runtime_scr_screens_ssession",
+        "defaultViewModelName": "vm_runtime_root_scr_screens_ssession",
+        "id": "scr_screens_ssession",
+        "responseCaptures": []
+      },
+      {
+        "defaultInstanceId": "vmi_runtime_scr_screens_swelcome",
+        "defaultViewModelName": "vm_runtime_root_scr_screens_swelcome",
+        "id": "scr_screens_swelcome",
+        "responseCaptures": []
+      }
+    ],
+    "steps": [
+      {
+        "action": {
+          "screenId": "scr_screens_ssession",
+          "transition": {
+            "transitionId": "step-2",
+            "type": "fade"
+          },
+          "type": "navigate"
+        },
+        "id": "06f908626c669489caef2a9fcba588f3cbdd3003cf5fcef75c97e1ef72cd391d",
+        "kind": "action",
+        "outlets": {}
+      },
+      {
+        "action": {
+          "screenId": "scr_screens_swelcome",
+          "transition": {
+            "transitionId": "step-1",
+            "type": "magic-move"
+          },
+          "type": "navigate"
+        },
+        "id": "21cd5284dacb0d602bae9508f8ce160f08baaafc1db86ff53db9eafdedd1cd0c",
+        "kind": "action",
+        "outlets": {}
+      },
+      {
+        "action": {
+          "type": "back"
+        },
+        "id": "2de9566cbacca7bf6e279241f2cfa71ab4379f23d7885aa16d9a24e78f514379",
+        "kind": "action",
+        "outlets": {}
+      },
+      {
+        "action": {
+          "screenId": "scr_screens_splans",
+          "type": "navigate"
+        },
+        "id": "2f94bc616981a8124a650234efcc29f16bb4816a04a86ec635b2fc6c2bb16282",
+        "kind": "action",
+        "outlets": {}
+      },
+      {
+        "action": {
+          "type": "back"
+        },
+        "id": "b13a7b59e201fce081c7338f73e1f2a5e55368613cac59b8527d361bfb2b6771",
+        "kind": "action",
+        "outlets": {}
+      }
+    ]
+  },
+  "metadata": {
+    "appDefaultTimezone": "Etc/UTC",
+    "name": "Experience Go-Live"
+  },
+  "placements": [],
+  "presentation": {
+    "backgroundColor": "#000000FF",
+    "orientation": "any"
+  },
+  "products": [],
+  "provenance": {
+    "compilerCommit": "parent-repo-commit-unavailable-at-worker-runtime",
+    "compilerVersion": "@nuxie/view-compiler/0.0.0"
+  },
+  "render": {
+    "assets": [
+      {
+        "assetUniqueName": "image-assets-2fforest-jpg-vadf2fa4d1b591eb045972ab0ccc-47dbe44a-6",
+        "authoredAssetId": 6,
+        "contentType": "image/png",
+        "height": 448,
+        "key": "assets/sha256/6158bb971ce86183dd6d07c110b92fcf67a00c93f4cfaa306535be75e3ebfa4f.png",
+        "kind": "image",
+        "required": false,
+        "sha256": "6158bb971ce86183dd6d07c110b92fcf67a00c93f4cfaa306535be75e3ebfa4f",
+        "sizeBytes": 268505,
+        "width": 252
+      },
+      {
+        "assetUniqueName": "image-assets-2flake-jpg-v7cbab7973575cb239f0ea9d7b76b3-4fb6f4ac-3",
+        "authoredAssetId": 3,
+        "contentType": "image/png",
+        "height": 448,
+        "key": "assets/sha256/639584c9a70ba79ae403d7442f51bdec42cef36ba835c6714544e9fea869fba7.png",
+        "kind": "image",
+        "required": false,
+        "sha256": "639584c9a70ba79ae403d7442f51bdec42cef36ba835c6714544e9fea869fba7",
+        "sizeBytes": 113384,
+        "width": 252
+      },
+      {
+        "assetUniqueName": "font-system-300-normal-02b1d7c6-5",
+        "authoredAssetId": 5,
+        "family": "System",
+        "kind": "font",
+        "location": "system",
+        "required": true,
+        "style": "normal",
+        "weight": "300"
+      },
+      {
+        "assetUniqueName": "font-system-400-normal-6cda3de3-2",
+        "authoredAssetId": 2,
+        "family": "System",
+        "kind": "font",
+        "location": "system",
+        "required": true,
+        "style": "normal",
+        "weight": "400"
+      },
+      {
+        "assetUniqueName": "font-system-500-normal-1d4391d8-4",
+        "authoredAssetId": 4,
+        "family": "System",
+        "kind": "font",
+        "location": "system",
+        "required": true,
+        "style": "normal",
+        "weight": "500"
+      },
+      {
+        "assetUniqueName": "font-system-600-normal-395194bd-0",
+        "authoredAssetId": 0,
+        "family": "System",
+        "kind": "font",
+        "location": "system",
+        "required": true,
+        "style": "normal",
+        "weight": "600"
+      },
+      {
+        "assetUniqueName": "font-system-700-normal-42d2e562-1",
+        "authoredAssetId": 1,
+        "family": "System",
+        "kind": "font",
+        "location": "system",
+        "required": true,
+        "style": "normal",
+        "weight": "700"
+      }
+    ],
+    "nux": {
+      "contentType": "application/vnd.nuxie.scene",
+      "key": "renders/sha256/5db21620466a5d3cc38a7bdb7b732ba26f71673810a7e0543d0fa807644792c5.nux",
+      "sha256": "5db21620466a5d3cc38a7bdb7b732ba26f71673810a7e0543d0fa807644792c5",
+      "sizeBytes": 121548
+    },
+    "renderer": "nux",
+    "screens": [
+      {
+        "artboardId": "scr_screens_splans",
+        "artboardName": "plans",
+        "exit": {
+          "completeEventName": "nuxie:screen-exit-complete:scr_screens_splans",
+          "durationMs": 520
+        },
+        "height": 874,
+        "id": "scr_screens_splans",
+        "width": 402
+      },
+      {
+        "artboardId": "scr_screens_ssession",
+        "artboardName": "session",
+        "exit": {
+          "completeEventName": "nuxie:screen-exit-complete:scr_screens_ssession",
+          "durationMs": 560
+        },
+        "height": 874,
+        "id": "scr_screens_ssession",
+        "width": 402
+      },
+      {
+        "artboardId": "scr_screens_swelcome",
+        "artboardName": "welcome",
+        "exit": {
+          "completeEventName": "nuxie:screen-exit-complete:scr_screens_swelcome",
+          "durationMs": 680
+        },
+        "height": 874,
+        "id": "scr_screens_swelcome",
+        "width": 402
+      }
+    ],
+    "textInputs": [
+      {
+        "artboardId": "scr_screens_splans",
+        "editable": true,
+        "geometry": {
+          "heightPath": "nuxieTextInputs/input_scr_screens_splans_v7_cbafa7ef/height",
+          "rotationPath": "nuxieTextInputs/input_scr_screens_splans_v7_cbafa7ef/rotation",
+          "scaleXPath": "nuxieTextInputs/input_scr_screens_splans_v7_cbafa7ef/scaleX",
+          "scaleYPath": "nuxieTextInputs/input_scr_screens_splans_v7_cbafa7ef/scaleY",
+          "widthPath": "nuxieTextInputs/input_scr_screens_splans_v7_cbafa7ef/width",
+          "xPath": "nuxieTextInputs/input_scr_screens_splans_v7_cbafa7ef/x",
+          "yPath": "nuxieTextInputs/input_scr_screens_splans_v7_cbafa7ef/y"
+        },
+        "id": "text-input/scr_screens_splans/scr_screens_splans::v7",
+        "multiline": false,
+        "placeholder": "Your name",
+        "renderedNodeId": "scr_screens_splans::v7",
+        "screenId": "scr_screens_splans",
+        "secureTextEntry": false,
+        "style": {
+          "color": 4294967295,
+          "fontAssetUniqueName": "font-system-500-normal-1d4391d8-4",
+          "fontFamily": "System",
+          "fontSize": 17,
+          "fontStyle": "normal",
+          "fontWeight": "500",
+          "letterSpacing": 0,
+          "lineHeight": -1,
+          "textAlign": "left"
+        },
+        "textInputName": "scr_screens_splans::v7 editable value",
+        "value": "",
+        "viewNodeId": "scr_screens_splans::v7"
+      },
+      {
+        "artboardId": "scr_screens_swelcome",
+        "editable": true,
+        "geometry": {
+          "heightPath": "nuxieTextInputs/input_scr_screens_swelcome_v17_9ca48d16/height",
+          "rotationPath": "nuxieTextInputs/input_scr_screens_swelcome_v17_9ca48d16/rotation",
+          "scaleXPath": "nuxieTextInputs/input_scr_screens_swelcome_v17_9ca48d16/scaleX",
+          "scaleYPath": "nuxieTextInputs/input_scr_screens_swelcome_v17_9ca48d16/scaleY",
+          "widthPath": "nuxieTextInputs/input_scr_screens_swelcome_v17_9ca48d16/width",
+          "xPath": "nuxieTextInputs/input_scr_screens_swelcome_v17_9ca48d16/x",
+          "yPath": "nuxieTextInputs/input_scr_screens_swelcome_v17_9ca48d16/y"
+        },
+        "id": "text-input/scr_screens_swelcome/scr_screens_swelcome::v17",
+        "multiline": false,
+        "placeholder": "Your name",
+        "renderedNodeId": "scr_screens_swelcome::v17",
+        "screenId": "scr_screens_swelcome",
+        "secureTextEntry": false,
+        "style": {
+          "color": 4294967295,
+          "fontAssetUniqueName": "font-system-500-normal-1d4391d8-4",
+          "fontFamily": "System",
+          "fontSize": 17,
+          "fontStyle": "normal",
+          "fontWeight": "500",
+          "letterSpacing": 0,
+          "lineHeight": -1,
+          "textAlign": "left"
+        },
+        "textInputName": "scr_screens_swelcome::v17 editable value",
+        "value": "",
+        "viewNodeId": "scr_screens_swelcome::v17"
+      }
+    ],
+    "transitions": [
+      {
+        "destination": {
+          "completeEventName": "nx_enter_done:step-1"
+        },
+        "destinationScreenId": "scr_screens_swelcome",
+        "durationMs": 680,
+        "id": "step-1",
+        "kind": "page",
+        "reverse": {
+          "destination": {
+            "completeEventName": "nx_enter_done:step-1.reverse"
+          },
+          "durationMs": 680,
+          "source": {
+            "completeEventName": "nx_exit_done:step-1.reverse"
+          }
+        },
+        "source": {
+          "completeEventName": "nx_exit_done:step-1"
+        },
+        "sourceScreenId": "scr_screens_splans"
+      },
+      {
+        "destination": {
+          "completeEventName": "nx_enter_done:step-2"
+        },
+        "destinationScreenId": "scr_screens_ssession",
+        "durationMs": 680,
+        "id": "step-2",
+        "kind": "page",
+        "reverse": {
+          "destination": {
+            "completeEventName": "nx_enter_done:step-2.reverse"
+          },
+          "durationMs": 680,
+          "source": {
+            "completeEventName": "nx_exit_done:step-2.reverse"
+          }
+        },
+        "source": {
+          "completeEventName": "nx_exit_done:step-2"
+        },
+        "sourceScreenId": "scr_screens_swelcome"
+      }
+    ]
+  },
+  "requirements": {
+    "luau": {
+      "bytecodeVersions": [
+        3,
+        6
+      ],
+      "revision": "rive_0_36"
+    },
+    "minimumSdkVersion": "0.1.0",
+    "requiredCapabilities": [
+      "system-fonts"
+    ],
+    "runtimeRevision": "753fcb19fc1d6219cabbd95a7694ca1d13ae2bd8",
+    "sceneFormat": {
+      "major": 7,
+      "minor": 3
+    },
+    "timezoneData": {
+      "format": "iana-tzdb",
+      "revision": "2026c",
+      "sha256": "d4ad5c12a6be491076f333c9b4f96f60cb8ab552495bbfae0d8cdc9730ecb198"
+    }
+  },
+  "responses": {
+    "profile": {
+      "fields": [
+        {
+          "key": "name",
+          "label": "What should we call you?",
+          "rules": [
+            {
+              "bound_flags": 2,
+              "code": "maxLength",
+              "kind": 8,
+              "maximum": 24,
+              "message": "Enter fewer characters.",
+              "minimum": 0,
+              "mode": 1,
+              "model": "Responses:profile",
+              "number_bound": 0,
+              "picked_property": "",
+              "property": "name",
+              "text": "",
+              "value_count": 0,
+              "values": []
+            }
+          ],
+          "type": "string"
+        }
+      ],
+      "model": "Responses:profile",
+      "title": "Profile"
+    }
+  },
+  "ruleGroups": [
+    {
+      "member_count": 1,
+      "members": [
+        {
+          "code_property": "rule",
+          "errors_path": "errors/name",
+          "item_model": "ResponseError",
+          "message_property": "message",
+          "property": "name"
+        }
+      ],
+      "model": "Responses:profile",
+      "valid": "valid"
+    }
+  ],
+  "schemaVersion": "nuxie.journey-release.v3",
+  "screenBehaviors": [
+    {
+      "controls": [],
+      "screenId": "scr_screens_splans"
+    },
+    {
+      "controls": [],
+      "screenId": "scr_screens_ssession"
+    },
+    {
+      "controls": [],
+      "screenId": "scr_screens_swelcome"
+    }
+  ],
+  "state": {},
+  "viewModelValues": [
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "screen/phase",
+      "value": "hidden",
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "screen/appearances",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "screen/transition",
+      "value": "",
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "env/reduceMotion",
+      "value": false,
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "safeArea/bottom",
+      "value": 34,
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "safeArea/left",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "safeArea/right",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "safeArea/top",
+      "value": 62,
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_splans",
+      "instanceName": "Untitled",
+      "path": "experience",
+      "value": {
+        "vmInstanceId": "vmi_experience"
+      },
+      "viewModelName": "vm_runtime_root_scr_screens_splans"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "screen/phase",
+      "value": "hidden",
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "screen/appearances",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "screen/transition",
+      "value": "",
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "env/reduceMotion",
+      "value": false,
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "safeArea/bottom",
+      "value": 34,
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "safeArea/left",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "safeArea/right",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "safeArea/top",
+      "value": 62,
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_ssession",
+      "instanceName": "Untitled",
+      "path": "experience",
+      "value": {
+        "vmInstanceId": "vmi_experience"
+      },
+      "viewModelName": "vm_runtime_root_scr_screens_ssession"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "state/cond:22d025757f5c2525",
+      "value": false,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "state/cond:47db265e291472b9",
+      "value": false,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "screen/phase",
+      "value": "hidden",
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "screen/appearances",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "screen/transition",
+      "value": "",
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "env/reduceMotion",
+      "value": false,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "safeArea/bottom",
+      "value": 34,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "safeArea/left",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "safeArea/right",
+      "value": 0,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "safeArea/top",
+      "value": 62,
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    },
+    {
+      "instanceId": "vmi_runtime_scr_screens_swelcome",
+      "instanceName": "Untitled",
+      "path": "experience",
+      "value": {
+        "vmInstanceId": "vmi_experience"
+      },
+      "viewModelName": "vm_runtime_root_scr_screens_swelcome"
+    }
+  ]
+}

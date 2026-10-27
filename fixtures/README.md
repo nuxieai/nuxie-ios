@@ -3,6 +3,7 @@
 These JSON vectors define the contracts shared by SDK implementations.
 
 - `runtime/page-host-live-moves/`: throwaway exporter fixtures with real live-move records, not publisher output. `ExperiencePageLiveMovesTests` uses Page/run/Page and clears authored rows before player creation; production page names and empty-list validation remain unchanged. Covers native landing, cuts, Back, retained row order/identity, reconciliation, and 40-row collapse. See provenance.json for exact source hashes.
+- `runtime/page-host-text-fields/`: Calmly v2 as the iOS simulator played it (published build `01m5xgmzcztdwb3np7w1h80k4m`): plans, welcome and session, a "Your name" field on plans and welcome, a Magic Move from plans to welcome and a fade from welcome to session. `ExperiencePageHostNavigationTests` checks where native text fields draw during in-page moves (UNIV-5597). The pictures are not copied; see provenance.json for the changes and hashes.
 
 ## Published runtime values
 

@@ -40,6 +40,8 @@ enum ExperiencePageStep {
         var hidden: () async -> Void
         var active: () async throws -> Void
         var drain: () async throws -> Void = {}
+        /// Bound native fields draw nothing until the first full pass after input returns.
+        var veil: () -> Void = {}
     }
 
     static func perform(source: String, target: String, style: ExperienceScreenTransitionSpec.Kind,
@@ -81,33 +83,39 @@ enum ExperiencePageStep {
             await operations.release()
         }
 
+        var veiled = false
+        func batch(_ changes: [Change]) async throws {
+            if !veiled { veiled = true; operations.veil() }
+            try await operations.batch(changes)
+        }
+
         let incoming: [Change] = [.take, .position(isBack: isBack), .expand, .settle]
         if coveredCut {
-            try await operations.batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
+            try await batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
                 .begin(nil), .end(nil), .retire])
         } else if reduceMotion {
-            try await operations.batch(incoming + [leaving, entering, .begin(name), .end(name), hidden, .retire, active])
+            try await batch(incoming + [leaving, entering, .begin(name), .end(name), hidden, .retire, active])
         } else if style != .none, let plan {
             let outgoing = try await operations.register(source, plan.outgoingCompletionEventName)
             let incomingCompletion = try await operations.register(target, plan.incomingCompletionEventName)
-            try await operations.batch(incoming + [.phases([(source, .exiting), (target, .entering)], transition), .begin(name)])
+            try await batch(incoming + [.phases([(source, .exiting), (target, .entering)], transition), .begin(name)])
             try await waitForFrame([outgoing, incomingCompletion], duration: plan.watchdogMilliseconds)
-            try await operations.batch([.end(name), hidden, .retire, active])
+            try await batch([.end(name), hidden, .retire, active])
         } else {
             let outgoingName = plan?.outgoingCompletionEventName ?? exit.completionEventName
             var outgoing: AsyncStream<Void>?
             if let outgoingName { outgoing = try await operations.register(source, outgoingName) }
-            try await operations.batch([leaving])
+            try await batch([leaving])
             if let outgoing {
                 try await waitForFrame([outgoing], duration: plan?.watchdogMilliseconds ?? exit.watchdogMilliseconds ?? 250)
             }
             var incomingCompletion: AsyncStream<Void>?
             if let plan { incomingCompletion = try await operations.register(target, plan.incomingCompletionEventName) }
-            try await operations.batch(incoming + [entering, .begin(name), hidden, .retire])
+            try await batch(incoming + [entering, .begin(name), hidden, .retire])
             if let incomingCompletion, let plan {
                 try await waitForFrame([incomingCompletion], duration: plan.watchdogMilliseconds)
             }
-            try await operations.batch([.end(name), active])
+            try await batch([.end(name), active])
         }
         // step_end commands arrive on the next player step. Deliver that result
         // while the outgoing row still owns host commands, even after retirement.

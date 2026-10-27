@@ -108,6 +108,20 @@ final class ExperiencePageStepTests: XCTestCase {
         XCTAssertFalse(probe.order.contains("present"))
     }
 
+    func testEveryStepStyleVeilsFieldsOnceBeforeItsFirstBatch() async throws {
+        let cases: [(String, ExperienceScreenTransitionSpec.Kind, Bool, Bool)] = [
+            ("covered cut", .none, true, true), ("reduce motion", .magicMove, true, false),
+            ("Magic Move", .magicMove, false, false), ("fade", .fade, false, false), ("cut", .none, false, false)]
+        for (name, style, reduced, coveredCut) in cases {
+            let probe = PageStepProbe()
+            try await probe.perform(style: style, reduced: reduced, coveredCut: coveredCut)
+            XCTAssertEqual(probe.veilsBeforeBatch, [0], "\(name): veiled once, before any batch")
+        }
+        let unmoved = PageStepProbe()
+        try await unmoved.perform(style: .magicMove, target: "A")
+        XCTAssertEqual(unmoved.veilsBeforeBatch, [], "A step to the same Screen sends no batch and veils nothing")
+    }
+
     func testTogetherStepExpandsAndSettlesBeforePhasesAndBegin() async throws {
         for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade] {
             let probe = PageStepProbe()
@@ -518,6 +532,8 @@ private final class PageStepProbe {
     var order: [String] = []
     var batches: [[ExperiencePageStep.Change]] = []
     var batchOrderIndices: [Int] = []
+    /// How many batches had been sent at each veil.
+    var veilsBeforeBatch: [Int] = []
     var operations: ExperiencePageStep.Operations {
         .init(setInputEnabled: { self.order.append("input:\($0)") }, prepare: { self.order.append("prepare") },
             register: { id, name in
@@ -543,7 +559,8 @@ private final class PageStepProbe {
                 self.order.append("release")
                 self.outstandingRegistrations.removeAll()
             },
-            hidden: { self.order.append("hidden") }, active: { self.order.append("active") })
+            hidden: { self.order.append("hidden") }, active: { self.order.append("active") },
+            veil: { self.veilsBeforeBatch.append(self.batches.count) })
     }
     func perform(style: ExperienceScreenTransitionSpec.Kind, plan: ExperienceScreenCustomTransitionPlan? = PageStepProbe.plan,
                  reduced: Bool = false, coveredCut: Bool = false, declaredExit: Bool = true, target: String = "B", isBack: Bool = false) async throws {
