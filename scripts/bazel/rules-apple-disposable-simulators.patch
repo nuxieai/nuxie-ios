@@ -1,0 +1,13 @@
+--- a/apple/testing/default_runner/simulator_creator.py
++++ b/apple/testing/default_runner/simulator_creator.py
+@@ -165 +165 @@
+-        default=True,
++        default=None,
+@@ -179,3 +179,4 @@
+-    reuse_simulator: bool = args.reuse_simulator or (
+-        os.getenv("SIMULATOR_REUSE_SIMULATOR") is not None
+-    )
++    reuse_simulator = args.reuse_simulator
++    if reuse_simulator is None:
++        reuse_setting = os.getenv("SIMULATOR_REUSE_SIMULATOR")
++        reuse_simulator = True if reuse_setting is None else bool(reuse_setting)
