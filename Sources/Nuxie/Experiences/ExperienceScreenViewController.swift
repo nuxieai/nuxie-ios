@@ -153,6 +153,9 @@ final class ExperienceScreenViewController: UIViewController {
 
     private var interactiveScreen: ExperienceInteractiveScreen?
     private(set) var interactivePage: ExperienceInteractivePage?
+    /// The page's video host, so a checkpoint hold retains its decoders in the
+    /// same MainActor turn as the hold, ordered before the step that follows.
+    private var pageVideoPlayback: ExperienceVideoPlayback?
     private var rowScreens: [String: JourneyScreen] = [:]
     private var rowBindings: [String: ExperienceInteractiveScreen] = [:]
     /// Counts each Screen's rows, so editors can tell a revisit's row from the removed one.
@@ -439,7 +442,15 @@ final class ExperienceScreenViewController: UIViewController {
     // (nuxie-handoff pages/magic-move/design-reset/sdk-ios-page-clock.md).
     private var presented = false { didSet { applyClock() } }
     private var hiddenBelow = false { didSet { applyClock(); updatePresentationVisibility() } }
-    private var checkpointHold = false { didSet { applyClock() } }
+    private var checkpointHold = false {
+        didSet {
+            // Step retention starts with the hold, so no admission pass while the
+            // Journey records its place can close a decoder the step will carry.
+            // It ends with the hold, step or not; a step retains its own when it starts.
+            if checkpointHold != oldValue { pageVideoPlayback?.setStepInProgress(checkpointHold) }
+            applyClock()
+        }
+    }
     private var pageClockRuns: Bool { presented && !hiddenBelow && !checkpointHold }
     /// Under a sheet or modal: input off, clock and drawing on.
     var isUnderLayer: Bool { coveredByLayer && !hiddenBelow }
@@ -620,6 +631,7 @@ final class ExperienceScreenViewController: UIViewController {
                 safeArea: experienceSafeAreaInsets(for: view), colorScheme: initialColorScheme,
                 videoDecoderPool: videoDecoderPool)
             interactivePage = layer
+            pageVideoPlayback = await layer.videoPlayback
             interactive = try await layer.prepareRow(screenID: screenId, products: artifact.acquired.products)
             rowBindings[screenId] = interactive
             rowGenerations[screenId, default: 0] += 1
@@ -764,6 +776,7 @@ final class ExperienceScreenViewController: UIViewController {
                 else { try? await interactive.close() }
             }
             interactivePage = nil
+            pageVideoPlayback = nil
             rowBindings.removeAll()
             rowScreens.removeAll()
             throw error
@@ -959,6 +972,7 @@ final class ExperienceScreenViewController: UIViewController {
                 self.presentationLoop = nil
                 self.interactiveScreen = nil
                 self.interactivePage = nil
+                self.pageVideoPlayback = nil
                 self.rowBindings.removeAll()
                 self.rowScreens.removeAll()
                 self.lifecycleIncludesExitReason = false
