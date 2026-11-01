@@ -18,10 +18,8 @@ enum JourneyTrustRootError: LocalizedError, Equatable {
 
 /// Environment-scoped package authorization keys.
 ///
-/// Slots must never inherit the deterministic dev key. Pre-GA, staging,
-/// preproduction, and production publishers share one Nuxie keypair; moving to
-/// per-environment keys later is additive (add the new keys here, republish,
-/// then drop the shared key).
+/// Slots must never inherit the deterministic dev key. Staging and production
+/// trust their own publisher keys.
 enum JourneyTrustRoots {
     private static let testOnlyDevKeyId = "TEST_ONLY_DEV_KEYPAIR"
     // TEST-ONLY: Ed25519 public key derived from the crate's [0x42; 32] seed.
@@ -30,10 +28,13 @@ enum JourneyTrustRoots {
 
     private static let nuxieSharedKeyId = "nuxie-experience-2026-07"
     // Public half of the shared Nuxie publisher signing keypair (see
-    // docs runbook: experience-manifest-signing). Staging/preproduction
-    // publishes are signed with the same key pre-GA.
+    // docs runbook: experience-manifest-signing).
     private static let nuxieSharedPublicKeyBase64 =
         "tcoCFOAFJLj7A5LJ+T/jWfnvpgvmP7vhDoaHZitBpiY="
+
+    private static let stagingKeyId = "nuxie-staging-2026-10-31"
+    private static let stagingPublicKeyBase64 =
+        "vI27ZxKfAvvqhjRgU5U51sMVlXcIOBURtZTFRFPsFTU="
 
     static func keys(for environment: Environment) throws -> [JourneyPackageAuthorizationKey] {
         switch environment {
@@ -41,7 +42,11 @@ enum JourneyTrustRoots {
             return [
                 try key(id: testOnlyDevKeyId, base64: testOnlyDevPublicKeyBase64, environment: environment)
             ]
-        case .staging, .production:
+        case .staging:
+            return [
+                try key(id: stagingKeyId, base64: stagingPublicKeyBase64, environment: environment)
+            ]
+        case .production:
             return [
                 try key(id: nuxieSharedKeyId, base64: nuxieSharedPublicKeyBase64, environment: environment)
             ]
