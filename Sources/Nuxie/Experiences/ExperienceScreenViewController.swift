@@ -446,7 +446,10 @@ final class ExperienceScreenViewController: UIViewController {
 
     private func applyClock() {
         guard isPageController else { return }
-        presentationLoop?.setTimelineActive(pageClockRuns)
+        // A checkpoint hold stops authored time only. The page is still on
+        // screen, so its media stays visible: a page hidden below, or not yet
+        // presented, is the one whose media hides.
+        presentationLoop?.setTimelineActive(pageClockRuns, held: presented && !hiddenBelow && checkpointHold)
     }
 
     /// Authored time on a page whose clock cannot run only ends through its watchdog.

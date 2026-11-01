@@ -688,6 +688,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var appliedMediaVisibility = true
     private var isPresentationVisible = true
     private var isTimelineActive = true
+    /// A stopped clock on a page that stays on screen, such as a Journey checkpoint.
+    private var isTimelineHeld = false
     private var sessionIsOpen = false
     var needsSessionCleanup: Bool { sessionIsOpen }
     private(set) var hasTakenSessionOwnership = false
@@ -985,8 +987,20 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     /// Controls authored wall-clock advancement independently from drawable
     /// visibility. Hidden lifecycle phases freeze time while queued host work
     /// remains executable through an explicit zero-delta step.
-    func setTimelineActive(_ active: Bool) {
-        guard isTimelineActive != active else { return }
+    ///
+    /// `held` marks a stopped clock on a page that stays on screen, as during a
+    /// Journey checkpoint. Only authored time holds: the page is still on screen
+    /// for its media, so a playing video is neither paused nor suspended.
+    func setTimelineActive(_ active: Bool, held: Bool = false) {
+        let held = held && !active
+        guard isTimelineActive != active else {
+            guard isTimelineHeld != held else { return }
+            isTimelineHeld = held
+            reconcile()
+            return
+        }
+        // Both facts change before any reconcile, so a hold never reads as hidden.
+        isTimelineHeld = held
         isTimelineActive = active
         if !active { endActiveInput() }
         semanticPresentationEpoch &+= 1
@@ -1145,8 +1159,9 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
         // Media must observe visibility even when no display tick or render is
         // pending. Keep the transition serialized with all other screen work.
-        if appliedMediaVisibility != shouldPresent {
-            return .setMediaVisible(shouldPresent)
+        // It follows real visibility, not the clock: a held page is on screen.
+        if appliedMediaVisibility != isOnScreen {
+            return .setMediaVisible(isOnScreen)
         }
 
         if !shouldAdvance {
@@ -1319,7 +1334,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 self?.completeFrame(frameID, generation: generation)
             }
         }
-        guard shouldPresent else {
+        // An occluded render suspends media, so only a page off screen gets one.
+        guard isOnScreen else {
             return .render(.occluded, layoutScaleFactor: scale, completion: completion)
         }
         guard size.pixelWidth > 0,
@@ -1416,10 +1432,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         return size
     }
 
-    private var shouldAdvance: Bool {
+    private var shouldAdvance: Bool { isTimelineActive && isLive }
+
+    /// Started, in a window, scene or screen, with the app and scene active.
+    private var isLive: Bool {
         guard isStarted,
               !isShuttingDown,
-              isTimelineActive,
               applicationIsActive,
               let surfaceView,
               surfaceView.window != nil
@@ -1429,8 +1447,13 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         return true
     }
 
-    private var shouldPresent: Bool {
-        guard shouldAdvance,
+    private var shouldPresent: Bool { isTimelineActive && isOnScreen }
+
+    /// Real visibility: a running or held clock (presented, not hidden below),
+    /// a live host and a visible surface. Media follows this, not the clock.
+    private var isOnScreen: Bool {
+        guard isTimelineActive || isTimelineHeld,
+              isLive,
               isPresentationVisible,
               let surfaceView,
               surfaceView.runtimeDisplayScale.isFinite,
