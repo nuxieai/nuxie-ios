@@ -1711,7 +1711,7 @@ actor JourneyReleaseAcquisitionStore: JourneyReleaseAcquiring {
                     sourceScreenId: $0.sourceScreenId,
                     destinationScreenId: $0.destinationScreenId,
                     durationMs: $0.durationMs,
-                    incomingOnTop: true,
+                    incomingOnTop: $0.incomingOnTop ?? true,
                     source: .init(completeEventName: $0.source.completeEventName),
                     destination: .init(
                         completeEventName: $0.destination.completeEventName

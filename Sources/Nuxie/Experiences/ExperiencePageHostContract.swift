@@ -57,6 +57,8 @@ enum ExperiencePageHostContract {
         private let kind: PublishedKind
         private let defaultPair: Bool?
         var isDefaultPair: Bool { defaultPair == true }
+        /// Present and false when the Screen being left draws on top going forward.
+        let incomingOnTop: Bool?
         var planKind: NativeExperienceTransition.Kind { .page }
         let sourceScreenId: String
         let destinationScreenId: String

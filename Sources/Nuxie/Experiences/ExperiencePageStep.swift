@@ -89,7 +89,8 @@ enum ExperiencePageStep {
             try await operations.batch(changes)
         }
 
-        let incoming: [Change] = [.take, .position(below: isBack), .expand, .settle]
+        // Back always goes below: a reverse names no flag, so its plan keeps the forward default.
+        let incoming: [Change] = [.take, .position(below: isBack || plan?.incomingOnTop == false), .expand, .settle]
         if coveredCut {
             try await batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
                 .begin(nil), .end(nil), .retire])

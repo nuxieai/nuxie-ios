@@ -943,7 +943,7 @@ enum JourneyReleaseSchemaPrimitives {
                     "id", "kind", "sourceScreenId", "destinationScreenId", "durationMs",
                     "source", "destination",
                 ],
-                optional: ["reverse", "defaultPair"],
+                optional: ["reverse", "defaultPair", "incomingOnTop"],
                 path: "render.transitions[\(index)]"
             )
             try identifier(transition["id"], path: "render.transitions[\(index)].id")
@@ -961,6 +961,9 @@ enum JourneyReleaseSchemaPrimitives {
             }
             try integer(transition["durationMs"], minimum: 0, maximum: 60_000, path: "render.transitions[\(index)].durationMs")
             if let marker = transition["defaultPair"], !isJSONBoolean(marker) { try invalid("render.transitions[\(index)].defaultPair") }
+            if let marker = transition["incomingOnTop"], !isJSONBoolean(marker) || marker as? Bool != false {
+                try invalid("render.transitions[\(index)].incomingOnTop")
+            }
             try validateEndpoint(transition["source"], path: "render.transitions[\(index)].source")
             try validateEndpoint(transition["destination"], path: "render.transitions[\(index)].destination")
             guard (transition["source"] as? [String: Any])?["completeEventName"] as? String == "nx_exit_done:\(id)",
