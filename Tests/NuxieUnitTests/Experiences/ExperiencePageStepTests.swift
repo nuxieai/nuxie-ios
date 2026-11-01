@@ -20,6 +20,61 @@ final class ExperiencePageStepTests: XCTestCase {
         }
     }
 
+    /// Lists by hand. A is the outgoing row; a new row is appended first, as a first visit is.
+    func testPositionPlacesTheRowDirectlyBelowOrAboveTheOutgoingRow() {
+        let cases: [(before: [String], new: String?, target: String, below: Bool,
+                     mutation: ExperiencePageRows.Mutation?, after: [String])] = [
+            (["A"], "B", "B", true, .move("B", 1, 0), ["B", "A"]),
+            (["A", "B"], nil, "B", true, .move("B", 1, 0), ["B", "A"]),
+            (["C", "A", "B"], nil, "C", true, nil, ["C", "A", "B"]),
+            (["A"], "B", "B", false, nil, ["A", "B"]),
+            (["B", "A"], nil, "B", false, .move("B", 0, 1), ["A", "B"]),
+            (["A", "B"], nil, "B", false, nil, ["A", "B"]),
+            (["C", "A", "B"], nil, "C", false, .move("C", 0, 1), ["A", "C", "B"])
+        ]
+        for item in cases {
+            let name = "\(item.before) + \(item.new ?? "kept") \(item.target) below: \(item.below)"
+            var rows = ExperiencePageRows()
+            for id in item.before { _ = rows.take(id) }
+            if let new = item.new { XCTAssertEqual(rows.take(new), .append(new, item.before.count), name) }
+            XCTAssertEqual(rows.position(item.target, relativeTo: "A", below: item.below), item.mutation, name)
+            XCTAssertEqual(rows.screenIDs, item.after, name)
+        }
+    }
+
+    /// Back goes below whatever its plan says: a reverse names no flag, so it falls back to the forward `true`.
+    func testRowGoesBelowOnBackOrWhenThePlanKeepsTheLeavingScreenOnTop() async throws {
+        let leavingOnTop = ExperienceScreenCustomTransitionPlan(transitionId: "pair", durationMilliseconds: 450,
+            incomingOnTop: false, outgoingCompletionEventName: "exit", incomingCompletionEventName: "enter")
+        let back = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: "route", sourceScreenId: "A",
+            destinationScreenId: "B", declarations: [declaration(id: "route", from: "B", to: "A", marked: false)]))
+        XCTAssertEqual(back.transitionId, "route.reverse")
+        XCTAssertTrue(back.incomingOnTop)
+        let cases: [(name: String, plan: ExperienceScreenCustomTransitionPlan?, isBack: Bool, below: Bool)] = [
+            ("Back", back, true, true),
+            ("Back with no plan", nil, true, true),
+            ("forward, leaving Screen on top", leavingOnTop, false, true),
+            ("normal forward", PageStepProbe.plan, false, false),
+            ("forward with no plan", nil, false, false)
+        ]
+        let paths: [(style: ExperienceScreenTransitionSpec.Kind, reduced: Bool, covered: Bool)] = [
+            (.magicMove, false, false), (.fade, false, false), (.none, false, false),
+            (.magicMove, true, false), (.none, true, true)
+        ]
+        for item in cases {
+            for path in paths {
+                let probe = PageStepProbe()
+                try await probe.perform(style: path.style, plan: item.plan, reduced: path.reduced,
+                    coveredCut: path.covered, isBack: item.isBack)
+                let positions = probe.batches.flatMap { $0 }.filter {
+                    if case .position = $0 { return true }
+                    return false
+                }
+                XCTAssertEqual(positions, [.position(below: item.below)], "\(item.name), \(path)")
+            }
+        }
+    }
+
     #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
     func testEndCommandsKeepOutgoingSaveOwnerUntilDeliveryAcrossEveryStepStyle() async throws {
         for (style, reduced, back, covered) in [

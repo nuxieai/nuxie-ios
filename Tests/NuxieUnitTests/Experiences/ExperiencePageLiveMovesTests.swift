@@ -266,6 +266,28 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
         }
     }
 
+    func testBrandNewRowPlacedBelowEndsUnderTheOutgoingRow() async throws {
+        try await withLiveMovePage { page in
+            _ = try await page.prepareRow(screenID: "B", products: [])
+            try await page.apply([.take, .position(below: true), .expand,
+                .phases([("A", .exiting), ("B", .entering)], "t1"), .begin("t1"), .end("t1")],
+                source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
+            await assertRows(page, ["B", "A"], collapsed: [])
+        }
+    }
+
+    func testBrandNewRowPlacedBelowSitsDirectlyUnderTheOutgoingRowNotAtTheBottom() async throws {
+        try await withLiveMovePage(count: 40) { page in
+            let reachable: Set<String> = ["A", "B", "R2"]
+            try await page.apply([.take, .position(below: false), .expand, .retire],
+                source: "A", target: "R2", reachable: reachable, reduceMotion: false)
+            await assertRows(page, ["A", "R2"], collapsed: ["A"])
+            try await page.apply([.take, .position(below: true), .expand],
+                source: "R2", target: "B", reachable: reachable, reduceMotion: false)
+            await assertRows(page, ["A", "B", "R2"], collapsed: ["A"])
+        }
+    }
+
     func testFortyRowsWithThirtyNineCollapsedStepWithoutError() async throws {
         try await withLiveMovePage(count: 40, preload: true) { page in
             let ids = (0..<40).map(liveMoveScreen)
