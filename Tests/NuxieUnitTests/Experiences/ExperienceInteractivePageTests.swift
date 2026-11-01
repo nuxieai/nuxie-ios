@@ -244,7 +244,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             (.fade, true, ["B", "A"])] {
             try await withLiveMovePage(initialA: false) { layer in
                 try await layer.insert(screenID: "A", at: 0)
-                try await layer.apply([.take, .position(isBack: back), .expand,
+                try await layer.apply([.take, .position(below: back), .expand,
                     .phases([("A", .exiting), ("B", .entering)], ""), .begin(nil)], source: "A", target: "B",
                     reachable: ["A", "B"], reduceMotion: false)
                 _ = try await layer.step(elapsedSeconds: 0)
@@ -263,7 +263,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             let original = try await layer.snapshot(screenID: "A")
             try await layer.apply([.retire], source: "A", target: "B",
                 reachable: ["A", "B"], reduceMotion: false)
-            try await layer.apply([.take, .position(isBack: false), .expand,
+            try await layer.apply([.take, .position(below: false), .expand,
                 .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back")], source: "B", target: "A",
                 reachable: ["A", "B"], reduceMotion: false)
             let forwardOrder = await layer.mountedScreenIDs
@@ -277,7 +277,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
             try await layer.setPhases([("A", .hidden), ("B", .active)])
             try await layer.apply([.retire], source: "A", target: "B",
                 reachable: ["A", "B"], reduceMotion: false)
-            try await layer.apply([.take, .position(isBack: true), .expand,
+            try await layer.apply([.take, .position(below: true), .expand,
                 .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back")], source: "B", target: "A",
                 reachable: ["A"], reduceMotion: false)
             let backOrder = await layer.mountedScreenIDs
@@ -295,7 +295,7 @@ final class ExperienceInteractivePageTests: XCTestCase {
     func testSettleRunsOneOrdinaryZeroTimeStepAfterExpansion() async throws {
         try await withLiveMovePage(initialA: false) { layer in
             try await layer.insert(screenID: "A", at: 0)
-            let settled = try await layer.apply([.take, .position(isBack: false), .expand, .settle],
+            let settled = try await layer.apply([.take, .position(below: false), .expand, .settle],
                 source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
             let step = try XCTUnwrap(settled, "Route (a): settle returns its step for ordinary delivery")
             XCTAssertEqual(step.mountedScreenIDs, ["A", "B"])
@@ -307,12 +307,12 @@ final class ExperienceInteractivePageTests: XCTestCase {
     func testInsertAndMoveExpandWithoutAnInterveningStep() async throws {
         try await withLiveMovePage(initialA: false) { layer in
             try await layer.insert(screenID: "A", at: 0)
-            let first = try await layer.apply([.take, .position(isBack: false), .expand],
+            let first = try await layer.apply([.take, .position(below: false), .expand],
                 source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
             XCTAssertNil(first, "Row mutations and expansion must not advance the player")
             let inserted = await layer.mountedScreenIDs
             XCTAssertEqual(inserted, ["A", "B"])
-            let moved = try await layer.apply([.take, .position(isBack: false), .expand],
+            let moved = try await layer.apply([.take, .position(below: false), .expand],
                 source: "B", target: "A", reachable: ["A", "B"], reduceMotion: false)
             XCTAssertNil(moved)
             let reordered = await layer.mountedScreenIDs

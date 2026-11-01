@@ -259,7 +259,7 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
     func testFreshlyAppendedIncomingRowBeginsAfterMountStepWithoutDrawingBetween() async throws {
         try await withLiveMovePage { page in
             _ = try await page.prepareRow(screenID: "B", products: [])
-            try await page.apply([.take, .position(isBack: false), .expand,
+            try await page.apply([.take, .position(below: false), .expand,
                 .phases([("A", .exiting), ("B", .entering)], "t1"), .begin("t1"), .end("t1")],
                 source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
             await assertRows(page, ["A", "B"], collapsed: [])
@@ -310,7 +310,7 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
             try await page.insert(screenID: "B", at: 0)
             try await page.setPhases([("A", .hidden), ("B", .active)])
             try await page.apply([.retire], source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
-            try await page.apply([.take, .position(isBack: true), .expand,
+            try await page.apply([.take, .position(below: true), .expand,
                 .phases([("B", .exiting), ("A", .entering)], "back"), .begin("back"), .end("back"), .retire],
                 source: "B", target: "A", reachable: ["A", "B"], reduceMotion: false)
             await assertRows(page, ["A", "B"], collapsed: ["B"])

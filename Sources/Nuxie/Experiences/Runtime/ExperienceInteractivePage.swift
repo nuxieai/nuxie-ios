@@ -319,14 +319,14 @@ actor ExperienceInteractivePage {
             switch change {
             case .take:
                 try await prepareRowLocked(screenID: target, products: rows[target]?.products ?? [])
-            case .position(let isBack):
+            case .position(let below):
                 var next = rowList
                 if !next.screenIDs.contains(target) {
                     try await applyRowMutation(next.take(target))
                     rowList = next
-                    if !isBack { continue }
+                    if !below { continue }
                 }
-                if let mutation = next.position(target, relativeTo: source, isBack: isBack) {
+                if let mutation = next.position(target, relativeTo: source, below: below) {
                     try await applyRowMutation(mutation)
                     rowList = next
                 }
