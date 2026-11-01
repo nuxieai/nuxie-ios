@@ -1,4 +1,5 @@
 #if canImport(UIKit) && NUXIE_HOSTED_INPUT_TESTS
+import AVFoundation
 import UIKit
 import QuartzCore
 import Metal
@@ -141,6 +142,155 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
                 .bytes(Data("edited response".utf8)))
             XCTAssertEqual(checkpoints, 1, "Navigation must not commit the dismissal twice")
         }
+    }
+
+    // A Journey checkpoint holds authored time, not media: during the hold the page
+    // stays visible for its video, and only what is authored stands still.
+
+    func testACheckpointHoldKeepsThePlayingVideosOwnPlayer() async throws {
+        try await withCoordinator(payload: try await hostedLiveMoveVideoPayload()) { _, controller, _, _ in
+            let playback = try await playingVideo(on: controller)
+            // Strong references keep a disposed player's address from being reused.
+            let players = try videoPlayers(playback)
+            let identities = playback.decoderPlayerIdentities
+            XCTAssertEqual(identities.count, players.count)
+            let pauses = PlayerPauseWatch(players.filter { $0.rate > 0 })
+            defer { pauses.stop() }
+            var suspended: Set<UInt32> = []
+            controller.setCheckpointHold(true)
+            let held = Date().addingTimeInterval(0.3)
+            while Date() < held {
+                suspended.formUnion(try suspensionReasons(playback))
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 2_000_000)
+            }
+            controller.setCheckpointHold(false)
+            let released = Date().addingTimeInterval(0.2)
+            while Date() < released {
+                suspended.formUnion(try suspensionReasons(playback))
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 2_000_000)
+            }
+            XCTAssertEqual(playback.decoderPlayerIdentities, identities,
+                "The hold keeps every decoder and its own AVPlayer: \(playback.playbackDiagnostics)")
+            XCTAssertEqual(pauses.recorded, [], "No playing AVPlayer pauses for the hold")
+            XCTAssertEqual(suspended, [], "The hold never suspends the page's video")
+            withExtendedLifetime(players) {}
+        }
+    }
+
+    func testACheckpointHoldKeepsPresentingVideoWhileAuthoredTimeStandsStill() async throws {
+        let payload = try await labeled("video payload") { try await hostedLiveMoveVideoPayload() }
+        try await labeled("hosted video page") { try await withCoordinator(payload: payload) { _, controller, _, _ in
+            let page = try XCTUnwrap(controller.interactivePage)
+            let loop = try presentationLoop(controller)
+            _ = try await labeled("video plays") { try await playingVideo(on: controller) }
+            // A page delivers a frame's semantics only once that frame's drawable is presented.
+            var presented = 0
+            controller.onSemanticCapture = { _ in presented += 1 }
+            // The mascot's authored walk animation drives its private phase.
+            let firstPhase = try await labeled("phase before the hold") { try await presentedMascotPhase(page, loop) }
+            let unheld = try XCTUnwrap(firstPhase, "The playing page presents its state")
+            var moved = false
+            let running = Date().addingTimeInterval(2)
+            while !moved, Date() < running {
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 20_000_000)
+                let phase = try await labeled("phase while running") { try await presentedMascotPhase(page, loop) }
+                moved = phase.map { $0 != unheld } ?? false
+            }
+            XCTAssertTrue(moved, "The authored animation moves while the page clock runs")
+            controller.setCheckpointHold(true)
+            // Read on the presentation lane, after any step it accepted before the hold.
+            let phaseAtHold = try await labeled("phase at the hold") { try await presentedMascotPhase(page, loop) }
+            let elapsedAtHold = controller.timelineElapsedSeconds
+            let picturesAtHold = await page.deliveredVideoFrames
+            var presentedAtNewPicture: Int?
+            var presentedNewPicture = false
+            let held = Date().addingTimeInterval(1)
+            while !presentedNewPicture, Date() < held {
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 16_000_000)
+                if presentedAtNewPicture == nil, await page.deliveredVideoFrames > picturesAtHold {
+                    presentedAtNewPicture = presented
+                }
+                if let mark = presentedAtNewPicture, presented > mark { presentedNewPicture = true }
+            }
+            let phaseWhileHeld = try await labeled("phase while held") { try await presentedMascotPhase(page, loop) }
+            let elapsedWhileHeld = controller.timelineElapsedSeconds
+            let picturesWhileHeld = await page.deliveredVideoFrames
+            controller.setCheckpointHold(false)
+            controller.onSemanticCapture = nil
+            XCTAssertTrue(presentedNewPicture, "The held page presents a new video picture: "
+                + "\(Int(picturesWhileHeld) - Int(picturesAtHold)) "
+                + "new pictures, \(presentedAtNewPicture.map { presented - $0 } ?? 0) presented frames after the first")
+            // The runtime reads semantics only from a presented frame, so a held page
+            // that presents nothing leaves its authored animation unreadable.
+            XCTAssertNotNil(phaseAtHold, "The held page's state at the hold was presented")
+            XCTAssertNotNil(phaseWhileHeld, "The held page's state was presented again while held")
+            if let phaseAtHold, let phaseWhileHeld {
+                XCTAssertEqual(phaseWhileHeld, phaseAtHold, "Authored animation stands still through the hold")
+            }
+            XCTAssertEqual(elapsedWhileHeld, elapsedAtHold, "Every render through the hold advances authored time by zero")
+        } }
+    }
+
+    func testACheckpointHoldOnAPageWithNoVideoRendersNothing() async throws {
+        try await withCoordinator { _, controller, _, _ in
+            let loop = try presentationLoop(controller)
+            var presented = 0
+            controller.onSemanticCapture = { _ in presented += 1 }
+            let ran = try await timelineAdvances(controller)
+            XCTAssertTrue(ran, "The page clock runs before the hold")
+            controller.setCheckpointHold(true)
+            let settled = Date().addingTimeInterval(5)
+            while !controller.hasCompletedLatestFrame, Date() < settled {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            XCTAssertTrue(controller.hasCompletedLatestFrame, "The lane settles before the baseline")
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let framesAtHold = try renderedFrames(loop)
+            let presentedAtHold = presented
+            let elapsedAtHold = controller.timelineElapsedSeconds
+            let held = Date().addingTimeInterval(0.3)
+            while Date() < held {
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 16_000_000)
+            }
+            XCTAssertEqual(try renderedFrames(loop), framesAtHold, "A held page with nothing playing renders no frame")
+            XCTAssertEqual(presented, presentedAtHold, "A held page with nothing playing presents nothing")
+            XCTAssertEqual(controller.timelineElapsedSeconds, elapsedAtHold)
+            controller.setCheckpointHold(false)
+            controller.onSemanticCapture = nil
+            let resumed = try await timelineAdvances(controller)
+            XCTAssertTrue(resumed, "The page clock runs again after the hold")
+        }
+    }
+
+    func testAPageHiddenBelowOrRetiredStillGivesItsVideoBack() async throws {
+        var retiring: ExperienceVideoPlayback?
+        try await withCoordinator(payload: try await hostedLiveMoveVideoPayload()) { _, controller, _, _ in
+            let playback = try await playingVideo(on: controller)
+            retiring = playback
+            // A hold that ends without a page step leaves nothing held behind it.
+            controller.setCheckpointHold(true)
+            try await Task.sleep(nanoseconds: 100_000_000)
+            controller.setCheckpointHold(false)
+            _ = try await playingVideo(on: controller)
+            await controller.coverPage(reduceMotion: true)
+            let hidden = Date().addingTimeInterval(5)
+            while Date() < hidden {
+                if try suspensionReasons(playback).contains(1), playback.activeDecoderCount == 0 { break }
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertTrue(try suspensionReasons(playback).contains(1), "A page hidden below suspends its video")
+            XCTAssertEqual(playback.activeDecoderCount, 0,
+                "A page hidden below gives its decoders back: \(playback.playbackDiagnostics)")
+        }
+        let playback = try XCTUnwrap(retiring)
+        XCTAssertEqual(playback.activeDecoderCount, 0, "A retired page keeps no decoder")
+        XCTAssertTrue(playback.decoderPlayerIdentities.isEmpty)
     }
 
     func testHandledCheckpointLeavesTheOnlyExitAndWaitToThePageStep() async throws {
@@ -1815,6 +1965,125 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         return (sample, sampled)
     }
 
+    /// page2 with its exported video slot filled. The exporter's loop.mp4 is not in
+    /// the repository, so the greeting clip (64x32, 2.022 s) plays in that slot.
+    private func hostedLiveMoveVideoPayload() async throws -> AuthenticatedRuntimePayload {
+        let base = try await hostedLiveMovePayload()
+        let root = experiencePreparationRepositoryRoot()
+        struct Inventory: Decodable {
+            struct Video: Decodable {
+                let assetUniqueName: String
+                let authoredAssetId: UInt32
+                let sourceAssetKey: String
+            }
+            let videos: [Video]
+            let videoElements: [NativeExperienceVideoElement]
+        }
+        let inventory = try JSONDecoder().decode(Inventory.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/runtime/page-host-live-moves/video-inventory2.json")))
+        let slot = try XCTUnwrap(inventory.videos.first)
+        let mediaURL = root.appendingPathComponent("fixtures/video/greeting.mp4")
+        let media = try Data(contentsOf: mediaURL)
+        let digest = SHA256Provider.hexDigest(media)
+        let key = "assets/sha256/\(digest).mp4"
+        var plan = base.renderPlan
+        plan.videos = [NativeExperienceVideoAsset(location: .external(key: key), sourceAssetKey: slot.sourceAssetKey,
+            authoredAssetId: UInt64(slot.authoredAssetId), assetUniqueName: slot.assetUniqueName, sha256: digest,
+            sizeBytes: media.count, width: 64, height: 32, durationMs: 2022, videoCodec: "avc1.42c00a",
+            audioCodec: "mp4a.40.2", captionTracks: [], required: true)]
+        plan.videoElements = inventory.videoElements
+        return .init(valuePolicy: base.valuePolicy, authenticatedKeyID: base.authenticatedKeyID,
+            requiredCapabilities: base.requiredCapabilities, renderPlan: plan, journey: base.journey,
+            definition: base.definition, sceneBytes: base.sceneBytes,
+            assets: base.assets + [.init(kind: .video, authoredAssetID: slot.authoredAssetId,
+                assetUniqueName: slot.assetUniqueName, sourceKey: key, contentType: "video/mp4", sha256: digest,
+                required: true, bytes: nil, fileURL: mediaURL)])
+    }
+
+    private struct VideoNotPlaying: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Waits until the page's video plays early in its 2.022 s clip, so a hold
+    /// that follows cannot reach the clip's end, where it pauses to loop.
+    private func playingVideo(on controller: ExperienceScreenViewController) async throws -> ExperienceVideoPlayback {
+        let page = try XCTUnwrap(controller.interactivePage)
+        let host = await page.videoPlayback
+        let playback = try XCTUnwrap(host, "The page opens its video host")
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline {
+            let playing = try videoPlayers(playback).filter { $0.rate > 0 }
+            if !playing.isEmpty, playing.allSatisfy({ (0.05...1.2).contains($0.currentTime().seconds) }) {
+                return playback
+            }
+            controller.advance(delta: 1 / 60)
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        throw VideoNotPlaying(description: "No video plays early in its clip: \(playback.playbackDiagnostics)")
+    }
+
+    /// The live decoders' players, read from the video host.
+    private func videoPlayers(_ playback: ExperienceVideoPlayback) throws -> [AVPlayer] {
+        let decoders = try XCTUnwrap(Mirror(reflecting: playback).children
+            .first { $0.label == "decoders" }?.value as? [Any])
+        return decoders.compactMap { decoder in
+            let fields = Mirror(reflecting: decoder).children
+            guard (fields.first { $0.label == "disposed" }?.value as? Bool) == false else { return nil }
+            return fields.first { $0.label == "player" }?.value as? AVPlayer
+        }
+    }
+
+    private func suspensionReasons(_ playback: ExperienceVideoPlayback) throws -> Set<UInt32> {
+        try XCTUnwrap(Mirror(reflecting: playback).children
+            .first { $0.label == "suspensionReasons" }?.value as? Set<UInt32>)
+    }
+
+    private func presentationLoop(_ controller: ExperienceScreenViewController) throws -> ExperienceRuntimePresentationLoop {
+        try XCTUnwrap(Mirror(reflecting: controller).children
+            .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop)
+    }
+
+    /// Every render the loop has issued, whether it presented or not.
+    private func renderedFrames(_ loop: ExperienceRuntimePresentationLoop) throws -> UInt64 {
+        try XCTUnwrap(Mirror(reflecting: loop).children.first { $0.label == "frameSequence" }?.value as? UInt64)
+    }
+
+    private struct MascotPhaseUnavailable: Error {}
+
+    /// The mascot's private phase, which its authored walk animation keys. Read on
+    /// the presentation lane, after every operation the lane accepted before it.
+    /// Nil when the page's latest state was never presented: the runtime reads
+    /// semantics only from the frame it last presented.
+    private func presentedMascotPhase(_ page: ExperienceInteractivePage,
+                                      _ loop: ExperienceRuntimePresentationLoop) async throws -> Float? {
+        let box = PhaseBox()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            loop.enqueue(.init {
+                let capture: NuxieNativeSemanticCapture
+                do {
+                    capture = try await page.runtime.captureSemantics(nativeInputs: ["edit"])
+                } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .handleMismatch {
+                    box.unpresented = true
+                    return .work(requestsFrame: false)
+                } catch {
+                    throw LabeledFailure(description: "semantic capture: \(error)")
+                }
+                guard let node = capture.nativeInputs["edit"]?.map(\.nodeID).min(),
+                      let owner = try await labeled("field owner", {
+                          try await page.runtime.fieldViewModelInstance(captureID: capture.id, nodeID: node, name: "edit")
+                      }) else { throw MascotPhaseUnavailable() }
+                let snapshot = try await labeled("field owner snapshot") { try await page.runtime.fieldOwnerSnapshot(owner) }
+                guard case .number(let value)? = snapshot.values.first(where: {
+                    $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "phase"
+                })?.value else { throw MascotPhaseUnavailable() }
+                box.value = value
+                return .work(requestsFrame: false)
+            }, completion: { continuation.resume(with: $0) })
+        }
+        if box.unpresented { return nil }
+        return try XCTUnwrap(box.value, "The queued phase read ran")
+    }
+
     private func presentationIsVisible(_ controller: ExperienceScreenViewController) -> Bool? {
         let loop = Mirror(reflecting: controller).children
             .first { $0.label == "presentationLoop" }?.value as? ExperienceRuntimePresentationLoop
@@ -2022,6 +2291,42 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         oldKey?.makeKey()
 
     }
+}
+
+/// Names the step a failure came from, since a thrown error alone may not say.
+private struct LabeledFailure: Error, CustomStringConvertible {
+    let description: String
+}
+
+private func labeled<T>(_ name: String, _ body: () async throws -> T) async throws -> T {
+    do { return try await body() } catch { throw LabeledFailure(description: "\(name): \(error)") }
+}
+
+/// Records every time a watched AVPlayer's rate drops to zero, whoever paused it.
+private final class PlayerPauseWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pauses: [String] = []
+    private var observations: [NSKeyValueObservation] = []
+
+    init(_ players: [AVPlayer]) {
+        observations = players.enumerated().map { index, player in
+            player.observe(\.rate, options: [.new]) { [weak self] _, change in
+                guard change.newValue == 0, let self else { return }
+                self.lock.withLock { self.pauses.append("player \(index) paused") }
+            }
+        }
+    }
+
+    var recorded: [String] { lock.withLock { pauses } }
+
+    func stop() {
+        for observation in observations { observation.invalidate() }
+    }
+}
+
+private final class PhaseBox: @unchecked Sendable {
+    var value: Float?
+    var unpresented = false
 }
 
 /// UIKit's coordinator for a swipe the test drives: the finger lifts, then the transition ends.
