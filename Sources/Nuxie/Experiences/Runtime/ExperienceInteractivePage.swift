@@ -10,6 +10,8 @@ actor ExperienceInteractivePage {
         let rows: [String: ExperienceInteractiveStepResult]
         let unattributedEvents: [NuxieNativeEvent]
         var mountedScreenIDs: [String] = []
+        /// The page's video still wants frames: loading, seeking or playing.
+        var videoActive = false
     }
 
     struct Completion: Sendable {
@@ -573,7 +575,7 @@ actor ExperienceInteractivePage {
         return Step(native: result, rows: projected,
             unattributedEvents: result.events.enumerated().compactMap { index, event in
                 eventOwners[index] == nil ? event : nil
-            }, mountedScreenIDs: mountedScreenIDs)
+            }, mountedScreenIDs: mountedScreenIDs, videoActive: videoActive)
     }
 
     func updateEnvironment(reduceMotion: Bool? = nil, fontScale: Double? = nil, safeArea: ExperienceSafeAreaInsets? = nil,
