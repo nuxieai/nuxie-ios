@@ -84,6 +84,13 @@
     { "value": [], "accept": false },
     { "value": {}, "accept": false }
   ],
+  "incomingOnTop": [
+    { "omit": true, "accept": true },
+    { "value": false, "accept": true },
+    { "value": true, "accept": false },
+    { "value": 0, "accept": false },
+    { "value": null, "accept": false }
+  ],
   "journeyTransitions": [
     {
       "value": {
