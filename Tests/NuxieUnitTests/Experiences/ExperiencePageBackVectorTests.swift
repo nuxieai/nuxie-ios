@@ -105,9 +105,9 @@ private struct Page {
         let source = active
         if !rows.screenIDs.contains(target) {
             _ = rows.take(target)
-            if isBack { _ = rows.position(target, relativeTo: source, isBack: true) }
+            if isBack { _ = rows.position(target, relativeTo: source, below: true) }
         } else {
-            _ = rows.position(target, relativeTo: source, isBack: isBack)
+            _ = rows.position(target, relativeTo: source, below: isBack)
         }
         _ = rows.take(target)
         history = next

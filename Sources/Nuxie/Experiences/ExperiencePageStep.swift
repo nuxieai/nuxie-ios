@@ -5,7 +5,7 @@ import Foundation
 enum ExperiencePageStep {
     enum Change: Equatable, Sendable {
         case take
-        case position(isBack: Bool)
+        case position(below: Bool)
         case expand
         /// Route (a): one ordinary zero-time step after the incoming row is
         /// placed and woken, so its machine settles before the phase writes.
@@ -89,7 +89,7 @@ enum ExperiencePageStep {
             try await operations.batch(changes)
         }
 
-        let incoming: [Change] = [.take, .position(isBack: isBack), .expand, .settle]
+        let incoming: [Change] = [.take, .position(below: isBack), .expand, .settle]
         if coveredCut {
             try await batch([.phases([(source, .hidden), (target, .hidden)], "")] + incoming + [
                 .begin(nil), .end(nil), .retire])
@@ -209,12 +209,12 @@ struct ExperiencePageRows {
 
     /// Destination indexes are in the list after removing the incoming item.
     /// Moving preserves the instance and sleep state; taking the row expands it separately.
-    mutating func position(_ screenID: String, relativeTo outgoing: String, isBack: Bool) -> Mutation? {
+    mutating func position(_ screenID: String, relativeTo outgoing: String, below: Bool) -> Mutation? {
         guard screenID != outgoing,
               let from = screenIDs.firstIndex(of: screenID),
               let outgoingIndex = screenIDs.firstIndex(of: outgoing) else { return nil }
         let adjustedOutgoing = outgoingIndex - (from < outgoingIndex ? 1 : 0)
-        let to = adjustedOutgoing + (isBack ? 0 : 1)
+        let to = adjustedOutgoing + (below ? 0 : 1)
         guard from != to else { return nil }
         screenIDs.remove(at: from)
         screenIDs.insert(screenID, at: to)
