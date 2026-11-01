@@ -936,8 +936,11 @@ final class ExperienceScreenViewController: UIViewController {
         }
     }
 
-    /// A durable checkpoint may wait indefinitely before the step starts. The source
-    /// keeps its last frame until the checkpoint returns or the page starts its exit.
+    /// A durable checkpoint may wait indefinitely before the step starts. Until the
+    /// checkpoint returns or the page starts its exit, the hold stops authored time
+    /// only: no exit, step or entrance plays, and every render advances authored
+    /// time by zero. The page stays on screen for its media, so a playing video
+    /// keeps playing and presenting new pictures through the hold.
     func setCheckpointHold(_ held: Bool) { checkpointHold = held }
 
     private func didPresentDrawable(_ drawable: ExperienceRuntimePresentedDrawable) {
