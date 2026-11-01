@@ -511,9 +511,13 @@ final class ExperienceVideoPlayback {
     }
 
     /// Whether the tick's frame path may hand the runtime a decoded picture,
-    /// read from the decoder's state at the moment of presenting.
+    /// read from the decoder's state at the moment of presenting. `ready` is
+    /// the readiness the runtime has been told, so an item that turns ready
+    /// after the tick's status read presents nothing until the next tick
+    /// reports it: a reopened decoder's time-0 picture never reaches the
+    /// runtime before the seek back to its kept position.
     nonisolated static func framePathPresents(ready: Bool, seeking: Bool, suspended: Bool) -> Bool {
-        !seeking && !suspended
+        ready && !seeking && !suspended
     }
 
     /// Called after Luau/state-machine stepping and before drawing the scene.
