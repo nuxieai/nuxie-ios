@@ -90,6 +90,18 @@ final class ExperienceVideoPlaybackTests: XCTestCase {
         }
     }
 
+    /// AVFoundation can turn an item ready between the tick's status read and its
+    /// frame path. A real AVPlayerItem cannot be made to do that on cue, so this
+    /// checks the frame path's own guard: a reopened decoder whose time-0 picture
+    /// arrives first must not reach the runtime before the runtime has seen ready.
+    func testFramePathPresentsNoPictureBeforeTheDecoderIsReady() {
+        XCTAssertFalse(ExperienceVideoPlayback.framePathPresents(ready: false, seeking: false, suspended: false),
+            "A decoder that is not ready yet presents no picture, even when its output already has one")
+        XCTAssertTrue(ExperienceVideoPlayback.framePathPresents(ready: true, seeking: false, suspended: false))
+        XCTAssertFalse(ExperienceVideoPlayback.framePathPresents(ready: true, seeking: true, suspended: false))
+        XCTAssertFalse(ExperienceVideoPlayback.framePathPresents(ready: true, seeking: false, suspended: true))
+    }
+
     @MainActor
     func testProductionPoolBoundsOverlappingOwnersAndPixelWork() throws {
         let pool = ExperienceVideoDecoderPool.shared

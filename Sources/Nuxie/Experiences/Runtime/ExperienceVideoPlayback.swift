@@ -510,6 +510,12 @@ final class ExperienceVideoPlayback {
         visibleOccurrences = try await runtime.visibleVideoIDs(current.map(\.componentID), viewport: viewport)
     }
 
+    /// Whether the tick's frame path may hand the runtime a decoded picture,
+    /// read from the decoder's state at the moment of presenting.
+    nonisolated static func framePathPresents(ready: Bool, seeking: Bool, suspended: Bool) -> Bool {
+        !seeking && !suspended
+    }
+
     /// Called after Luau/state-machine stepping and before drawing the scene.
     func tick() async throws -> Bool {
         guard !closed else { return false }
@@ -539,7 +545,8 @@ final class ExperienceVideoPlayback {
                 seconds: clock.isFinite ? clock : 0, rate: Double(decoder.player.rate),
                 playing: decoder.player.timeControlStatus == .playing, available: decoder.ready && !decoder.seeking)
             guard !closed, !decoder.disposed else { continue }
-            if !decoder.seeking && suspensionReasons.isEmpty {
+            if Self.framePathPresents(ready: decoder.ready, seeking: decoder.seeking,
+                                      suspended: !suspensionReasons.isEmpty) {
                 // A paused seek may select the image already served by the
                 // output. Retrieve it once for the new generation even when it
                 // is not "new", retaining AVFoundation's actual display PTS.
