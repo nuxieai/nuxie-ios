@@ -73,6 +73,35 @@ final class ExperiencePageHostContractTests: XCTestCase {
         XCTAssertNoThrow(try validate(transition))
     }
 
+    func testIncomingOnTopFalseIsAcceptedAndReachesThePlan() throws {
+        var transition = validTransition; transition["incomingOnTop"] = false
+        XCTAssertNoThrow(try validate(parsed(transition)))
+        let plan = try runtimePlan(transition)
+        let declaration = try XCTUnwrap(plan.transitions.first)
+        XCTAssertFalse(declaration.incomingOnTop)
+        let forward = try XCTUnwrap(ExperienceScreenCustomTransitionPlan.resolve(transitionId: declaration.id,
+            sourceScreenId: "screen_1", destinationScreenId: "screen_2", declarations: plan.transitions))
+        XCTAssertFalse(forward.incomingOnTop)
+    }
+
+    func testTransitionWithoutTheMarkerKeepsTheIncomingScreenOnTop() throws {
+        XCTAssertEqual(try runtimePlan(validTransition).transitions.map(\.incomingOnTop), [true])
+    }
+
+    /// Only the exception is published, and only on the forward step.
+    func testIncomingOnTopRefusesAnythingButFalseAndStaysOffReverse() throws {
+        for value in [true, 0, 1, "false"] as [Any] {
+            var transition = validTransition; transition["incomingOnTop"] = value
+            XCTAssertThrowsError(try validate(parsed(transition)), "\(value)")
+        }
+        for value in [false, true] {
+            var transition = validTransition
+            var reverse = try XCTUnwrap(transition["reverse"] as? [String: Any]); reverse["incomingOnTop"] = value
+            transition["reverse"] = reverse
+            XCTAssertThrowsError(try validate(parsed(transition)), "\(value)")
+        }
+    }
+
     func testV4DurationIsTotalAndReverseUsesCanonicalCompletionNames() throws {
         var transition = validTransition
         transition["durationMs"] = 450
@@ -159,6 +188,21 @@ final class ExperiencePageHostContractTests: XCTestCase {
         render["transitions"] = [transition]
         descriptor["render"] = render
         try JourneyReleaseSchemaValidator.validate(descriptor)
+    }
+
+    /// As a release reaches the validator: a JSON 0 is an NSNumber that bridges to `false`.
+    private func parsed(_ transition: [String: Any]) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: transition)) as? [String: Any])
+    }
+
+    private func runtimePlan(_ transition: [String: Any]) throws -> NativeExperienceRenderPlan {
+        var descriptor = try sourceDescriptor()
+        var render = try XCTUnwrap(descriptor["render"] as? [String: Any])
+        render["transitions"] = [transition]
+        descriptor["render"] = render
+        let release = try JSONDecoder().decode(JourneyReleaseDescriptor.self,
+            from: JSONSerialization.data(withJSONObject: descriptor))
+        return try JourneyReleaseAcquisitionStore.runtimePlan(descriptor: release)
     }
 
     private func sourceDescriptor() throws -> [String: Any] {
