@@ -35,6 +35,11 @@ Only true identifies a compiler default pair for a skipping Back; absent or
 false declarations remain route-specific. Null and other types are refused.
 UNIV-5113 will supply the final field name.
 
+The render.transitions[].incomingOnTop marker is optional, and false is its only
+published value: that forward step keeps the leaving Screen on top. Absent means
+the incoming Screen comes in on top. True, null and other types are refused,
+and a reverse never carries it.
+
 Stage 2 restores the stage 1 plain-Node layout. Filling the root is UNIV-5113's
 publisher-layout responsibility. testMountedRowsFillResizedRoot is a strict
 expected failure until published layouts fill the resized root. The rejected

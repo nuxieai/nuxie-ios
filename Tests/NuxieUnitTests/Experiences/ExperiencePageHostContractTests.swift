@@ -102,6 +102,18 @@ final class ExperiencePageHostContractTests: XCTestCase {
         }
     }
 
+    func testIncomingOnTopFollowsTheSharedVectors() throws {
+        let root = experiencePreparationRepositoryRoot()
+        let bytes = try Data(contentsOf: root.appendingPathComponent("fixtures/runtime/layer-host-interim/format-cases.json"))
+        let vectors = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        for (index, item) in try XCTUnwrap(vectors["incomingOnTop"] as? [[String: Any]]).enumerated() {
+            var transition = validTransition
+            if item["omit"] as? Bool != true { transition["incomingOnTop"] = item["value"] }
+            if item["accept"] as? Bool == true { XCTAssertNoThrow(try validate(transition), "incomingOnTop[\(index)]") }
+            else { XCTAssertThrowsError(try validate(transition), "incomingOnTop[\(index)]") }
+        }
+    }
+
     func testV4DurationIsTotalAndReverseUsesCanonicalCompletionNames() throws {
         var transition = validTransition
         transition["durationMs"] = 450
