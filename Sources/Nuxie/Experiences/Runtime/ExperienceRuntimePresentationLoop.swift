@@ -312,13 +312,17 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
     }
 
     let value: Value
+    /// A step left media that wants frames, such as a playing video.
+    let mediaActive: Bool
     private let deliverOnMainActor: (@MainActor @Sendable () async -> Void)?
 
     private init(
         _ value: Value,
+        mediaActive: Bool = false,
         deliverOnMainActor: (@MainActor @Sendable () async -> Void)? = nil
     ) {
         self.value = value
+        self.mediaActive = mediaActive
         self.deliverOnMainActor = deliverOnMainActor
     }
 
@@ -329,9 +333,10 @@ struct ExperienceRuntimePresentationSessionResult: @unchecked Sendable {
     }
 
     static func session(
+        mediaActive: Bool = false,
         deliverOnMainActor: (@MainActor @Sendable () async -> Void)? = nil
     ) -> Self {
-        Self(.session, deliverOnMainActor: deliverOnMainActor)
+        Self(.session, mediaActive: mediaActive, deliverOnMainActor: deliverOnMainActor)
     }
 
     static func work(
@@ -509,7 +514,7 @@ extension ExperienceInteractivePage {
                 let result = try await self.step(pointers: step.pointers.map(ExperienceInteractiveScreen.nativePointer),
                     focusInputs: step.focusInputs, elapsedSeconds: step.elapsedSeconds,
                     capturesTextLayout: onTextFrame != nil)
-                return .session {
+                return .session(mediaActive: result.videoActive) {
                     if let state = result.native.focusState { onFocus(state) }
                     await onStep(result)
                 }
@@ -690,6 +695,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var isTimelineActive = true
     /// A stopped clock on a page that stays on screen, such as a Journey checkpoint.
     private var isTimelineHeld = false
+    /// Whether the latest step left media that wants frames.
+    private var stepMediaActive = false
     private var sessionIsOpen = false
     var needsSessionCleanup: Bool { sessionIsOpen }
     private(set) var hasTakenSessionOwnership = false
@@ -960,7 +967,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     func displayLinkDidFire(at timestamp: TimeInterval) {
-        guard shouldAdvance else {
+        guard shouldAdvance || presentsHeldMedia else {
             reconcile()
             return
         }
@@ -990,7 +997,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     ///
     /// `held` marks a stopped clock on a page that stays on screen, as during a
     /// Journey checkpoint. Only authored time holds: the page is still on screen
-    /// for its media, so a playing video is neither paused nor suspended.
+    /// for its media, so a playing video is neither paused nor suspended, and
+    /// while it wants frames each display tick steps by zero and draws.
     func setTimelineActive(_ active: Bool, held: Bool = false) {
         let held = held && !active
         guard isTimelineActive != active else {
@@ -1089,7 +1097,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private func reconcile() {
         updateDisplayLinkForCurrentScreen()
-        displayLink?.isPaused = !shouldAdvance
+        displayLink?.isPaused = !shouldAdvance && !presentsHeldMedia
         drain()
     }
 
@@ -1141,7 +1149,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return nil
         }
 
-        if shouldPresent {
+        if shouldPresent || presentsHeldMedia {
             let size = surfaceSize(for: surfaceView)
             if size != lastAppliedSize {
                 pendingRender = false
@@ -1173,6 +1181,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     elapsedSeconds: 0,
                     pointers: [],
                     requestsRender: false
+                ))
+            }
+            // A held page keeps presenting its media: each display tick steps
+            // by zero, so new video pictures reach the screen and nothing
+            // authored moves. With no media wanting frames it draws nothing.
+            if presentsHeldMedia, pendingTimestamp != nil {
+                pendingTimestamp = nil
+                return .step(ExperienceRuntimePresentationStep(
+                    elapsedSeconds: 0,
+                    pointers: [],
+                    requestsRender: true
                 ))
             }
             return nil
@@ -1244,6 +1263,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             appliedMediaVisibility = visible
         case (.step(let step), .session):
             timelineElapsedSeconds += Double(step.elapsedSeconds)
+            stepMediaActive = result.mediaActive
             await result.deliver()
             if !step.pointers.isEmpty {
                 onAcceptedPointerInput(.init(eventCount: step.pointers.count))
@@ -1266,7 +1286,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             if result.hasDelivery {
                 completion.recordPresentedWork { [weak self] in
                     Task { @MainActor [weak self] in
-                        guard let self, self.shouldPresent, self.terminalError == nil,
+                        // A held page's frames are on screen too.
+                        guard let self, self.isOnScreen, self.terminalError == nil,
                               self.lifecycleGeneration == generation,
                               self.semanticPresentationEpoch == semanticEpoch,
                               frame > self.lastSemanticFrame else { return }
@@ -1461,6 +1482,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
               surfaceViewIsEffectivelyVisible(surfaceView) else { return false }
         return true
     }
+
+    /// A held page on screen whose latest step left media wanting frames keeps
+    /// stepping by zero and drawing on each display tick.
+    private var presentsHeldMedia: Bool { isTimelineHeld && stepMediaActive && isOnScreen }
 
     private func surfaceViewIsEffectivelyVisible(
         _ view: ExperienceRuntimeSurfaceView
