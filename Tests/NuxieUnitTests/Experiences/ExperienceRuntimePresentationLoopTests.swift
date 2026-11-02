@@ -497,6 +497,66 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     }
 
     @MainActor
+    func testSuspensionLiftDuringAHeldStepAsksTheMediaAgainAfterThatStep() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        // Each step's media answer, in order: the visible step's video wants
+        // frames; the held step in flight sampled it suspended; the probe after
+        // the lift and the held tick it restarts find it playing again.
+        await recorder.enqueueStepMediaAnswers([true, false, true, true])
+        let (window, view) = makePresentationSurface()
+        let loop = makeLoop(recorder: recorder, view: view)
+        try await loop.start()
+
+        // A held page whose latest step wanted frames.
+        loop.displayLinkDidFire(at: 1)
+        let rendered = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(rendered)
+        let firstDeadline = Date().addingTimeInterval(2)
+        while !loop.hasCompletedLatestFrame, Date() < firstDeadline { await Task.yield() }
+        XCTAssertTrue(loop.hasCompletedLatestFrame)
+        let authoredTime = loop.timelineElapsedSeconds
+        loop.setTimelineActive(false, held: true)
+
+        // A held step is in flight that will answer no demand.
+        await recorder.holdNextStep()
+        loop.displayLinkDidFire(at: 2)
+        let entered = await recorder.waitForStepCount(2)
+        XCTAssertTrue(entered, "A held page whose media wants frames steps on a display tick")
+
+        // The suspension lifts while that step is in flight.
+        loop.refreshHeldMedia()
+        await recorder.releaseStep()
+
+        // One zero-delta step that draws nothing follows, sampled after the lift.
+        let probed = await recorder.waitForStepCount(3)
+        XCTAssertTrue(probed, "A lift during a held step asks the page again after that step")
+        let probeDeadline = Date().addingTimeInterval(2)
+        while !loop.hasCompletedLatestFrame, Date() < probeDeadline { await Task.yield() }
+        XCTAssertTrue(loop.hasCompletedLatestFrame)
+        var steps = await recorder.steps()
+        XCTAssertEqual(steps.count, 3)
+        XCTAssertEqual(steps.last?.elapsedSeconds, 0)
+        XCTAssertEqual(steps.last?.requestsRender, false)
+        let rendersAfterProbe = await recorder.renderDispositions().count
+        XCTAssertEqual(rendersAfterProbe, 2, "The probe itself draws nothing")
+
+        // The probe found the video playing, so the held ticks resume.
+        loop.displayLinkDidFire(at: 3)
+        let ticked = await recorder.waitForStepCount(4)
+        XCTAssertTrue(ticked, "The held ticks resume once the probe finds media wanting frames")
+        let drawn = await recorder.waitForRenderCount(3)
+        XCTAssertTrue(drawn)
+        steps = await recorder.steps()
+        XCTAssertEqual(steps.last?.elapsedSeconds, 0)
+        XCTAssertEqual(steps.last?.requestsRender, true)
+        XCTAssertEqual(loop.timelineElapsedSeconds, authoredTime, "Nothing authored moves while held")
+
+        await loop.shutdown()
+        _ = window
+    }
+
+    @MainActor
     func testPresentationIdleWaitsForLatestSemanticFrame() async throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         var deliveries = 0
@@ -1799,6 +1859,7 @@ private actor PresentationSessionRecorder {
     private var queuedWorkContinuation: CheckedContinuation<Void, Never>?
     private var renderHealth: [ExperienceRuntimePresentationRenderOutcome.Health] = []
     private var presentedDrawCalls: [UInt64] = []
+    private var stepMediaAnswers: [Bool] = []
     private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0, layoutScaleFactor: 0)
 
     init(device: any MTLDevice, onClose: (@Sendable () async throws -> Void)? = nil,
@@ -1832,11 +1893,13 @@ private actor PresentationSessionRecorder {
             if shouldFailTerminalInput, step.pointers.contains(where: { $0.kind == .exit }) {
                 throw PresentationSessionShutdownFailure.terminalInput
             }
+            // A page samples its media during the step, so a held step answers what it found on entry.
+            let mediaActive = stepMediaAnswers.isEmpty ? false : stepMediaAnswers.removeFirst()
             if shouldHoldStep {
                 shouldHoldStep = false
                 await withCheckedContinuation { stepContinuation = $0 }
             }
-            return .session { await self.waitForDeliveryIfNeeded() }
+            return .session(mediaActive: mediaActive) { await self.waitForDeliveryIfNeeded() }
         case .render(let state, _, let completion):
             names.append("render")
             let disposition: ExperienceRuntimePresentationRenderOutcome.Disposition
@@ -1901,6 +1964,11 @@ private actor PresentationSessionRecorder {
 
     func enqueuePresentedDrawCalls(_ values: [UInt64]) {
         presentedDrawCalls.append(contentsOf: values)
+    }
+
+    /// Whether each following step leaves media wanting frames, in order. Steps past the list answer no.
+    func enqueueStepMediaAnswers(_ values: [Bool]) {
+        stepMediaAnswers.append(contentsOf: values)
     }
 
     func releaseFrames() {
