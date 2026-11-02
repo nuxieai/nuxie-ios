@@ -695,8 +695,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var isTimelineActive = true
     /// A stopped clock on a page that stays on screen, such as a Journey checkpoint.
     private var isTimelineHeld = false
-    /// Whether the latest step left media that wants frames. A step taken while
-    /// the media was suspended says no; `refreshHeldMedia` asks again.
+    /// Whether the latest step left media that wants frames. It is a copy taken
+    /// by that step: a step that sampled the media while suspended says no, and
+    /// a suspension can lift off the step path, even while a step is in flight.
+    /// So a lift never consults it; `refreshHeldMedia` always asks again.
     private var stepMediaActive = false
     private var sessionIsOpen = false
     var needsSessionCleanup: Bool { sessionIsOpen }
@@ -1024,11 +1026,15 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     /// Media on a held page can want frames again with no step to say so, as
     /// when its video's suspension lifts after the page was hidden, after an
-    /// audio interruption or while the app was inactive. The held ticks follow
-    /// the latest step, so one zero-delta step that draws nothing asks the page
-    /// again, and its answer restarts them when media wants frames.
+    /// audio interruption or while the app was inactive. While suspended its
+    /// demand is unknown, so every lift on a held page queues one zero-delta
+    /// step that draws nothing, whatever the latest step said. Operations run
+    /// one at a time, so it follows any step in flight and its answer, sampled
+    /// after the lift, is the one the held ticks follow. A suspension that
+    /// begins off the step path needs nothing: the next held tick finds no
+    /// demand and stops the ticks.
     func refreshHeldMedia() {
-        guard isTimelineHeld, !stepMediaActive else { return }
+        guard isTimelineHeld else { return }
         pendingZeroDeltaFrame = true
         reconcile()
     }
