@@ -293,6 +293,59 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
         XCTAssertTrue(playback.decoderPlayerIdentities.isEmpty)
     }
 
+    // A held page steps its media only while the latest step found it wanting
+    // frames. Video that resumes with no step to report it, once its suspension
+    // lifts, has the page ask again, so its pictures keep reaching the screen.
+
+    func testAHeldPageShownAgainAfterAStepWhileHiddenPresentsItsVideo() async throws {
+        try await withCoordinator(payload: try await hostedLiveMoveVideoPayload()) { _, controller, _, _ in
+            let page = try XCTUnwrap(controller.interactivePage)
+            let loop = try presentationLoop(controller)
+            let surface = try surfaceView(controller)
+            let playback = try await playingVideo(on: controller)
+            controller.setCheckpointHold(true)
+            // The surface leaves the screen while the Journey still decides, as when its window goes.
+            surface.isHidden = true
+            let hidden = Date().addingTimeInterval(5)
+            while Date() < hidden {
+                if try suspensionReasons(playback).contains(1) { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            XCTAssertTrue(try suspensionReasons(playback).contains(1), "The hidden held page suspends its video")
+            // A write while hidden steps by zero and finds its suspended video wanting no frames.
+            try await loop.advanceZeroDelta()
+            XCTAssertFalse(try heldMediaWanted(loop), "A step while hidden finds no media wanting frames")
+            surface.isHidden = false
+            let presents = try await heldPagePresentsANewPicture(controller, page, within: 3)
+            controller.setCheckpointHold(false)
+            XCTAssertTrue(presents,
+                "The held page shown again presents new video pictures: \(playback.playbackDiagnostics)")
+        }
+    }
+
+    func testAHeldPageWhoseAudioInterruptionEndsPresentsItsVideo() async throws {
+        try await withCoordinator(payload: try await hostedLiveMoveVideoPayload()) { _, controller, _, _ in
+            let page = try XCTUnwrap(controller.interactivePage)
+            let loop = try presentationLoop(controller)
+            let playback = try await playingVideo(on: controller)
+            controller.setCheckpointHold(true)
+            try await playback.handleAudioInterruption(.began, options: [])
+            // A held step during the interruption finds the video wanting no frames, so the held ticks stop.
+            let stopped = Date().addingTimeInterval(5)
+            while Date() < stopped {
+                if try !heldMediaWanted(loop) { break }
+                controller.advance(delta: 1 / 60)
+                try await Task.sleep(nanoseconds: 16_000_000)
+            }
+            XCTAssertFalse(try heldMediaWanted(loop), "A held step during the interruption finds no media wanting frames")
+            try await playback.handleAudioInterruption(.ended, options: [.shouldResume])
+            let presents = try await heldPagePresentsANewPicture(controller, page, within: 3)
+            controller.setCheckpointHold(false)
+            XCTAssertTrue(presents,
+                "The held page presents new video pictures after the interruption: \(playback.playbackDiagnostics)")
+        }
+    }
+
     func testHandledCheckpointLeavesTheOnlyExitAndWaitToThePageStep() async throws {
         let entered = expectation(description: "checkpoint before any exit")
         var release: CheckedContinuation<JourneyScreenDismissalResult, Never>?
@@ -2046,6 +2099,39 @@ final class ExperiencePageHostNavigationTests: JourneyTestCase {
     /// Every render the loop has issued, whether it presented or not.
     private func renderedFrames(_ loop: ExperienceRuntimePresentationLoop) throws -> UInt64 {
         try XCTUnwrap(Mirror(reflecting: loop).children.first { $0.label == "frameSequence" }?.value as? UInt64)
+    }
+
+    private func surfaceView(_ controller: ExperienceScreenViewController) throws -> ExperienceRuntimeSurfaceView {
+        try XCTUnwrap(Mirror(reflecting: controller).children
+            .first { $0.label == "surfaceView" }?.value as? ExperienceRuntimeSurfaceView)
+    }
+
+    /// Whether the loop's latest step found media wanting frames, which a held page's ticks follow.
+    private func heldMediaWanted(_ loop: ExperienceRuntimePresentationLoop) throws -> Bool {
+        try XCTUnwrap(Mirror(reflecting: loop).children.first { $0.label == "stepMediaActive" }?.value as? Bool)
+    }
+
+    /// Display ticks on a held page until it delivers a new video picture and then
+    /// presents a frame, or the time runs out.
+    private func heldPagePresentsANewPicture(_ controller: ExperienceScreenViewController,
+                                             _ page: ExperienceInteractivePage,
+                                             within seconds: TimeInterval) async throws -> Bool {
+        // A page delivers a frame's semantics only once that frame's drawable is presented.
+        var presented = 0
+        controller.onSemanticCapture = { _ in presented += 1 }
+        defer { controller.onSemanticCapture = nil }
+        let picturesAtStart = await page.deliveredVideoFrames
+        var presentedAtNewPicture: Int?
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            controller.advance(delta: 1 / 60)
+            try await Task.sleep(nanoseconds: 16_000_000)
+            if presentedAtNewPicture == nil, await page.deliveredVideoFrames > picturesAtStart {
+                presentedAtNewPicture = presented
+            }
+            if let mark = presentedAtNewPicture, presented > mark { return true }
+        }
+        return false
     }
 
     private struct MascotPhaseUnavailable: Error {}

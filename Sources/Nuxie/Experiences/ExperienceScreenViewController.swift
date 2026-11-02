@@ -632,6 +632,8 @@ final class ExperienceScreenViewController: UIViewController {
                 videoDecoderPool: videoDecoderPool)
             interactivePage = layer
             pageVideoPlayback = await layer.videoPlayback
+            // Video that resumes on a held page, with no step to report it, asks its loop to step again.
+            pageVideoPlayback?.onSuspensionLifted = { [weak self] in self?.presentationLoop?.refreshHeldMedia() }
             interactive = try await layer.prepareRow(screenID: screenId, products: artifact.acquired.products)
             rowBindings[screenId] = interactive
             rowGenerations[screenId, default: 0] += 1
