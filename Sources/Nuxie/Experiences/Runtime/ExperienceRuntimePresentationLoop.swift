@@ -695,7 +695,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var isTimelineActive = true
     /// A stopped clock on a page that stays on screen, such as a Journey checkpoint.
     private var isTimelineHeld = false
-    /// Whether the latest step left media that wants frames.
+    /// Whether the latest step left media that wants frames. A step taken while
+    /// the media was suspended says no; `refreshHeldMedia` asks again.
     private var stepMediaActive = false
     private var sessionIsOpen = false
     var needsSessionCleanup: Bool { sessionIsOpen }
@@ -1018,6 +1019,17 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             // Delta-0 resume per the lifecycle contract; never a time jump.
             pendingZeroDeltaFrame = true
         }
+        reconcile()
+    }
+
+    /// Media on a held page can want frames again with no step to say so, as
+    /// when its video's suspension lifts after the page was hidden, after an
+    /// audio interruption or while the app was inactive. The held ticks follow
+    /// the latest step, so one zero-delta step that draws nothing asks the page
+    /// again, and its answer restarts them when media wants frames.
+    func refreshHeldMedia() {
+        guard isTimelineHeld, !stepMediaActive else { return }
+        pendingZeroDeltaFrame = true
         reconcile()
     }
 

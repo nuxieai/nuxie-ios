@@ -134,6 +134,10 @@ final class ExperienceVideoPlayback {
     private var closed = false
     private(set) var deliveredFrames: UInt64 = 0
     var activeDecoderCount: Int { decoders.filter { !$0.disposed }.count }
+    /// Called once the last suspension lifts, after the tick that resumes
+    /// playback. A host whose authored time is held steps media only while it
+    /// wants frames, so it learns here that media may want them again.
+    var onSuspensionLifted: (@MainActor () -> Void)?
 
     private init(runtime: NuxieNativeRuntime, artboardBounds: CGRect, lease: JourneyReleaseVideoFileLease?, targets: [NativeExperienceVideoElement],
         decoderBudget: (() -> NuxieNativeVideoDecoderBudget)?, decoderPool: ExperienceVideoDecoderPool?) {
@@ -633,6 +637,7 @@ final class ExperienceVideoPlayback {
             try await runtime.videoCommand(componentID: decoder.componentID, kind: 6, value: suspensionReasons.contains(reason) ? 1 : 0, reason: reason)
         }
         _ = try await tick()
+        if !enabled, suspensionReasons.isEmpty, !closed { onSuspensionLifted?() }
     }
 
     /// Read-only identities let retention checks compare decoders without exposing AVPlayer controls.
