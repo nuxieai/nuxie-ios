@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 /// Internal control-flow error used when an identity or locale transition
 /// makes an in-flight profile response obsolete.
@@ -324,12 +325,22 @@ internal actor ProfileService: ProfileServiceProtocol {
     }
 
     private func loadCurrentProfileFromDisk() async {
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Profile disk load",
+            id: signposter.makeSignpostID()
+        )
+        var outcome = "miss"
+        defer {
+            signposter.endInterval("Profile disk load", interval, "\(outcome, privacy: .public)")
+        }
         let distinctId = identity.getDistinctId()
         let admission = beginAdmission(distinctId: distinctId)
         guard let cached = await diskCache.retrieve(
             forKey: distinctId,
             allowStale: true
         ) else { return }
+        outcome = "rejected"
         guard cached.locale == admission.locale else {
             _ = await diskCache.remove(
                 forKey: distinctId,
@@ -344,6 +355,7 @@ internal actor ProfileService: ProfileServiceProtocol {
                 persistToDisk: false,
                 authoritySource: .cache
             ) else { return }
+            outcome = "admitted"
         } catch {
             LogError("Cached Journey profile rejected: \(error)")
             await discard(cached, admission: admission)
@@ -380,11 +392,13 @@ internal actor ProfileService: ProfileServiceProtocol {
             && cachedProfile?.locale == admission.locale
             ? cachedProfile
             : nil
-        let result = try await api.fetchProfile(
-            for: distinctId,
-            locale: admission.locale,
-            revalidating: previous?.validator
-        )
+        let result = try await signposted("Profile fetch") {
+            try await api.fetchProfile(
+                for: distinctId,
+                locale: admission.locale,
+                revalidating: previous?.validator
+            )
+        }
         guard isCurrent(admission) else {
             throw ProfileRefreshCancellationError()
         }
@@ -458,6 +472,13 @@ internal actor ProfileService: ProfileServiceProtocol {
               let authority = item.validator?.authority else {
             return false
         }
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Profile admit",
+            id: signposter.makeSignpostID(),
+            "\(authoritySource == .cache ? "cache" : "network", privacy: .public)"
+        )
+        defer { signposter.endInterval("Profile admit", interval) }
 
         let authorityAccepted: Bool
         switch authoritySource {
@@ -470,15 +491,19 @@ internal actor ProfileService: ProfileServiceProtocol {
             throw JourneyReleaseAuthenticationError.invalidDescriptor
         }
 
-        let preparedProfile = try await journeyProfiles.prepare(
-            item.response.planeProfile,
-            authority: authority
-        )
+        let preparedProfile = try await signposted("Profile verify") {
+            try await journeyProfiles.prepare(
+                item.response.planeProfile,
+                authority: authority
+            )
+        }
         guard isCurrent(admission) else { return false }
-        let preparedArtifacts = try await prepareArtifacts(
-            preparedProfile.snapshot,
-            admission: admission
-        )
+        let preparedArtifacts = try await signposted("Profile release artifacts") {
+            try await prepareArtifacts(
+                preparedProfile.snapshot,
+                admission: admission
+            )
+        }
         guard isCurrent(admission) else { return false }
 
         if persistToDisk {
@@ -640,6 +665,17 @@ internal actor ProfileService: ProfileServiceProtocol {
             }
         }
         guard isCurrent(admission) else { return }
+    }
+
+    /// Wraps one step of profile work in a signpost interval.
+    private func signposted<T>(
+        _ name: StaticString,
+        _ work: () async throws -> T
+    ) async rethrows -> T {
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(name, id: signposter.makeSignpostID())
+        defer { signposter.endInterval(name, interval) }
+        return try await work()
     }
 
     private func beginAdmission(distinctId: String) -> Admission {

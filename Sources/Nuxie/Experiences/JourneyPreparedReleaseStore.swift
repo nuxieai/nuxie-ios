@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 /// The single shared store of prepared Journey releases, keyed by signed
 /// descriptor SHA-256.
@@ -585,6 +586,13 @@ actor JourneyPreparedReleaseStore {
     }
 
     private func prepare(_ entry: Entry, descriptorSHA256: String) async {
+        let signposter = NuxieSignposts.signposter
+        let interval = signposter.beginInterval(
+            "Background preparation",
+            id: signposter.makeSignpostID(),
+            "\(String(descriptorSHA256.prefix(12)), privacy: .public)"
+        )
+        defer { signposter.endInterval("Background preparation", interval) }
         let startEpoch = epoch
         do {
             let runtime: PreparedRuntimeRelease?

@@ -79,6 +79,12 @@ private func runningOperation() -> SerializedSDKLifecycle<NuxieSDKRun>.Operation
     overrides: NuxieCoreOverrides,
     facadeTaskStartBarrier: (@Sendable () async -> Void)? = nil
   ) throws {
+    let signposter = NuxieSignposts.signposter
+    let setupInterval = signposter.beginInterval(
+      "Setup",
+      id: signposter.makeSignpostID()
+    )
+    defer { signposter.endInterval("Setup", setupInterval) }
     // Validate configuration
     guard !configuration.apiKey.isEmpty else {
       throw NuxieError.invalidConfiguration("API key cannot be empty")
