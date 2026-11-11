@@ -51,6 +51,13 @@ struct ExperienceRuntimeFrameClock {
         return ExperienceRuntimeFrameTime(timestamp: timestamp, delta: 0)
     }
 
+    /// Starts counting from `timestamp`, as when a page step begins: the next
+    /// frame advances by its own time since then, not by time from before it.
+    mutating func restart(at timestamp: TimeInterval) {
+        guard timestamp.isFinite else { return }
+        previousTimestamp = timestamp
+    }
+
     mutating func reset() {
         previousTimestamp = nil
     }
