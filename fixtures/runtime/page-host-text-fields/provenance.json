@@ -1,24 +1,20 @@
 {
-  "source": "Calmly v2 as the iOS simulator played it: Test ahead's copy from the simulator's release cache (nuxie-handoff pages/magic-move/test-ahead/e2e/published-v2)",
+  "source": "Calmly (the Magic Move demo Experience), republished from its source folder by the page-release exporter",
   "purpose": "UNIV-5597 (a): native text fields during in-page moves. Three Screens (plans, welcome with \"Your name\", session) with two published text input declarations and the step-1 and step-2 page transitions.",
-  "publishedBuild": "01m5xgmzcztdwb3np7w1h80k4m",
-  "releaseLocator": {
-    "experienceId": "xp_01m5xfzp80be1gry1s56ag6e01",
-    "experienceVersionId": "ver_01m5xgmzczfr26hg0fna3dhbzw",
-    "buildId": "01m5xgmzcz4hnyyyyzqd15xh7g",
-    "legId": "4ec88de632f2b868254d4052b1cf4da1fdbff3f55daeae1f13f5b17ebb784762"
-  },
-  "compiledByRuntime": "753fcb19fc1d6219cabbd95a7694ca1d13ae2bd8",
-  "signedDescriptorSha256": "a042fb14646973de9fff0e73fb220ffdd61385a9b7b4b66b112002c926b04232",
+  "journeyMetadata": "The Journey metadata is that of the Calmly v2 release the iOS simulator played (published build 01m5xgmzcztdwb3np7w1h80k4m); the scene, its transitions and its text inputs come from the publisher at the export head.",
+  "exportHead": "345d6a5cc7317837a68afa83c9fb9d83095b8eca",
+  "runtimeSourceCommit": "7f1137f8dc1fdd5fbd723a20e4db8aefebed261f",
+  "command": "node tools/sdk-fixtures/page-release/export.mjs tests/fixtures/experiences/magic-move-demo tools/sdk-fixtures/page-release/page-host-text-fields/wrapper.json <output-root> 345d6a5cc7317837a68afa83c9fb9d83095b8eca",
   "changes": [
-    "descriptor.json is the signed descriptor's bytes decoded and printed with sorted keys. The tests read it as an authenticated payload's declarations; they don't sign it",
-    "The two pictures are not copied: their declarations are marked not required, and the tests give them no bytes, so they draw nothing. Nothing else changed"
+    "descriptor.json is the exporter's signed descriptor, printed with sorted keys. The tests read it as an authenticated payload's declarations; they don't sign it",
+    "scene.riv is the exporter's screen.riv",
+    "The two pictures are not copied: they publish as 1 by 1 stand-in PNGs, and the tests give them no bytes, so they draw nothing. Nothing else changed"
   ],
   "sha256": {
-    "scene.riv": "5db21620466a5d3cc38a7bdb7b732ba26f71673810a7e0543d0fa807644792c5",
-    "descriptor.json": "85e762e0d4fc3e50b8e8fd096c17dfbccdd4a9f5b35be44bf947f6334426f262"
+    "scene.riv": "9c8e3c2832599c4a552ecf3ca88678105b5390ec80d130072b059f253f53ba7a",
+    "descriptor.json": "98062499e2d0d218d34cd8dfd3c27115daaaf6b793af7758a569294da65a1fd4"
   },
   "sizeBytes": {
-    "scene.riv": 121548
+    "scene.riv": 79984
   }
 }
