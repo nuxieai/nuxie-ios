@@ -55,6 +55,7 @@ if git grep -nE "$prohibited" -- \
   ':!fixtures/runtime/choices-set/provenance.json' \
   ':!fixtures/runtime/emit-values/provenance.json' \
   ':!fixtures/runtime/script-tap/provenance.json' \
+  ':!fixtures/runtime/scripted-input/screen.riv' \
   ':!fixtures/runtime/system-font-axes/provenance.json'
 then
   echo "The public SDK contains Editor-product-specific support. Keep that harness in nuxie-dev." >&2
