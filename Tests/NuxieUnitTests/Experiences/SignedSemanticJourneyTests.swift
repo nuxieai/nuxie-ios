@@ -28,6 +28,7 @@ final class SignedSemanticJourneyTests: XCTestCase {
     }
 
     func testSignedSemanticActivationPublishesOnlyOrdinaryEventsBeforeNavigation() async throws {
+        throw XCTSkip("UNIV-5579: this fixture's compiled responses.set helper names the empty root, which the page player binds to the page; the helper that passes its own Screen is on main, and this test returns when the next SDK pointer move republishes the fixture")
         try await exercise(.success)
     }
 
