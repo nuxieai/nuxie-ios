@@ -8,8 +8,8 @@
     "sizeBytes": 1385
   },
   "report.json": {
-    "sha256": "1298016daec07a12e6092b1f19cf1f44428d07fe6370e16c57177ad70c9902a3",
-    "sizeBytes": 1406
+    "sha256": "9b4518b44f61d0fb8f268f9268d9d16c475662f73df61f2d260bff4c790cf2fd",
+    "sizeBytes": 1466
   },
   "page-structure.json": {
     "sha256": "ef213e6fd06321eb3306a2bf932378b3afa9b577f42f61748426613d5b7b43a2",
@@ -32,23 +32,23 @@
     "sizeBytes": 83
   },
   "descriptor.json": {
-    "sha256": "f2fde90179e2cde6dd382cc8c48ac0e2e8e9cd79f1d9d4db77cf4f5dbe21faec",
+    "sha256": "099310544067287097a9842260949767315bea905018f47846bf47caeaa53800",
     "sizeBytes": 2706
   },
   "release-entry.json": {
-    "sha256": "dee21d44f328cc31df1b2488d780faac002d5f2c52d5f7df556ca83cb14fedc1",
+    "sha256": "5437adf3dc0fffdc230057e0b67e01a9fb3c7d7c0f4a3757fbf784da48745251",
     "sizeBytes": 4554
   },
   "release.json": {
-    "sha256": "f2fde90179e2cde6dd382cc8c48ac0e2e8e9cd79f1d9d4db77cf4f5dbe21faec",
+    "sha256": "099310544067287097a9842260949767315bea905018f47846bf47caeaa53800",
     "sizeBytes": 2706
   },
   "profile.json": {
-    "sha256": "f3251f50c8ed006e7e7e832b9827f3f1b699405e0680303e234140e9cf54cb3c",
+    "sha256": "fecbadb6923566e702f16c0ec7d599dbdd18cb3edec6cf9567f281d37cfcce3f",
     "sizeBytes": 5608
   },
   "provenance.json": {
-    "sha256": "9d7a283209094ff9fbd75a25683931b003749db8decad3b0a0a5e39d862b3efd",
+    "sha256": "c9802d422f3d4af2daae2703c9b6c34411664fb4f2e7b22176044df51c33f22a",
     "sizeBytes": 4492
   }
 }

@@ -1,5 +1,5 @@
 {
-  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
+  "cleanParentHead": "9949d224ea15ce531e7130b5db32ca18424e2ca7",
   "wrapper": "tools/sdk-fixtures/page-release/presentation-full-screen-light/wrapper.json",
   "wrapperPin": {
     "sha256": "76bd6eb24641b49e9f08c6217d3155232bd96cee5187fcef2b06fd5311fdb87a",
@@ -21,37 +21,37 @@
     }
   ],
   "baseManifest": {
-    "sha256": "f0957b26ddb52c0773e462830e7ea6668c0fe784f48ff0a09b29e847a3284516",
-    "sizeBytes": 1662
+    "sha256": "3f86225356cd3128fbd28b74e031fde5ea9b1490222f714525683f76ee2b942d",
+    "sizeBytes": 1663
   },
   "qualification": "Test-authored wrapper over the verified base page; native SDK qualification remains separate.",
   "files": {
     "screen.riv": {
-      "sha256": "f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a",
-      "sizeBytes": 2527
+      "sha256": "45d936518bab4ff0687527529ab863e3828e67ab6c5465bdaaeba4e88eb40088",
+      "sizeBytes": 2533
     },
-    "renders/sha256/f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a.nux": {
-      "sha256": "f22354f0ba9c69f4621cde2c5fccea1d6915b01182ffb44c941e23b3bbdc650a",
-      "sizeBytes": 2527
+    "renders/sha256/45d936518bab4ff0687527529ab863e3828e67ab6c5465bdaaeba4e88eb40088.nux": {
+      "sha256": "45d936518bab4ff0687527529ab863e3828e67ab6c5465bdaaeba4e88eb40088",
+      "sizeBytes": 2533
     },
     "report.json": {
-      "sha256": "34bb8fea9229f5a49920f4c03ba5e7ef74a8820e1087655db767dbf21861f3f6",
-      "sizeBytes": 953
+      "sha256": "307dd1f6064a9eaed0fd18a42804530cc17f6a1a64398d8940d9f96a0b866266",
+      "sizeBytes": 1009
     },
     "page-structure.json": {
-      "sha256": "24a34dd390ed9de57022e824de828ed798c93576d495d6f4fb873c9e4ca50b16",
+      "sha256": "8e37c20c940d334657dcd8f8f3d3ecefff1fdae7d3c620c7bd75738f68f260c5",
       "sizeBytes": 380
     },
     "descriptor.json": {
-      "sha256": "80d3bdd169fac9b7b018de77a2414c6213ae521914466737622cea43ecfa7cde",
+      "sha256": "ed968b4eee00586271cd2baca0b16b869ad069eaf1dfea04358392790236f6aa",
       "sizeBytes": 2337
     },
     "release-entry.json": {
-      "sha256": "ecf0a8c633d3eecef6872cea70bdc56028afb84e3b57ab2b0c77bfb8f93ef82c",
+      "sha256": "44073dcbcbe1619d3997ec907b456a13e25305d79cbe57f28a1b54854826ae7b",
       "sizeBytes": 4086
     },
     "profile.json": {
-      "sha256": "2c462e06800f4b623737ee1e488f561bd88cb188734593f06920bbe79f3b0312",
+      "sha256": "4d82b071d9abd39676622dd1a7d892aa219f9e6a258f618cee7c6d0663be5881",
       "sizeBytes": 5176
     }
   }

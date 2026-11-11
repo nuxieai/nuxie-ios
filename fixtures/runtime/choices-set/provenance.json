@@ -1,7 +1,7 @@
 {
-  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
-  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
-  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "cleanParentHead": "9949d224ea15ce531e7130b5db32ca18424e2ca7",
+  "publisherSourceCommit": "9949d224ea15ce531e7130b5db32ca18424e2ca7",
+  "runtimeSourceCommit": "7f1137f8dc1fdd5fbd723a20e4db8aefebed261f",
   "source": "tools/sdk-fixtures/page-release/choices-set/source",
   "wrapper": "tools/sdk-fixtures/page-release/choices-set/wrapper.json",
   "migratedForCompiler2b": [
@@ -37,8 +37,8 @@
       "sizeBytes": 317
     },
     "tools/sdk-fixtures/page-release/choices-set/source/scripts/save.luau": {
-      "sha256": "89e33db4285cc541d8d2c80ba9e6e85fde3cf3c446d2bae622ff19c4a4af0bab",
-      "sizeBytes": 531
+      "sha256": "476e2d78fc7df2a4257a3a90a64e718bcf26a28702f17fdc3160dde10063addc",
+      "sizeBytes": 558
     },
     "tools/sdk-fixtures/page-release/choices-set/wrapper.json": {
       "sha256": "8942d2c08d417eebf99ae202047f955aefc23a1bf0c15f92b3821b38b59ca732",
@@ -55,7 +55,7 @@
     "tools/sdk-fixtures/page-release/choices-set/source",
     "tools/sdk-fixtures/page-release/choices-set/wrapper.json",
     "<output-root>",
-    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+    "9949d224ea15ce531e7130b5db32ca18424e2ca7"
   ],
   "producerCommand": [
     "bash",
@@ -90,19 +90,19 @@
   "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
   "files": {
     "screen.riv": {
-      "sha256": "125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92",
-      "sizeBytes": 8509
+      "sha256": "214cf73aac65562dad5e633054ae9b29754b7b26cdd936183811a40fb64fd842",
+      "sizeBytes": 8821
     },
-    "renders/sha256/125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92.nux": {
-      "sha256": "125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92",
-      "sizeBytes": 8509
+    "renders/sha256/214cf73aac65562dad5e633054ae9b29754b7b26cdd936183811a40fb64fd842.nux": {
+      "sha256": "214cf73aac65562dad5e633054ae9b29754b7b26cdd936183811a40fb64fd842",
+      "sizeBytes": 8821
     },
     "report.json": {
-      "sha256": "81d74d967a653b6431f4395b1e46c3d6eac7456b089af1c42518d860ac64c300",
-      "sizeBytes": 2801
+      "sha256": "581dccb4b9b873122ec79bb9bac35044ba62bef0cda0621c4baea182d20d641a",
+      "sizeBytes": 2871
     },
     "page-structure.json": {
-      "sha256": "412101b26ddbbe888670a86c56709e668c524c564f29c96d9fbe23992a6bf810",
+      "sha256": "c2f5681e0ee17b27752a3cade04822d00e3bebd702508db9099157eeb138f592",
       "sizeBytes": 396
     },
     "expectations.json": {
@@ -134,23 +134,23 @@
       "sizeBytes": 317
     },
     "source/scripts/save.luau": {
-      "sha256": "89e33db4285cc541d8d2c80ba9e6e85fde3cf3c446d2bae622ff19c4a4af0bab",
-      "sizeBytes": 531
+      "sha256": "476e2d78fc7df2a4257a3a90a64e718bcf26a28702f17fdc3160dde10063addc",
+      "sizeBytes": 558
     },
     "descriptor.json": {
-      "sha256": "25dce82fad6df0378c829c95f05ddaa19f2cc20b9c38f3d528783dd1ea615ae9",
+      "sha256": "b5fe55029d5ac30fa3ffe23443f346c41105142774d69b6f8b488a1529e74e98",
       "sizeBytes": 7760
     },
     "release-entry.json": {
-      "sha256": "368f34a9f1c649665ed4de39b0f8b8744c85927d6d2ccc85367cf549593a8eab",
+      "sha256": "b6aa68359b3915d583d26fdc9b1fc631262d49c369f267b457559953c723d0fd",
       "sizeBytes": 11213
     },
     "release.json": {
-      "sha256": "25dce82fad6df0378c829c95f05ddaa19f2cc20b9c38f3d528783dd1ea615ae9",
+      "sha256": "b5fe55029d5ac30fa3ffe23443f346c41105142774d69b6f8b488a1529e74e98",
       "sizeBytes": 7760
     },
     "profile-entry.json": {
-      "sha256": "368f34a9f1c649665ed4de39b0f8b8744c85927d6d2ccc85367cf549593a8eab",
+      "sha256": "b6aa68359b3915d583d26fdc9b1fc631262d49c369f267b457559953c723d0fd",
       "sizeBytes": 11213
     }
   }

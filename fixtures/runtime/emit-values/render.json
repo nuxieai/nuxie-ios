@@ -1,9 +1,9 @@
 {
   "renderer": "nux",
   "nux": {
-    "key": "renders/sha256/62574a3be63f4f3ffe4c55ad9453f38b694e8fff225f7023e9a3753cf499cbd1.nux",
-    "sha256": "62574a3be63f4f3ffe4c55ad9453f38b694e8fff225f7023e9a3753cf499cbd1",
-    "sizeBytes": 16942,
+    "key": "renders/sha256/d070d154265d6ec083f74755a6fe749ce978afb1e841a4f64fd42191fbd29ed1.nux",
+    "sha256": "d070d154265d6ec083f74755a6fe749ce978afb1e841a4f64fd42191fbd29ed1",
+    "sizeBytes": 16969,
     "contentType": "application/vnd.nuxie.scene"
   },
   "screens": [

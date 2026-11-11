@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 6077,
-  "outputSizeBytes": 140912,
-  "outputSha256": "71c69b2c4d2154c0b3d5572d43311bed4532285ac7e18d3112f1ff524de020c0",
+  "outputSizeBytes": 141314,
+  "outputSha256": "1932c66952c3c4c696dc1860fa9d1a91b1150bff64c06e0436e2b9eb992ddf93",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -101,7 +101,8 @@
           "$nuxie.response.save",
           "back",
           "continue"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sdaily-plan"
       },
       {
         "screenId": "scr_screens_sdaily-reminder",
@@ -115,7 +116,8 @@
           "back",
           "enable",
           "skip"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sdaily-reminder"
       },
       {
         "screenId": "scr_screens_sdeparture",
@@ -128,7 +130,8 @@
           "$nuxie.response.save",
           "back",
           "continue"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sdeparture"
       },
       {
         "screenId": "scr_screens_sfeedback",
@@ -140,7 +143,8 @@
         "reportedEventNames": [
           "$nuxie.response.save",
           "sent"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sfeedback"
       },
       {
         "screenId": "scr_screens_sgoals",
@@ -149,7 +153,8 @@
         "width": 402,
         "height": 874,
         "authoredOrder": 4,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sgoals"
       },
       {
         "screenId": "scr_screens_sitalian-level",
@@ -162,7 +167,8 @@
           "$nuxie.response.save",
           "back",
           "continue"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sitalian-level"
       },
       {
         "screenId": "scr_screens_sstart-lesson",
@@ -174,7 +180,8 @@
         "reportedEventNames": [
           "back",
           "start"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sstart-lesson"
       },
       {
         "screenId": "scr_screens_swelcome",
@@ -185,7 +192,8 @@
         "authoredOrder": 7,
         "reportedEventNames": [
           "begin"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_swelcome"
       }
     ],
     "assets": {

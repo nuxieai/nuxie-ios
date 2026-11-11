@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 322,
-  "outputSizeBytes": 5887,
-  "outputSha256": "54bee7350ab04c65f39921f68a3b3fa91137492afe4d165be9a5f4a05bdd136f",
+  "outputSizeBytes": 5899,
+  "outputSha256": "2bc3a1fe04f90334b58602ad45d45cb1028c4b1e298930611eb9a9b39a7b2232",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -41,7 +41,8 @@
         "width": 320,
         "height": 150,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "PurchaseRoot"
       },
       {
         "screenId": "details",
@@ -50,7 +51,8 @@
         "width": 320,
         "height": 150,
         "authoredOrder": 1,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "DetailsRoot"
       }
     ],
     "assets": {

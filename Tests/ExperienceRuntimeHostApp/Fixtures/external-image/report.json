@@ -25,7 +25,8 @@
         "width": 80,
         "height": 40,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "$nuxie.Screen.hero_image"
       }
     ],
     "assets": {

@@ -8,8 +8,8 @@
     "sizeBytes": 3121
   },
   "report.json": {
-    "sha256": "30606591262ddfd4c290a140294ce5cbdcd1fa4c29635bf281adbc8f7ed0014e",
-    "sizeBytes": 1789
+    "sha256": "df7f6b675378c8d34559b593d9ba10501bec34785f647082d9258e8262b7eeb1",
+    "sizeBytes": 1845
   },
   "page-structure.json": {
     "sha256": "8ddc1c5b2c9f9704a164f61abd3bee073cde7aff59c5e4d49f5d3915405bc1e2",
@@ -44,7 +44,7 @@
     "sizeBytes": 2208
   },
   "provenance.json": {
-    "sha256": "7344293832db2d95c1ac741ae940eeb7f797e6a44cb576e261914de64763caad",
+    "sha256": "f5e6b6db76da4fd390f39ed83506e019df74d33700dab0bcf0a5f437ead30cc2",
     "sizeBytes": 5089
   }
 }

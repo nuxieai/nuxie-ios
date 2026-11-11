@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 381,
-  "outputSizeBytes": 8862,
-  "outputSha256": "f15307764e5ce73bb71c9f41e7311dae4f6154425232e9c8354deac99e5be137",
+  "outputSizeBytes": 8874,
+  "outputSha256": "ff2f10bfa739154138fc50e42b293875f05f9bc1a3838b2d98fa0da418b8affe",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -51,7 +51,8 @@
         "authoredOrder": 0,
         "reportedEventNames": [
           "continue"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sfirst"
       },
       {
         "screenId": "scr_screens_slong",
@@ -60,7 +61,8 @@
         "width": 393,
         "height": 852,
         "authoredOrder": 1,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_slong"
       },
       {
         "screenId": "scr_screens_sshort",
@@ -69,7 +71,8 @@
         "width": 393,
         "height": 852,
         "authoredOrder": 2,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sshort"
       }
     ],
     "assets": {

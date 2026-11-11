@@ -1,7 +1,7 @@
 {
-  "cleanParentHead": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
-  "publisherSourceCommit": "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2",
-  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "cleanParentHead": "9949d224ea15ce531e7130b5db32ca18424e2ca7",
+  "publisherSourceCommit": "9949d224ea15ce531e7130b5db32ca18424e2ca7",
+  "runtimeSourceCommit": "7f1137f8dc1fdd5fbd723a20e4db8aefebed261f",
   "source": "tools/sdk-fixtures/page-release/host-multi-screen/snapshot.json",
   "wrapper": "tools/sdk-fixtures/page-release/host-multi-screen/wrapper.json",
   "migratedForCompiler2b": [],
@@ -28,7 +28,7 @@
     "tools/sdk-fixtures/page-release/host-multi-screen/snapshot.json",
     "tools/sdk-fixtures/page-release/host-multi-screen/wrapper.json",
     "<output-root>",
-    "6a6a873c94b7b8bdd77e1669ec417f77eacd4dc2"
+    "9949d224ea15ce531e7130b5db32ca18424e2ca7"
   ],
   "producerCommand": [
     "bash",
@@ -60,8 +60,8 @@
       "sizeBytes": 2745
     },
     "report.json": {
-      "sha256": "7b363fbaef080ac359735685b86e3a394dec4844ad512771c0b8a80651d0c37b",
-      "sizeBytes": 1308
+      "sha256": "5e982e208f5daa7210963c551e803c436ddf611b4c01a9b51e9f9ea5bb7aeea4",
+      "sizeBytes": 1420
     },
     "page-structure.json": {
       "sha256": "f2af0ae75cf550599c53f2e97d2e450b37f0485c12beb8c07866963103c59eb5",
@@ -80,19 +80,19 @@
       "sizeBytes": 7064
     },
     "descriptor.json": {
-      "sha256": "5553cf3322a066048bb523a9be0d0beaab79606437a0ad0562c61199b3fea3c9",
+      "sha256": "27870ef713d63216eda625be4713032ba69dc365789df20867688b2d40414d2e",
       "sizeBytes": 2542
     },
     "release-entry.json": {
-      "sha256": "1120765fb2fc4d804c13b05b53d0fccd0b94db504a56254fd99d7b66b99669c8",
+      "sha256": "9763ef1fb6aa423931e5c9dd33b55454709a1860e1f70171c542a641707e014c",
       "sizeBytes": 4332
     },
     "release.json": {
-      "sha256": "5553cf3322a066048bb523a9be0d0beaab79606437a0ad0562c61199b3fea3c9",
+      "sha256": "27870ef713d63216eda625be4713032ba69dc365789df20867688b2d40414d2e",
       "sizeBytes": 2542
     },
     "profile.json": {
-      "sha256": "4cd5175b911769af9c75c94dd4829922e5d763927a3f9cd4041afaca361a2fc9",
+      "sha256": "e2f2486fac34dbbde2f452db425c31fd5cc283e59f273fcb10d94d4e9914b60e",
       "sizeBytes": 5378
     }
   }

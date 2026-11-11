@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 629,
-  "outputSizeBytes": 12933,
-  "outputSha256": "389adc8c1927b7b9c2e34499fb0cba49bb242471e6fcc8c65ffb597cb35f9066",
+  "outputSizeBytes": 12948,
+  "outputSha256": "d7d3d2e52f4489ce0e6178d1fb9e411f7d01a49d69c479dbdf10d48acf725d73",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -57,7 +57,8 @@
         "width": 402,
         "height": 874,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sdevice"
       },
       {
         "screenId": "scr_screens_slevel",
@@ -68,7 +69,8 @@
         "authoredOrder": 1,
         "reportedEventNames": [
           "continue"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_slevel"
       },
       {
         "screenId": "scr_screens_stap",
@@ -79,7 +81,8 @@
         "authoredOrder": 2,
         "reportedEventNames": [
           "continue"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_stap"
       }
     ],
     "assets": {

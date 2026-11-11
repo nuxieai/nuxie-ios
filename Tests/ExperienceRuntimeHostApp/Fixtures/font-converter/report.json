@@ -25,7 +25,8 @@
         "width": 320,
         "height": 180,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "Copy"
       }
     ],
     "assets": {
