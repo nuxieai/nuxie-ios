@@ -122,8 +122,8 @@ extension JourneyTestCase {
 }
 
 extension JourneyTestCase {
-    /// Calmly v2 as the simulator played it: plans, welcome and session, with a
-    /// "Your name" field on plans and welcome. Its pictures have no bytes and draw nothing.
+    /// Calmly, republished from its source: plans, welcome and session, with a
+    /// "Your name" field on plans and welcome. Its pictures are 1 by 1 stand-ins.
     func calmlyFieldsPresentation() throws -> (Experience, LoadedExperienceArtifact) {
         let root = experiencePreparationRepositoryRoot()
         let directory = root.appendingPathComponent("fixtures/runtime/page-host-text-fields")
@@ -146,7 +146,8 @@ extension JourneyTestCase {
             assets: try plan.images.map {
                 AuthenticatedRuntimeAsset(kind: .image, authoredAssetID: try XCTUnwrap(UInt32(exactly: $0.authoredAssetId)),
                     assetUniqueName: $0.assetUniqueName, sourceKey: $0.location.contentAddressedPath,
-                    contentType: $0.contentType, sha256: $0.sha256, required: false, bytes: nil)
+                    contentType: $0.contentType, sha256: $0.sha256, required: $0.required,
+                    bytes: try Data(contentsOf: directory.appendingPathComponent($0.location.contentAddressedPath)))
             })
         let experience = Experience(id: "calmly", versionId: "calmly-v2", buildId: "calmly-build",
             artifactContentHash: nil, authenticatedReleaseID: nil, behaviorPresentation: .standard,
