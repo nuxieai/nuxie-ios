@@ -7,13 +7,17 @@ import XCTest
 @MainActor
 final class ExperiencePageStepTests: XCTestCase {
     /// The batches whose next frame is presented start the step's clock: the
-    /// begin batch, and an exit-only leave. Landing batches do not.
+    /// begin batch, and an exit-only leave. Landing batches, and batches that
+    /// begin and end a step at once, do not.
     func testOnlyTheBatchesThatStartAStepsTimelinesStartItsClock() {
         XCTAssertTrue(ExperiencePageStep.startsStepClock([.take, .settle,
             .phases([("A", .exiting), ("B", .entering)], "t1"), .begin("t1")]))
         XCTAssertTrue(ExperiencePageStep.startsStepClock([.phases([("A", .exiting)], "")]))
         XCTAssertFalse(ExperiencePageStep.startsStepClock([.end("t1"), .phases([("A", .hidden)], ""), .retire,
             .phases([("B", .active)], "")]))
+        // Reduced motion and a covered cut begin and end in one batch, with no presented step frame.
+        XCTAssertFalse(ExperiencePageStep.startsStepClock([.take, .settle, .phases([("A", .exiting)], ""),
+            .phases([("B", .entering)], ""), .begin(nil), .end(nil), .retire]))
     }
 
     func testNewBackRowAppendsThenMovesBelowOutgoingWhileForwardOnlyAppends() {
