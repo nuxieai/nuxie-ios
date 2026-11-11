@@ -8,7 +8,7 @@
   "changes": [
     "descriptor.json is the exporter's signed descriptor, printed with sorted keys. The tests read it as an authenticated payload's declarations; they don't sign it",
     "scene.riv is the exporter's screen.riv",
-    "The two pictures are not copied: they publish as 1 by 1 stand-in PNGs, and the tests give them no bytes, so they draw nothing. Nothing else changed"
+    "The two pictures publish as 1 by 1 stand-in PNGs; assets/sha256/ holds the exporter's bytes for them, which the tests supply as the release declares. Nothing else changed"
   ],
   "sha256": {
     "scene.riv": "9c8e3c2832599c4a552ecf3ca88678105b5390ec80d130072b059f253f53ba7a",
