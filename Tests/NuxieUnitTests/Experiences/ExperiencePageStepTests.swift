@@ -6,6 +6,16 @@ import XCTest
 
 @MainActor
 final class ExperiencePageStepTests: XCTestCase {
+    /// The batches whose next frame is presented start the step's clock: the
+    /// begin batch, and an exit-only leave. Landing batches do not.
+    func testOnlyTheBatchesThatStartAStepsTimelinesStartItsClock() {
+        XCTAssertTrue(ExperiencePageStep.startsStepClock([.take, .settle,
+            .phases([("A", .exiting), ("B", .entering)], "t1"), .begin("t1")]))
+        XCTAssertTrue(ExperiencePageStep.startsStepClock([.phases([("A", .exiting)], "")]))
+        XCTAssertFalse(ExperiencePageStep.startsStepClock([.end("t1"), .phases([("A", .hidden)], ""), .retire,
+            .phases([("B", .active)], "")]))
+    }
+
     func testNewBackRowAppendsThenMovesBelowOutgoingWhileForwardOnlyAppends() {
         for isBack in [false, true] {
             var rows = ExperiencePageRows()

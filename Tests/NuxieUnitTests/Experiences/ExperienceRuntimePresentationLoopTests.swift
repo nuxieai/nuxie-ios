@@ -683,6 +683,49 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         _ = window
     }
 
+    /// A page step's clock starts when the step lands, and its first presented
+    /// frame advances to its own time (Core Animation's model): begin at B,
+    /// present at B + 8 ms steps 0.008, and the next tick counts from that frame.
+    @MainActor
+    func testStepFrameAdvancesFromTheStepBeginAndTheNextTickCountsFromIt() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        var now: TimeInterval = 1
+        let loop = makeLoop(recorder: recorder, view: view, now: { now })
+        try await loop.start()
+        loop.displayLinkDidFire(at: 1)
+        let seeded = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(seeded)
+        loop.displayLinkDidFire(at: 1.016)
+        let ticked = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(ticked)
+        let before = await recorder.steps().count
+
+        // The step's batch lands at B = 1.020, four milliseconds after the last tick.
+        now = 1.020
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            _ = loop.enqueue(.init(startsStepClock: true) { .work(requestsFrame: false) },
+                             completion: { continuation.resume(with: $0) })
+        }
+        now = 1.028
+        try await loop.advanceStepFrame()
+        loop.displayLinkDidFire(at: 1.033)
+        let next = await recorder.waitForStepCount(before + 2)
+        XCTAssertTrue(next)
+
+        let steps = Array(await recorder.steps().dropFirst(before))
+        XCTAssertEqual(steps.count, 2, "only the step's first frame and the next tick step")
+        XCTAssertEqual(Double(steps[0].elapsedSeconds), 0.008, accuracy: 0.000_01,
+            "the first presented frame advances from the step's begin to its own time")
+        XCTAssertGreaterThan(steps[0].elapsedSeconds, 0)
+        XCTAssertTrue(steps[0].requestsRender)
+        XCTAssertEqual(Double(steps[1].elapsedSeconds), 0.005, accuracy: 0.000_01,
+            "the next tick counts from the presented frame, not from the tick before the step")
+        await loop.shutdown()
+        _ = window
+    }
+
     @MainActor
     func testStepDeliveryCompletesBeforeItsRenderAndAdvanceNotification() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -2075,7 +2118,8 @@ private func makeLoop(
     ) -> Void = { _, _ in },
     nativeCompletionPresentationFallback:
         ExperienceRuntimePresentedDrawable.Provenance? = .runtimeCompletionProxy,
-    onError: @escaping @MainActor (Error) -> Void = { _ in }
+    onError: @escaping @MainActor (Error) -> Void = { _ in },
+    now: @escaping @MainActor () -> TimeInterval = { CACurrentMediaTime() }
 ) -> ExperienceRuntimePresentationLoop {
     ExperienceRuntimePresentationLoop(
         session: ExperienceRuntimePresentationSession(
@@ -2092,7 +2136,8 @@ private func makeLoop(
         onAcceptedPointerInput: onAcceptedPointerInput,
         observeDrawablePresentation: observeDrawablePresentation,
         nativeCompletionPresentationFallback: nativeCompletionPresentationFallback,
-        onError: onError
+        onError: onError,
+        now: now
     )
 }
 

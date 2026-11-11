@@ -18,6 +18,15 @@ final class ExperienceRuntimeFrameClockTests: QuickSpec {
                 expect(nextFrame.delta).to(beCloseTo(0.016, within: 0.000_001))
             }
 
+            it("counts the next frame from a restart, not from the frame before it") {
+                var clock = ExperienceRuntimeFrameClock()
+                _ = clock.frame(at: 10)
+                clock.restart(at: 10.004)
+
+                let nextFrame = clock.frame(at: 10.012)
+                expect(nextFrame.delta).to(beCloseTo(0.008, within: 0.000_001))
+            }
+
             it("never advances backward when timestamps regress") {
                 var clock = ExperienceRuntimeFrameClock()
                 _ = clock.frame(at: 5)

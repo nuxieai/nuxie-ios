@@ -26,6 +26,18 @@ enum ExperiencePageStep {
             }
         }
     }
+    /// A batch that begins a step or starts its phase timelines starts the
+    /// step's clock: the step's frames count from when it lands (UNIV-6118).
+    static func startsStepClock(_ changes: [Change]) -> Bool {
+        changes.contains { change in
+            switch change {
+            case .begin: return true
+            case .phases(let phases, _): return phases.contains { $0.1 == .exiting || $0.1 == .entering }
+            default: return false
+            }
+        }
+    }
+
     struct Operations {
         var setInputEnabled: (Bool) -> Void
         var prepare: () async throws -> Void

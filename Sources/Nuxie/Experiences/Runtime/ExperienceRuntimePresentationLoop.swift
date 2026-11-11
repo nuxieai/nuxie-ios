@@ -279,8 +279,12 @@ struct ExperienceRuntimePresentationQueuedWork: Sendable {
         -> ExperienceRuntimePresentationSessionResult
 
     let perform: Perform
+    /// A page step begins when this work lands: the frame clock counts from
+    /// that moment, so no frame of the step carries time from before it.
+    let startsStepClock: Bool
 
-    init(perform: @escaping Perform) {
+    init(startsStepClock: Bool = false, perform: @escaping Perform) {
+        self.startsStepClock = startsStepClock
         self.perform = perform
     }
 }
@@ -679,6 +683,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var operationInFlight = false
     private var pendingTimestamp: TimeInterval?
     private var pendingZeroDeltaFrame = false
+    /// The pending zero-delta request is a page step's first frame: when it
+    /// presents, it advances to its own time instead of holding at zero.
+    private var pendingFrameAdvancesToNow = false
+    /// The display link's time base, injectable so tests own the clock.
+    private let now: @MainActor () -> TimeInterval
     private var zeroDeltaRequestGeneration: UInt64 = 0
     private var zeroDeltaStepGeneration: UInt64?
     private var zeroDeltaRenderGeneration: UInt64?
@@ -759,8 +768,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 .runtimeCompletionProxy
                 #endif
             }(),
-        onError: @escaping @MainActor (Error) -> Void = { _ in }
+        onError: @escaping @MainActor (Error) -> Void = { _ in },
+        now: @escaping @MainActor () -> TimeInterval = { CACurrentMediaTime() }
     ) {
+        self.now = now
         self.session = session
         self.surfaceView = surfaceView
         self.notificationCenter = notificationCenter
@@ -855,6 +866,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         isStarted = false
         pendingTimestamp = nil
         pendingZeroDeltaFrame = false
+        pendingFrameAdvancesToNow = false
         zeroDeltaStepGeneration = nil
         zeroDeltaRenderGeneration = nil
         zeroDeltaGenerationByFrameID.removeAll()
@@ -1085,6 +1097,16 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         }
     }
 
+    /// Presents a page step's first frame. Like `advanceZeroDelta(awaitsPresentation: true)`,
+    /// except that while the timeline runs and presents, the frame advances by its own time
+    /// since the step began (`ExperienceRuntimePresentationQueuedWork.startsStepClock`), as a
+    /// display frame does, so the step is already moving when it first reaches the screen.
+    /// The next display tick then counts from this frame.
+    func advanceStepFrame() async throws {
+        pendingFrameAdvancesToNow = true
+        try await advanceZeroDelta(awaitsPresentation: true)
+    }
+
     func runtimeSurfaceViewGeometryDidChange() {
         semanticPresentationEpoch &+= 1
         updateOwningSceneObservers()
@@ -1194,6 +1216,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             if !pendingWork.isEmpty { return takeNextQueuedOperation() }
             if pendingZeroDeltaFrame {
                 pendingZeroDeltaFrame = false
+                pendingFrameAdvancesToNow = false
                 zeroDeltaStepGeneration = zeroDeltaRequestGeneration
                 return .step(ExperienceRuntimePresentationStep(
                     elapsedSeconds: 0,
@@ -1219,6 +1242,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             if !pendingWork.isEmpty { return takeNextQueuedOperation() }
             if pendingZeroDeltaFrame {
                 pendingZeroDeltaFrame = false
+                pendingFrameAdvancesToNow = false
                 zeroDeltaStepGeneration = zeroDeltaRequestGeneration
                 return .step(ExperienceRuntimePresentationStep(
                     elapsedSeconds: 0,
@@ -1241,7 +1265,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         if pendingZeroDeltaFrame {
             pendingZeroDeltaFrame = false
             zeroDeltaStepGeneration = zeroDeltaRequestGeneration
-            let frame = frameClock.zeroDeltaFrame(at: CACurrentMediaTime())
+            // A page step's first frame is evaluated at its own time, as a
+            // display frame is, so it already shows the step moving.
+            let frame = pendingFrameAdvancesToNow
+                ? frameClock.frame(at: now())
+                : frameClock.zeroDeltaFrame(at: now())
+            pendingFrameAdvancesToNow = false
             return .step(ExperienceRuntimePresentationStep(
                 elapsedSeconds: Float(frame.delta),
                 pointers: [],
@@ -1318,7 +1347,13 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             }
             completion.recordRenderOutcome(outcome)
             try consumeRenderOutcome(outcome)
-        case (.queued, .work(let requestsFrame)):
+        case (.queued(let work), .work(let requestsFrame)):
+            if work.startsStepClock {
+                // The step begins now. A tick taken before it would carry
+                // time from before the step, so it is dropped, not drawn.
+                frameClock.restart(at: now())
+                pendingTimestamp = nil
+            }
             await result.deliver()
             finishInFlightWork(.success(()))
             if requestsFrame {
@@ -1660,6 +1695,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         terminalError = error
         pendingTimestamp = nil
         pendingZeroDeltaFrame = false
+        pendingFrameAdvancesToNow = false
         zeroDeltaStepGeneration = nil
         zeroDeltaRenderGeneration = nil
         zeroDeltaGenerationByFrameID.removeAll()
