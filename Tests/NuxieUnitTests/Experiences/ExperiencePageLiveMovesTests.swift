@@ -568,9 +568,9 @@ private func move(_ page: ExperienceInteractivePage, _ source: String, _ target:
                         }
                     }
                     if change == .retire && !retire { continue }
-                    let frame = try await page.apply([change], source: source, target: target,
+                    let frames = try await page.apply([change], source: source, target: target,
                         reachable: reachable, reduceMotion: false)
-                    if let frame { observe(frame) }
+                    for frame in frames { observe(frame) }
                 }
             }, present: {
                 let frame = try await page.step(elapsedSeconds: 0)

@@ -303,20 +303,21 @@ actor ExperienceInteractivePage {
         await videoPlayback?.setStepInProgress(true)
     }
 
+    /// Returns each zero step's result in order, so every advance's effects reach the host.
     @discardableResult
     func apply(_ changes: [ExperiencePageStep.Change], source: String, target: String,
-               reachable: Set<String>, reduceMotion: Bool) async throws -> Step? {
+               reachable: Set<String>, reduceMotion: Bool) async throws -> [Step] {
         try await gate.withLock { [self] in
             try await applyLocked(changes, source: source, target: target, reachable: reachable, reduceMotion: reduceMotion)
         }
     }
 
     private func applyLocked(_ changes: [ExperiencePageStep.Change], source: String, target: String,
-                             reachable: Set<String>, reduceMotion: Bool) async throws -> Step? {
+                             reachable: Set<String>, reduceMotion: Bool) async throws -> [Step] {
         guard let mapped = payload.renderPlan.screens.first(where: { $0.screenId == target }) else {
             throw ExperienceInteractiveScreenError.screenNotFound(target)
         }
-        var settled: Step?
+        var settled: [Step] = []
         for change in changes {
             switch change {
             case .take:
@@ -340,7 +341,7 @@ actor ExperienceInteractivePage {
                 try await applyRowMutation(next.take(target))
                 rowList = next
             case .settle:
-                settled = try await stepLocked(pointers: [], elapsedSeconds: 0, correlationID: 0)
+                settled.append(try await stepLocked(pointers: [], elapsedSeconds: 0, correlationID: 0))
             case .phases(let phases, let transition):
                 try await setPhasesLocked(phases, transition: transition, reduceMotion: reduceMotion, exitReason: .navigation)
                 if phases.contains(where: { $0.1 == .active }) { await videoPlayback?.setStepInProgress(false) }

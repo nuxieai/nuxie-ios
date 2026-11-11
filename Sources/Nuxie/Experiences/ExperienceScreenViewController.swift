@@ -817,13 +817,13 @@ final class ExperienceScreenViewController: UIViewController {
     }
 
     private func pageWork(startsStepClock: Bool = false,
-                          _ work: @escaping @Sendable () async throws -> ExperienceInteractivePage.Step?) async throws {
+                          _ work: @escaping @Sendable () async throws -> [ExperienceInteractivePage.Step]) async throws {
         guard let presentationLoop, runtimeFailure == nil, !isShuttingDown else { throw CancellationError() }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             presentationLoop.enqueue(.init(startsStepClock: startsStepClock) {
-                let step = try await work()
+                let steps = try await work()
                 return .work(requestsFrame: false) { [weak self = self] in
-                    if let step { await self?.deliverPageStep(step) }
+                    for step in steps { await self?.deliverPageStep(step) }
                 }
             }, completion: { continuation.resume(with: $0) })
         }
@@ -1119,7 +1119,7 @@ final class ExperienceScreenViewController: UIViewController {
         try await pageWork {
             guard !(await page.isRowRemoved(screenID: id)) else { throw CancellationError() }
             try await page.setPhases([(id, phase)], reduceMotion: reduceMotion)
-            return nil
+            return []
         }
         lifecycleState = await page.state(screenID: id) ?? lifecycleState
         presented = true

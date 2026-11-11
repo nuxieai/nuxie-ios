@@ -297,9 +297,28 @@ final class ExperienceInteractivePageTests: XCTestCase {
             try await layer.insert(screenID: "A", at: 0)
             let settled = try await layer.apply([.take, .position(below: false), .expand, .settle],
                 source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
-            let step = try XCTUnwrap(settled, "Route (a): settle returns its step for ordinary delivery")
+            XCTAssertEqual(settled.count, 1, "Route (a): settle returns its step for ordinary delivery")
+            let step = try XCTUnwrap(settled.first)
             XCTAssertEqual(step.mountedScreenIDs, ["A", "B"])
             XCTAssertEqual(Set(step.rows.keys), ["A", "B"])
+        }
+    }
+
+    /// A step-starting batch on the frame lane holds the incoming row's zero step
+    /// and the one that enters its states. Each advance commits its own effects,
+    /// so the batch returns both steps, in order, for delivery.
+    @MainActor
+    func testEveryZeroStepInABatchReturnsItsStepInOrder() async throws {
+        try await withLiveMovePage(initialA: false) { layer in
+            try await layer.insert(screenID: "A", at: 0)
+            let changes: [ExperiencePageStep.Change] = [.take, .position(below: false), .expand, .settle,
+                .phases([("A", .exiting), ("B", .entering)], ""), .begin(nil)]
+            let applied = ExperiencePageStep.frameLaneChanges(changes)
+            XCTAssertEqual(applied.filter { $0 == .settle }.count, 2)
+            let settled = try await layer.apply(applied, source: "A", target: "B",
+                reachable: ["A", "B"], reduceMotion: false)
+            XCTAssertEqual(settled.count, 2, "Each zero step's effects must reach the host")
+            XCTAssertEqual(settled.map { $0.mountedScreenIDs }, [["A", "B"], ["A", "B"]])
         }
     }
 
@@ -309,12 +328,12 @@ final class ExperienceInteractivePageTests: XCTestCase {
             try await layer.insert(screenID: "A", at: 0)
             let first = try await layer.apply([.take, .position(below: false), .expand],
                 source: "A", target: "B", reachable: ["A", "B"], reduceMotion: false)
-            XCTAssertNil(first, "Row mutations and expansion must not advance the player")
+            XCTAssertTrue(first.isEmpty, "Row mutations and expansion must not advance the player")
             let inserted = await layer.mountedScreenIDs
             XCTAssertEqual(inserted, ["A", "B"])
             let moved = try await layer.apply([.take, .position(below: false), .expand],
                 source: "B", target: "A", reachable: ["A", "B"], reduceMotion: false)
-            XCTAssertNil(moved)
+            XCTAssertTrue(moved.isEmpty)
             let reordered = await layer.mountedScreenIDs
             XCTAssertEqual(reordered, ["B", "A"])
             let frame = try await layer.step(elapsedSeconds: 0)
