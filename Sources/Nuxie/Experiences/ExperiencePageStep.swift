@@ -42,6 +42,15 @@ enum ExperiencePageStep {
         return starts
     }
 
+    /// The changes the frame lane applies for one batch. A state entered
+    /// during an advance starts its timeline at zero and moves only from the
+    /// next advance, so a batch that starts a step's clock ends with a zero
+    /// step that enters its states; the step's first presented frame, with
+    /// real time, then already moves.
+    static func frameLaneChanges(_ changes: [Change]) -> [Change] {
+        startsStepClock(changes) ? changes + [.settle] : changes
+    }
+
     struct Operations {
         var setInputEnabled: (Bool) -> Void
         var prepare: () async throws -> Void

@@ -874,13 +874,9 @@ final class ExperienceScreenViewController: UIViewController {
                 return waiter.events
             }, batch: { [self] changes in
                 guard isLive() else { throw CancellationError() }
-                // A state entered during an advance starts its timeline at zero
-                // and moves only from the next advance. So a batch that starts
-                // a step ends with a zero step that enters its states, and the
-                // step's first presented frame, with real time, already moves.
                 let startsStep = ExperiencePageStep.startsStepClock(changes)
                 try await pageWork(startsStepClock: startsStep) {
-                    try await layer.apply(startsStep ? changes + [.settle] : changes, source: sourceID, target: targetID,
+                    try await layer.apply(ExperiencePageStep.frameLaneChanges(changes), source: sourceID, target: targetID,
                         reachable: reachable, reduceMotion: reduceMotion)
                 }
                 lifecycleState = await layer.state(screenID: sourceID) ?? lifecycleState

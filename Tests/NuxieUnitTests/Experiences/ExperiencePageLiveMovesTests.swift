@@ -1,6 +1,8 @@
 #if (os(iOS) || os(macOS)) && !targetEnvironment(macCatalyst)
 import Foundation
 import XCTest
+import Metal
+import QuartzCore
 @testable import NuxieRuntime
 @_spi(Testing) @testable import Nuxie
 
@@ -75,6 +77,60 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
             _ = try await page.step(elapsedSeconds: 1 / 60)
             await assertRows(page, ["A"], collapsed: [])
         }
+    }
+
+    /// The step's arrival timeline keys its flight from take-off over one
+    /// second. A state entered during an advance waits for the next advance,
+    /// so the frame lane's zero step is what lets the first presented frame,
+    /// one sixtieth of a second in, draw the flight already off its take-off
+    /// pose. Without that zero step the same frame draws the take-off pose.
+    func testAStepsFirstPresentedFrameDrawsItsFlightAlreadyMoved() async throws {
+        let lane = try await firstStepFrame(throughFrameLane: true)
+        XCTAssertNotEqual(lane.firstFrame, lane.takeOff,
+            "The first presented frame of a step must draw its flight moved from take-off")
+        let unsettled = try await firstStepFrame(throughFrameLane: false)
+        XCTAssertEqual(unsettled.firstFrame, unsettled.takeOff,
+            "Control: without the zero step the entered arrival state does not move on that frame")
+    }
+
+    private func firstStepFrame(throughFrameLane: Bool) async throws -> (takeOff: Data, firstFrame: Data) {
+        var takeOff: Data?
+        var firstFrame: Data?
+        try await withLiveMovePage { page in
+            let lifecycle = try JSONSerialization.jsonObject(with: liveMoveFixture("lifecycle2.json")) as? [String: Any]
+            let t1 = try XCTUnwrap((lifecycle?["steps"] as? [String: Any])?["t1"] as? [String: Any])
+            let incoming = try XCTUnwrap((t1["incoming"] as? [String: Any])?["completeEventName"] as? String)
+            let duration = try XCTUnwrap(t1["durationMs"] as? NSNumber).uint64Value
+            var waiters: [(String, UUID)] = []
+            try await ExperiencePageStep.perform(source: "A", target: "B", style: .magicMove, isBack: false,
+                plan: .init(transitionId: "t1", durationMilliseconds: duration, incomingOnTop: true,
+                    outgoingCompletionEventName: "", incomingCompletionEventName: incoming),
+                exit: .init(declaration: nil, reduceMotion: false), reduceMotion: false,
+                operations: .init(setInputEnabled: { _ in }, prepare: {
+                    _ = try await page.prepareRow(screenID: "B", products: [])
+                }, register: { id, event in
+                    if event.isEmpty { return AsyncStream { $0.yield(()); $0.finish() } }
+                    let waiter = try await page.registerCompletion(screenID: id, eventName: event)
+                    waiters.append((id, waiter.id))
+                    return waiter.events
+                }, batch: { changes in
+                    let applied = throughFrameLane ? ExperiencePageStep.frameLaneChanges(changes) : changes
+                    _ = try await page.apply(applied, source: "A", target: "B",
+                        reachable: ["A", "B"], reduceMotion: false)
+                    if firstFrame == nil, ExperiencePageStep.startsStepClock(changes) {
+                        takeOff = try await liveMovePixels(page)
+                    }
+                }, present: {
+                    _ = try await page.step(elapsedSeconds: 1 / 60)
+                    if firstFrame == nil { firstFrame = try await liveMovePixels(page) }
+                }, wait: { _, milliseconds in
+                    for _ in 0...Int(milliseconds * 60 / 1000) { _ = try? await page.step(elapsedSeconds: 1 / 60) }
+                }, release: {
+                    for (id, token) in waiters { await page.removeCompletion(screenID: id, id: token) }
+                    waiters.removeAll()
+                }, hidden: {}, active: { try await page.selectActiveRow("B") }))
+        }
+        return (try XCTUnwrap(takeOff, "No batch started the step"), try XCTUnwrap(firstFrame, "No frame was presented"))
     }
 
     func testRepeatedBackRevisitsKeepNativeHandleCountBounded() async throws {
@@ -331,6 +387,38 @@ private func liveMoveFixture(_ name: String) throws -> Data {
     }
     return try Data(contentsOf: experiencePreparationRepositoryRoot()
         .appendingPathComponent("fixtures/runtime/page-host-live-moves/\(name)"))
+}
+
+/// Draws the page's current state, without advancing it, and reads it back.
+@MainActor
+private func liveMovePixels(_ page: ExperienceInteractivePage, width: Int = 800, height: Int = 600) async throws -> Data {
+    let device = try await page.runtime.metalDevice().value
+    let layer = CAMetalLayer()
+    layer.device = device; layer.pixelFormat = .bgra8Unorm; layer.framebufferOnly = false
+    layer.drawableSize = CGSize(width: width, height: height)
+    let drawable = try XCTUnwrap(layer.nextDrawable())
+    let stride = (width * 4 + 255) & ~255
+    let buffer = try XCTUnwrap(device.makeBuffer(length: stride * height, options: .storageModeShared))
+    let rendered = AsyncStream<Void> { continuation in
+        Task { @MainActor in
+            do {
+                let frame = try await page.runtime.renderFrame(layoutScaleFactor: 1,
+                    drawable: .available(NuxieNativeDrawable(drawable)),
+                    readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: stride),
+                    completion: { continuation.yield(()); continuation.finish() })
+                XCTAssertEqual(frame.outcome.disposition, .presented)
+            } catch {
+                XCTFail("Cannot draw the live-move page: \(error)")
+                continuation.finish()
+            }
+        }
+    }
+    for await _ in rendered { break }
+    var data = Data()
+    for row in 0..<height {
+        data.append(buffer.contents().assumingMemoryBound(to: UInt8.self) + row * stride, count: width * 4)
+    }
+    return data
 }
 
 @MainActor
