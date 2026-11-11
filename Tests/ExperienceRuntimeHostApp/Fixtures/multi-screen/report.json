@@ -33,7 +33,8 @@
         "width": 320,
         "height": 640,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "$nuxie.Screen.ab_one"
       },
       {
         "screenId": "ab_two",
@@ -42,7 +43,8 @@
         "width": 240,
         "height": 360,
         "authoredOrder": 1,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "$nuxie.Screen.ab_two"
       }
     ],
     "assets": {

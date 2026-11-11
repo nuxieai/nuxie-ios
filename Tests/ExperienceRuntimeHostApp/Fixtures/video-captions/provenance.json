@@ -1,7 +1,7 @@
 {
-  "cleanParentHead": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
-  "publisherSourceCommit": "1f9e4e10f1009cb7284c85d329672f621eebfd22",
-  "runtimeSourceCommit": "8f3c67de2e71c4f4f8e1626146135f8fd3bfd1d8",
+  "cleanParentHead": "9949d224ea15ce531e7130b5db32ca18424e2ca7",
+  "publisherSourceCommit": "9949d224ea15ce531e7130b5db32ca18424e2ca7",
+  "runtimeSourceCommit": "7f1137f8dc1fdd5fbd723a20e4db8aefebed261f",
   "source": "tools/sdk-fixtures/page-release/host-video-captions/snapshot.json",
   "wrapper": "tools/sdk-fixtures/page-release/host-video-captions/wrapper.json",
   "migratedForCompiler2b": [
@@ -38,7 +38,7 @@
     "tools/sdk-fixtures/page-release/host-video-captions/snapshot.json",
     "tools/sdk-fixtures/page-release/host-video-captions/wrapper.json",
     "<output-root>",
-    "1f9e4e10f1009cb7284c85d329672f621eebfd22"
+    "9949d224ea15ce531e7130b5db32ca18424e2ca7"
   ],
   "producerCommand": [
     "bash",
@@ -62,19 +62,19 @@
   "qualification": "Producer candidate only; SDK admission and native execution require separate qualification.",
   "files": {
     "screen.riv": {
-      "sha256": "c8e016922451990ae838285c80bb2351d93fc2501c90c333b91dd8832ea6d1ac",
-      "sizeBytes": 2483
+      "sha256": "8ca1b7e9137f23dcd40b71a8c4cb2b47475fa5a8501971f49a405e041a23d966",
+      "sizeBytes": 2481
     },
-    "renders/sha256/c8e016922451990ae838285c80bb2351d93fc2501c90c333b91dd8832ea6d1ac.nux": {
-      "sha256": "c8e016922451990ae838285c80bb2351d93fc2501c90c333b91dd8832ea6d1ac",
-      "sizeBytes": 2483
+    "renders/sha256/8ca1b7e9137f23dcd40b71a8c4cb2b47475fa5a8501971f49a405e041a23d966.nux": {
+      "sha256": "8ca1b7e9137f23dcd40b71a8c4cb2b47475fa5a8501971f49a405e041a23d966",
+      "sizeBytes": 2481
     },
     "report.json": {
-      "sha256": "8b46d2f3682bc0616fe7574fd5ab77de9e6aaa587e525e09b00759e66995887c",
-      "sizeBytes": 1473
+      "sha256": "3e7c6504cecb15e9870326594b7635ed79af0d395b9cb22222d49db0ca89cc04",
+      "sizeBytes": 1529
     },
     "page-structure.json": {
-      "sha256": "0635ac8f618095e019da999bc3b7e8a517665cb46b53bbd08d2d9b24edea7769",
+      "sha256": "572fc9cb3497a2959392ed958d3791e46ed6f332e034e16fc5be08f9788660bd",
       "sizeBytes": 376
     },
     "snapshot-processing.json": {
@@ -94,19 +94,19 @@
       "sizeBytes": 22646
     },
     "descriptor.json": {
-      "sha256": "c773d28d8aa600d2cae1242ef62718cd926d229aea475220b67d9dab95fb0519",
+      "sha256": "40e2d3b65540c320055c39255f57e6d829773f7ac35690aab0e1ac3abe066eac",
       "sizeBytes": 2961
     },
     "release-entry.json": {
-      "sha256": "701848e705201ed51aadd60cd8134af4bf95328575464150b5cc05205b6b82bb",
+      "sha256": "e0ff856ac5b40005790bffc8620368a1eaa5ab0752d1d33a312360f59615afa8",
       "sizeBytes": 4821
     },
     "release.json": {
-      "sha256": "c773d28d8aa600d2cae1242ef62718cd926d229aea475220b67d9dab95fb0519",
+      "sha256": "40e2d3b65540c320055c39255f57e6d829773f7ac35690aab0e1ac3abe066eac",
       "sizeBytes": 2961
     },
     "profile.json": {
-      "sha256": "9174dcee0f5eaab7b9f7c852ce6fe332187954eb746a841c432e9781fc9beb55",
+      "sha256": "36b99e87cb5986c722aefa987f94481f0db620ddd7d215d1b1881831472e5cf2",
       "sizeBytes": 5804
     }
   }

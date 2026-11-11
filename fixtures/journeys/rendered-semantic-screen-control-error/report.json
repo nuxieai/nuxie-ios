@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 193,
-  "outputSizeBytes": 7292,
-  "outputSha256": "6697c4c82954f81ed2c27f264448d9cd4ed7095129eca7b9541c6c06060dc01d",
+  "outputSizeBytes": 7583,
+  "outputSha256": "996b6a16cefe1a06a01a1492e748ba404e149cd2c134378349f491832576cae7",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -25,7 +25,8 @@
         "width": 390,
         "height": 844,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "Runtime Paywall screen_1"
       }
     ],
     "assets": {

@@ -1,18 +1,18 @@
 {
   "screen.riv": {
-    "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
-    "sizeBytes": 5722
+    "sha256": "e867f5db5626103a4535b47b1998bfcd08735701eda5b76e583547798be6cc34",
+    "sizeBytes": 5725
   },
-  "renders/sha256/dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01.nux": {
-    "sha256": "dc5bf073308a8a3120aed44609e148beaef0e50634c07f483d32a27b8daeec01",
-    "sizeBytes": 5722
+  "renders/sha256/e867f5db5626103a4535b47b1998bfcd08735701eda5b76e583547798be6cc34.nux": {
+    "sha256": "e867f5db5626103a4535b47b1998bfcd08735701eda5b76e583547798be6cc34",
+    "sizeBytes": 5725
   },
   "report.json": {
-    "sha256": "639b1bb98201ea96d118d24671a3355572f294f6a4bb75d188c7d3afabb65511",
-    "sizeBytes": 2794
+    "sha256": "86a1e11393b6d9d3eecafe4950e3f909e9c55c4833540bbcbb564b9d66b507bf",
+    "sizeBytes": 2937
   },
   "page-structure.json": {
-    "sha256": "5c40107b6e4247b741e1ac2626e2458ff86ca5e62f115686fc78686075438510",
+    "sha256": "0e977fb237ecfe220fccb431811f6583d3dd638204a8f8c8e6f206f0281d1ea1",
     "sizeBytes": 574
   },
   "expectations.json": {
@@ -40,19 +40,19 @@
     "sizeBytes": 269
   },
   "descriptor.json": {
-    "sha256": "7dfd282e98d559d49846d74322b252ec30c7eea58361e2ffa08fe1b72c76f704",
+    "sha256": "0495234afa793bd48ef42eb7e9590f53f148e10e4b81f4897b8acbe090cf7f98",
     "sizeBytes": 4520
   },
   "release-entry.json": {
-    "sha256": "99fa29cead44289b50fffddcf73d5e3714e14f7cd3f63b41fd27bce5af30f748",
+    "sha256": "632ce0e5e7acb8d77ec6ab3076b6f23c3074f1fae0b429867618063f4ca569f8",
     "sizeBytes": 6969
   },
   "release.json": {
-    "sha256": "7dfd282e98d559d49846d74322b252ec30c7eea58361e2ffa08fe1b72c76f704",
+    "sha256": "0495234afa793bd48ef42eb7e9590f53f148e10e4b81f4897b8acbe090cf7f98",
     "sizeBytes": 4520
   },
   "provenance.json": {
-    "sha256": "2b20e5412300d3bcd091dcf08324eae423df627a704131ef8ea8dfa5d5546eab",
+    "sha256": "4d8c7848072913a90237788a6bc3eedaf2307e2d1f5da440a8255033292c3d4e",
     "sizeBytes": 5562
   }
 }

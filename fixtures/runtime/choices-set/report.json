@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 244,
-  "outputSizeBytes": 8509,
-  "outputSha256": "125f252878f42027afbad70bc2a6193ae8efa4dda2062f0d91498b1911c77e92",
+  "outputSizeBytes": 8821,
+  "outputSha256": "214cf73aac65562dad5e633054ae9b29754b7b26cdd936183811a40fb64fd842",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -33,7 +33,8 @@
         "width": 300,
         "height": 300,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_sfirst"
       }
     ],
     "assets": {

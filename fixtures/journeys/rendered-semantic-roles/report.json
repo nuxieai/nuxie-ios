@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 397,
-  "outputSizeBytes": 15348,
-  "outputSha256": "f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539",
+  "outputSizeBytes": 15351,
+  "outputSha256": "ecb708c13c90b997a7ca327c71c6dcb6a63a5ecd939631e3e2f32955c0f3fe2e",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -36,7 +36,8 @@
         "reportedEventNames": [
           "seat_decreased",
           "seat_increased"
-        ]
+        ],
+        "defaultViewModelName": "Accessibility"
       }
     ],
     "assets": {

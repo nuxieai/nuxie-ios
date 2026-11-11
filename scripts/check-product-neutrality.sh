@@ -44,7 +44,7 @@ if git grep -nE "$prohibited" -- \
   ':!fixtures/journeys/rendered-semantic-roles/descriptor.json' \
   ':!fixtures/journeys/rendered-semantic-roles/provenance.json' \
   ':!fixtures/journeys/rendered-semantic-roles/release.json' \
-  ':!fixtures/journeys/rendered-semantic-roles/renders/sha256/f5e3ee38eaf045e60417ed73b98a08b705b882571e3f73015473b55193f81539.nux' \
+  ':!fixtures/journeys/rendered-semantic-roles/renders/sha256/ecb708c13c90b997a7ca327c71c6dcb6a63a5ecd939631e3e2f32955c0f3fe2e.nux' \
   ':!fixtures/journeys/rendered-semantic-roles/report.json' \
   ':!fixtures/journeys/rendered-semantic-roles/screen.riv' \
   ':!fixtures/journeys/rendered-semantic-screen-control-condition/provenance.json' \

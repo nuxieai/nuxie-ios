@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 691,
-  "outputSizeBytes": 16942,
-  "outputSha256": "62574a3be63f4f3ffe4c55ad9453f38b694e8fff225f7023e9a3753cf499cbd1",
+  "outputSizeBytes": 16969,
+  "outputSha256": "d070d154265d6ec083f74755a6fe749ce978afb1e841a4f64fd42191fbd29ed1",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -65,7 +65,8 @@
           "noted",
           "picked",
           "rated"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_semits"
       }
     ],
     "assets": {

@@ -25,7 +25,8 @@
         "width": 320,
         "height": 640,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "$nuxie.Screen.ab_one"
       }
     ],
     "assets": {

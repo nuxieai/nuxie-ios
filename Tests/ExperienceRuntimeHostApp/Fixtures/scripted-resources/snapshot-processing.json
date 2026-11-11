@@ -11,8 +11,8 @@
     {
       "kind": "shader",
       "assetId": "shader-vector",
-      "sha256": "e83341b43a488f71ba4e1b7cd32a11a1a8143e908bf6e5c51b2ddc61634f920d",
-      "sizeBytes": 366,
+      "sha256": "3b2faed7be3faab59150e82a1d72c3f878ebf70ce46da59c8fbc13b2b739e02f",
+      "sizeBytes": 392,
       "qualification": "package-only"
     }
   ],

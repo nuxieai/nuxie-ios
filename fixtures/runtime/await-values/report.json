@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 430,
-  "outputSizeBytes": 11943,
-  "outputSha256": "3986fe060ca7de29411a99063f0d4a81bb1585a22bc1ec3625a350105df73bc7",
+  "outputSizeBytes": 11952,
+  "outputSha256": "09e3c1249a140cc24d1d44fbef94e51aed1d95d536cdf052165c6b09dffebca2",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -37,7 +37,8 @@
           "$nuxie.relay.rated",
           "$nuxie.response.save",
           "rated"
-        ]
+        ],
+        "defaultViewModelName": "vm_runtime_root_scr_screens_srate"
       }
     ],
     "assets": {

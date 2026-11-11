@@ -3,8 +3,8 @@
   "minorVersion": 3,
   "fileId": 1,
   "recordCount": 126,
-  "outputSizeBytes": 3537,
-  "outputSha256": "6d6a9db38e7274134ffa0a47ec676f3dbddf72012c1a9246efa07241e76b3578",
+  "outputSizeBytes": 3563,
+  "outputSha256": "d4442441b00d77fffd2af48c74d62790c829a350aaf10cc03f9a9d27839cb841",
   "roundtripValidated": true,
   "builtPackageMetadata": {
     "artboards": [
@@ -25,7 +25,8 @@
         "width": 160,
         "height": 100,
         "authoredOrder": 0,
-        "reportedEventNames": []
+        "reportedEventNames": [],
+        "defaultViewModelName": "$nuxie.Screen.screen"
       }
     ],
     "assets": {
