@@ -201,6 +201,26 @@ final class ExperiencePageStepTests: XCTestCase {
         }
     }
 
+    /// Everything a step starts shares one start. A Screen's fade plays from
+    /// its phase and a flight from the begin; both Screens' phases and the
+    /// begin travel in the batch that starts the step's clock, and the frame
+    /// lane ends it with one zero step that enters every state they start, so
+    /// the step's first real-time frame moves a Screen's fade with the flight.
+    /// No later batch starts a timeline before the landing.
+    func testEverythingAStepStartsIsEnteredOnOneZeroStepBeforeItsFirstFrame() async throws {
+        for style in [ExperienceScreenTransitionSpec.Kind.magicMove, .fade] {
+            let probe = PageStepProbe()
+            try await probe.perform(style: style)
+            let starting = try XCTUnwrap(probe.batches.first(where: ExperiencePageStep.startsStepClock))
+            let applied = ExperiencePageStep.frameLaneChanges(starting)
+            XCTAssertEqual(Array(applied.suffix(3)),
+                [.phases([("A", .exiting), ("B", .entering)], "pair"), .begin("pair"), .settle])
+            XCTAssertEqual(probe.batches.filter(ExperiencePageStep.startsStepClock).count, 1)
+            XCTAssertEqual(probe.order.firstIndex(of: "present"), probe.order.firstIndex(of: "batch").map { $0 + 1 },
+                "The step's first presented frame follows its starting batch")
+        }
+    }
+
     func testCutRunsPublishedHalvesSequentiallyAndRetiresAfterBegin() async throws {
         let probe = PageStepProbe()
         try await probe.perform(style: .none)

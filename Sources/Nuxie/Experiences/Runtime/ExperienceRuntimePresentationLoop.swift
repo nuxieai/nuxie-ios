@@ -692,7 +692,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var lastDisplayTime: TimeInterval?
     /// The display's refresh interval, once a tick has reported it.
     private var displayInterval: TimeInterval?
-    /// The display time the latest presented picture was evaluated at.
+    /// When the latest picture that got a drawable is shown: the one place
+    /// that fact lives. Only a drawable-backed render sets it.
     private var lastPictureTime: TimeInterval?
     /// The display time the next render's picture was evaluated at. It takes
     /// its refresh only once it gets a drawable; a skipped render takes none.
@@ -1394,7 +1395,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             if work.startsStepClock {
                 // The step begins now. A tick taken before it would carry
                 // time from before the step, so it is dropped, not drawn.
-                frameClock.restart(at: now())
+                // Pictures are timed when they are shown, so the last shown
+                // picture may still be due; the step then counts from it, so
+                // time already on screen is never stepped twice. A picture
+                // that got no drawable was never shown and counts for nothing.
+                frameClock.restart(at: max(now(), lastPictureTime ?? -.infinity))
                 pendingTimestamp = nil
             }
             await result.deliver()

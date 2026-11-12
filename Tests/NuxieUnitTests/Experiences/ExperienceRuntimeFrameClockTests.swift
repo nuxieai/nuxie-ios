@@ -27,16 +27,6 @@ final class ExperienceRuntimeFrameClockTests: QuickSpec {
                 expect(nextFrame.delta).to(beCloseTo(0.008, within: 0.000_001))
             }
 
-            it("never steps time again when a step begins before the last frame is shown") {
-                var clock = ExperienceRuntimeFrameClock()
-                // The last frame is timed at its display time, 10.016; the step begins at 10.010.
-                _ = clock.frame(at: 10.016)
-                clock.restart(at: 10.010)
-
-                let nextFrame = clock.frame(at: 10.033)
-                expect(nextFrame.delta).to(beCloseTo(0.017, within: 0.000_001))
-            }
-
             it("never advances backward when timestamps regress") {
                 var clock = ExperienceRuntimeFrameClock()
                 _ = clock.frame(at: 5)
