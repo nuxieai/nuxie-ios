@@ -850,6 +850,63 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         _ = window
     }
 
+    /// A picture that gets no drawable is never shown, so it takes no refresh:
+    /// the pictures after it are timed as if it had not been drawn, and the
+    /// step's clock never runs ahead of what reaches the screen.
+    @MainActor
+    func testASkippedPictureTakesNoRefresh() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let interval = 1.0 / 60.0
+        let vsync = { (n: Double) in 1.0 + n * interval }
+        var now: TimeInterval = vsync(0) + 0.001
+        var permitsDrawable = true
+        let loop = makeLoop(recorder: recorder, view: view,
+            acquireDrawable: { permitsDrawable ? $0.nextDrawable() : nil }, now: { now })
+        try await loop.start()
+        func tick(_ n: Double) {
+            now = vsync(n) + 0.001
+            loop.displayLinkDidFire(at: vsync(n + 1), interval: interval)
+        }
+        tick(0)
+        let seeded = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(seeded)
+        tick(1)
+        let ticked = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(ticked)
+        let before = await recorder.steps().count
+
+        // The step lands before the picture for vsync(2) is shown; its first
+        // two pictures find no drawable, so neither reaches the screen.
+        now = vsync(1) + 0.004
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            _ = loop.enqueue(.init(startsStepClock: true) { .work(requestsFrame: false) },
+                             completion: { continuation.resume(with: $0) })
+        }
+        permitsDrawable = false
+        now = vsync(1) + 0.006
+        let first = Task { @MainActor in try await loop.advanceStepFrame() }
+        let skippedFirst = await recorder.waitForRenderCount(3)
+        XCTAssertTrue(skippedFirst)
+        let second = Task { @MainActor in try await loop.advanceStepFrame() }
+        let skippedSecond = await recorder.waitForRenderCount(4)
+        XCTAssertTrue(skippedSecond)
+        // The next tick's picture is the first shown, at vsync(3), one refresh
+        // after the last shown picture.
+        permitsDrawable = true
+        tick(2)
+        _ = try await first.value
+        _ = try await second.value
+
+        let steps = Array(await recorder.steps().dropFirst(before))
+        let clock = steps.reduce(0.0) { $0 + Double($1.elapsedSeconds) }
+        XCTAssertEqual(clock, interval, accuracy: 0.000_05,
+            "the step reaches the first shown picture's display time, not one refresh per skipped picture")
+        await loop.shutdown()
+        _ = window
+    }
+
     @MainActor
     func testStepDeliveryCompletesBeforeItsRenderAndAdvanceNotification() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {

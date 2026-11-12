@@ -692,8 +692,11 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var lastDisplayTime: TimeInterval?
     /// The display's refresh interval, once a tick has reported it.
     private var displayInterval: TimeInterval?
-    /// The display time the latest drawn picture was evaluated at.
+    /// The display time the latest presented picture was evaluated at.
     private var lastPictureTime: TimeInterval?
+    /// The display time the next render's picture was evaluated at. It takes
+    /// its refresh only once it gets a drawable; a skipped render takes none.
+    private var pendingPictureTime: TimeInterval?
     private var zeroDeltaRequestGeneration: UInt64 = 0
     private var zeroDeltaStepGeneration: UInt64?
     private var zeroDeltaRenderGeneration: UInt64?
@@ -1227,6 +1230,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             let size = surfaceSize(for: surfaceView)
             if size != lastAppliedSize {
                 pendingRender = false
+                pendingPictureTime = nil
                 submittedPresentationContext = nil
                 return .resize(size)
             }
@@ -1303,7 +1307,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             // as every display frame is: at least one refresh after the step
             // began, so it already shows the step moving.
             let shown = pictureTime(for: requestedDisplayTime())
-            lastPictureTime = shown
+            pendingPictureTime = shown
             let frame = pendingFrameAdvancesToNow
                 ? frameClock.frame(at: shown)
                 : frameClock.zeroDeltaFrame(at: shown)
@@ -1320,7 +1324,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         let pointers = pendingPointers.takeBatch()
         if !pendingPointers.isEmpty { pendingTimestamp = timestamp }
         let shown = pictureTime(for: timestamp)
-        lastPictureTime = shown
+        pendingPictureTime = shown
         return .step(ExperienceRuntimePresentationStep(
             elapsedSeconds: Float(frameClock.frame(at: shown).delta),
             pointers: pointers,
@@ -1434,6 +1438,8 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return nil
         }
         let scale = size.layoutScaleFactor
+        let picture = pendingPictureTime
+        pendingPictureTime = nil
         frameSequence &+= 1
         let frameID = frameSequence
         if let generation = zeroDeltaRenderGeneration {
@@ -1460,6 +1466,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             permit.release()
             return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
+        if let picture { lastPictureTime = max(lastPictureTime ?? picture, picture) }
         let firstPresentedDrawableGate = firstPresentedDrawableGate
         // A later frame still carries the phase writes if their first drawable was skipped.
         let phaseGeneration = max(zeroDeltaGenerationByFrameID.values.max() ?? 0, completedZeroDeltaGeneration)
