@@ -692,12 +692,14 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var lastDisplayTime: TimeInterval?
     /// The display's refresh interval, once a tick has reported it.
     private var displayInterval: TimeInterval?
-    /// When the latest picture that got a drawable is shown: the one place
-    /// that fact lives. Only a drawable-backed render sets it.
+    /// When the latest presented picture is shown: the one place that fact
+    /// lives. Only a render whose outcome is presented sets it.
     private var lastPictureTime: TimeInterval?
-    /// The display time the next render's picture was evaluated at. It takes
-    /// its refresh only once it gets a drawable; a skipped render takes none.
+    /// The display time the next render's picture was evaluated at.
     private var pendingPictureTime: TimeInterval?
+    /// The display time of the render in flight. It takes its refresh only
+    /// if the render presents; a skipped render takes none.
+    private var renderPictureTime: TimeInterval?
     private var zeroDeltaRequestGeneration: UInt64 = 0
     private var zeroDeltaStepGeneration: UInt64?
     private var zeroDeltaRenderGeneration: UInt64?
@@ -1266,8 +1268,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             // A held page keeps presenting its media: each display tick steps
             // by zero, so new video pictures reach the screen and nothing
             // authored moves. With no media wanting frames it draws nothing.
-            if presentsHeldMedia, pendingTimestamp != nil {
+            if presentsHeldMedia, let timestamp = pendingTimestamp {
                 pendingTimestamp = nil
+                // Nothing authored moves, but the picture takes its refresh.
+                pendingPictureTime = pictureTime(for: timestamp)
                 return .step(ExperienceRuntimePresentationStep(
                     elapsedSeconds: 0,
                     pointers: [],
@@ -1374,6 +1378,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 }
             }
         case (.render(_, _, let completion), .renderer(let outcome)):
+            if outcome.disposition == .presented, outcome.health == .healthy, let picture = renderPictureTime {
+                lastPictureTime = max(lastPictureTime ?? picture, picture)
+            }
+            renderPictureTime = nil
             if result.hasDelivery {
                 completion.recordPresentedWork { [weak self] in
                     Task { @MainActor [weak self] in
@@ -1443,7 +1451,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             return nil
         }
         let scale = size.layoutScaleFactor
-        let picture = pendingPictureTime
+        renderPictureTime = pendingPictureTime
         pendingPictureTime = nil
         frameSequence &+= 1
         let frameID = frameSequence
@@ -1471,7 +1479,6 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             permit.release()
             return .render(.timeout, layoutScaleFactor: scale, completion: completion)
         }
-        if let picture { lastPictureTime = max(lastPictureTime ?? picture, picture) }
         let firstPresentedDrawableGate = firstPresentedDrawableGate
         // A later frame still carries the phase writes if their first drawable was skipped.
         let phaseGeneration = max(zeroDeltaGenerationByFrameID.values.max() ?? 0, completedZeroDeltaGeneration)

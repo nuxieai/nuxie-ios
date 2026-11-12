@@ -855,6 +855,27 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
     /// step's clock never runs ahead of what reaches the screen.
     @MainActor
     func testASkippedPictureTakesNoRefresh() async throws {
+        try await assertASkippedPictureTakesNoRefresh(outcome: nil)
+    }
+
+    /// The same when the loop gets a drawable but the render does not present
+    /// it, for whatever reason: the page drops it while a video waits for its
+    /// first frame, the page is occluded or zero-sized, or nothing is drawn.
+    /// Only a render whose outcome is presented takes a refresh.
+    @MainActor
+    func testARenderThatDoesNotPresentTakesNoRefresh() async throws {
+        for outcome: ExperienceRuntimePresentationRenderOutcome.Disposition in
+            [.skippedTimeout, .skippedOccluded, .skippedZeroSize, .none, .reconfigured] {
+            try await assertASkippedPictureTakesNoRefresh(outcome: outcome)
+        }
+    }
+
+    /// `outcome` nil: the loop gets no drawable. Otherwise the loop gets one and
+    /// the render answers `outcome`.
+    @MainActor
+    private func assertASkippedPictureTakesNoRefresh(
+        outcome: ExperienceRuntimePresentationRenderOutcome.Disposition?
+    ) async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
         let recorder = PresentationSessionRecorder(device: device)
         let (window, view) = makePresentationSurface()
@@ -884,7 +905,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
             _ = loop.enqueue(.init(startsStepClock: true) { .work(requestsFrame: false) },
                              completion: { continuation.resume(with: $0) })
         }
-        permitsDrawable = false
+        if let outcome { await recorder.answerAvailableDrawables(with: outcome) } else { permitsDrawable = false }
         now = vsync(1) + 0.006
         let first = Task { @MainActor in try await loop.advanceStepFrame() }
         let skippedFirst = await recorder.waitForRenderCount(3)
@@ -894,7 +915,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         XCTAssertTrue(skippedSecond)
         // The next tick's picture is the first shown, at vsync(3), one refresh
         // after the last shown picture.
-        permitsDrawable = true
+        if outcome != nil { await recorder.answerAvailableDrawables(with: .presented) } else { permitsDrawable = true }
         tick(2)
         _ = try await first.value
         _ = try await second.value
@@ -902,7 +923,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let steps = Array(await recorder.steps().dropFirst(before))
         let clock = steps.reduce(0.0) { $0 + Double($1.elapsedSeconds) }
         XCTAssertEqual(clock, interval, accuracy: 0.000_05,
-            "the step reaches the first shown picture's display time, not one refresh per skipped picture")
+            "\(String(describing: outcome)): the step reaches the first shown picture's display time, not one refresh per skipped picture")
         await loop.shutdown()
         _ = window
     }
@@ -954,6 +975,60 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         XCTAssertEqual(clock, vsync(3) - begin, accuracy: 0.000_05,
             "the first shown picture reads its display time minus the step's begin")
         XCTAssertGreaterThan(clock, 0)
+        await loop.shutdown()
+        _ = window
+    }
+
+    /// A held page still presents its media's pictures, and each takes its
+    /// refresh. The held picture is shown at vsync(3), so the picture drawn on
+    /// resume is shown at vsync(4); a step that lands before that counts from
+    /// it, and its first picture is shown one refresh later, at vsync(5).
+    @MainActor
+    func testAHeldMediaPictureTakesItsRefresh() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        await recorder.enqueueStepMediaAnswers(Array(repeating: true, count: 20))
+        let (window, view) = makePresentationSurface()
+        let interval = 1.0 / 60.0
+        let vsync = { (n: Double) in 1.0 + n * interval }
+        var now: TimeInterval = vsync(0) + 0.001
+        let loop = makeLoop(recorder: recorder, view: view, now: { now })
+        try await loop.start()
+        func tick(_ n: Double) {
+            now = vsync(n) + 0.001
+            loop.displayLinkDidFire(at: vsync(n + 1), interval: interval)
+        }
+        tick(0)
+        let seeded = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(seeded)
+        tick(1)
+        let ticked = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(ticked)
+        // Held: the tick for vsync(3) presents the media's picture, nothing authored moves.
+        loop.setTimelineActive(false, held: true)
+        tick(2)
+        let held = await recorder.waitForRenderCount(3)
+        XCTAssertTrue(held)
+        let heldDeadline = Date().addingTimeInterval(2)
+        while !loop.hasCompletedLatestFrame, Date() < heldDeadline { await Task.yield() }
+        loop.setTimelineActive(true, held: false)
+        let resumeDeadline = Date().addingTimeInterval(2)
+        while !loop.hasCompletedLatestFrame, Date() < resumeDeadline { await Task.yield() }
+        let before = await recorder.steps().count
+
+        // The step lands after vsync(3), before the resume picture is shown at vsync(4).
+        now = vsync(3) + 0.004
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            _ = loop.enqueue(.init(startsStepClock: true) { .work(requestsFrame: false) },
+                             completion: { continuation.resume(with: $0) })
+        }
+        now = vsync(3) + 0.006
+        try await loop.advanceStepFrame()
+
+        let steps = Array(await recorder.steps().dropFirst(before))
+        let clock = steps.reduce(0.0) { $0 + Double($1.elapsedSeconds) }
+        XCTAssertEqual(clock, interval, accuracy: 0.000_05,
+            "the step counts from the resume picture at vsync(4) to its own first picture at vsync(5)")
         await loop.shutdown()
         _ = window
     }
@@ -2135,6 +2210,11 @@ private actor PresentationSessionRecorder {
     private var renderHealth: [ExperienceRuntimePresentationRenderOutcome.Health] = []
     private var presentedDrawCalls: [UInt64] = []
     private var stepMediaAnswers: [Bool] = []
+    private var availableDisposition: ExperienceRuntimePresentationRenderOutcome.Disposition = .presented
+
+    func answerAvailableDrawables(with disposition: ExperienceRuntimePresentationRenderOutcome.Disposition) {
+        availableDisposition = disposition
+    }
     private var currentSize = ExperienceRuntimeSurfaceSize(pixelWidth: 0, pixelHeight: 0, layoutScaleFactor: 0)
 
     init(device: any MTLDevice, onClose: (@Sendable () async throws -> Void)? = nil,
@@ -2181,7 +2261,9 @@ private actor PresentationSessionRecorder {
             switch state {
             case .available:
                 states.append("available")
-                disposition = .presented
+                // A page can still not present a drawable it was given, for example while a
+                // video waits for its first frame.
+                disposition = availableDisposition
             case .timeout:
                 states.append("timeout")
                 disposition = currentSize.pixelWidth == 0 || currentSize.pixelHeight == 0
