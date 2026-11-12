@@ -688,6 +688,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     private var pendingFrameAdvancesToNow = false
     /// The display link's time base, injectable so tests own the clock.
     private let now: @MainActor () -> TimeInterval
+    /// The latest display tick's target: when its picture is due on screen.
+    private var lastDisplayTime: TimeInterval?
+    /// The display's refresh interval, once a tick has reported it.
+    private var displayInterval: TimeInterval?
+    /// The display time the latest drawn picture was evaluated at.
+    private var lastPictureTime: TimeInterval?
     private var zeroDeltaRequestGeneration: UInt64 = 0
     private var zeroDeltaStepGeneration: UInt64?
     private var zeroDeltaRenderGeneration: UInt64?
@@ -977,17 +983,45 @@ final class ExperienceRuntimePresentationLoop: NSObject {
 
     private func takeFocusBatch() -> [NuxieNativeFocusInput] {
         let batch = pendingFocus.takeBatch()
-        if !pendingFocus.isEmpty { pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime() }
+        if !pendingFocus.isEmpty { pendingTimestamp = pendingTimestamp ?? requestedDisplayTime() }
         return batch
     }
 
-    func displayLinkDidFire(at timestamp: TimeInterval) {
+    /// A display tick. `timestamp` is when the tick's picture is due on screen
+    /// (the display link's `targetTimestamp`), and `interval` the display's
+    /// refresh interval when the display link knows it.
+    func displayLinkDidFire(at timestamp: TimeInterval, interval: TimeInterval? = nil) {
+        if let interval, interval.isFinite, interval > 0 { displayInterval = interval }
+        if timestamp.isFinite { lastDisplayTime = timestamp }
         guard shouldAdvance || presentsHeldMedia else {
             reconcile()
             return
         }
         pendingTimestamp = timestamp
         drain()
+    }
+
+    /// The time to ask for a picture drawn now, outside a display tick: the
+    /// latest tick's target, which `pictureTime(for:)` moves on to the refresh
+    /// the picture can reach. Before any tick reports its interval, the later
+    /// of now and that target.
+    private func requestedDisplayTime() -> TimeInterval {
+        guard let lastDisplayTime else { return now() }
+        return displayInterval == nil ? max(lastDisplayTime, now()) : lastDisplayTime
+    }
+
+    /// When a picture asked for at `requested` is shown, the time every picture
+    /// is evaluated at, as Core Animation evaluates a layer animation (UNIV-6118):
+    /// the first refresh on the display's grid that is still ahead of now, and
+    /// after the refresh the previous picture took, since each presented picture
+    /// takes its own refresh. Without a known interval, `requested` itself.
+    private func pictureTime(for requested: TimeInterval) -> TimeInterval {
+        guard let interval = displayInterval, requested.isFinite else { return requested }
+        let current = now()
+        var time = requested
+        if time <= current { time += (floor((current - time) / interval) + 1) * interval }
+        if let lastPictureTime, time < lastPictureTime + interval / 2 { time = lastPictureTime + interval }
+        return time
     }
 
     private(set) var timelineElapsedSeconds: Double = 0
@@ -1098,10 +1132,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
     }
 
     /// Presents a page step's first frame. Like `advanceZeroDelta(awaitsPresentation: true)`,
-    /// except that while the timeline runs and presents, the frame advances by its own time
-    /// since the step began (`ExperienceRuntimePresentationQueuedWork.startsStepClock`), as a
-    /// display frame does, so the step is already moving when it first reaches the screen.
-    /// The next display tick then counts from this frame.
+    /// except that while the timeline runs and presents, the frame advances from the step's
+    /// begin (`ExperienceRuntimePresentationQueuedWork.startsStepClock`) to the time it is
+    /// shown, as a display frame does, so the step is already moving when it first reaches
+    /// the screen. The next display tick then counts from this frame's display time.
     func advanceStepFrame() async throws {
         pendingFrameAdvancesToNow = true
         try await advanceZeroDelta(awaitsPresentation: true)
@@ -1121,7 +1155,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         updateOwningSceneObservers()
         updateDisplayLinkForCurrentScreen()
         if shouldAdvance {
-            pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+            pendingTimestamp = pendingTimestamp ?? requestedDisplayTime()
         } else if !shouldAdvance {
             pendingTimestamp = nil
             frameClock.reset()
@@ -1255,7 +1289,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             let pointers = pendingPointers.takeBatch()
             if !pendingPointers.isEmpty { pendingTimestamp = timestamp }
             return .step(ExperienceRuntimePresentationStep(
-                elapsedSeconds: Float(frameClock.frame(at: timestamp).delta),
+                elapsedSeconds: Float(frameClock.frame(at: pictureTime(for: timestamp)).delta),
                 pointers: pointers,
                 requestsRender: false
             ))
@@ -1265,11 +1299,14 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         if pendingZeroDeltaFrame {
             pendingZeroDeltaFrame = false
             zeroDeltaStepGeneration = zeroDeltaRequestGeneration
-            // A page step's first frame is evaluated at its own time, as a
-            // display frame is, so it already shows the step moving.
+            // A page step's first frame is evaluated at the time it is shown,
+            // as every display frame is: at least one refresh after the step
+            // began, so it already shows the step moving.
+            let shown = pictureTime(for: requestedDisplayTime())
+            lastPictureTime = shown
             let frame = pendingFrameAdvancesToNow
-                ? frameClock.frame(at: now())
-                : frameClock.zeroDeltaFrame(at: now())
+                ? frameClock.frame(at: shown)
+                : frameClock.zeroDeltaFrame(at: shown)
             pendingFrameAdvancesToNow = false
             return .step(ExperienceRuntimePresentationStep(
                 elapsedSeconds: Float(frame.delta),
@@ -1282,8 +1319,10 @@ final class ExperienceRuntimePresentationLoop: NSObject {
         pendingTimestamp = nil
         let pointers = pendingPointers.takeBatch()
         if !pendingPointers.isEmpty { pendingTimestamp = timestamp }
+        let shown = pictureTime(for: timestamp)
+        lastPictureTime = shown
         return .step(ExperienceRuntimePresentationStep(
-            elapsedSeconds: Float(frameClock.frame(at: timestamp).delta),
+            elapsedSeconds: Float(frameClock.frame(at: shown).delta),
             pointers: pointers,
             focusInputs: takeFocusBatch(),
             requestsRender: true
@@ -1358,7 +1397,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
             finishInFlightWork(.success(()))
             if requestsFrame {
                 if shouldAdvance {
-                    pendingTimestamp = pendingTimestamp ?? CACurrentMediaTime()
+                    pendingTimestamp = pendingTimestamp ?? requestedDisplayTime()
                 } else {
                     pendingZeroDeltaFrame = true
                 }
@@ -1614,7 +1653,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     self?.applicationIsActive = true
                     self?.refreshOwningSceneActivity()
                     self?.frameClock.reset()
-                    self?.pendingTimestamp = CACurrentMediaTime()
+                    self?.pendingTimestamp = self?.requestedDisplayTime()
                     self?.reconcile()
                 }
             },
@@ -1650,7 +1689,7 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                     self?.semanticPresentationEpoch &+= 1
                     self?.owningSceneIsActive = true
                     self?.frameClock.reset()
-                    self?.pendingTimestamp = CACurrentMediaTime()
+                    self?.pendingTimestamp = self?.requestedDisplayTime()
                     self?.reconcile()
                 }
             },
@@ -1749,7 +1788,7 @@ extension ExperienceRuntimePresentationLoop: ExperienceRuntimeSurfaceViewObserve
         let projected = pointerInput.runtimeEvents(for: events, transform: transform)
         guard !projected.isEmpty else { return }
         pendingPointers.enqueue(projected)
-        pendingTimestamp = CACurrentMediaTime()
+        pendingTimestamp = requestedDisplayTime()
         drain()
     }
 }
@@ -1770,7 +1809,10 @@ private final class ExperienceRuntimePresentationDisplayLinkProxy: NSObject {
     }
 
     @objc func tick(_ displayLink: CADisplayLink) {
-        loop?.displayLinkDidFire(at: displayLink.timestamp)
+        // `timestamp` is the refresh that already began; `targetTimestamp` is
+        // when this tick's picture is shown, the time it is evaluated at.
+        loop?.displayLinkDidFire(at: displayLink.targetTimestamp,
+                                 interval: displayLink.targetTimestamp - displayLink.timestamp)
     }
 }
 #endif

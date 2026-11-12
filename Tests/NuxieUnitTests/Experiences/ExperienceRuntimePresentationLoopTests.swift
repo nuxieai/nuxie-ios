@@ -726,6 +726,130 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         _ = window
     }
 
+    /// The phone's order (UNIV-6118): the display link reports the refresh
+    /// that already began (`timestamp`) and the one its picture is shown at
+    /// (`targetTimestamp`), and a page step's batch lands after the refresh
+    /// that will draw it began. Each picture of the step, the first included,
+    /// is evaluated at the time it is shown: its clock reads that display time
+    /// minus the step's begin, so the first picture is already moving and no
+    /// later picture jumps or holds at zero. Before, the first picture stepped
+    /// about 2 ms and the next tick counted from a refresh before it.
+    @MainActor
+    func testEveryStepPictureIsTimedAtItsDisplayTimeInThePhonesOrder() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let interval = 1.0 / 60.0
+        let vsync = { (n: Double) in 1.0 + n * interval }
+        var now: TimeInterval = vsync(0) + 0.001
+        let loop = makeLoop(recorder: recorder, view: view, now: { now })
+        try await loop.start()
+        // A tick fires just after its refresh begins and draws for the next one.
+        func tick(_ n: Double, firedAfter lateness: TimeInterval = 0.001) {
+            now = vsync(n) + lateness
+            loop.displayLinkDidFire(at: vsync(n + 1), interval: interval)
+        }
+        tick(0)
+        let seeded = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(seeded)
+        tick(1)
+        let ticked = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(ticked)
+        let before = await recorder.steps().count
+
+        // The step's batch lands at B, 3 ms into the refresh whose picture is
+        // shown at vsync(3); its first picture is drawn 2 ms later.
+        let begin = vsync(2) + 0.003
+        now = begin
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            _ = loop.enqueue(.init(startsStepClock: true) { .work(requestsFrame: false) },
+                             completion: { continuation.resume(with: $0) })
+        }
+        now = begin + 0.002
+        try await loop.advanceStepFrame()
+        // The refreshes go on: one tick on time, then one delivered 20 ms late,
+        // after the refresh it targets has passed, then one on time again.
+        tick(3)
+        let first = await recorder.waitForStepCount(before + 2)
+        XCTAssertTrue(first)
+        tick(4, firedAfter: 0.020)
+        let late = await recorder.waitForStepCount(before + 3)
+        XCTAssertTrue(late)
+        tick(6)
+        let last = await recorder.waitForStepCount(before + 4)
+        XCTAssertTrue(last)
+
+        let steps = Array(await recorder.steps().dropFirst(before))
+        XCTAssertEqual(steps.count, 4, "the step's first picture and three ticks")
+        XCTAssertGreaterThan(steps[0].elapsedSeconds, 0, "the first picture is already moving")
+        // Display times: vsync(3) for the first picture, then vsync(4), the late
+        // tick's vsync(6) (its target vsync(5) had passed), and vsync(7).
+        let shown = [vsync(3), vsync(4), vsync(6), vsync(7)]
+        var clock = 0.0
+        for (index, step) in steps.enumerated() {
+            clock += Double(step.elapsedSeconds)
+            XCTAssertEqual(clock, shown[index] - begin, accuracy: 0.000_05,
+                "picture \(index) reads its display time minus the step's begin")
+            if index > 0 { XCTAssertGreaterThan(step.elapsedSeconds, 0, "picture \(index) moves") }
+        }
+        XCTAssertTrue(steps[0].requestsRender)
+        await loop.shutdown()
+        _ = window
+    }
+
+    /// The other order on a phone: the step's batch lands while the last
+    /// tick's picture still waits for its refresh. Each presented picture takes
+    /// its own refresh, so the step's first picture is shown one refresh after
+    /// that one, and the step counts from that picture's display time, so time
+    /// the player already stepped is not stepped twice. Every picture of the
+    /// step moves by one refresh: none holds at zero, none jumps.
+    @MainActor
+    func testAStepThatLandsBeforeTheLastPictureIsShownStartsOneRefreshAfterIt() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
+        let recorder = PresentationSessionRecorder(device: device)
+        let (window, view) = makePresentationSurface()
+        let interval = 1.0 / 60.0
+        let vsync = { (n: Double) in 1.0 + n * interval }
+        var now: TimeInterval = vsync(0) + 0.001
+        let loop = makeLoop(recorder: recorder, view: view, now: { now })
+        try await loop.start()
+        func tick(_ n: Double) {
+            now = vsync(n) + 0.001
+            loop.displayLinkDidFire(at: vsync(n + 1), interval: interval)
+        }
+        tick(0)
+        let seeded = await recorder.waitForRenderCount(1)
+        XCTAssertTrue(seeded)
+        tick(1)
+        let ticked = await recorder.waitForRenderCount(2)
+        XCTAssertTrue(ticked)
+        let before = await recorder.steps().count
+
+        // The picture for vsync(2) is drawn; the step's batch lands before it is shown.
+        now = vsync(1) + 0.004
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            _ = loop.enqueue(.init(startsStepClock: true) { .work(requestsFrame: false) },
+                             completion: { continuation.resume(with: $0) })
+        }
+        now = vsync(1) + 0.006
+        try await loop.advanceStepFrame()
+        tick(2)
+        let second = await recorder.waitForStepCount(before + 2)
+        XCTAssertTrue(second)
+        tick(3)
+        let third = await recorder.waitForStepCount(before + 3)
+        XCTAssertTrue(third)
+
+        let steps = Array(await recorder.steps().dropFirst(before))
+        XCTAssertEqual(steps.count, 3)
+        for (index, step) in steps.enumerated() {
+            XCTAssertEqual(Double(step.elapsedSeconds), interval, accuracy: 0.000_05,
+                "picture \(index) moves by one refresh")
+        }
+        await loop.shutdown()
+        _ = window
+    }
+
     @MainActor
     func testStepDeliveryCompletesBeforeItsRenderAndAdvanceNotification() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {

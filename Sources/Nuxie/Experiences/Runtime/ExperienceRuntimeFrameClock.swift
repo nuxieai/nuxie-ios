@@ -53,9 +53,12 @@ struct ExperienceRuntimeFrameClock {
 
     /// Starts counting from `timestamp`, as when a page step begins: the next
     /// frame advances by its own time since then, not by time from before it.
+    /// Frames are timed when they are shown, so the last frame may be shown
+    /// after the step begins; the clock then counts from that frame instead,
+    /// so time the player already stepped is never stepped twice.
     mutating func restart(at timestamp: TimeInterval) {
         guard timestamp.isFinite else { return }
-        previousTimestamp = timestamp
+        previousTimestamp = max(previousTimestamp ?? timestamp, timestamp)
     }
 
     mutating func reset() {
