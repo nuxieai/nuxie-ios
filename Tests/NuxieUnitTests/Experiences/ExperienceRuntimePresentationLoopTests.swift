@@ -928,11 +928,15 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         _ = window
     }
 
-    /// A tick whose picture got no drawable was never shown. A step that
-    /// lands after it counts from the last picture that was, so its first
-    /// shown picture moves instead of stepping by zero.
+    /// A tick whose picture got no drawable was never shown, but the runtime
+    /// was already advanced to its time, and one elapsed time moves every
+    /// timeline. A step whose batch lands before that time does not rewind
+    /// the clock: timelines that continue across the batch get no time twice,
+    /// and the step's first shown picture starts from that tick's time, at
+    /// most one refresh late. (Without a skipped tick the step is exact; see
+    /// `testEveryStepPictureIsTimedAtItsDisplayTimeInThePhonesOrder`.)
     @MainActor
-    func testAStepAfterASkippedTickStillMovesOnItsFirstShownPicture() async throws {
+    func testAStepAfterASkippedTickStepsNoTimeTwiceAndStartsAtMostOneRefreshLate() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal is unavailable") }
         let recorder = PresentationSessionRecorder(device: device)
         let (window, view) = makePresentationSurface()
@@ -959,7 +963,7 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         let skipped = await recorder.waitForRenderCount(3)
         XCTAssertTrue(skipped)
         permitsDrawable = true
-        let before = await recorder.steps().count
+        let skippedTick = await recorder.steps().count - 1
 
         let begin = vsync(2) + 0.004
         now = begin
@@ -969,12 +973,20 @@ final class ExperienceRuntimePresentationLoopTests: XCTestCase {
         }
         now = begin + 0.002
         try await loop.advanceStepFrame()
+        tick(3)
+        let next = await recorder.waitForStepCount(skippedTick + 3)
+        XCTAssertTrue(next)
 
-        let steps = Array(await recorder.steps().dropFirst(before))
-        let clock = steps.reduce(0.0) { $0 + Double($1.elapsedSeconds) }
-        XCTAssertEqual(clock, vsync(3) - begin, accuracy: 0.000_05,
-            "the first shown picture reads its display time minus the step's begin")
-        XCTAssertGreaterThan(clock, 0)
+        // From the last shown picture (vsync(2)) every timeline is advanced
+        // exactly to the picture on screen: vsync(3), then vsync(4). Nothing twice.
+        let all = Array(await recorder.steps().dropFirst(skippedTick))
+        XCTAssertEqual(all.count, 3, "the skipped tick, the step's first picture, the next tick")
+        XCTAssertEqual(all.reduce(0.0) { $0 + Double($1.elapsedSeconds) }, vsync(4) - vsync(2), accuracy: 0.000_05)
+        // The step's own clock starts at the skipped tick's time, vsync(3),
+        // later than its begin by less than one refresh.
+        let stepClock = all.dropFirst().reduce(0.0) { $0 + Double($1.elapsedSeconds) }
+        XCTAssertEqual(stepClock, vsync(4) - vsync(3), accuracy: 0.000_05)
+        XCTAssertLessThan(vsync(3) - begin, interval, "at most one refresh late")
         await loop.shutdown()
         _ = window
     }
