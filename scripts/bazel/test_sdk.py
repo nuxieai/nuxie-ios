@@ -560,8 +560,9 @@ class NativeCommandSelectionTests(unittest.TestCase):
                                    "--output_user_root=/tmp/owned CI", "--batch"])
 
     def test_explicit_batch_and_storekit_diagnostic_environment_are_preserved(self):
+        # The cleared environment selects the pinned runtime, so the result doesn't depend on a staged local one.
         with patch.dict("os.environ", {"NUXIE_BAZEL_BIN": "bazel", "NUXIE_BAZEL_BATCH": "1",
-                                       "NUXIE_STOREKIT_REQUIRE_AVAILABLE": "0"}, clear=True):
+                                       "NUXIE_STOREKIT_REQUIRE_AVAILABLE": "0", "NUXIE_RUNTIME_USE_LOCAL": "0"}, clear=True):
             self.assertIn("--batch", sdk.bazel_command())
             command = self.command(["test", "--suite", "storekit"])
         self.assertIn("--test_env=NUXIE_STOREKIT_REQUIRE_AVAILABLE=0", command)
