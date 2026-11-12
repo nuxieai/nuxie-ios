@@ -53,9 +53,12 @@ struct ExperienceRuntimeFrameClock {
 
     /// Starts counting from `timestamp`, as when a page step begins: the next
     /// frame advances by its own time since then, not by time from before it.
+    /// It never rewinds past time the runtime was already advanced to: one
+    /// elapsed time moves every timeline, so a rewind would play that time
+    /// again for the timelines that continue across the step.
     mutating func restart(at timestamp: TimeInterval) {
         guard timestamp.isFinite else { return }
-        previousTimestamp = timestamp
+        previousTimestamp = max(previousTimestamp ?? timestamp, timestamp)
     }
 
     mutating func reset() {

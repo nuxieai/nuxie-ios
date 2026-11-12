@@ -1405,8 +1405,12 @@ final class ExperienceRuntimePresentationLoop: NSObject {
                 // time from before the step, so it is dropped, not drawn.
                 // Pictures are timed when they are shown, so the last shown
                 // picture may still be due; the step then counts from it, so
-                // time already on screen is never stepped twice. A picture
-                // that got no drawable was never shown and counts for nothing.
+                // time already on screen is never stepped twice. The clock
+                // never rewinds either: after a tick whose picture was never
+                // shown, the runtime was already advanced to that tick's time,
+                // and one elapsed time moves every timeline. Continuing
+                // timelines stay exact; the new step starts at that time, at
+                // most one refresh late, only in that case.
                 frameClock.restart(at: max(now(), lastPictureTime ?? -.infinity))
                 pendingTimestamp = nil
             }
