@@ -1,0 +1,480 @@
+#if os(iOS) && !targetEnvironment(macCatalyst)
+import Foundation
+@_implementationOnly import NuxMachineC
+
+// FOR TESTS ONLY. The Nux machine's library carries the `.nux` compiler and a
+// fixed stand-in world, so this module exists only when that library is
+// staged at `.artifacts/NuxMachine.xcframework`, and nothing in the `Nuxie`
+// product depends on it.
+
+/// One session of the Nux machine, over the C interface in `nux_machine.h`:
+/// a plan compiled from `.nux` source, the record of one Journey through it,
+/// and the effects of the last call as rows.
+///
+/// Confined, not an actor: the header lets one thread at a time use a
+/// session, and this class is not `Sendable`, so the compiler keeps each
+/// session in the one isolation domain that made it (the edge's actor, or a
+/// test's). Every call reads what it gives back before it returns, because
+/// the strings the interface lends stay valid only until the next call.
+package final class NuxieMachineSession {
+    private let handle: OpaquePointer
+    /// The plan's name, as the compiler gave it.
+    package let planName: UInt64
+
+    /// Compile `files` with `root` (the root file's path without `.nux`) under
+    /// the app, Experience and version given, admit the plan, and hold it with
+    /// no record yet.
+    package init(
+        files: [(path: String, text: String)],
+        root: String,
+        app: String,
+        experience: String,
+        version: UInt32
+    ) throws {
+        var session: OpaquePointer?
+        var name: UInt64 = 0
+        var refusalsLength = 0
+        let borrowed = files.flatMap { [$0.path, $0.text] } + [root, app, experience]
+        let status: UInt32 = try NuxieMachineStrings.lend(borrowed) { views in
+            var given: [NuxMachineFile] = []
+            for at in files.indices {
+                given.append(NuxMachineFile(path: views[2 * at], text: views[2 * at + 1]))
+            }
+            let tail = views.count - 3
+            var refusals = [UInt8](repeating: 0, count: 64 * 1024)
+            let capacity = refusals.count
+            let status = given.withUnsafeBufferPointer { files in
+                refusals.withUnsafeMutableBufferPointer { buffer in
+                    nux_machine_session_new(
+                        files.baseAddress, files.count, views[tail], views[tail + 1], views[tail + 2], version,
+                        &session, &name, buffer.baseAddress, capacity, &refusalsLength)
+                }
+            }
+            if status == NuxieMachineStatus.refused {
+                let length = min(refusalsLength, capacity)
+                throw NuxieMachineError.refused(String(decoding: refusals[0..<length], as: UTF8.self))
+            }
+            return status
+        }
+        try NuxieMachineError.check(status)
+        guard let session else { throw NuxieMachineError.nullArgument }
+        handle = session
+        planName = name
+    }
+
+    deinit {
+        _ = nux_machine_session_free(handle)
+    }
+
+    // MARK: Calls that deliver something
+
+    /// The host saw the event `event` at `now` (milliseconds since the Unix
+    /// epoch): the first entry that starts on it makes the record.
+    package func start(event: String, now: Int64) throws -> [NuxieMachineRow] {
+        var declined = NuxMachineStr(ptr: nil, len: 0)
+        let status = NuxieMachineStrings.lend([event]) { views in
+            nux_machine_start(handle, views[0], now, &declined)
+        }
+        if status == NuxieMachineStatus.declined {
+            // The reason is a static string: it does not expire.
+            throw NuxieMachineError.declined(NuxieMachineStrings.copy(declined))
+        }
+        return try delivered(status)
+    }
+
+    /// An engine event on the presented instance `instance`, by the name the
+    /// engine reported. The session reads `tap_<object>` as a tap on
+    /// `<object>`; the name rule is the session's, not the caller's.
+    package func engineEvent(instance: UInt64, name: String, now: Int64) throws -> [NuxieMachineRow] {
+        let status = NuxieMachineStrings.lend([name]) { views in
+            nux_machine_engine_event(handle, instance, views[0], now)
+        }
+        return try delivered(status)
+    }
+
+    /// The person closed the presented instance `instance` with a system
+    /// gesture.
+    package func closed(instance: UInt64, now: Int64) throws -> [NuxieMachineRow] {
+        try delivered(nux_machine_closed(handle, instance, now))
+    }
+
+    /// The answer to the unanswered call `call`: its extern's outcome named
+    /// `outcome`, which carries no fields.
+    package func answer(_ call: NuxieMachineCallID, outcome: String, now: Int64) throws -> [NuxieMachineRow] {
+        let id = NuxMachineCallId(record: call.record, generation: call.generation, counter: call.counter)
+        let status = NuxieMachineStrings.lend([outcome]) { views in
+            nux_machine_answer(handle, id, views[0], now)
+        }
+        return try delivered(status)
+    }
+
+    /// The moment the record asked for (its last `wake at`) has come.
+    package func wake(now: Int64) throws -> [NuxieMachineRow] {
+        try delivered(nux_machine_wake(handle, now))
+    }
+
+    // MARK: Reads
+
+    /// The rows the last call that delivered something left.
+    package func rows() throws -> [NuxieMachineRow] {
+        var count = 0
+        try NuxieMachineError.check(nux_machine_effect_count(handle, &count))
+        return try (0..<count).map(row)
+    }
+
+    /// Whether a record is open: one has started, it has not ended, and no
+    /// fault has ended the session.
+    package func recordOpen() throws -> Bool {
+        var open = false
+        try NuxieMachineError.check(nux_machine_record_open(handle, &open))
+        return open
+    }
+
+    /// The route presented on top and its instance, or none.
+    package func topRoute() throws -> (route: String, instance: UInt64)? {
+        var has = false
+        var route = NuxMachineStr(ptr: nil, len: 0)
+        var instance: UInt64 = 0
+        try NuxieMachineError.check(nux_machine_top_route(handle, &has, &route, &instance))
+        return has ? (NuxieMachineStrings.copy(route) ?? "", instance) : nil
+    }
+
+    /// The value of the root slot named `name` in the record.
+    package func slot(_ name: String) throws -> NuxieMachineValue {
+        var value = NuxMachineValue(kind: 0, boolean: false, number: 0, text: NuxMachineStr(ptr: nil, len: 0))
+        let status = NuxieMachineStrings.lend([name]) { views in
+            nux_machine_slot(handle, views[0], &value)
+        }
+        try NuxieMachineError.check(status)
+        return try NuxieMachineValue(value)
+    }
+
+    // MARK: Rows
+
+    /// The rows of a call that delivered something. A call that ended the
+    /// session still leaves its rows (the effects up to what it could not
+    /// carry, then a dismiss and an end); they travel in the error.
+    private func delivered(_ status: UInt32) throws -> [NuxieMachineRow] {
+        if status == NuxieMachineStatus.faulted {
+            throw NuxieMachineError.faulted(rows: try rows())
+        }
+        try NuxieMachineError.check(status)
+        return try rows()
+    }
+
+    private func row(_ index: Int) throws -> NuxieMachineRow {
+        var kind: UInt32 = 0
+        try NuxieMachineError.check(nux_machine_effect_kind(handle, index, &kind))
+        switch kind {
+        case NuxieMachineStatus.rowPresent:
+            var route = NuxMachineStr(ptr: nil, len: 0)
+            var instance: UInt64 = 0
+            var presentation: UInt32 = 0
+            try NuxieMachineError.check(nux_machine_effect_present(handle, index, &route, &instance, &presentation))
+            return .present(route: NuxieMachineStrings.copy(route) ?? "", instance: instance,
+                            presentation: NuxieMachinePresentation(rawValue: presentation) ?? .unknown)
+        case NuxieMachineStatus.rowPop:
+            var instance: UInt64 = 0
+            try NuxieMachineError.check(nux_machine_effect_pop(handle, index, &instance))
+            return .pop(instance: instance)
+        case NuxieMachineStatus.rowDismiss:
+            var has = false
+            var reason = NuxMachineStr(ptr: nil, len: 0)
+            try NuxieMachineError.check(nux_machine_effect_dismiss(handle, index, &has, &reason))
+            return .dismiss(reason: has ? NuxieMachineStrings.copy(reason) ?? "" : nil)
+        case NuxieMachineStatus.rowSceneSet:
+            var instance: UInt64 = 0
+            var object = NuxMachineStr(ptr: nil, len: 0)
+            var key = NuxMachineStr(ptr: nil, len: 0)
+            var value = NuxMachineValue(kind: 0, boolean: false, number: 0, text: NuxMachineStr(ptr: nil, len: 0))
+            try NuxieMachineError.check(nux_machine_effect_scene_set(handle, index, &instance, &object, &key, &value))
+            return .sceneSet(instance: instance, object: NuxieMachineStrings.copy(object) ?? "",
+                             key: NuxieMachineStrings.copy(key) ?? "", value: try NuxieMachineValue(value))
+        case NuxieMachineStatus.rowCall:
+            var id = NuxMachineCallId(record: 0, generation: 0, counter: 0)
+            var name = NuxMachineStr(ptr: nil, len: 0)
+            var awaited = false
+            var place: UInt32 = 0
+            try NuxieMachineError.check(nux_machine_effect_call(handle, index, &id, &name, &awaited, &place))
+            return .call(NuxieMachineCall(
+                id: NuxieMachineCallID(record: id.record, generation: id.generation, counter: id.counter),
+                externName: NuxieMachineStrings.copy(name) ?? "", awaited: awaited,
+                place: NuxieMachinePlace(rawValue: place) ?? .unknown))
+        case NuxieMachineStatus.rowWakeAt:
+            var has = false
+            var moment: Int64 = 0
+            try NuxieMachineError.check(nux_machine_effect_wake_at(handle, index, &has, &moment))
+            return .wakeAt(has ? moment : nil)
+        case NuxieMachineStatus.rowEnd:
+            var reason: UInt32 = 0
+            var has = false
+            var fault = NuxMachineStr(ptr: nil, len: 0)
+            try NuxieMachineError.check(nux_machine_effect_end(handle, index, &reason, &has, &fault))
+            return .end(reason: NuxieMachineEnding(rawValue: reason) ?? .unknown,
+                        fault: has ? NuxieMachineStrings.copy(fault) ?? "" : nil)
+        case NuxieMachineStatus.rowNote:
+            var note: UInt32 = 0
+            try NuxieMachineError.check(nux_machine_effect_note(handle, index, &note))
+            return .note(NuxieMachineNote(rawValue: note) ?? .unknown)
+        case NuxieMachineStatus.rowHandOver:
+            return .handOver
+        default:
+            return .unknown(kind: kind)
+        }
+    }
+}
+
+/// One row of a call's effects, copied out of the session.
+package enum NuxieMachineRow: Equatable, Sendable {
+    /// Present this route as this instance.
+    case present(route: String, instance: UInt64, presentation: NuxieMachinePresentation)
+    /// Remove this presented instance.
+    case pop(instance: UInt64)
+    /// Close whatever is presented, with a reason or none.
+    case dismiss(reason: String?)
+    /// Set the property `key` of the object named `object` of the presented
+    /// instance `instance` to `value`.
+    case sceneSet(instance: UInt64, object: String, key: String, value: NuxieMachineValue)
+    /// Perform an extern.
+    case call(NuxieMachineCall)
+    /// Deliver a wake at this moment (milliseconds since the Unix epoch), or
+    /// at none.
+    case wakeAt(Int64?)
+    /// The record has ended, for this reason, with the fault's code when the
+    /// reason is a fault.
+    case end(reason: NuxieMachineEnding, fault: String?)
+    /// A line for the person's log.
+    case note(NuxieMachineNote)
+    /// This host cannot carry the record further.
+    case handOver
+    /// A row kind this module does not know: the header grew.
+    case unknown(kind: UInt32)
+}
+
+/// An extern call's id: the record's number, its generation, and a number
+/// from its counter. An answer names its call by it.
+package struct NuxieMachineCallID: Hashable, Sendable {
+    package let record: UInt64
+    package let generation: UInt32
+    package let counter: UInt64
+
+    package init(record: UInt64, generation: UInt32, counter: UInt64) {
+        self.record = record
+        self.generation = generation
+        self.counter = counter
+    }
+}
+
+/// A `call` row: perform the extern named `externName` under `id`, where it
+/// runs; an awaited call waits for its answer. Its arguments are not carried
+/// yet.
+package struct NuxieMachineCall: Equatable, Sendable {
+    package let id: NuxieMachineCallID
+    package let externName: String
+    package let awaited: Bool
+    package let place: NuxieMachinePlace
+
+    package init(id: NuxieMachineCallID, externName: String, awaited: Bool, place: NuxieMachinePlace) {
+        self.id = id
+        self.externName = externName
+        self.awaited = awaited
+        self.place = place
+    }
+}
+
+/// A value read out of the session.
+package enum NuxieMachineValue: Equatable, Sendable {
+    case bool(Bool)
+    case number(Double)
+    case text(String)
+    /// An enum value, by its name.
+    case enumeration(String)
+
+    fileprivate init(_ value: NuxMachineValue) throws {
+        switch value.kind {
+        case NuxieMachineStatus.valueBoolean: self = .bool(value.boolean)
+        case NuxieMachineStatus.valueNumber: self = .number(value.number)
+        case NuxieMachineStatus.valueText: self = .text(NuxieMachineStrings.copy(value.text) ?? "")
+        case NuxieMachineStatus.valueEnum: self = .enumeration(NuxieMachineStrings.copy(value.text) ?? "")
+        default: throw NuxieMachineError.valueNotCarried
+        }
+    }
+}
+
+package enum NuxieMachinePresentation: UInt32, Sendable {
+    case push = 0, sheet = 1, cover = 2, fade = 3, none = 4, move = 5
+    case unknown = 0xFFFF_FFFF
+}
+
+package enum NuxieMachinePlace: UInt32, Sendable {
+    case client = 0, server = 1
+    case unknown = 0xFFFF_FFFF
+}
+
+package enum NuxieMachineEnding: UInt32, Sendable {
+    case finished = 0, exited = 1, fault = 2
+    case unknown = 0xFFFF_FFFF
+}
+
+package enum NuxieMachineNote: UInt32, Sendable {
+    case started = 0, shown = 1, ended = 2
+    case unknown = 0xFFFF_FFFF
+}
+
+/// Every status but `NUX_MACHINE_OK`, with the header's meaning.
+package enum NuxieMachineError: Error, Equatable, Sendable {
+    /// A pointer the interface needed was NULL.
+    case nullArgument
+    /// The handle is not a live session.
+    case notASession
+    /// Another call on the same session is running.
+    case busy
+    /// A panic inside the machine; every later call on the session says so.
+    case panicked
+    /// A string handed in was not UTF-8.
+    case notUTF8
+    /// The source did not compile, or the compiled plan was not admitted:
+    /// the refusals, one per line.
+    case refused(String)
+    /// `begin` started nothing for the event, with the last entry's reason.
+    case declined(String?)
+    /// A fault ended the session earlier.
+    case ended
+    /// This call met something the session cannot carry and ended the
+    /// session: its rows, ending in a dismiss and an `engine.failed` end.
+    case faulted(rows: [NuxieMachineRow])
+    /// No record has started yet.
+    case noRecord
+    /// No entry starts on an event of this name.
+    case unknownEvent
+    /// No presented instance has this number.
+    case unknownInstance
+    /// The instance's component has no handled object of this name.
+    case unknownObject
+    /// The engine event's name is not one the session reads.
+    case unknownEngineEvent
+    /// No unanswered call has this id.
+    case unknownCall
+    /// The called extern has no outcome of this name.
+    case unknownOutcome
+    /// The outcome carries fields, which the interface does not take yet.
+    case outcomeHasFields
+    /// The plan has no root slot of this name.
+    case unknownSlot
+    /// The slot holds a value of a kind the interface does not carry.
+    case valueNotCarried
+    /// No row has this index.
+    case outOfRange
+    /// The row at this index is of another kind.
+    case wrongKind
+    /// A status this module does not know: the header grew.
+    case unknownStatus(UInt32)
+
+    /// The header's name for the status, as a fault code reads it.
+    package var code: String {
+        switch self {
+        case .nullArgument: "null_argument"
+        case .notASession: "not_a_session"
+        case .busy: "busy"
+        case .panicked: "panicked"
+        case .notUTF8: "not_utf8"
+        case .refused: "refused"
+        case .declined: "declined"
+        case .ended: "ended"
+        case .faulted: "faulted"
+        case .noRecord: "no_record"
+        case .unknownEvent: "unknown_event"
+        case .unknownInstance: "unknown_instance"
+        case .unknownObject: "unknown_object"
+        case .unknownEngineEvent: "unknown_engine_event"
+        case .unknownCall: "unknown_call"
+        case .unknownOutcome: "unknown_outcome"
+        case .outcomeHasFields: "outcome_has_fields"
+        case .unknownSlot: "unknown_slot"
+        case .valueNotCarried: "value_not_carried"
+        case .outOfRange: "out_of_range"
+        case .wrongKind: "wrong_kind"
+        case .unknownStatus(let status): "status_\(status)"
+        }
+    }
+
+    fileprivate static func check(_ status: UInt32) throws {
+        guard status != NuxieMachineStatus.ok else { return }
+        throw byStatus[status] ?? .unknownStatus(status)
+    }
+
+    /// Each status by the header's number. `refused`, `declined` and
+    /// `faulted` carry more where their calls read it.
+    private static let byStatus: [UInt32: NuxieMachineError] = [
+        UInt32(NUX_MACHINE_NULL_ARGUMENT): .nullArgument,
+        UInt32(NUX_MACHINE_NOT_A_SESSION): .notASession,
+        UInt32(NUX_MACHINE_BUSY): .busy,
+        UInt32(NUX_MACHINE_PANICKED): .panicked,
+        UInt32(NUX_MACHINE_NOT_UTF8): .notUTF8,
+        UInt32(NUX_MACHINE_REFUSED): .refused(""),
+        UInt32(NUX_MACHINE_DECLINED): .declined(nil),
+        UInt32(NUX_MACHINE_ENDED): .ended,
+        UInt32(NUX_MACHINE_FAULTED): .faulted(rows: []),
+        UInt32(NUX_MACHINE_NO_RECORD): .noRecord,
+        UInt32(NUX_MACHINE_UNKNOWN_EVENT): .unknownEvent,
+        UInt32(NUX_MACHINE_UNKNOWN_INSTANCE): .unknownInstance,
+        UInt32(NUX_MACHINE_UNKNOWN_OBJECT): .unknownObject,
+        UInt32(NUX_MACHINE_UNKNOWN_ENGINE_EVENT): .unknownEngineEvent,
+        UInt32(NUX_MACHINE_UNKNOWN_CALL): .unknownCall,
+        UInt32(NUX_MACHINE_UNKNOWN_OUTCOME): .unknownOutcome,
+        UInt32(NUX_MACHINE_OUTCOME_HAS_FIELDS): .outcomeHasFields,
+        UInt32(NUX_MACHINE_UNKNOWN_SLOT): .unknownSlot,
+        UInt32(NUX_MACHINE_VALUE_NOT_CARRIED): .valueNotCarried,
+        UInt32(NUX_MACHINE_OUT_OF_RANGE): .outOfRange,
+        UInt32(NUX_MACHINE_WRONG_KIND): .wrongKind,
+    ]
+}
+
+/// The header's constants, read once from the C module so a renumbering
+/// there shows here as a compile error rather than a silent mismatch.
+private enum NuxieMachineStatus {
+    static let ok = UInt32(NUX_MACHINE_OK)
+    static let refused = UInt32(NUX_MACHINE_REFUSED)
+    static let declined = UInt32(NUX_MACHINE_DECLINED)
+    static let faulted = UInt32(NUX_MACHINE_FAULTED)
+    static let rowPresent = UInt32(NUX_MACHINE_ROW_PRESENT)
+    static let rowPop = UInt32(NUX_MACHINE_ROW_POP)
+    static let rowDismiss = UInt32(NUX_MACHINE_ROW_DISMISS)
+    static let rowSceneSet = UInt32(NUX_MACHINE_ROW_SCENE_SET)
+    static let rowCall = UInt32(NUX_MACHINE_ROW_CALL)
+    static let rowWakeAt = UInt32(NUX_MACHINE_ROW_WAKE_AT)
+    static let rowEnd = UInt32(NUX_MACHINE_ROW_END)
+    static let rowNote = UInt32(NUX_MACHINE_ROW_NOTE)
+    static let rowHandOver = UInt32(NUX_MACHINE_ROW_HAND_OVER)
+    static let valueBoolean = UInt32(NUX_MACHINE_VALUE_BOOLEAN)
+    static let valueNumber = UInt32(NUX_MACHINE_VALUE_NUMBER)
+    static let valueText = UInt32(NUX_MACHINE_VALUE_TEXT)
+    static let valueEnum = UInt32(NUX_MACHINE_VALUE_ENUM)
+}
+
+/// Strings across the interface: lent in for the length of one call, copied
+/// out before the next.
+private enum NuxieMachineStrings {
+    /// Each string's UTF-8 bytes as a `NuxMachineStr`, alive while `body`
+    /// runs.
+    static func lend<Result>(_ strings: [String], _ body: ([NuxMachineStr]) throws -> Result) rethrows -> Result {
+        let buffers = strings.map { string -> UnsafeMutableBufferPointer<UInt8> in
+            let bytes = Array(string.utf8)
+            let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: max(bytes.count, 1))
+            _ = buffer.initialize(from: bytes)
+            return buffer
+        }
+        defer { buffers.forEach { $0.deallocate() } }
+        let views = zip(strings, buffers).map { string, buffer in
+            NuxMachineStr(ptr: UnsafePointer(buffer.baseAddress), len: string.utf8.count)
+        }
+        return try body(views)
+    }
+
+    /// A borrowed string, copied; `nil` when the interface gave none.
+    static func copy(_ string: NuxMachineStr) -> String? {
+        guard let pointer = string.ptr else { return nil }
+        return String(decoding: UnsafeBufferPointer(start: pointer, count: string.len), as: UTF8.self)
+    }
+}
+#endif
