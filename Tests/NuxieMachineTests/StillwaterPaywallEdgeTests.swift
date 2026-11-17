@@ -302,6 +302,264 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
+    // MARK: Deliveries that meet
+
+    /// A swipe down while the store has not answered the purchase is a
+    /// normal close, as the machine's rows say: it pops the paywall with no
+    /// `dismiss` row (the gesture has already closed the sheet) and asks for
+    /// no wake, and the record stays open for the purchase. The owner hears no dismissal and
+    /// nothing faults. The store's answer, released after, goes to the
+    /// session, whose rows end the record; it tells nothing.
+    func testASwipeDownWhileThePurchaseWaitsIsANormalClose() async throws {
+        let run = try await Run(holdingStore: true)
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            let buyTap = try await run.tap(Box.buy)
+            XCTAssertEqual(buyTap, ["tap_buy"])
+            let written = await run.edge.log.count
+            await run.edge.closed(now: run.advance())
+            let closing = await Array(run.edge.log.dropFirst(written))
+            let whole = await run.edge.log
+            let presented = try XCTUnwrap(Self.presentedInstance(whole))
+            XCTAssertEqual(closing, [.pop(instance: presented), .wakeAt(nil)])
+            let waiting = try await run.edge.recordOpen()
+            XCTAssertTrue(waiting, "the record waits for the purchase")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [], "the machine's rows hold no dismiss: the sheet is already closed")
+
+            // The store answers after the close.
+            run.store.release()
+            await run.edge.storeAnswered()
+            let beforeAnswer = await run.edge.log.count
+            try await run.settle(frames: 2)
+            let late = await Array(run.edge.log.dropFirst(beforeAnswer))
+            let call = try XCTUnwrap(run.store.calls.first)
+            XCTAssertEqual(call.externName, "purchase")
+            XCTAssertEqual(late, [.answer(call.id, outcome: "failed"), .note(.ended),
+                                  .end(reason: .finished, fault: nil)])
+            let open = try await run.edge.recordOpen()
+            XCTAssertFalse(open, "the answer ends the record")
+            let stillNoFault = await run.edge.fault
+            XCTAssertNil(stillNoFault)
+            XCTAssertEqual(run.owner.dismissals, [], "the answer tells nothing")
+            XCTAssertEqual(run.store.calls.count, 1)
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A Screen whose `close` dismisses and exits while the `restore` call
+    /// it started has not been answered. Its route is renamed so the
+    /// Stillwater Screen is its artwork, and its buttons hold no state, so
+    /// it writes no cell.
+    private static let leavesWhileRestoring = """
+        use restore from "nuxie/store"
+
+        component App
+          routes
+            paywall  Card  sheet
+              restore=restore_purchases
+              close=leave
+          entry
+            on event "go"
+            do go(paywall)
+
+          action restore_purchases
+            restore(completed=leave)
+
+          action leave
+            dismiss("left")
+            exit
+
+        component Card
+          props
+            restore: action
+            close: action
+          view
+            column
+              button id="restore" press=restore
+                text "Restore purchases"
+              button id="close" press=close
+                text "Not now"
+
+        """
+
+    /// An answer that arrives after its record ended is dropped: the
+    /// machine dropped the call when the record ended, so it is recorded as
+    /// dropped, applies nothing, tells nothing and is no fault, even when
+    /// the store failed the call.
+    func testAnAnswerAfterTheRecordEndedIsDropped() async throws {
+        let plan = NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: Self.leavesWhileRestoring)],
+            root: "main", app: "app", experience: "leaves", version: 1)
+        let run = try await Run(plan: plan, holdingStore: true)
+        do {
+            await run.edge.start(event: "go", now: run.now)
+            try await run.settle()
+            await run.edge.handleReported("tap_restore", now: run.advance())
+            await run.edge.handleReported("tap_close", now: run.advance())
+            let open = try await run.edge.recordOpen()
+            XCTAssertFalse(open, "leaving ends the record")
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")], "the owner hears one dismissal")
+
+            // The stand-in store fails `restore`, after the record ended.
+            run.store.release()
+            await run.edge.storeAnswered()
+            let beforeAnswer = await run.edge.log.count
+            try await run.settle(frames: 2)
+            let late = await Array(run.edge.log.dropFirst(beforeAnswer))
+            let call = try XCTUnwrap(run.store.calls.first)
+            XCTAssertEqual(call.externName, "restore")
+            XCTAssertEqual(late, [.dropped(call.id, outcome: nil)])
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault, "a late answer is no fault")
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")], "a late answer tells nothing")
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Frames and a tap on another control while the store has not answered
+    /// are handled, in order; the answer, released after, applies its rows
+    /// once, after the tap's.
+    func testATapWhileThePurchaseWaitsIsHandledAndTheAnswerAppliesOnce() async throws {
+        let run = try await Run(holdingStore: true)
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            let written = await run.edge.log.count
+            let buyTap = try await run.tap(Box.buy)
+            XCTAssertEqual(buyTap, ["tap_buy"])
+            let detailsTap = try await run.tap(Box.details)
+            XCTAssertEqual(detailsTap, ["tap_details"])
+            let waiting = try await run.cells()
+            XCTAssertEqual(waiting["buy_busy"], .bool(true), "the button is busy while the store has not answered")
+            XCTAssertEqual(waiting["terms_visible"], .bool(true), "the tap was handled while the store worked")
+
+            run.store.release()
+            await run.edge.storeAnswered()
+            try await run.settle(frames: 2)
+            let after = await Array(run.edge.log.dropFirst(written))
+            let answers = after.indices.filter {
+                if case .answer = after[$0] { return true }
+                return false
+            }
+            XCTAssertEqual(answers.count, 1, "the answer applies once: \(after)")
+            let details = try XCTUnwrap(after.firstIndex(of: .reported("tap_details")))
+            let answer = try XCTUnwrap(answers.first)
+            XCTAssertLessThan(details, answer, "the tap is handled before the answer arrives")
+            let writes = Self.writes(after)
+            XCTAssertEqual(writes.filter { $0.cell == "buy_busy" }.map(\.value), [.bool(true), .bool(false)])
+            XCTAssertEqual(writes.filter { $0.cell == "error_visible" }.map(\.value), [.bool(true)])
+            XCTAssertEqual(writes.filter { $0.cell == "terms_visible" }.map(\.value), [.bool(true)])
+            let answeredWrites = Self.writes(Array(after[answer...]))
+            XCTAssertEqual(Set(answeredWrites.map(\.cell)), ["buy_busy", "error_visible"],
+                           "the answer's rows come after it")
+            let settled = try await run.cells()
+            XCTAssertEqual(settled["buy_busy"], .bool(false))
+            XCTAssertEqual(settled["error_visible"], .bool(true))
+            XCTAssertEqual(settled["terms_visible"], .bool(true))
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [])
+            XCTAssertEqual(run.store.calls.map(\.externName), ["purchase"])
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Requests asked for together, none awaited before the next is asked,
+    /// are applied in arrival order, each whole: a pointer down and up on
+    /// Monthly and a frame after (whose `tap_monthly` writes suspend on the
+    /// engine), "About the trial" reported, then a swipe down. Were a
+    /// delivery to start while another is suspended, the swipe down would pop
+    /// the paywall between Monthly's writes, and the rest would fault.
+    ///
+    /// The tasks start on the main actor in the order they are made, so each
+    /// reaches the edge before the next one is asked.
+    @MainActor
+    func testRequestsAskedTogetherApplyInArrivalOrderEachWhole() async throws {
+        let run = try await Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            let written = await run.edge.log.count
+            let edge = run.edge
+            let x = Float(Box.monthly[0] + Box.monthly[2]) / 2
+            let y = Float(Box.monthly[1] + Box.monthly[3]) / 2
+            let at = run.advance()
+            let tick = Self.tick
+            let requests = [
+                Task { _ = await edge.frame(pointers: [NuxieNativePointerEvent(kind: .down, x: x, y: y)],
+                                            elapsedSeconds: tick, now: at) },
+                Task { _ = await edge.frame(pointers: [NuxieNativePointerEvent(kind: .up, x: x, y: y)],
+                                            elapsedSeconds: tick, now: at) },
+                Task { _ = await edge.frame(elapsedSeconds: tick, now: at) },
+                Task { await edge.handleReported("tap_details", now: at) },
+                Task { await edge.closed(now: at) },
+            ]
+            for request in requests { await request.value }
+
+            let after = await Array(edge.log.dropFirst(written))
+            let noFault = await edge.fault
+            XCTAssertNil(noFault, "\(after)")
+            let whole = await edge.log
+            let presented = try XCTUnwrap(Self.presentedInstance(whole))
+            XCTAssertEqual(after.filter { entry in
+                if case .reported = entry { return true }
+                return Self.isPresentation(entry)
+            }, [.reported("tap_monthly"), .reported("tap_details"), .pop(instance: presented),
+                .end(reason: .finished, fault: nil)])
+            let monthly = try XCTUnwrap(after.firstIndex(of: .reported("tap_monthly")))
+            let details = try XCTUnwrap(after.firstIndex(of: .reported("tap_details")))
+            let pop = try XCTUnwrap(after.firstIndex(of: .pop(instance: presented)))
+            let monthlyWrites = Self.writes(Array(after[monthly..<details]))
+            XCTAssertEqual(monthlyWrites.filter { $0.cell == "monthly_selected" }.map(\.value), [.bool(true)])
+            XCTAssertEqual(monthlyWrites.filter { $0.cell == "annual_selected" }.map(\.value), [.bool(false)])
+            XCTAssertEqual(Self.writes(Array(after[details..<pop])).map(\.cell), ["terms_visible"])
+            XCTAssertEqual(Self.writes(Array(after[pop...])).count, 0)
+            let open = try await edge.recordOpen()
+            XCTAssertFalse(open)
+            XCTAssertEqual(run.owner.dismissals, [])
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    private static func isPresentation(_ entry: NuxieMachineEdgeEntry) -> Bool {
+        switch entry {
+        case .present, .pop, .dismiss, .end: return true
+        default: return false
+        }
+    }
+
+    private static func presentedInstance(_ log: [NuxieMachineEdgeEntry]) -> UInt64? {
+        log.lazy.compactMap { entry -> UInt64? in
+            if case .present(_, let instance, _) = entry { return instance }
+            return nil
+        }.first
+    }
+
+    private static func writes(_ entries: [NuxieMachineEdgeEntry]) -> [(cell: String, value: NuxieMachineValue)] {
+        entries.compactMap { entry in
+            if case .write(let cell, let value) = entry { return (cell, value) }
+            return nil
+        }
+    }
+
     // MARK: Pixels
 
     /// Whether the region `box` of `after` differs from `before`.
@@ -350,14 +608,17 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
 /// A fresh session and Screen, its clock, and what its store and owner heard.
 private final class Run {
     let edge: NuxieMachineEdge
-    let store = RecordingStore()
+    let store: RecordingStore
     let owner = Owner()
     private(set) var now: Int64 = 9 * 3_600_000
     private var frames = 0
 
     /// Stillwater's plan over its Screen, or `plan` over the same Screen.
-    init(plan: NuxieMachinePlanSource? = nil) async throws {
+    /// A holding store answers each call only when the test releases it.
+    init(plan: NuxieMachinePlanSource? = nil, holdingStore: Bool = false) async throws {
         let fixture = try Fixture.load()
+        let store = RecordingStore(holds: holdingStore)
+        self.store = store
         let owner = self.owner
         edge = try await NuxieMachineEdge(
             plan: plan ?? fixture.plan, screen: fixture.screen, store: store,
@@ -429,21 +690,54 @@ private final class Run {
     }
 }
 
-/// A store that hands every call to the stand-in and keeps them.
+/// A store that hands every call to the stand-in and keeps them. A holding
+/// one gives each answer only when the test releases it: a release that
+/// comes before its call lets that call answer at once.
 private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
     private let lock = NSLock()
     private var received: [NuxieMachineCall] = []
     private let standIn = NuxieMachineStandInStore()
+    private let holds: Bool
+    private var held: [CheckedContinuation<Void, Never>] = []
+    private var releasedEarly = 0
+
+    init(holds: Bool) {
+        self.holds = holds
+    }
 
     var calls: [NuxieMachineCall] {
-        lock.lock()
-        defer { lock.unlock() }
-        return received
+        lock.withLock { received }
     }
 
     func perform(_ call: NuxieMachineCall) async throws -> String {
         lock.withLock { received.append(call) }
+        if holds {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let goes = lock.withLock { () -> Bool in
+                    guard releasedEarly == 0 else {
+                        releasedEarly -= 1
+                        return true
+                    }
+                    held.append(continuation)
+                    return false
+                }
+                if goes { continuation.resume() }
+            }
+        }
         return try await standIn.perform(call)
+    }
+
+    /// Let the oldest held call answer, or the next call when none is held.
+    func release() {
+        guard holds else { return }
+        let next = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            guard !held.isEmpty else {
+                releasedEarly += 1
+                return nil
+            }
+            return held.removeFirst()
+        }
+        next?.resume()
     }
 }
 
