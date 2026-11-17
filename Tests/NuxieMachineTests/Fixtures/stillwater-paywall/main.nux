@@ -1,0 +1,128 @@
+use products, purchase, restore, store, owns from "nuxie/store"
+use customer, access, count, event from "nuxie/person"
+use assigned, exposed from "nuxie/experiments"
+use Paywall, Plan from "paywall"
+use Offer, Thanks from "screens"
+use Done from "done"
+
+component Stillwater
+  platforms ios android
+
+  enum Headline calm sleep
+
+  derive catalog = products(Plan,
+    annual       = store(ios="stillwater.pro.yearly",       android="pro:yearly"),
+    monthly      = store(ios="stillwater.pro.monthly",      android="pro:monthly"),
+    annual_offer = store(ios="stillwater.pro.yearly.offer", android="pro:yearly-offer"))
+
+  state plan = annual
+  state offer_due = false
+  state failed = false
+
+  derive headline = assigned("headline", Headline, fallback=calm)
+  derive headline_text =
+    match headline
+      calm -> "Ten quiet minutes,\nevery day."
+      sleep -> "Fall asleep\nin ten minutes."
+
+  entry
+    on event "onboarding_completed"
+    if customer.plan == "free" and not (access.pro ?? false)
+    once
+    goal count("$purchase_completed") >= 1 within 14d after shown
+    do start
+
+  routes
+    paywall  Paywall sheet
+      headline=headline_text
+      plans=[catalog[annual], catalog[monthly]]
+      selected=plan
+      busy=pending(purchase)
+      failed=failed
+      select=choose
+      buy=buy
+      restore=restore_purchases
+      close=close
+    offer    Offer(product=catalog[annual_offer], busy=pending(purchase), buy=buy_offer, close=decline)  sheet
+    thanks   Thanks(close=finish)  sheet
+    done     Done(close=finish)
+
+  action start
+    if owns[annual] or owns[monthly]
+      go(thanks)
+    else
+      exposed("headline")
+      go(paywall)
+
+  action choose(picked: Plan)
+    plan = picked
+
+  action buy
+    failed = false
+    purchase(catalog[plan], completed=go(done, replace), failed=mark_failed)
+
+  action mark_failed
+    failed = true
+
+  action buy_offer
+    purchase(catalog[annual_offer], completed=go(done, replace), failed=mark_failed)
+
+  action restore_purchases
+    restore(completed=go(done, replace))
+
+  action close
+    offer_due = true
+    dismiss("paywall_closed")
+
+  wait evening_offer
+    while offer_due
+    until next 18:00
+    then show_offer within 6h
+    else give_up
+
+  action show_offer
+    offer_due = false
+    go(offer)
+
+  action give_up
+    offer_due = false
+    exit
+
+  action decline
+    dismiss("offer_declined")
+    exit
+
+  action finish
+    dismiss("purchased")
+    exit
+
+  test "the offer waits for her to come back"
+    given customer.plan = "free"
+    clock to 09:00
+    event "onboarding_completed"
+    tap "close"
+    app closes
+    clock to 18:00
+    expect route none
+    expect owed show_offer
+    expect held client
+    clock to 20:00
+    app opens
+    expect route offer
+
+  test "an offer nobody came back for is given up"
+    given customer.plan = "free"
+    clock to 09:00
+    event "onboarding_completed"
+    tap "close"
+    app closes
+    clock +2d
+    app opens
+    expect route none
+    expect ended
+
+  test "she already paid on her tablet"
+    given customer.plan = "free"
+    given owns[annual] = true
+    event "onboarding_completed"
+    expect route thanks

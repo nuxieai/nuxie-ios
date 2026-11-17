@@ -1,0 +1,9 @@
+component Done
+  props
+    close: action
+
+  view
+    column
+      text "Welcome to Stillwater Pro."
+      button id="close" press=close
+        text "Start listening"
