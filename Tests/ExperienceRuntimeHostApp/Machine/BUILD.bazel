@@ -1,0 +1,4 @@
+load("//scripts/bazel:machine.bzl", "nuxie_machine_host")
+
+# Declares the host's machine screen only when .artifacts/NuxMachine.xcframework is staged.
+nuxie_machine_host(name = "NuxieMachineHost")

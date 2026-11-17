@@ -88,7 +88,7 @@ help:
 	@echo "  fetch-runtime-xcframework-clean - Re-download and qualify without reusing a cached archive"
 	@echo "  stage-runtime-xcframework - Verify and stage NUXIE_RUNTIME_XCFRAMEWORK for local development"
 	@echo "  stage-machine-xcframework - Verify and stage the Nux machine's tests-only NUX_MACHINE_XCFRAMEWORK"
-	@echo "  test-machine     - Run the Nux machine suite on a simulator (needs the machine's library staged)"
+	@echo "  test-machine     - Run the Nux machine suite and its sheet UI test on a simulator (needs the machine's library staged)"
 	@echo "  check-staged-runtime-xcframework - Validate the stage (NUXIE_RUNTIME_USE_LOCAL=0 checks the release pin)"
 	@echo "  check-local-runtime-xcframework - Structurally validate the staged local runtime"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
