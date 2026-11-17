@@ -198,7 +198,7 @@ def require_remote_target(manifest: dict) -> None:
 package_root = pathlib.Path(__file__).resolve().parent.parent
 require_remote_target(dump_package(package_root, "0"))
 
-# Development uses the stage by default; release selection is explicit.
+# Development uses the stage when one exists; customers get the pinned release.
 with tempfile.TemporaryDirectory(prefix="nuxie-runtime-package-pin-") as temporary:
     fixture_root = pathlib.Path(temporary)
     shutil.copy2(package_root / "Package.swift", fixture_root / "Package.swift")
@@ -221,11 +221,13 @@ with tempfile.TemporaryDirectory(prefix="nuxie-runtime-package-pin-") as tempora
     missing_fixture = fixture_root / "missing-local"
     missing_fixture.mkdir()
     shutil.copy2(package_root / "Package.swift", missing_fixture / "Package.swift")
-    for selection in (None, "1"):
-        require_dump_failure(
-            missing_fixture,
-            selection,
-            "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework.",
-        )
+    # A SwiftPM customer never stages a runtime and never sets the variable:
+    # it must resolve the pinned release, not stop.
+    require_remote_target(dump_package(missing_fixture))
+    require_dump_failure(
+        missing_fixture,
+        "1",
+        "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework.",
+    )
 
 print(f"Runtime package pin passed: {metadata['release']} URL and checksum are atomic")
