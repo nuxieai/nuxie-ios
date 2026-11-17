@@ -75,9 +75,12 @@ make test
 ```
 
 This copies and verifies the local artifact at the ignored SwiftPM/XcodeGen
-path, used by SwiftPM and Bazel when NUXIE_RUNTIME_USE_LOCAL is unset or 1.
-An absent stage stops with the staging command. NUXIE_RUNTIME_USE_LOCAL=0
-selects the pinned release; distribution preparation requires that selection.
+path, used by Bazel when NUXIE_RUNTIME_USE_LOCAL is unset or 1, and by SwiftPM
+when the variable is 1, or unset with a stage present. Bazel, and SwiftPM with
+NUXIE_RUNTIME_USE_LOCAL=1, stop with the staging command when nothing is
+staged. With the variable unset and nothing staged, SwiftPM uses the pinned
+release, as a customer's app does. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned
+release; distribution preparation requires that selection.
 The iOS repository contains no Rust workspace or native runtime
 build step; runtime source and XCFramework production live in `nuxie-runtime`.
 

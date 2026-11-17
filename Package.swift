@@ -11,17 +11,22 @@ let releasedRuntimeChecksum = "56adb13e3e66ff3ab5a1fa60a2a874ee59033c3d02e80997c
 let unstagedRuntimeMessage = "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework. Stage one with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>`. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead."
 
 func makeNuxieRuntimeBinaryTarget() -> Target {
+    // Unset: a staged runtime wins when one exists (development); otherwise the
+    // pinned release (SwiftPM customers never stage one). 1 requires the stage;
+    // 0 always selects the pinned release.
     let localRuntimeSelection = ProcessInfo.processInfo.environment["NUXIE_RUNTIME_USE_LOCAL"]
-    if localRuntimeSelection == nil || localRuntimeSelection == "1" {
-        guard FileManager.default.fileExists(atPath: localRuntimeURL.path) else {
+    let runtimeIsStaged = FileManager.default.fileExists(atPath: localRuntimeURL.path)
+    switch localRuntimeSelection {
+    case "1":
+        guard runtimeIsStaged else {
             fatalError(unstagedRuntimeMessage)
         }
-        return .binaryTarget(
-            name: "NuxieRuntimeBinary",
-            path: localRuntimePath
-        )
-    }
-    guard localRuntimeSelection == "0" else {
+        return .binaryTarget(name: "NuxieRuntimeBinary", path: localRuntimePath)
+    case nil where runtimeIsStaged:
+        return .binaryTarget(name: "NuxieRuntimeBinary", path: localRuntimePath)
+    case nil, "0":
+        break
+    default:
         fatalError("NUXIE_RUNTIME_USE_LOCAL must be unset, 1 or 0")
     }
 
