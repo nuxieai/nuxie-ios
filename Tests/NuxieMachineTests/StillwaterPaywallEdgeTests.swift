@@ -132,6 +132,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let closing = await Array(run.edge.log.dropFirst(written))
             XCTAssertTrue(closing.contains(.dismiss(reason: "paywall_closed")), "\(closing)")
             XCTAssertTrue(closing.contains(.wakeAt(18 * Self.hour)), "\(closing)")
+            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
             let stillOpen = try await run.edge.recordOpen()
             XCTAssertTrue(stillOpen, "the record waits for the evening offer")
@@ -186,10 +187,12 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let recorded = await run.edge.fault
             let fault = try XCTUnwrap(recorded)
             XCTAssertEqual(fault.code, "machine.unknown_object")
+            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
             XCTAssertEqual(run.owner.dismissals, [.fault(fault)])
             let afterFault = try await run.tap(Box.monthly)
             XCTAssertEqual(afterFault, [], "a stopped edge steps nothing")
-            XCTAssertEqual(run.owner.dismissals.count, 1)
+            await run.edge.handleReported("tap_nothing", now: run.advance())
+            XCTAssertEqual(run.owner.dismissals.count, 1, "a stopped edge tells nothing more")
             try await run.close()
         } catch {
             try? await run.close()
@@ -211,9 +214,77 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let fault = try XCTUnwrap(recorded)
             XCTAssertEqual(fault.code, "store.unknown-extern")
             XCTAssertEqual(run.store.calls.map(\.externName), ["restore"])
+            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
             XCTAssertEqual(run.owner.dismissals, [.fault(fault)])
             let afterFault = try await run.tap(Box.monthly)
             XCTAssertEqual(afterFault, [], "a stopped edge steps nothing")
+            XCTAssertEqual(run.owner.dismissals.count, 1, "a stopped edge tells nothing more")
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A Screen whose view has an `if` with an `else`: presenting it shows
+    /// the `else`, a write the machine's C interface cannot carry (the
+    /// interface crate's `tests/refusals.rs`, its route renamed so the
+    /// Stillwater Screen is its artwork). The header documents what the
+    /// call leaves: the effects up to that write, a dismiss with no reason,
+    /// and an end whose fault is "engine.failed".
+    private static let showsARegion = """
+        component App
+          routes
+            paywall  Card(on=false)  sheet
+          entry
+            on event "go"
+            do go(paywall)
+
+        component Card
+          props
+            on: boolean
+          view
+            column
+              text "Hi" id="label"
+              if on
+                box id="yes"
+              else
+                box id="no"
+
+        """
+
+    /// A write the machine cannot carry ends in the one fault path, and the
+    /// owner hears that fault alone: not the machine's dismiss row before
+    /// it. The record keeps both rows.
+    func testAWriteTheMachineCannotCarryTellsOneFaultDismissal() async throws {
+        let plan = NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: Self.showsARegion)],
+            root: "main", app: "app", experience: "card", version: 1)
+        let run = try await Run(plan: plan)
+        do {
+            await run.edge.start(event: "go", now: run.now)
+            let log = await run.edge.log
+            XCTAssertTrue(log.contains { entry in
+                if case .present("paywall", _, .sheet) = entry { return true }
+                return false
+            }, "\(log)")
+            XCTAssertEqual(Array(log.suffix(2)), [.dismiss(reason: nil), .end(reason: .fault, fault: "engine.failed")])
+            let recorded = await run.edge.fault
+            let fault = try XCTUnwrap(recorded)
+            XCTAssertEqual(fault.code, "engine.failed")
+            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
+            XCTAssertEqual(run.owner.dismissals, [.fault(fault)])
+            let open = try await run.edge.recordOpen()
+            XCTAssertFalse(open, "the fault ended the session")
+
+            // A stopped edge takes nothing more and tells nothing more.
+            await run.edge.start(event: "go", now: run.advance())
+            await run.edge.closed(now: run.advance())
+            await run.edge.handleReported("tap_label", now: run.advance())
+            try await run.settle()
+            let after = await run.edge.log
+            XCTAssertEqual(after, log, "a stopped edge records nothing more")
+            XCTAssertEqual(run.owner.dismissals.count, 1, "a stopped edge tells nothing more")
             try await run.close()
         } catch {
             try? await run.close()
@@ -274,11 +345,12 @@ private final class Run {
     private(set) var now: Int64 = 9 * 3_600_000
     private var frames = 0
 
-    init() async throws {
+    /// Stillwater's plan over its Screen, or `plan` over the same Screen.
+    init(plan: NuxieMachinePlanSource? = nil) async throws {
         let fixture = try Fixture.load()
         let owner = self.owner
         edge = try await NuxieMachineEdge(
-            plan: fixture.plan, screen: fixture.screen, store: store,
+            plan: plan ?? fixture.plan, screen: fixture.screen, store: store,
             onDismiss: { owner.heard($0) })
     }
 
