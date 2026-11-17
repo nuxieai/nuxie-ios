@@ -1,0 +1,4 @@
+load("//scripts/bazel:machine.bzl", "nuxie_machine_module")
+
+# Declares the module only when .artifacts/NuxMachine.xcframework is staged.
+nuxie_machine_module(name = "NuxieMachine")

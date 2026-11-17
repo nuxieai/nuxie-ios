@@ -1,0 +1,4 @@
+load("//scripts/bazel:machine.bzl", "nuxie_machine_tests")
+
+# Declares the suite only when .artifacts/NuxMachine.xcframework is staged.
+nuxie_machine_tests(name = "NuxieMachineTests")
