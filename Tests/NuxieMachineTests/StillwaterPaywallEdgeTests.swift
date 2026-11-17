@@ -743,6 +743,120 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
+    // MARK: Waking and resting
+
+    /// "Not now" leaves the evening offer owed and asks for a wake at 18:00.
+    /// Delivered then, the wake runs Stillwater's `show_offer`, which goes
+    /// to the `offer` route: a route this edge has no artwork for, so the
+    /// wake ends in the one fault path, and the owner hears that fault once.
+    func testAWakeAtTheEveningMomentIsDeliveredToTheMachine() async throws {
+        let run = try await Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            _ = try await run.tap(Box.close)
+            let asked = await run.edge.log
+            XCTAssertTrue(asked.contains(.wakeAt(18 * Self.hour)), "\(asked)")
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            let written = asked.count
+
+            await run.edge.wake(now: 18 * Self.hour)
+            let recorded = await run.edge.fault
+            let fault = try XCTUnwrap(recorded, "the wake reached the machine")
+            XCTAssertEqual(fault.code, "edge.no-artwork")
+            XCTAssertTrue(fault.detail.contains("offer"), fault.detail)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed"), .fault(fault)])
+            let after = await Array(run.edge.log.dropFirst(written))
+            XCTAssertFalse(after.contains { if case .present = $0 { return true }; return false },
+                           "an offer with no artwork is never recorded as presented: \(after)")
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// The machine takes a wake only at the moment it asked for. A wake
+    /// delivered at another moment, here two days late, changes nothing: no
+    /// rows, no fault, the record still open. The wake at the moment asked
+    /// for still reaches it afterwards. So a host that comes back late
+    /// delivers each wake at its own moment, not at the clock's.
+    func testAWakeAtAMomentTheRecordDidNotAskForChangesNothing() async throws {
+        let run = try await Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            _ = try await run.tap(Box.close)
+            let written = await run.edge.log.count
+
+            await run.edge.wake(now: 2 * 24 * Self.hour + Self.nine)
+            let after = await Array(run.edge.log.dropFirst(written))
+            XCTAssertEqual(after, [], "a wake at another moment is not the one asked for")
+            let open = try await run.edge.recordOpen()
+            XCTAssertTrue(open)
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+
+            await run.edge.wake(now: 18 * Self.hour)
+            let recorded = await run.edge.fault
+            XCTAssertEqual(recorded?.code, "edge.no-artwork", "the wake at the moment asked for reached the machine")
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Each frame says what a host that rests between frames needs: whether
+    /// a write landed (it shows on the next step) and whether the store
+    /// still owes an answer (it is delivered only at a frame). Both hold
+    /// while a purchase is held, and neither once its answer has shown.
+    func testEachFrameSaysWhetherAnotherIsNeeded() async throws {
+        let run = try await Run(holdingStore: true)
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            let first = await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
+            XCTAssertFalse(first.wrote, "the start's writes landed in the start, not in a frame")
+            XCTAssertFalse(first.waitsOnStore)
+            try await run.settle()
+            let quiet = await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
+            XCTAssertFalse(quiet.wrote)
+            XCTAssertFalse(quiet.waitsOnStore)
+
+            // The pointer's up reports `tap_buy`: the machine writes the busy
+            // button and calls the store, which holds its answer.
+            let x = Float(Box.buy[0] + Box.buy[2]) / 2
+            let y = Float(Box.buy[1] + Box.buy[3]) / 2
+            let at = run.advance()
+            await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .down, x: x, y: y)],
+                                 elapsedSeconds: Self.tick, now: at)
+            let tapped = await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .up, x: x, y: y)],
+                                              elapsedSeconds: Self.tick, now: at)
+            XCTAssertEqual(tapped.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_buy"])
+            XCTAssertTrue(tapped.wrote, "the busy button was written")
+            XCTAssertTrue(tapped.waitsOnStore, "the purchase is in flight")
+            let holding = await run.edge.frame(elapsedSeconds: Self.tick, now: at)
+            XCTAssertFalse(holding.wrote)
+            XCTAssertTrue(holding.waitsOnStore, "the purchase is still in flight")
+
+            // The answer arrives and waits for a frame, which delivers it.
+            run.store.release()
+            await run.edge.storeAnswered()
+            let delivering = await run.edge.frame(elapsedSeconds: Self.tick, now: at)
+            XCTAssertTrue(delivering.wrote, "the answer wrote the error line and the button")
+            XCTAssertFalse(delivering.waitsOnStore, "nothing is owed once the answer is delivered")
+            let rested = await run.edge.frame(elapsedSeconds: Self.tick, now: at)
+            XCTAssertFalse(rested.wrote)
+            XCTAssertFalse(rested.waitsOnStore)
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
     private static func isPresentation(_ entry: NuxieMachineEdgeEntry) -> Bool {
         switch entry {
         case .present, .pop, .dismiss, .end: return true
