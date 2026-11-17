@@ -425,12 +425,35 @@ class NativeCommandSelectionTests(unittest.TestCase):
             ]:
                 with self.subTest(arguments=arguments), patch.object(Path, "home", return_value=home), \
                         patch("sys.argv", ["sdk.py", "test", *arguments]), \
-                        patch.dict(os.environ, {"_NUXIE_POOL_NESTED": "0"}), patch.object(sdk, "run") as run:
+                        patch.dict(os.environ, {"_NUXIE_POOL_NESTED": "0"}), patch.object(sdk, "run") as run, \
+                        patch.object(sdk, "STAGED_MACHINE", "missing/NuxMachine.xcframework"):
                     sdk.main()
                     run.assert_not_called()
                     actual = json.loads(receipt.read_text())
                     self.assertEqual(actual, {"platform": "macos", "outputs": {},
                         **({"requirements": requirements} if requirements is not None else {})})
+
+    def test_pool_ships_a_staged_machine_library_with_the_task(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            installed = home / ".local/share/nuxie-homelab"; installed.mkdir(parents=True)
+            receipt = home / "received.json"
+            (installed / "sdk-task.py").write_text(
+                "import json\nfrom pathlib import Path\n"
+                "def route(root, arguments, **kwargs):\n"
+                " Path(" + repr(str(receipt)) + ").write_text(json.dumps({k: str(v) for k, v in kwargs.get('input_files', {}).items()}))\n"
+                " return 0\n")
+            staged = home / "checkout"
+            (staged / ".artifacts/NuxMachine.xcframework").mkdir(parents=True)
+            for arguments in (["--suite", "machine"], ["--gate"]):
+                with self.subTest(arguments=arguments), patch.object(Path, "home", return_value=home), \
+                        patch("sys.argv", ["sdk.py", "test", *arguments]), \
+                        patch.dict(os.environ, {"_NUXIE_POOL_NESTED": "0"}), patch.object(sdk, "run") as run, \
+                        patch.object(sdk, "ROOT", staged):
+                    sdk.main()
+                    run.assert_not_called()
+                    self.assertEqual(json.loads(receipt.read_text()), {
+                        ".artifacts/NuxMachine.xcframework": str(staged / ".artifacts/NuxMachine.xcframework")})
 
     def test_nested_pool_frontend_does_not_submit_itself_again(self):
         with patch.dict(os.environ, {'_NUXIE_POOL_NESTED': '1'}):

@@ -1,4 +1,10 @@
-"""Import the staged runtime by default, or the explicit pinned release."""
+"""Import the staged runtime by default, or the explicit pinned release.
+
+The same extension looks for the Nux machine's tests-only library at
+.artifacts/NuxMachine.xcframework. Its repository always exists; it holds the
+library and says MACHINE_STAGED = True only when one is staged, so the
+machine's packages declare targets only then.
+"""
 
 _UNSTAGED_RUNTIME_MESSAGE = "No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework. Stage one with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>`. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead."
 
@@ -39,6 +45,34 @@ def _runtime_repository_impl(ctx):
     ctx.file("BUILD.bazel", _BUILD)
     ctx.file("source-root.bzl", "SDK_SOURCE_ROOT = " + repr(str(metadata_path.dirname.dirname)) + "\n")
 
+_MACHINE_BUILD = """\
+load("@rules_apple//apple:apple.bzl", "apple_static_xcframework_import")
+package(default_visibility = ["//visibility:public"])
+apple_static_xcframework_import(
+    name = "machine",
+    testonly = True,
+    xcframework_imports = glob(["NuxMachine.xcframework/**"]),
+)
+"""
+
+def _machine_repository_impl(ctx):
+    staged = ctx.path(ctx.attr.metadata).dirname.dirname.get_child(".artifacts/NuxMachine.xcframework")
+    # Watched whether or not it exists, so staging or removing the library
+    # changes the graph on the next command.
+    ctx.watch(staged)
+    if staged.exists:
+        ctx.watch_tree(staged)
+        ctx.symlink(staged, "NuxMachine.xcframework")
+        ctx.file("BUILD.bazel", _MACHINE_BUILD)
+    else:
+        ctx.file("BUILD.bazel", "")
+    ctx.file("staged.bzl", "MACHINE_STAGED = " + repr(staged.exists) + "\n")
+
+_machine_repository = repository_rule(
+    implementation = _machine_repository_impl,
+    attrs = {"metadata": attr.label(allow_single_file = True, mandatory = True)},
+)
+
 _runtime_repository = repository_rule(
     implementation = _runtime_repository_impl,
     attrs = {"metadata": attr.label(allow_single_file = True, mandatory = True)},
@@ -49,6 +83,7 @@ def _runtime_impl(ctx):
     if len(artifacts) != 1:
         fail("Exactly one immutable runtime artifact must be selected")
     _runtime_repository(name = "nuxie_runtime_release", metadata = artifacts[0].metadata)
+    _machine_repository(name = "nuxie_machine", metadata = artifacts[0].metadata)
 
 runtime = module_extension(
     implementation = _runtime_impl,

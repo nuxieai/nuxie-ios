@@ -39,4 +39,4 @@ use_repo(
 
 runtime = use_extension("//scripts/bazel:runtime.bzl", "runtime")
 runtime.artifact(metadata = "//:Runtime/artifact.json")
-use_repo(runtime, "nuxie_runtime_release")
+use_repo(runtime, "nuxie_machine", "nuxie_runtime_release")

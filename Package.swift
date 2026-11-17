@@ -39,6 +39,28 @@ func makeNuxieRuntimeBinaryTarget() -> Target {
 
 let nuxieRuntimeBinaryTarget = makeNuxieRuntimeBinaryTarget()
 
+// The Nux machine's library is for tests only: it carries the .nux compiler
+// and a fixed stand-in world. Its module exists only while the library is
+// staged, is not a product, and nothing in Nuxie depends on it.
+let localMachinePath = ".artifacts/NuxMachine.xcframework"
+let machineTargets: [Target] = FileManager.default.fileExists(
+    atPath: packageRoot.appendingPathComponent(localMachinePath).path
+) ? [
+    .binaryTarget(name: "NuxMachineBinary", path: localMachinePath),
+    .target(
+        name: "NuxieMachine",
+        dependencies: [
+            "NuxieRuntime",
+            .target(name: "NuxMachineBinary", condition: .when(platforms: [.iOS])),
+        ],
+        path: "Sources/NuxieMachine",
+        exclude: ["BUILD.bazel"],
+        swiftSettings: [
+            .enableExperimentalFeature("StrictConcurrency")
+        ]
+    ),
+] : []
+
 let package = Package(
     name: "Nuxie",
     defaultLocalization: "en",
@@ -136,5 +158,5 @@ let package = Package(
             path: "Tests/NuxieIntegrationTests"
         ),
         nuxieRuntimeBinaryTarget,
-    ]
+    ] + machineTargets
 )

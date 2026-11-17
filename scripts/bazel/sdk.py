@@ -45,7 +45,10 @@ SUITES = {
     "runtime-ui": ["//:NuxieExperienceRuntimeUITests"],
     "reference-ui": ["//:NuxieExperienceRuntimeReferenceUITests"],
     "e2e": ["//:NuxieE2EAppTests", "//:NuxieE2EAppUITests"],
+    # Exists only while the Nux machine's tests-only library is staged.
+    "machine": ["//Tests/NuxieMachineTests:NuxieMachineTests"],
 }
+STAGED_MACHINE = ".artifacts/NuxMachine.xcframework"
 SCHEMES = {
     "NuxieRuntimeExecutorTests": "runtime-executor",
     "NuxieRuntimeExecutorMacTests": "macos-runtime-executor",
@@ -277,7 +280,7 @@ def test_options(args, sdk_platform):
         # Xcode accepts Target/Class[/method]; xctestrunner passes the filter
         # directly to XCTest, which identifies Swift classes as Module.Class.
         identifiers = []
-        modules = {label.removeprefix("//:") for labels in SUITES.values() for label in labels}
+        modules = {label.rsplit(":", 1)[1] for labels in SUITES.values() for label in labels}
         for selector in ",".join(selectors).split(","):
             excluded = selector.startswith("-")
             parts = selector.removeprefix("-").split("/")
@@ -545,6 +548,10 @@ def pool_dispatch(args):
     elif args.command == "prepare":
         outputs[".bazel-artifacts/prepared"] = preparation_output(args)
     route_options = {}
+    # The pool ships the staged runtime itself; the machine's staged library
+    # travels as a declared input, so the remote graph matches this checkout.
+    if (ROOT / STAGED_MACHINE).is_dir():
+        route_options["input_files"] = {STAGED_MACHINE: ROOT / STAGED_MACHINE}
     if args.command == "test" and not args.gate:
         suite = SCHEMES.get(args.scheme, args.suite)
         sdk_platform = (args.platform or ["macos" if suite.startswith("macos-") else "ios-simulator"])[0]
@@ -608,6 +615,9 @@ def main() -> None:
                 raise ValueError(UNSTAGED_RUNTIME_MESSAGE)
             if args.command == "test" and args.scheme:
                 args.suite = SCHEMES[args.scheme]
+            if args.command == "test" and args.suite == "machine" and not (ROOT / STAGED_MACHINE).is_dir():
+                raise ValueError("The machine suite needs the Nux machine's library staged at " + STAGED_MACHINE
+                                 + "; stage one with `make stage-machine-xcframework NUX_MACHINE_XCFRAMEWORK=<path>`.")
             if args.command == "test" and args.suite == "all":
                 if args.platform:
                     parser.error("Use an explicit test suite when selecting one platform")

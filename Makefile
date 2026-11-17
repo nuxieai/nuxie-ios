@@ -1,4 +1,4 @@
-.PHONY: test-runtime-executor test-macos-runtime-executor test-video test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings
+.PHONY: test-runtime-executor test-macos-runtime-executor test-video test-experience-input generate test test-ios test-xcode test-unit test-storekit test-native-runtime test-runtime-reference-ui test-macos-unit test-macos-unit-runner test-integration test-e2e test-experience-runtime-ui test-flow-runtime-ui test-all build-ios-device build-macos build-reference-app verify-customer-framework verify-runtime-reference-app verify-runtime-native-archive verify-runtime-artifact install-reference-app clean help coverage coverage-html coverage-json coverage-summary install-deps check-xcodegen check-storekit-test-toolchain check-privacy-manifest check-public-api check-event-catalog check-product-neutrality test-product-neutrality check-runtime-module-boundary test-runtime-module-boundary test-runtime-consumer-boundary check-runtime-package-pin check-sdk-guidance check-provider-adapters stage-runtime-xcframework fetch-runtime-xcframework fetch-runtime-xcframework-clean check-staged-runtime-xcframework check-local-runtime-xcframework check-concurrency-warnings stage-machine-xcframework test-machine
 
 XCODEGEN_STAMP := .xcodegen.stamp
 .DEFAULT_GOAL := help
@@ -27,6 +27,8 @@ STOREKIT_REQUIRE_AVAILABLE ?= 1
 NUXIE_RUNTIME_XCFRAMEWORK ?=
 RUNTIME_ARTIFACTS_DIR := .artifacts
 STAGED_RUNTIME_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework
+NUX_MACHINE_XCFRAMEWORK ?=
+STAGED_MACHINE_XCFRAMEWORK := $(RUNTIME_ARTIFACTS_DIR)/NuxMachine.xcframework
 UNSTAGED_RUNTIME_MESSAGE := No NuxieRuntime xcframework is staged at .artifacts/NuxieRuntime.xcframework. Stage one with `make stage-runtime-xcframework NUXIE_RUNTIME_XCFRAMEWORK=<path to a built NuxieRuntime.xcframework>`. NUXIE_RUNTIME_USE_LOCAL=0 selects the pinned release runtime instead.
 RUNTIME_ARTIFACT_METADATA := Runtime/artifact.json
 DOWNLOADED_RUNTIME_ARCHIVE := $(RUNTIME_ARTIFACTS_DIR)/NuxieRuntime.xcframework.zip
@@ -85,6 +87,8 @@ help:
 	@echo "  fetch-runtime-xcframework - Download, checksum, verify, and stage the released runtime"
 	@echo "  fetch-runtime-xcframework-clean - Re-download and qualify without reusing a cached archive"
 	@echo "  stage-runtime-xcframework - Verify and stage NUXIE_RUNTIME_XCFRAMEWORK for local development"
+	@echo "  stage-machine-xcframework - Verify and stage the Nux machine's tests-only NUX_MACHINE_XCFRAMEWORK"
+	@echo "  test-machine     - Run the Nux machine suite on a simulator (needs the machine's library staged)"
 	@echo "  check-staged-runtime-xcframework - Validate the stage (NUXIE_RUNTIME_USE_LOCAL=0 checks the release pin)"
 	@echo "  check-local-runtime-xcframework - Structurally validate the staged local runtime"
 	@echo "  check-privacy-manifest - Validate the SDK-wide privacy inventory"
@@ -185,6 +189,33 @@ stage-runtime-xcframework:
 	rm -rf "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
 	mv "$$candidate" "$(STAGED_RUNTIME_XCFRAMEWORK)"; \
 	echo "Staged $(STAGED_RUNTIME_XCFRAMEWORK)"
+
+# The Nux machine's library is for tests only (the .nux compiler and a fixed
+# stand-in world). Staging it adds the NuxieMachine module and its simulator
+# suite; without .artifacts/NuxMachine.xcframework neither exists.
+stage-machine-xcframework:
+	@set -eu; \
+	source="$(NUX_MACHINE_XCFRAMEWORK)"; \
+	if [ -z "$$source" ]; then \
+		echo "Set NUX_MACHINE_XCFRAMEWORK to a built NuxMachine.xcframework" >&2; \
+		exit 1; \
+	fi; \
+	metadata="$$(dirname "$$source")/NuxMachine.metadata.json"; \
+	scripts/verify-machine-xcframework.py "$$source" "$$metadata"; \
+	mkdir -p "$(RUNTIME_ARTIFACTS_DIR)"; \
+	temporary=$$(mktemp -d "$(RUNTIME_ARTIFACTS_DIR)/.machine-stage.XXXXXX"); \
+	trap 'rm -rf "$$temporary"' EXIT; \
+	ditto "$$source" "$$temporary/NuxMachine.xcframework"; \
+	cp "$$metadata" "$$temporary/NuxMachine.metadata.json"; \
+	scripts/verify-machine-xcframework.py "$$temporary/NuxMachine.xcframework" "$$temporary/NuxMachine.metadata.json"; \
+	rm -rf "$(STAGED_MACHINE_XCFRAMEWORK)"; \
+	mv -f "$$temporary/NuxMachine.metadata.json" "$(RUNTIME_ARTIFACTS_DIR)/NuxMachine.metadata.json"; \
+	mv "$$temporary/NuxMachine.xcframework" "$(STAGED_MACHINE_XCFRAMEWORK)"; \
+	echo "Staged $(STAGED_MACHINE_XCFRAMEWORK)"
+
+test-machine:
+	@scripts/bazel/sdk.sh test --suite machine \
+		$(if $(filter command line environment override,$(origin TEST_DESTINATION) $(origin TEST_SIMULATOR_NAME) $(origin TEST_SIMULATOR_OS)),--destination '$(TEST_DESTINATION)')
 
 # Download and stage the immutable release declared in Runtime/artifact.json.
 # The fetcher checks the archive before extraction and the verifier checks the
@@ -329,6 +360,7 @@ _test-sdk-gate: check-presentation-schema bazel-contract-test check-sdk-guidance
 	@$(MAKE) test-integration
 	@$(MAKE) test-macos-unit
 	@$(MAKE) test-macos-runtime-executor
+	@if [ -d "$(STAGED_MACHINE_XCFRAMEWORK)" ]; then $(MAKE) test-machine; fi
 
 # `make test` IS the holistic gate — running less locally is opt-in
 # (test-unit / test-integration / test-macos-unit directly).

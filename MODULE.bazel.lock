@@ -280,12 +280,18 @@
   "moduleExtensions": {
     "//scripts/bazel:runtime.bzl%runtime": {
       "general": {
-        "bzlTransitiveDigest": "n8fBtreQ8eu4ChLmH/mxoEHkV3lebUGLZhHhUH+WhFs=",
+        "bzlTransitiveDigest": "M5Dsw69qpAwDtbCyCsq3RF9w/oyGby3LTs8+G5Umo8U=",
         "usagesDigest": "Uw+Ju5W4a5v7iiri+9i8woKbJHLn739QZ5+U2p5PrcE=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "nuxie_runtime_release": {
             "repoRuleId": "@@//scripts/bazel:runtime.bzl%_runtime_repository",
+            "attributes": {
+              "metadata": "@@//:Runtime/artifact.json"
+            }
+          },
+          "nuxie_machine": {
+            "repoRuleId": "@@//scripts/bazel:runtime.bzl%_machine_repository",
             "attributes": {
               "metadata": "@@//:Runtime/artifact.json"
             }
