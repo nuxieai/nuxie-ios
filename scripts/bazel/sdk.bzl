@@ -1,5 +1,5 @@
 """Native Apple build targets and the existing source-based test fixture seam."""
-
+load("@nuxie_machine//:staged.bzl", "MACHINE_STAGED")
 load("@nuxie_runtime_release//:source-root.bzl", "SDK_SOURCE_ROOT")
 load("@rules_apple//apple:providers.bzl", "AppleBundleInfo")
 load("@rules_apple//apple/internal/aspects:swift_dynamic_framework_aspect.bzl", "SwiftDynamicFrameworkInfo")
@@ -139,3 +139,25 @@ sdk_framework_module = rule(
     fragments = ["apple"],
     attrs = {"deps": attr.label_list(mandatory = True, providers = [SwiftInfo, CcInfo])},
 )
+
+# The runtime host app takes the Nux machine's host screen only while the
+# machine's tests-only library is staged. Then the host's module and app are
+# test-only too, because the machine's module is. With nothing staged these
+# give back exactly what they were given, and `None` for `testonly`, which
+# Bazel reads as unset, so the graph is the graph without the machine. They
+# live here, not in machine.bzl, because the root package loads this file and
+# machine.bzl loads it in turn.
+_MACHINE_HOST = "//Tests/ExperienceRuntimeHostApp/Machine:NuxieMachineHost"
+_MACHINE_FIXTURES = "//Tests/NuxieMachineTests:NuxieMachineTests_fixtures"
+
+def sdk_machine_host_deps(deps):
+    """The runtime host app's module deps, with the machine's host screen when staged."""
+    return deps + [_MACHINE_HOST] if MACHINE_STAGED else deps
+
+def sdk_machine_host_resources(resources):
+    """The runtime host app's resources, with Stillwater's fixture when staged."""
+    return resources + [_MACHINE_FIXTURES] if MACHINE_STAGED else resources
+
+def sdk_machine_host_testonly():
+    """True when staged, otherwise unset."""
+    return True if MACHINE_STAGED else None

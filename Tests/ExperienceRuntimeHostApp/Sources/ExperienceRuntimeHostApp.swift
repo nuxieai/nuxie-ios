@@ -3,6 +3,9 @@ import CoreText
 import NuxieRuntime
 import SwiftUI
 import UIKit
+#if canImport(NuxieMachineHost)
+import NuxieMachineHost
+#endif
 
 @main
 struct NuxieExperienceRuntimeHostApp: App {
@@ -16,6 +19,12 @@ struct NuxieExperienceRuntimeHostApp: App {
 
 private struct ExperienceRuntimeHostView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
+        #if canImport(NuxieMachineHost)
+        // Present only in the build with the Nux machine's library staged.
+        if ProcessInfo.processInfo.arguments.contains("--nuxie-machine-paywall") {
+            return UINavigationController(rootViewController: NuxieMachineHostViewController())
+        }
+        #endif
         if ProcessInfo.processInfo.arguments.contains("--nuxie-accessibility-qualification")
             || ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification") {
             return UINavigationController(rootViewController: AccessibilityJourneyHostViewController())

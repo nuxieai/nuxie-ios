@@ -45,8 +45,9 @@ SUITES = {
     "runtime-ui": ["//:NuxieExperienceRuntimeUITests"],
     "reference-ui": ["//:NuxieExperienceRuntimeReferenceUITests"],
     "e2e": ["//:NuxieE2EAppTests", "//:NuxieE2EAppUITests"],
-    # Exists only while the Nux machine's tests-only library is staged.
-    "machine": ["//Tests/NuxieMachineTests:NuxieMachineTests"],
+    # Exists only while the Nux machine's tests-only library is staged: the
+    # edge's simulator suite and the paywall played as a sheet in the host app.
+    "machine": ["//Tests/NuxieMachineTests:NuxieMachineTests", "//Tests/NuxieMachineUITests:NuxieMachineUITests"],
 }
 STAGED_MACHINE = ".artifacts/NuxMachine.xcframework"
 SCHEMES = {
