@@ -108,15 +108,38 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// The store's outcome for a call, delivered in its own delivery after
     /// the frame that took it (an awaited call's to the session).
     case answer(NuxieMachineCallID, outcome: String)
-    /// The store answered a call of a record that is no longer open: the
-    /// machine dropped the call when the record ended, so the answer is
-    /// dropped too. `outcome` is none when the store failed.
+    /// The store answered a retired call: the record that issued it has
+    /// ended, and the machine dropped the call with it, so the answer is
+    /// dropped too, whatever record is open by then. `outcome` is none when
+    /// the store failed.
     case dropped(NuxieMachineCallID, outcome: String?)
+    /// An engine event the Screen reported in a frame for a showing that a
+    /// row earlier in the same frame ended. It belongs to that showing, so
+    /// it goes to no one.
+    case droppedReport(String)
+    /// The person closed a showing that had already ended. The close
+    /// belongs to it, so it goes to no one.
+    case droppedClose(NuxieMachineShown)
     /// Recorded only: the timer that delivers `wake` comes with the view
     /// controller.
     case wakeAt(Int64?)
     case end(reason: NuxieMachineEnding, fault: String?)
     case note(NuxieMachineNote)
+}
+
+/// One instance the edge shows: the machine's instance number, and which of
+/// the edge's showings it is (1 for the first `present` row the edge
+/// applied, one more for each after). The machine numbers instances afresh
+/// in each record, so two records can show the same instance number; the
+/// showing tells them apart.
+package struct NuxieMachineShown: Equatable, Sendable {
+    package let showing: UInt64
+    package let instance: UInt64
+
+    package init(showing: UInt64, instance: UInt64) {
+        self.showing = showing
+        self.instance = instance
+    }
 }
 
 /// What one frame did.
@@ -157,8 +180,20 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 ///    order. So an answer is applied right after the step of the first frame
 ///    that begins after it arrived: that step draws what the call's own
 ///    writes show (a busy button) before the answer's writes replace it, on
-///    the step after. An answer for a record that is no longer open is
-///    recorded as [`dropped`](NuxieMachineEdgeEntry.dropped) and is no fault.
+///    the step after.
+///
+/// What arrives later belongs to what it was for, never to whatever is open
+/// by then:
+///
+/// - An answer belongs to the record that issued its call. The edge keeps
+///   the open record's calls it has started and not yet answered
+///   ([`unanswered`]); the record's `end` row retires them all, as the
+///   machine drops them. An answer to a retired call is recorded as
+///   [`dropped`](NuxieMachineEdgeEntry.dropped): nothing applied, no one
+///   told, no fault.
+/// - An engine event belongs to the showing the frame stepped, and a close
+///   to the showing the host names ([`NuxieMachineShown`]). Once a row has
+///   ended that showing, both are recorded as dropped and go to no one.
 ///
 /// Nothing is ignored silently. A reported event the session refuses, a row
 /// this edge cannot perform, a cell the Screen does not have and a call the
@@ -185,8 +220,14 @@ package actor NuxieMachineEdge {
     /// The owner, told only by [`deliver`].
     private let owner: @Sendable (NuxieMachineEdgeDismissal) -> Void
 
-    /// The presented instance of the route, while it is presented.
-    package private(set) var instance: UInt64?
+    /// The presented instance of the route, while it is presented, with its
+    /// showing. A host names it when the person closes it ([`closed`]).
+    package private(set) var shown: NuxieMachineShown?
+    /// How many `present` rows the edge has applied.
+    private var showings: UInt64 = 0
+    /// The open record's calls the edge has started at the store and not
+    /// yet delivered an answer for. The record's `end` row retires them all.
+    private var unanswered: Set<NuxieMachineCallID> = []
     /// Everything the edge did, in order.
     package private(set) var log: [NuxieMachineEdgeEntry] = []
     /// What stopped the edge, once something has.
@@ -323,23 +364,30 @@ package actor NuxieMachineEdge {
     package func handleReported(_ name: String, now: Int64) async {
         await inTurn { turn in
             await deliver(turn, stopped: ()) { delivery in
-                await hear(name, now: now, &delivery)
+                await hear(name, on: shown, now: now, &delivery)
             }
         }
     }
 
-    /// The person closed the presented Screen with a system gesture.
-    package func closed(now: Int64) async {
+    /// The person closed the showing `closing` with a system gesture. A
+    /// showing that has already ended (the machine dismissed or popped it
+    /// first) takes no close: it is recorded as dropped. A showing this edge
+    /// never made is a fault.
+    package func closed(_ closing: NuxieMachineShown, now: Int64) async {
         await inTurn { turn in
             await deliver(turn, stopped: ()) { delivery in
-                guard let instance else {
-                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-event", detail: "closed while nothing is presented"),
-                         &delivery)
+                guard closing == shown else {
+                    if closing.showing >= 1 && closing.showing <= showings {
+                        log.append(.droppedClose(closing))
+                    } else {
+                        fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
+                            detail: "closed showing \(closing.showing), which this edge never made"), &delivery)
+                    }
                     return
                 }
                 let rows: [NuxieMachineRow]
                 do {
-                    rows = try session.closed(instance: instance, now: now)
+                    rows = try session.closed(instance: closing.instance, now: now)
                 } catch {
                     await refused(error, doing: "closed", now: now, &delivery)
                     return
@@ -349,7 +397,8 @@ package actor NuxieMachineEdge {
         }
     }
 
-    /// Whether the session's record is open, between deliveries.
+    /// Whether the session's record is open, between deliveries. For checks:
+    /// the edge decides nothing by it, since it does not say which record.
     package func recordOpen() async throws -> Bool {
         try await inTurn { _ in try session.recordOpen() }
     }
@@ -430,13 +479,14 @@ package actor NuxieMachineEdge {
     }
 
     /// A frame's delivery: step the engine and hand the Screen's events to
-    /// the session.
+    /// the session, each for the showing the step drew.
     private func step(
         pointers: [NuxieNativePointerEvent],
         elapsedSeconds: Float,
         now: Int64,
         _ delivery: inout Delivery
     ) async -> NuxieMachineFrame {
+        let stepped = shown
         let step: NuxieNativePlayerStepResult
         do {
             step = try await runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
@@ -459,23 +509,30 @@ package actor NuxieMachineEdge {
                     detail: "the Screen reported a link to \(event.url), which this edge cannot open"), &delivery)
                 continue
             }
-            await hear(event.name, now: now, &delivery)
+            await hear(event.name, on: stepped, now: now, &delivery)
         }
         return NuxieMachineFrame(reported: reported, keepGoing: step.keepGoing)
     }
 
-    /// An engine event the Screen reported, handed to the session.
-    private func hear(_ name: String, now: Int64, _ delivery: inout Delivery) async {
+    /// An engine event the Screen reported for the showing `on`, handed to
+    /// the session. One reported while nothing was shown is a fault; one
+    /// whose showing a row has ended since is dropped.
+    private func hear(_ name: String, on reportedFor: NuxieMachineShown?, now: Int64,
+                      _ delivery: inout Delivery) async {
         guard fault == nil else { return }
-        guard let instance else {
+        guard let reportedFor else {
             fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
                 detail: "the Screen reported \(name) while nothing is presented"), &delivery)
+            return
+        }
+        guard reportedFor == shown else {
+            log.append(.droppedReport(name))
             return
         }
         log.append(.reported(name))
         let rows: [NuxieMachineRow]
         do {
-            rows = try session.engineEvent(instance: instance, name: name, now: now)
+            rows = try session.engineEvent(instance: reportedFor.instance, name: name, now: now)
         } catch {
             await refused(error, doing: "the engine event \(name)", now: now, &delivery)
             return
@@ -483,23 +540,16 @@ package actor NuxieMachineEdge {
         await apply(rows, now: now, &delivery)
     }
 
-    /// A store's answer, as its own delivery. An answer for a record that
-    /// is no longer open is dropped: the machine dropped the call when the
-    /// record ended (it answers such a call `unknown_call`), and a store
-    /// that failed for it has nothing left to fail. Otherwise a store that
-    /// could not perform the call is a fault, an unawaited call's outcome is
-    /// recorded, and an awaited call's goes to the session, whose refusal
-    /// (`unknown_call` included: the call was answered twice) is a fault.
+    /// A store's answer, as its own delivery. An answer to a retired call
+    /// is dropped: the record that issued it has ended, the machine dropped
+    /// the call with it, and a store that failed for it has nothing left to
+    /// fail. Otherwise the call is the open record's own and unanswered: a
+    /// store that could not perform it is a fault, an unawaited call's
+    /// outcome is recorded, and an awaited call's goes to the session, whose
+    /// refusal (`unknown_call` included) is a fault.
     private func answer(_ answer: Answer, now: Int64, _ delivery: inout Delivery) async {
         let call = answer.call
-        let open: Bool
-        do {
-            open = try session.recordOpen()
-        } catch {
-            await refused(error, doing: "a read of the record for \(call.externName)'s answer", now: now, &delivery)
-            return
-        }
-        guard open else {
+        guard unanswered.remove(call.id) != nil else {
             log.append(.dropped(call.id, outcome: try? answer.outcome.get()))
             return
         }
@@ -543,23 +593,24 @@ package actor NuxieMachineEdge {
             guard fault == nil else { return }
             switch row {
             case .present(let route, let instance, let presentation):
-                guard route == self.route, self.instance == nil else {
+                guard route == self.route, shown == nil else {
                     fail(NuxieMachineEdgeFault(code: "edge.no-artwork",
                         detail: "present \(route) as \(instance); this edge draws \(self.route) once"), &delivery)
                     return
                 }
-                self.instance = instance
+                showings += 1
+                shown = NuxieMachineShown(showing: showings, instance: instance)
                 log.append(.present(route: route, instance: instance, presentation: presentation))
             case .pop(let instance):
-                guard instance == self.instance else {
+                guard instance == shown?.instance else {
                     fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
                         detail: "pop \(instance), which is not presented"), &delivery)
                     return
                 }
-                self.instance = nil
+                shown = nil
                 log.append(.pop(instance: instance))
             case .dismiss(let reason):
-                instance = nil
+                shown = nil
                 log.append(.dismiss(reason: reason))
                 delivery.dismissed(reason: reason)
             case .sceneSet(let instance, let object, let key, let value):
@@ -570,6 +621,9 @@ package actor NuxieMachineEdge {
             case .wakeAt(let moment):
                 log.append(.wakeAt(moment))
             case .end(let reason, let code):
+                // The record's unanswered calls are retired with it: the
+                // machine drops them, and their answers are dropped here.
+                unanswered.removeAll()
                 log.append(.end(reason: reason, fault: code))
                 if reason != .finished && reason != .exited {
                     fail(NuxieMachineEdgeFault(code: code ?? "machine.fault",
@@ -586,7 +640,7 @@ package actor NuxieMachineEdge {
     /// A `scene` write: the value lands in the Screen's cell
     /// `state/<cell>` and shows on the next step.
     private func write(instance: UInt64, cell: String, value: NuxieMachineValue, _ delivery: inout Delivery) async {
-        guard instance == self.instance else {
+        guard instance == shown?.instance else {
             fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
                 detail: "a write to \(cell) of instance \(instance), which is not presented"), &delivery)
             return
@@ -625,6 +679,7 @@ package actor NuxieMachineEdge {
                 detail: "\(call.externName) runs on the server, which this edge cannot reach"), &delivery)
             return
         }
+        unanswered.insert(call.id)
         let store = store
         // The task holds the edge weakly: an edge let go of takes no answer.
         // It is recorded before this method returns, and its answer needs

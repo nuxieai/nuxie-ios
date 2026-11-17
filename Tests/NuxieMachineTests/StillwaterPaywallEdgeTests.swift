@@ -162,7 +162,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             tapped += try await run.tap(Box.details)
             XCTAssertEqual(tapped, ["tap_monthly", "tap_buy", "tap_details"])
             let written = await run.edge.log.count
-            await run.edge.closed(now: run.advance())
+            let current = await run.edge.shown
+            let shown = try XCTUnwrap(current)
+            await run.edge.closed(shown, now: run.advance())
             let closing = await Array(run.edge.log.dropFirst(written))
             XCTAssertEqual(closing.filter {
                 if case .pop = $0 { return true }
@@ -288,8 +290,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             XCTAssertFalse(open, "the fault ended the session")
 
             // A stopped edge takes nothing more and tells nothing more.
+            let presented = try XCTUnwrap(Self.presentedInstance(log))
             await run.edge.start(event: "go", now: run.advance())
-            await run.edge.closed(now: run.advance())
+            await run.edge.closed(NuxieMachineShown(showing: 1, instance: presented), now: run.advance())
             await run.edge.handleReported("tap_label", now: run.advance())
             try await run.settle()
             let after = await run.edge.log
@@ -318,7 +321,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let buyTap = try await run.tap(Box.buy)
             XCTAssertEqual(buyTap, ["tap_buy"])
             let written = await run.edge.log.count
-            await run.edge.closed(now: run.advance())
+            let current = await run.edge.shown
+            let shown = try XCTUnwrap(current)
+            await run.edge.closed(shown, now: run.advance())
             let closing = await Array(run.edge.log.dropFirst(written))
             let whole = await run.edge.log
             let presented = try XCTUnwrap(Self.presentedInstance(whole))
@@ -427,6 +432,203 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
+    private static let leavesPlan = NuxieMachinePlanSource(
+        files: [NuxieMachineSourceFile(path: "main.nux", text: leavesWhileRestoring)],
+        root: "main", app: "app", experience: "leaves", version: 1)
+
+    /// An answer belongs to the record that issued its call, not to the
+    /// record open when it arrives. A store refusal of the first record's
+    /// `restore`, released after that record ended and a second started,
+    /// is dropped.
+    func testARefusalForAnEndedRecordLeavesTheNextRecordAlone() async throws {
+        try await checkAnAnswerForAnEndedRecord(answering: [:], dropped: nil)
+    }
+
+    /// The same with a successful awaited answer: it is dropped, not handed
+    /// to the second record (whose machine would answer `unknown_call`).
+    func testAnAnswerForAnEndedRecordLeavesTheNextRecordAlone() async throws {
+        try await checkAnAnswerForAnEndedRecord(answering: ["restore": "completed"], dropped: "completed")
+    }
+
+    /// Hold `restore`, close (the record ends), start `go` again (a second
+    /// record), then release the store. The second record's showing is
+    /// untouched, its owner hears nothing for it, the log has one dropped
+    /// entry for the old call, nothing faults, and a tap on the second
+    /// record is still handled.
+    private func checkAnAnswerForAnEndedRecord(answering: [String: String], dropped outcome: String?) async throws {
+        let run = try await Run(plan: Self.leavesPlan, holdingStore: true, answering: answering)
+        do {
+            await run.edge.start(event: "go", now: run.now)
+            try await run.settle()
+            await run.edge.handleReported("tap_restore", now: run.advance())
+            await run.edge.handleReported("tap_close", now: run.advance())
+            let firstOpen = try await run.edge.recordOpen()
+            XCTAssertFalse(firstOpen, "leaving ends the first record")
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")])
+
+            await run.edge.start(event: "go", now: run.advance())
+            try await run.settle()
+            let second = await run.edge.shown
+            let secondShown = try XCTUnwrap(second, "the second record shows the paywall")
+            let secondOpen = try await run.edge.recordOpen()
+            XCTAssertTrue(secondOpen, "the second record is open")
+
+            run.store.release()
+            await run.edge.storeAnswered()
+            let beforeAnswer = await run.edge.log.count
+            try await run.settle(frames: 2)
+            let late = await Array(run.edge.log.dropFirst(beforeAnswer))
+            let call = try XCTUnwrap(run.store.calls.first)
+            XCTAssertEqual(call.externName, "restore")
+            XCTAssertEqual(late, [.dropped(call.id, outcome: outcome)])
+            let whole = await run.edge.log
+            XCTAssertEqual(whole.filter {
+                if case .dropped = $0 { return true }
+                return false
+            }.count, 1, "one dropped entry for the old call")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault, "an answer for an ended record is no fault")
+            let still = await run.edge.shown
+            XCTAssertEqual(still, secondShown, "the second record's showing is untouched")
+            let stillOpen = try await run.edge.recordOpen()
+            XCTAssertTrue(stillOpen, "the second record is still open")
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")],
+                           "the owner hears nothing for the second record")
+
+            // The second record still works: a tap on "Not now" is handled.
+            let closeTap = try await run.tap(Box.close)
+            XCTAssertEqual(closeTap, ["tap_close"])
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left"), .machine(reason: "left")])
+            let finalFault = await run.edge.fault
+            XCTAssertNil(finalFault)
+            XCTAssertEqual(run.store.calls.count, 1)
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// An answer for the open record's own unanswered call is delivered,
+    /// once: `restore` answered `completed` runs `leave`.
+    func testAnAnswerForTheOpenRecordsOwnCallIsDeliveredOnce() async throws {
+        let run = try await Run(plan: Self.leavesPlan, holdingStore: true, answering: ["restore": "completed"])
+        do {
+            await run.edge.start(event: "go", now: run.now)
+            try await run.settle()
+            await run.edge.handleReported("tap_restore", now: run.advance())
+            let written = await run.edge.log.count
+            run.store.release()
+            await run.edge.storeAnswered()
+            try await run.settle(frames: 3)
+            let after = await Array(run.edge.log.dropFirst(written))
+            let call = try XCTUnwrap(run.store.calls.first)
+            XCTAssertEqual(after.filter {
+                switch $0 {
+                case .answer, .dropped: return true
+                default: return false
+                }
+            }, [.answer(call.id, outcome: "completed")], "\(after)")
+            XCTAssertTrue(after.contains(.dismiss(reason: "left")), "\(after)")
+            XCTAssertTrue(after.contains(.end(reason: .exited, fault: nil)), "\(after)")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")])
+            let open = try await run.edge.recordOpen()
+            XCTAssertFalse(open, "the answer's `leave` ends the record")
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A close belongs to the showing the person closed. Instance numbers
+    /// start over with each record, so the host names the showing. Closing
+    /// the first record's showing after a second record shows its own is
+    /// dropped and leaves the second alone; closing the second's is handled.
+    func testACloseForAnEndedShowingIsDropped() async throws {
+        let run = try await Run(plan: Self.leavesPlan)
+        do {
+            await run.edge.start(event: "go", now: run.now)
+            try await run.settle()
+            let firstShown = await run.edge.shown
+            let first = try XCTUnwrap(firstShown)
+            await run.edge.handleReported("tap_close", now: run.advance())
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")])
+
+            await run.edge.start(event: "go", now: run.advance())
+            try await run.settle()
+            let secondShown = await run.edge.shown
+            let second = try XCTUnwrap(secondShown)
+            XCTAssertNotEqual(first, second)
+
+            var written = await run.edge.log.count
+            await run.edge.closed(first, now: run.advance())
+            let stale = await Array(run.edge.log.dropFirst(written))
+            XCTAssertEqual(stale, [.droppedClose(first)])
+            let untouched = await run.edge.shown
+            XCTAssertEqual(untouched, second, "the second record's showing is untouched")
+            let open = try await run.edge.recordOpen()
+            XCTAssertTrue(open)
+            var noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")])
+
+            written = await run.edge.log.count
+            await run.edge.closed(second, now: run.advance())
+            let closing = await Array(run.edge.log.dropFirst(written))
+            XCTAssertTrue(closing.contains(.pop(instance: second.instance)), "\(closing)")
+            noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            let gone = await run.edge.shown
+            XCTAssertNil(gone)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// An engine event belongs to the showing the frame stepped. One frame
+    /// whose pointers tap "Not now" and then "About the trial": "Not now"
+    /// dismisses the paywall, so "About the trial", reported for the same
+    /// showing, is dropped rather than heard by nothing or by another.
+    func testAnEventReportedAfterItsShowingEndedInTheSameFrameIsDropped() async throws {
+        let run = try await Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            let written = await run.edge.log.count
+            func center(_ box: [Int]) -> (Float, Float) {
+                (Float(box[0] + box[2]) / 2, Float(box[1] + box[3]) / 2)
+            }
+            let (closeX, closeY) = center(Box.close)
+            let (detailsX, detailsY) = center(Box.details)
+            let frame = await run.edge.frame(pointers: [
+                NuxieNativePointerEvent(kind: .down, x: closeX, y: closeY),
+                NuxieNativePointerEvent(kind: .up, x: closeX, y: closeY),
+                NuxieNativePointerEvent(kind: .down, x: detailsX, y: detailsY),
+                NuxieNativePointerEvent(kind: .up, x: detailsX, y: detailsY),
+            ], elapsedSeconds: Self.tick, now: run.advance())
+            XCTAssertEqual(frame.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_close", "tap_details"])
+            let after = await Array(run.edge.log.dropFirst(written))
+            XCTAssertTrue(after.contains(.reported("tap_close")), "\(after)")
+            XCTAssertTrue(after.contains(.dismiss(reason: "paywall_closed")), "\(after)")
+            XCTAssertFalse(after.contains(.reported("tap_details")), "\(after)")
+            XCTAssertEqual(after.last, .droppedReport("tap_details"), "\(after)")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
     /// Frames and a tap on another control while the store has not answered
     /// are handled, in order; the answer, released after, applies its rows
     /// once, after the tap's.
@@ -496,6 +698,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try await run.settle()
             let written = await run.edge.log.count
             let edge = run.edge
+            let current = await edge.shown
+            let shown = try XCTUnwrap(current)
             let x = Float(Box.monthly[0] + Box.monthly[2]) / 2
             let y = Float(Box.monthly[1] + Box.monthly[3]) / 2
             let at = run.advance()
@@ -507,7 +711,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                                             elapsedSeconds: tick, now: at) },
                 Task { _ = await edge.frame(elapsedSeconds: tick, now: at) },
                 Task { await edge.handleReported("tap_details", now: at) },
-                Task { await edge.closed(now: at) },
+                Task { await edge.closed(shown, now: at) },
             ]
             for request in requests { await request.value }
 
@@ -614,10 +818,13 @@ private final class Run {
     private var frames = 0
 
     /// Stillwater's plan over its Screen, or `plan` over the same Screen.
-    /// A holding store answers each call only when the test releases it.
-    init(plan: NuxieMachinePlanSource? = nil, holdingStore: Bool = false) async throws {
+    /// A holding store answers each call only when the test releases it,
+    /// and `answering` names an outcome for an extern in place of the
+    /// stand-in's.
+    init(plan: NuxieMachinePlanSource? = nil, holdingStore: Bool = false,
+         answering: [String: String] = [:]) async throws {
         let fixture = try Fixture.load()
-        let store = RecordingStore(holds: holdingStore)
+        let store = RecordingStore(holds: holdingStore, answering: answering)
         self.store = store
         let owner = self.owner
         edge = try await NuxieMachineEdge(
@@ -690,19 +897,22 @@ private final class Run {
     }
 }
 
-/// A store that hands every call to the stand-in and keeps them. A holding
-/// one gives each answer only when the test releases it: a release that
-/// comes before its call lets that call answer at once.
+/// A store that hands every call to the stand-in, or answers it with the
+/// outcome `answering` names for its extern, and keeps them. A holding one
+/// gives each answer only when the test releases it: a release that comes
+/// before its call lets that call answer at once.
 private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
     private let lock = NSLock()
     private var received: [NuxieMachineCall] = []
     private let standIn = NuxieMachineStandInStore()
     private let holds: Bool
+    private let answering: [String: String]
     private var held: [CheckedContinuation<Void, Never>] = []
     private var releasedEarly = 0
 
-    init(holds: Bool) {
+    init(holds: Bool, answering: [String: String]) {
         self.holds = holds
+        self.answering = answering
     }
 
     var calls: [NuxieMachineCall] {
@@ -724,6 +934,7 @@ private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
                 if goes { continuation.resume() }
             }
         }
+        if let outcome = answering[call.externName] { return outcome }
         return try await standIn.perform(call)
     }
 
