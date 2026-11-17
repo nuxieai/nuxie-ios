@@ -120,8 +120,8 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// The person closed a showing that had already ended. The close
     /// belongs to it, so it goes to no one.
     case droppedClose(NuxieMachineShown)
-    /// Recorded only: the timer that delivers `wake` comes with the view
-    /// controller.
+    /// The record asks for a `wake` at this moment, or at none. The host's
+    /// timer delivers it ([`wake`]).
     case wakeAt(Int64?)
     case end(reason: NuxieMachineEnding, fault: String?)
     case note(NuxieMachineNote)
@@ -149,6 +149,15 @@ package struct NuxieMachineFrame: Equatable, Sendable {
     package let reported: [String]
     /// The engine's step, for a host that schedules frames by it.
     package let keepGoing: Bool
+    /// Whether a write landed in this frame's turn, from the frame or from a
+    /// store's answer delivered after it. A write shows on the next step, so
+    /// a host that rests between frames steps once more.
+    package let wrote: Bool
+    /// Whether, when this frame's turn ended, a call the edge started at the
+    /// store was still unanswered or an answer was waiting. An answer is
+    /// delivered only at a frame, so a host that rests between frames keeps
+    /// them going while this holds.
+    package let waitsOnStore: Bool
 }
 
 /// The edge between one session of the Nux machine and one published Screen
@@ -159,7 +168,9 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 /// arrived; hand each reported event to the session by name; apply each
 /// `scene` write to its cell; start each `call` at the store; record
 /// `present`, `pop`, `dismiss`, `end`, `wake at` and `note`. A write shows on
-/// the next step.
+/// the next step. The edge has no window and no clock: its owner draws the
+/// Screen, schedules frames, presents what the log records and delivers
+/// `wake` when the moment comes.
 ///
 /// Two rules make a delivery (a start, a frame, a reported event, a close,
 /// a store's answer) one whole thing:
@@ -245,6 +256,15 @@ package actor NuxieMachineEdge {
     private var mailbox: [Answer] = []
     /// The store's work in flight, by call, until its answer arrives.
     private var working: [NuxieMachineCallID: Task<Void, Never>] = [:]
+    /// How many writes have landed in the Screen's cells.
+    private var writes = 0
+
+    /// Whether the store owes this edge something a frame would deliver: a
+    /// call still in flight, or an answer waiting in the mailbox. A stopped
+    /// or closed edge delivers nothing, so it owes nothing.
+    private var storeOwes: Bool {
+        fault == nil && !closedScreen && (!working.isEmpty || !mailbox.isEmpty)
+    }
 
     private enum CellKind: Equatable {
         case bool, number, text
@@ -346,7 +366,8 @@ package actor NuxieMachineEdge {
             // Answers that arrive during this turn wait for the next frame.
             let answers = mailbox
             mailbox = []
-            let frame = await deliver(turn, stopped: NuxieMachineFrame(reported: [], keepGoing: false)) { delivery in
+            let writesBefore = writes
+            let stepped = await deliver(turn, stopped: (reported: [String](), keepGoing: false)) { delivery in
                 await step(pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
             }
             for arrived in answers {
@@ -354,7 +375,32 @@ package actor NuxieMachineEdge {
                     await answer(arrived, now: now, &delivery)
                 }
             }
-            return frame
+            return NuxieMachineFrame(reported: stepped.reported, keepGoing: stepped.keepGoing,
+                                     wrote: writes != writesBefore, waitsOnStore: storeOwes)
+        }
+    }
+
+    /// The moment the record asked for with its last `wake at` has come:
+    /// the machine's rows for it are applied. A host's timer delivers it;
+    /// the edge keeps no clock of its own.
+    ///
+    /// `now` must be that moment. The machine takes a wake only at the
+    /// moment it last asked for, and no event earlier than its last step; a
+    /// wake at any other moment changes nothing. So a host delivers a wake
+    /// before any frame or close whose `now` has passed its moment, and one
+    /// that comes back late delivers each wake at its own moment, in order.
+    package func wake(now: Int64) async {
+        await inTurn { turn in
+            await deliver(turn, stopped: ()) { delivery in
+                let rows: [NuxieMachineRow]
+                do {
+                    rows = try session.wake(now: now)
+                } catch {
+                    await refused(error, doing: "wake", now: now, &delivery)
+                    return
+                }
+                await apply(rows, now: now, &delivery)
+            }
         }
     }
 
@@ -485,14 +531,14 @@ package actor NuxieMachineEdge {
         elapsedSeconds: Float,
         now: Int64,
         _ delivery: inout Delivery
-    ) async -> NuxieMachineFrame {
+    ) async -> (reported: [String], keepGoing: Bool) {
         let stepped = shown
         let step: NuxieNativePlayerStepResult
         do {
             step = try await runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
         } catch {
             fail(NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)"), &delivery)
-            return NuxieMachineFrame(reported: [], keepGoing: false)
+            return ([], false)
         }
         var reported: [String] = []
         for event in step.events {
@@ -511,7 +557,7 @@ package actor NuxieMachineEdge {
             }
             await hear(event.name, on: stepped, now: now, &delivery)
         }
-        return NuxieMachineFrame(reported: reported, keepGoing: step.keepGoing)
+        return (reported, step.keepGoing)
     }
 
     /// An engine event the Screen reported for the showing `on`, handed to
@@ -666,6 +712,7 @@ package actor NuxieMachineEdge {
             fail(NuxieMachineEdgeFault(code: "engine.write", detail: "\(cell): \(error)"), &delivery)
             return
         }
+        writes += 1
         log.append(.write(cell: cell, value: value))
     }
 
