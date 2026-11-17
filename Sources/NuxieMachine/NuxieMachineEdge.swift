@@ -140,8 +140,16 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 /// Nothing is ignored silently. A reported event the session refuses, a row
 /// this edge cannot perform, a cell the Screen does not have and a call the
 /// store cannot perform are faults, and every fault takes one path
-/// ([`fail`]): the edge stops, records the code, and tells its owner to
-/// dismiss. A stopped edge does nothing more.
+/// ([`fail`]): the edge stops and records the code. A stopped edge does
+/// nothing more.
+///
+/// The owner hears at most one dismissal per delivery (a start, a frame, a
+/// reported event, a close), told once when the delivery is over
+/// ([`deliver`], the only place the owner is called). Rows and faults
+/// decide it as they apply ([`Delivery`]): a fault in the delivery, from the
+/// machine, the store, the engine or this edge, makes it the fault's
+/// dismissal, whatever normal dismissal came before it; otherwise it is the
+/// machine's first `dismiss`. The log keeps every row either way.
 package actor NuxieMachineEdge {
     /// The engine's Screen, for its owner to draw.
     package nonisolated let runtime: NuxieNativeRuntime
@@ -151,7 +159,8 @@ package actor NuxieMachineEdge {
     private let root: NuxieNativeViewModelReference
     /// The Screen's cells, by name, with the kind of value each holds.
     private let cells: [String: CellKind]
-    private let dismiss: @Sendable (NuxieMachineEdgeDismissal) -> Void
+    /// The owner, told only by [`deliver`].
+    private let owner: @Sendable (NuxieMachineEdgeDismissal) -> Void
 
     /// The presented instance of the route, while it is presented.
     package private(set) var instance: UInt64?
@@ -166,9 +175,29 @@ package actor NuxieMachineEdge {
         case bool, number, text
     }
 
+    /// What one delivery tells the owner, decided as its rows and faults
+    /// apply and told once when it is over.
+    private struct Delivery {
+        private(set) var dismissal: NuxieMachineEdgeDismissal?
+
+        /// The machine's `dismiss` row. The first one stands, and never
+        /// over a fault.
+        mutating func dismissed(reason: String?) {
+            if dismissal == nil { dismissal = .machine(reason: reason) }
+        }
+
+        /// The fault that stopped the edge in this delivery, over any
+        /// normal dismissal before it.
+        mutating func faulted(_ fault: NuxieMachineEdgeFault) {
+            if case .fault? = dismissal { return }
+            dismissal = .fault(fault)
+        }
+    }
+
     /// Compile the plan into a session, and open the Screen on the engine
     /// with its root view model bound and its System fonts supplied by this
-    /// device. `onDismiss` hears every dismissal: the machine's and a fault's.
+    /// device. `onDismiss` hears at most one dismissal per delivery: the
+    /// fault's when the delivery ended in one, otherwise the machine's.
     package init(
         plan: NuxieMachinePlanSource,
         screen: NuxieMachineScreenSource,
@@ -192,21 +221,22 @@ package actor NuxieMachineEdge {
         self.runtime = runtime
         self.route = screen.route
         self.store = store
-        self.dismiss = onDismiss
+        self.owner = onDismiss
     }
 
     /// The host saw the event `event` at `now` (milliseconds since the Unix
     /// epoch), and the machine's rows for it are applied.
     package func start(event: String, now: Int64) async {
-        guard fault == nil else { return }
-        let rows: [NuxieMachineRow]
-        do {
-            rows = try session.start(event: event, now: now)
-        } catch {
-            await refused(error, doing: "start on \(event)", now: now)
-            return
+        await deliver(stopped: ()) { delivery in
+            let rows: [NuxieMachineRow]
+            do {
+                rows = try session.start(event: event, now: now)
+            } catch {
+                await refused(error, doing: "start on \(event)", now: now, &delivery)
+                return
+            }
+            await apply(rows, now: now, &delivery)
         }
-        await apply(rows, now: now)
     }
 
     /// One frame. `now` is the clock the machine reads, and `elapsedSeconds`
@@ -217,86 +247,77 @@ package actor NuxieMachineEdge {
         elapsedSeconds: Float,
         now: Int64
     ) async -> NuxieMachineFrame {
-        guard fault == nil else { return NuxieMachineFrame(reported: [], keepGoing: false) }
-        // Answers the store gave before this frame; ones it gives during
-        // this frame wait for the next.
-        let waiting = answers
-        answers = []
-        let step: NuxieNativePlayerStepResult
-        do {
-            step = try await runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
-        } catch {
-            fail(NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)"))
-            return NuxieMachineFrame(reported: [], keepGoing: false)
-        }
-        var reported: [String] = []
-        for event in step.events {
-            reported.append(event.name)
-            guard fault == nil else { continue }
-            // A reserved (`$`) event is the engine's own, and an unnamed
-            // one with no link is a bare notification: a phone drops both,
-            // as the SDK's Screen does for every Screen it shows. The
-            // Screen's named events are the ones the machine hears. Both
-            // still appear in the frame's `reported`.
-            if event.name.hasPrefix("$") || (event.name.isEmpty && event.url.isEmpty) { continue }
-            guard event.url.isEmpty else {
-                fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
-                    detail: "the Screen reported a link to \(event.url), which this edge cannot open"))
-                continue
-            }
-            await handleReported(event.name, now: now)
-        }
-        for answer in waiting {
-            guard fault == nil else { break }
-            log.append(.answer(answer.call, outcome: answer.outcome))
-            let rows: [NuxieMachineRow]
+        await deliver(stopped: NuxieMachineFrame(reported: [], keepGoing: false)) { delivery in
+            // Answers the store gave before this frame; ones it gives during
+            // this frame wait for the next.
+            let waiting = answers
+            answers = []
+            let step: NuxieNativePlayerStepResult
             do {
-                rows = try session.answer(answer.call, outcome: answer.outcome, now: now)
+                step = try await runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
             } catch {
-                await refused(error, doing: "answer \(answer.outcome)", now: now)
-                break
+                fail(NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)"), &delivery)
+                return NuxieMachineFrame(reported: [], keepGoing: false)
             }
-            await apply(rows, now: now)
+            var reported: [String] = []
+            for event in step.events {
+                reported.append(event.name)
+                guard fault == nil else { continue }
+                // A reserved (`$`) event is the engine's own, and an unnamed
+                // one with no link is a bare notification: a phone drops both,
+                // as the SDK's Screen does for every Screen it shows. The
+                // Screen's named events are the ones the machine hears. Both
+                // still appear in the frame's `reported`.
+                if event.name.hasPrefix("$") || (event.name.isEmpty && event.url.isEmpty) { continue }
+                guard event.url.isEmpty else {
+                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
+                        detail: "the Screen reported a link to \(event.url), which this edge cannot open"), &delivery)
+                    continue
+                }
+                await hear(event.name, now: now, &delivery)
+            }
+            for answer in waiting {
+                guard fault == nil else { break }
+                log.append(.answer(answer.call, outcome: answer.outcome))
+                let rows: [NuxieMachineRow]
+                do {
+                    rows = try session.answer(answer.call, outcome: answer.outcome, now: now)
+                } catch {
+                    await refused(error, doing: "answer \(answer.outcome)", now: now, &delivery)
+                    break
+                }
+                await apply(rows, now: now, &delivery)
+            }
+            return NuxieMachineFrame(reported: reported, keepGoing: step.keepGoing)
         }
-        return NuxieMachineFrame(reported: reported, keepGoing: step.keepGoing)
     }
 
     /// An engine event the Screen reported, handed to the session by the name
     /// the engine gave it. Package-visible so a check can hand the edge an
     /// event the published Screen never reports.
     package func handleReported(_ name: String, now: Int64) async {
-        guard fault == nil else { return }
-        guard let instance else {
-            fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
-                detail: "the Screen reported \(name) while nothing is presented"))
-            return
+        await deliver(stopped: ()) { delivery in
+            await hear(name, now: now, &delivery)
         }
-        log.append(.reported(name))
-        let rows: [NuxieMachineRow]
-        do {
-            rows = try session.engineEvent(instance: instance, name: name, now: now)
-        } catch {
-            await refused(error, doing: "the engine event \(name)", now: now)
-            return
-        }
-        await apply(rows, now: now)
     }
 
     /// The person closed the presented Screen with a system gesture.
     package func closed(now: Int64) async {
-        guard fault == nil else { return }
-        guard let instance else {
-            fail(NuxieMachineEdgeFault(code: "edge.unhandled-event", detail: "closed while nothing is presented"))
-            return
+        await deliver(stopped: ()) { delivery in
+            guard let instance else {
+                fail(NuxieMachineEdgeFault(code: "edge.unhandled-event", detail: "closed while nothing is presented"),
+                     &delivery)
+                return
+            }
+            let rows: [NuxieMachineRow]
+            do {
+                rows = try session.closed(instance: instance, now: now)
+            } catch {
+                await refused(error, doing: "closed", now: now, &delivery)
+                return
+            }
+            await apply(rows, now: now, &delivery)
         }
-        let rows: [NuxieMachineRow]
-        do {
-            rows = try session.closed(instance: instance, now: now)
-        } catch {
-            await refused(error, doing: "closed", now: now)
-            return
-        }
-        await apply(rows, now: now)
     }
 
     /// Whether the session's record is open.
@@ -313,23 +334,65 @@ package actor NuxieMachineEdge {
         try await runtime.close()
     }
 
+    // MARK: Deliveries
+
+    /// The one place the owner is told anything. Runs one delivery, unless
+    /// the edge has stopped, and then tells the owner the one dismissal the
+    /// delivery decided, if any.
+    private func deliver<Result>(
+        stopped: Result,
+        _ body: (inout Delivery) async -> Result
+    ) async -> Result {
+        guard fault == nil else { return stopped }
+        var delivery = Delivery()
+        let result = await body(&delivery)
+        guard let dismissal = delivery.dismissal else { return result }
+        // A fault this delivery did not record stopped the edge while it
+        // was suspended (the actor took another delivery meanwhile), and
+        // that delivery told the owner. Its normal dismissal is not told
+        // after it.
+        if case .machine = dismissal, fault != nil { return result }
+        owner(dismissal)
+        return result
+    }
+
+    /// An engine event the Screen reported, handed to the session.
+    private func hear(_ name: String, now: Int64, _ delivery: inout Delivery) async {
+        guard fault == nil else { return }
+        guard let instance else {
+            fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
+                detail: "the Screen reported \(name) while nothing is presented"), &delivery)
+            return
+        }
+        log.append(.reported(name))
+        let rows: [NuxieMachineRow]
+        do {
+            rows = try session.engineEvent(instance: instance, name: name, now: now)
+        } catch {
+            await refused(error, doing: "the engine event \(name)", now: now, &delivery)
+            return
+        }
+        await apply(rows, now: now, &delivery)
+    }
+
     // MARK: Rows
 
-    private func apply(_ rows: [NuxieMachineRow], now: Int64) async {
+    private func apply(_ rows: [NuxieMachineRow], now: Int64, _ delivery: inout Delivery) async {
         for row in rows {
             guard fault == nil else { return }
             switch row {
             case .present(let route, let instance, let presentation):
                 guard route == self.route, self.instance == nil else {
                     fail(NuxieMachineEdgeFault(code: "edge.no-artwork",
-                        detail: "present \(route) as \(instance); this edge draws \(self.route) once"))
+                        detail: "present \(route) as \(instance); this edge draws \(self.route) once"), &delivery)
                     return
                 }
                 self.instance = instance
                 log.append(.present(route: route, instance: instance, presentation: presentation))
             case .pop(let instance):
                 guard instance == self.instance else {
-                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-row", detail: "pop \(instance), which is not presented"))
+                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
+                        detail: "pop \(instance), which is not presented"), &delivery)
                     return
                 }
                 self.instance = nil
@@ -337,32 +400,34 @@ package actor NuxieMachineEdge {
             case .dismiss(let reason):
                 instance = nil
                 log.append(.dismiss(reason: reason))
-                dismiss(.machine(reason: reason))
+                delivery.dismissed(reason: reason)
             case .sceneSet(let instance, let object, let key, let value):
-                await write(instance: instance, cell: nuxieMachineCellName(object: object, key: key), value: value)
+                await write(instance: instance, cell: nuxieMachineCellName(object: object, key: key), value: value,
+                            &delivery)
             case .call(let call):
-                await perform(call)
+                await perform(call, &delivery)
             case .wakeAt(let moment):
                 log.append(.wakeAt(moment))
             case .end(let reason, let code):
                 log.append(.end(reason: reason, fault: code))
                 if reason != .finished && reason != .exited {
-                    fail(NuxieMachineEdgeFault(code: code ?? "machine.fault", detail: "the record ended in a fault"))
+                    fail(NuxieMachineEdgeFault(code: code ?? "machine.fault",
+                        detail: "the record ended in a fault"), &delivery)
                 }
             case .note(let note):
                 log.append(.note(note))
             case .handOver, .unknown:
-                fail(NuxieMachineEdgeFault(code: "edge.unhandled-row", detail: "\(row)"))
+                fail(NuxieMachineEdgeFault(code: "edge.unhandled-row", detail: "\(row)"), &delivery)
             }
         }
     }
 
     /// A `scene` write: the value lands in the Screen's cell
     /// `state/<cell>` and shows on the next step.
-    private func write(instance: UInt64, cell: String, value: NuxieMachineValue) async {
+    private func write(instance: UInt64, cell: String, value: NuxieMachineValue, _ delivery: inout Delivery) async {
         guard instance == self.instance else {
             fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
-                detail: "a write to \(cell) of instance \(instance), which is not presented"))
+                detail: "a write to \(cell) of instance \(instance), which is not presented"), &delivery)
             return
         }
         let path = "state/\(cell)"
@@ -372,17 +437,18 @@ package actor NuxieMachineEdge {
         case (.number, .number(let number)): mutation = .setNumber(instance: root, path: path, value: Float(number))
         case (.text, .text(let text)): mutation = .setString(instance: root, path: path, value: Data(text.utf8))
         case (nil, _):
-            fail(NuxieMachineEdgeFault(code: "edge.unknown-cell", detail: "the Screen has no cell \(cell) for \(value)"))
+            fail(NuxieMachineEdgeFault(code: "edge.unknown-cell",
+                detail: "the Screen has no cell \(cell) for \(value)"), &delivery)
             return
         default:
             fail(NuxieMachineEdgeFault(code: "edge.unknown-cell",
-                detail: "the Screen's cell \(cell) does not hold a value like \(value)"))
+                detail: "the Screen's cell \(cell) does not hold a value like \(value)"), &delivery)
             return
         }
         do {
             _ = try await runtime.mutateViewModel([mutation])
         } catch {
-            fail(NuxieMachineEdgeFault(code: "engine.write", detail: "\(cell): \(error)"))
+            fail(NuxieMachineEdgeFault(code: "engine.write", detail: "\(cell): \(error)"), &delivery)
             return
         }
         log.append(.write(cell: cell, value: value))
@@ -390,21 +456,22 @@ package actor NuxieMachineEdge {
 
     /// A `call` row, through the store. An awaited call's outcome waits for
     /// the next frame.
-    private func perform(_ call: NuxieMachineCall) async {
+    private func perform(_ call: NuxieMachineCall, _ delivery: inout Delivery) async {
         log.append(.call(call))
         guard call.place == .client else {
             fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
-                detail: "\(call.externName) runs on the server, which this edge cannot reach"))
+                detail: "\(call.externName) runs on the server, which this edge cannot reach"), &delivery)
             return
         }
         let outcome: String
         do {
             outcome = try await store.perform(call)
         } catch NuxieMachineStoreFault.unknownExtern(let name) {
-            fail(NuxieMachineEdgeFault(code: "store.unknown-extern", detail: "the store cannot perform \(name)"))
+            fail(NuxieMachineEdgeFault(code: "store.unknown-extern",
+                detail: "the store cannot perform \(name)"), &delivery)
             return
         } catch {
-            fail(NuxieMachineEdgeFault(code: "store.failed", detail: "\(call.externName): \(error)"))
+            fail(NuxieMachineEdgeFault(code: "store.failed", detail: "\(call.externName): \(error)"), &delivery)
             return
         }
         guard fault == nil else { return }
@@ -417,21 +484,23 @@ package actor NuxieMachineEdge {
 
     /// A call the session refused. A call that ended the session still
     /// left rows, which end in its fault, and they are applied first.
-    private func refused(_ error: Error, doing what: String, now: Int64) async {
+    private func refused(_ error: Error, doing what: String, now: Int64, _ delivery: inout Delivery) async {
         if case NuxieMachineError.faulted(let rows) = error {
-            await apply(rows, now: now)
+            await apply(rows, now: now, &delivery)
         }
         let code = (error as? NuxieMachineError)?.code ?? "unknown"
-        fail(NuxieMachineEdgeFault(code: "machine.\(code)", detail: "the session refused \(what): \(error)"))
+        fail(NuxieMachineEdgeFault(code: "machine.\(code)", detail: "the session refused \(what): \(error)"), &delivery)
     }
 
-    /// The one path for faults: the edge stops, records the code, and tells
-    /// its owner to dismiss. The first fault is the one kept.
-    private func fail(_ fault: NuxieMachineEdgeFault) {
+    /// The one path for faults: the edge stops, records the code, and the
+    /// delivery's dismissal becomes the fault's. The first fault is the one
+    /// kept; a later one, in this delivery or after the edge stopped,
+    /// changes nothing.
+    private func fail(_ fault: NuxieMachineEdgeFault, _ delivery: inout Delivery) {
         guard self.fault == nil else { return }
         self.fault = fault
         answers = []
-        dismiss(.fault(fault))
+        delivery.faulted(fault)
     }
 
     // MARK: Opening
