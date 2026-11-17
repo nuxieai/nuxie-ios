@@ -96,11 +96,15 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
 
             // 3. A pointer on the buy button: one awaited purchase reaches
             // the store, which answers `failed`; the button is busy, then not,
-            // and the error line shows.
+            // and the error line shows. The answer is applied after the step
+            // of the first frame that begins after it arrived, so the frame
+            // after the tap draws the busy button whenever the store answers.
+            // Once it has answered, two more frames apply and show it.
             written = await run.edge.log.count
             let buyTap = try await run.tap(Box.buy, framesAfter: 1)
             XCTAssertEqual(buyTap, ["tap_buy"])
             let buying = try await run.frame("buying")
+            await run.edge.storeAnswered()
             try await run.settle(frames: 2)
             let failed = try await run.frame("failed")
             let calls = run.store.calls
@@ -153,6 +157,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try await run.settle()
             var tapped = try await run.tap(Box.monthly)
             tapped += try await run.tap(Box.buy)
+            // The store's answer is applied in the frames of the next tap.
+            await run.edge.storeAnswered()
             tapped += try await run.tap(Box.details)
             XCTAssertEqual(tapped, ["tap_monthly", "tap_buy", "tap_details"])
             let written = await run.edge.log.count
@@ -210,6 +216,10 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try await run.settle()
             let restoreTap = try await run.tap(Box.restore)
             XCTAssertEqual(restoreTap, ["tap_restore"])
+            // The store's refusal arrives as an answer, which the next frame
+            // delivers.
+            await run.edge.storeAnswered()
+            try await run.settle(frames: 1)
             let recorded = await run.edge.fault
             let fault = try XCTUnwrap(recorded)
             XCTAssertEqual(fault.code, "store.unknown-extern")
