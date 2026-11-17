@@ -4,7 +4,9 @@ import Foundation
 /// Where the edge performs the machine's `call` rows that a store answers.
 package protocol NuxieMachineStore: Sendable {
     /// Perform `call` and give the name of its extern's outcome. A call the
-    /// store cannot perform throws, and the edge faults.
+    /// store cannot perform throws, and the edge faults. The edge runs this
+    /// in a task of its own and never waits for it inside a delivery; the
+    /// answer is delivered at the next frame after it arrives.
     func perform(_ call: NuxieMachineCall) async throws -> String
 }
 
