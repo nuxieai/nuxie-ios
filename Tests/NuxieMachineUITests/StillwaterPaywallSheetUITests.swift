@@ -92,6 +92,32 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         _ = try capture("2-after-swipe", expecting: ["Finish onboarding"])
     }
 
+    func testASwipeThePersonLetsGoOfKeepsTheSheet() throws {
+        let app = launch()
+        let screen = try openPaywall(app)
+        let resting = screen.frame
+
+        // A short, slow pull that the person lets go of: UIKit cancels the
+        // dismissal and the sheet settles back. The machine hears nothing.
+        let start = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: resting.midX, dy: resting.minY + 12))
+        let short = start.withOffset(CGVector(dx: 0, dy: 90))
+        start.press(forDuration: 0.1, thenDragTo: short, withVelocity: .slow, thenHoldForDuration: 0.4)
+        let deadline = Date().addingTimeInterval(10)
+        while screen.exists, screen.frame != resting, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertTrue(screen.exists, "the swipe took the sheet")
+        XCTAssertEqual(screen.frame, resting, "the sheet did not settle back")
+        waitFor(screen, valueContaining: "Record: open.")
+        _ = try capture("1-after-cancelled-swipe", expecting: ["Ten quiet minutes", "Continue"])
+
+        // The machine's own dismissal still takes the sheet.
+        tap(Box.close, on: screen, app: app)
+        waitUntilGone(screen)
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, wakes at ")
+    }
+
     // MARK: Driving the host
 
     private func launch() -> XCUIApplication {

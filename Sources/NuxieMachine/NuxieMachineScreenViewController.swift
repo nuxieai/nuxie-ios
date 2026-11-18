@@ -9,9 +9,11 @@ import UIKit
 ///
 /// Each display tick is one frame: the pointers that arrived, the edge's
 /// frame (engine step, engine events to the machine, writes to cells, the
-/// store's answers), then a draw. The Screen is laid out by the engine at
-/// the view's size, as the SDK's Screens are, and drawn at the display's
-/// scale. One frame is in flight at a time, and a frame's draw waits for the
+/// store's answers), then a draw. Frames run in the Screen's lane
+/// ([`inLane`]), where the owner makes its own calls to the edge, so the
+/// edge hears a frame, a wake and a close in the order they were asked for.
+/// The Screen is laid out by the engine at the view's size, as the SDK's
+/// Screens are, and drawn at the display's scale. One frame is in flight at a time, and a frame's draw waits for the
 /// GPU, so a frame never starts before the last one is on screen.
 ///
 /// The loop rests when nothing asks for a frame: the engine's step says no
@@ -52,6 +54,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
     private var frameInFlight = false
     private var frameRequested = true
     private var stopped = false
+    /// Whether the lane is held, and the calls waiting for it in order.
+    private var laneHeld = false
+    private var laneWaiting: [CheckedContinuation<Void, Never>] = []
     /// The display time of the last frame; none after a rest, so the frame
     /// that wakes the loop advances by zero, not by the time it rested.
     private var lastTimestamp: CFTimeInterval?
@@ -120,6 +125,28 @@ package final class NuxieMachineScreenViewController: UIViewController {
         displayLink?.isPaused = false
     }
 
+    /// Run `body` holding the Screen's lane, after every call asked for
+    /// before it. Frames run in it, and the owner makes its calls to the
+    /// edge in it, so they reach the edge one at a time and in order. The
+    /// lane outlives the loop: an owner may still call the edge after
+    /// [`stop`].
+    package func inLane<Value>(_ body: () async throws -> Value) async rethrows -> Value {
+        if laneHeld {
+            await withCheckedContinuation { laneWaiting.append($0) }
+        } else {
+            laneHeld = true
+        }
+        defer {
+            // The next waiting call takes it over still held.
+            if laneWaiting.isEmpty {
+                laneHeld = false
+            } else {
+                laneWaiting.removeFirst().resume()
+            }
+        }
+        return try await body()
+    }
+
     /// Stop the loop for good. A frame in flight finishes; none follows.
     package func stop() {
         stopped = true
@@ -139,7 +166,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
-            await self?.runFrame(pointers: pointers, elapsedSeconds: elapsed)
+            guard let self else { return }
+            await self.inLane { await self.runFrame(pointers: pointers, elapsedSeconds: elapsed) }
         }
     }
 
