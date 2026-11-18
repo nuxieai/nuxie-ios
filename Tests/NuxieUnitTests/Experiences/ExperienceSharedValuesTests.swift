@@ -571,17 +571,19 @@ final class ExperienceSharedValuesTests: XCTestCase {
         let movedInk = after.pixels[(movedBand.lowerBound * 393 * 4)..<(movedBand.upperBound * 393 * 4)]
         XCTAssertTrue(pixelsMatchWithinAntialiasing(Data(originalInk), Data(movedInk)),
             "Device's unchanged ink moves by exactly the source's safe-area delta")
+        XCTAssertFalse(pixelsMatchWithinAntialiasing(after.pixels, before.pixels),
+            "The tolerance still tells the source's env update apart")
         let secondPixels = try await renderCopyPixels(second)
-        XCTAssertEqual(secondPixels, before.pixels, "The other screen retains its own environment")
+        XCTAssertTrue(pixelsMatchWithinAntialiasing(secondPixels, before.pixels), "The other screen retains its own environment")
         try await updateFixtureEnvironment(second, reduceMotion: true,
             safeArea: .init(top: 31, bottom: 0, left: 0, right: 0))
         _ = try await first.step(elapsedSeconds: 0)
         let retained = try await renderCopyPixels(first)
-        XCTAssertEqual(retained, after.pixels, "The other screen's env update cannot shift this screen")
+        XCTAssertTrue(pixelsMatchWithinAntialiasing(retained, after.pixels), "The other screen's env update cannot shift this screen")
         try await updateFixtureEnvironment(first, reduceMotion: false, safeArea: .zero)
         _ = try await first.step(elapsedSeconds: 0)
         let restored = try await renderCopyPixels(first)
-        XCTAssertEqual(restored, before.pixels, "A screen restores its own initial environment")
+        XCTAssertTrue(pixelsMatchWithinAntialiasing(restored, before.pixels), "A screen restores its own initial environment")
     }
 
     func testPublishedCopyDrawsSelectedValueOnItsFirstFrame() async throws {
@@ -690,22 +692,14 @@ final class ExperienceSharedValuesTests: XCTestCase {
             XCTAssertTrue(up.pointerHits.contains(where: { $0 != .none }))
             for _ in 0..<3 { _ = try await screen.step(elapsedSeconds: 1.0 / 60.0) }
             let next = try await renderCopyPixels(screen)
-            XCTAssertNotEqual(previous, next, "The private copy redraws its count after each tap")
+            XCTAssertFalse(pixelsMatchWithinAntialiasing(previous, next), "The private copy redraws its count after each tap")
             let otherPixels = try await renderCopyPixels(other)
-            XCTAssertEqual(otherPixels, untouched, "Another copy sharing the run keeps its own counter")
+            XCTAssertTrue(pixelsMatchWithinAntialiasing(otherPixels, untouched), "Another copy sharing the run keeps its own counter")
             let runAfter = try await run.journeyValues()
             XCTAssertEqual(runAfter, runBefore, "The private counter does not change shared run values")
             previous = next
         }
     }
-    /// Two frames of the same content agree when every channel is within two units.
-    /// Metal's antialiased edges can round by that much between draws of identical
-    /// content (an integer translation, or a later draw in the same process). A
-    /// different value or item changes whole glyphs, far beyond two units.
-    private func pixelsMatchWithinAntialiasing(_ first: Data, _ second: Data) -> Bool {
-        first.count == second.count && zip(first, second).allSatisfy { abs(Int($0) - Int($1)) <= 2 }
-    }
-
     private func renderedInkBands(_ pixels: Data) -> [Range<Int>] {
         let background = Array(pixels.suffix(4))
         let rows = (0..<852).filter { y in
