@@ -79,6 +79,44 @@ package enum NuxieMachineEdgeDismissal: Equatable, Sendable {
     case fault(NuxieMachineEdgeFault)
 }
 
+/// A row the edge's owner performs with its window, as the edge applied it.
+package enum NuxieMachineHostRow: Equatable, Sendable {
+    /// Show `shown` with `presentation`.
+    case present(NuxieMachineShown, presentation: NuxieMachinePresentation)
+    /// The machine popped `shown`: it is no longer shown.
+    case pop(NuxieMachineShown)
+    /// The machine's `dismiss`, with its reason or none.
+    case dismiss(reason: String?)
+    /// The record asks for a `wake` at this moment, or at none.
+    case wakeAt(Int64?)
+    /// The record ended normally: finished or exited.
+    case end(NuxieMachineEnding)
+}
+
+/// What one delivery tells the edge's owner, once, when it is over: the
+/// rows the owner performs, in order, or the fault that stopped the edge.
+/// A fault replaces the delivery's rows, since nothing the owner would do
+/// for them survives it.
+package enum NuxieMachineEdgeReport: Equatable, Sendable {
+    /// The delivery's rows for the owner, never empty. At most one is a
+    /// `dismiss`: the machine's first in the delivery.
+    case rows([NuxieMachineHostRow])
+    /// The edge stopped on this fault in the delivery.
+    case fault(NuxieMachineEdgeFault)
+
+    /// The one dismissal this report tells, if any: the fault's, or the
+    /// machine's `dismiss`.
+    package var dismissal: NuxieMachineEdgeDismissal? {
+        switch self {
+        case .fault(let fault):
+            return .fault(fault)
+        case .rows(let rows):
+            for case .dismiss(let reason) in rows { return .machine(reason: reason) }
+            return nil
+        }
+    }
+}
+
 /// What stopped the edge: a code, and what the edge was doing.
 package struct NuxieMachineEdgeFault: Error, Equatable, Sendable {
     /// `machine.<status>` for a call the session refused, the row's own code
@@ -169,8 +207,9 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 /// `scene` write to its cell; start each `call` at the store; record
 /// `present`, `pop`, `dismiss`, `end`, `wake at` and `note`. A write shows on
 /// the next step. The edge has no window and no clock: its owner draws the
-/// Screen, schedules frames, presents what the log records and delivers
-/// `wake` when the moment comes.
+/// Screen, schedules frames, performs the rows each delivery reports and
+/// delivers `wake` when the moment comes. The log is the record of what the
+/// edge did, for checks; an owner acts only on what it is told.
 ///
 /// Two rules make a delivery (a start, a frame, a reported event, a close,
 /// a store's answer) one whole thing:
@@ -212,13 +251,15 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 /// ([`fail`]): the edge stops and records the code. A stopped edge, or a
 /// closed one, delivers nothing more.
 ///
-/// The owner hears at most one dismissal per delivery, told once when the
-/// delivery is over ([`deliver`], the only place the owner is called). Rows
-/// and faults decide it as they apply ([`Delivery`]): a fault in the
-/// delivery, from the machine, the store, the engine or this edge, makes it
-/// the fault's dismissal, whatever normal dismissal came before it;
-/// otherwise it is the machine's first `dismiss`. The log keeps every row
-/// either way.
+/// The owner hears one report per delivery that did something for it, told
+/// once when the delivery is over ([`deliver`], the only place the owner is
+/// called): the rows it performs (`present`, `pop`, `dismiss`, `wake at`,
+/// a normal `end`), in order, or the fault. Rows and faults decide it as
+/// they apply ([`Delivery`]): a fault in the delivery, from the machine, the
+/// store, the engine or this edge, makes the report the fault, whatever rows
+/// came before it, so every fault reaches the owner and as the fault.
+/// Otherwise the owner hears at most one dismissal: the machine's first
+/// `dismiss`. The log keeps every row either way.
 package actor NuxieMachineEdge {
     /// The engine's Screen, for its owner to draw.
     package nonisolated let runtime: NuxieNativeRuntime
@@ -229,7 +270,7 @@ package actor NuxieMachineEdge {
     /// The Screen's cells, by name, with the kind of value each holds.
     private let cells: [String: CellKind]
     /// The owner, told only by [`deliver`].
-    private let owner: @Sendable (NuxieMachineEdgeDismissal) -> Void
+    private let owner: @Sendable (NuxieMachineEdgeReport) -> Void
 
     /// The presented instance of the route, while it is presented, with its
     /// showing. A host names it when the person closes it ([`closed`]).
@@ -286,34 +327,45 @@ package actor NuxieMachineEdge {
     /// What one delivery tells the owner, decided as its rows and faults
     /// apply and told once when it is over.
     private struct Delivery {
-        private(set) var dismissal: NuxieMachineEdgeDismissal?
+        private var rows: [NuxieMachineHostRow] = []
+        private var fault: NuxieMachineEdgeFault?
 
         /// Only [`deliver`] makes one.
         fileprivate init(_ turn: Turn) {}
 
-        /// The machine's `dismiss` row. The first one stands, and never
-        /// over a fault.
-        mutating func dismissed(reason: String?) {
-            if dismissal == nil { dismissal = .machine(reason: reason) }
+        /// A row the owner performs. The machine's first `dismiss` stands:
+        /// a later one in the same delivery is not told again.
+        mutating func told(_ row: NuxieMachineHostRow) {
+            if case .dismiss = row, rows.contains(where: { if case .dismiss = $0 { true } else { false } }) {
+                return
+            }
+            rows.append(row)
         }
 
-        /// The fault that stopped the edge in this delivery, over any
-        /// normal dismissal before it.
+        /// The fault that stopped the edge in this delivery, over every row
+        /// before it.
         mutating func faulted(_ fault: NuxieMachineEdgeFault) {
-            if case .fault? = dismissal { return }
-            dismissal = .fault(fault)
+            if self.fault == nil { self.fault = fault }
+        }
+
+        /// What the owner hears: the fault, the rows, or nothing.
+        var report: NuxieMachineEdgeReport? {
+            if let fault { return .fault(fault) }
+            return rows.isEmpty ? nil : .rows(rows)
         }
     }
 
     /// Compile the plan into a session, and open the Screen on the engine
     /// with its root view model bound and its System fonts supplied by this
-    /// device. `onDismiss` hears at most one dismissal per delivery: the
-    /// fault's when the delivery ended in one, otherwise the machine's.
+    /// device. `onReport` hears one report per delivery that did something
+    /// for it: the fault when the delivery ended in one, otherwise the rows
+    /// it performs, in order. It is called inside the edge's turn, so it
+    /// must not wait on the edge.
     package init(
         plan: NuxieMachinePlanSource,
         screen: NuxieMachineScreenSource,
         store: any NuxieMachineStore,
-        onDismiss: @escaping @Sendable (NuxieMachineEdgeDismissal) -> Void
+        onReport: @escaping @Sendable (NuxieMachineEdgeReport) -> Void
     ) async throws {
         let session = try NuxieMachineSession(
             files: plan.files.map { ($0.path, $0.text) }, root: plan.root,
@@ -332,7 +384,7 @@ package actor NuxieMachineEdge {
         self.runtime = runtime
         self.route = screen.route
         self.store = store
-        self.owner = onDismiss
+        self.owner = onReport
     }
 
     /// The host saw the event `event` at `now` (milliseconds since the Unix
@@ -508,8 +560,8 @@ package actor NuxieMachineEdge {
     }
 
     /// One delivery, inside a turn, unless the edge has stopped or closed;
-    /// then the owner is told the one dismissal it decided, if any. The one
-    /// place the owner is called, and the one place a [`Delivery`] is made.
+    /// then the owner is told the report it decided, if any. The one place
+    /// the owner is called, and the one place a [`Delivery`] is made.
     private func deliver<Value>(
         _ turn: Turn,
         stopped: Value,
@@ -518,8 +570,8 @@ package actor NuxieMachineEdge {
         guard fault == nil, !closedScreen else { return stopped }
         var delivery = Delivery(turn)
         let result = await body(&delivery)
-        if let dismissal = delivery.dismissal {
-            owner(dismissal)
+        if let report = delivery.report {
+            owner(report)
         }
         return result
     }
@@ -645,20 +697,23 @@ package actor NuxieMachineEdge {
                     return
                 }
                 showings += 1
-                shown = NuxieMachineShown(showing: showings, instance: instance)
+                let presented = NuxieMachineShown(showing: showings, instance: instance)
+                shown = presented
                 log.append(.present(route: route, instance: instance, presentation: presentation))
+                delivery.told(.present(presented, presentation: presentation))
             case .pop(let instance):
-                guard instance == shown?.instance else {
+                guard let popped = shown, instance == popped.instance else {
                     fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
                         detail: "pop \(instance), which is not presented"), &delivery)
                     return
                 }
                 shown = nil
                 log.append(.pop(instance: instance))
+                delivery.told(.pop(popped))
             case .dismiss(let reason):
                 shown = nil
                 log.append(.dismiss(reason: reason))
-                delivery.dismissed(reason: reason)
+                delivery.told(.dismiss(reason: reason))
             case .sceneSet(let instance, let object, let key, let value):
                 await write(instance: instance, cell: nuxieMachineCellName(object: object, key: key), value: value,
                             &delivery)
@@ -666,15 +721,18 @@ package actor NuxieMachineEdge {
                 perform(call, &delivery)
             case .wakeAt(let moment):
                 log.append(.wakeAt(moment))
+                delivery.told(.wakeAt(moment))
             case .end(let reason, let code):
                 // The record's unanswered calls are retired with it: the
                 // machine drops them, and their answers are dropped here.
                 unanswered.removeAll()
                 log.append(.end(reason: reason, fault: code))
-                if reason != .finished && reason != .exited {
+                guard reason == .finished || reason == .exited else {
                     fail(NuxieMachineEdgeFault(code: code ?? "machine.fault",
                         detail: "the record ended in a fault"), &delivery)
+                    return
                 }
+                delivery.told(.end(reason))
             case .note(let note):
                 log.append(.note(note))
             case .handOver, .unknown:
@@ -753,7 +811,7 @@ package actor NuxieMachineEdge {
     }
 
     /// The one path for faults: the edge stops, records the code, and the
-    /// delivery's dismissal becomes the fault's. The first fault is the one
+    /// delivery's report becomes the fault. The first fault is the one
     /// kept; a later one in the same delivery changes nothing, and a stopped
     /// edge delivers nothing more. Answers waiting for a frame go with it.
     private func fail(_ fault: NuxieMachineEdgeFault, _ delivery: inout Delivery) {

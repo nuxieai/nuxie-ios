@@ -100,9 +100,9 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         started = true
         let edge: NuxieMachineEdge
         do {
-            // Dismissals are read from the edge's log in order with every
-            // other row; a fault is read from the edge itself.
-            edge = try await NuxieMachineEdge(plan: plan, screen: screen, store: store, onDismiss: { _ in })
+            // What the edge did is read from its log in order; a fault is
+            // read from the edge itself.
+            edge = try await NuxieMachineEdge(plan: plan, screen: screen, store: store, onReport: { _ in })
         } catch {
             let fault = error as? NuxieMachineEdgeFault
                 ?? NuxieMachineEdgeFault(code: "edge.open", detail: "\(error)")
