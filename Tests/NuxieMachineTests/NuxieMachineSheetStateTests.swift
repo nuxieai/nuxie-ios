@@ -47,7 +47,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.dueWake(at: evening), evening)
         XCTAssertEqual(state.handle(.wakeTaken(evening)), [.schedule(nil)])
         XCTAssertEqual(state.record, .open(wakeAt: nil))
-        XCTAssertEqual(state.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork)])
+        XCTAssertEqual(state.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork), .release])
         XCTAssertEqual(state.record, .faulted(noArtwork))
         XCTAssertEqual(state.sheet, .none)
         XCTAssertNil(state.dueWake(at: .max))
@@ -59,7 +59,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         let step = NuxieMachineEdgeFault(code: "engine.step", detail: "closed")
         XCTAssertEqual(state.handle(.report(.fault(step))), [.schedule(nil), .stop(step), .dismiss])
         XCTAssertEqual(state.sheet, .leaving(paywall))
-        XCTAssertEqual(state.handle(.dismissed), [])
+        XCTAssertEqual(state.handle(.dismissed), [.release])
         XCTAssertEqual(state.sheet, .none)
         XCTAssertEqual(state.record, .faulted(step))
     }
@@ -107,7 +107,8 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.handle(.swipeEnded(completed: true)), [.close(paywall)])
         XCTAssertEqual(state.sheet, .none)
         XCTAssertEqual(state.handle(.report(.rows([.dismiss(reason: "paywall_closed")]))), [])
-        XCTAssertEqual(state.handle(.report(.rows([.pop(paywall), .end(.finished)]))), [.schedule(nil), .stop(nil)])
+        XCTAssertEqual(state.handle(.report(.rows([.pop(paywall), .end(.finished)]))),
+                       [.schedule(nil), .stop(nil), .release])
         XCTAssertEqual(state.sheet, .none)
         XCTAssertEqual(state.record, .ended)
     }
@@ -143,7 +144,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.handle(.report(.rows([.present(paywall, presentation: .sheet), .wakeAt(evening)]))),
                        [.present(paywall), .schedule(evening)])
         let noHost = NuxieMachineEdgeFault(code: "edge.no-host", detail: "the host is off screen")
-        XCTAssertEqual(state.handle(.presentFailed(noHost)), [.schedule(nil), .stop(noHost)])
+        XCTAssertEqual(state.handle(.presentFailed(noHost)), [.schedule(nil), .stop(noHost), .release])
         XCTAssertEqual(state.record, .faulted(noHost))
         XCTAssertEqual(state.sheet, .none)
 
@@ -164,7 +165,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         let effects = state.handle(.report(.rows([.present(paywall, presentation: .push)])))
         guard case .faulted(let fault) = state.record else { return XCTFail("\(state.record)") }
         XCTAssertEqual(fault.code, "edge.unsupported-presentation")
-        XCTAssertEqual(effects, [.schedule(nil), .stop(fault)])
+        XCTAssertEqual(effects, [.schedule(nil), .stop(fault), .release])
 
         var twice = sheetUp()
         _ = twice.handle(.report(.rows([.present(NuxieMachineShown(showing: 2, instance: 3), presentation: .sheet)])))
@@ -184,7 +185,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.record, .open(wakeAt: evening))
         XCTAssertEqual(state.handle(.report(.rows([.wakeAt(nil)]))), [.schedule(nil)])
         XCTAssertNil(state.dueWake(at: .max))
-        XCTAssertEqual(state.handle(.report(.rows([.end(.exited)]))), [.schedule(nil), .stop(nil)])
+        XCTAssertEqual(state.handle(.report(.rows([.end(.exited)]))), [.schedule(nil), .stop(nil), .release])
         XCTAssertEqual(state.record, .ended)
         XCTAssertEqual(state.handle(.report(.fault(noArtwork))), [], "an ended record stays ended")
         XCTAssertEqual(state.record, .ended)
@@ -198,6 +199,134 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.handle(.report(.rows([.end(.finished)]))), [.schedule(nil), .stop(nil)])
         XCTAssertEqual(state.handle(.swipeEnded(completed: false)), [.dismiss])
         XCTAssertEqual(state.sheet, .leaving(paywall))
+        XCTAssertEqual(state.handle(.dismissed), [.release])
+    }
+
+    // MARK: Letting go (review round 2)
+
+    /// Every event a presenter can still hear once it has let go. None of
+    /// them says `release` again or moves the record.
+    private func lateEvents() -> [State.Event] {
+        [.dismissed, .presented, .swipeBegan, .swipeEnded(completed: true), .swipeEnded(completed: false),
+         .report(.rows([.dismiss(reason: nil), .wakeAt(evening), .end(.finished)])),
+         .report(.fault(noArtwork)), .hostFault(noArtwork), .wakeTaken(evening), .started,
+         .presentFailed(noArtwork)]
+    }
+
+    private func assertReleasedForGood(_ state: State, file: StaticString = #filePath, line: UInt = #line) {
+        var state = state
+        XCTAssertTrue(state.released, file: file, line: line)
+        let record = state.record
+        for event in lateEvents() {
+            XCTAssertFalse(state.handle(event).contains(.release), "\(event)", file: file, line: line)
+        }
+        XCTAssertEqual(state.record, record, file: file, line: line)
+    }
+
+    /// The record ends while the sheet is up: the edge stops at once, and
+    /// the presenter lets go only once UIKit has finished the dismissal.
+    func testAnEndReleasesOnceTheDismissalIsOver() {
+        var state = sheetUp()
+        XCTAssertEqual(state.handle(.report(.rows([.end(.finished)]))), [.schedule(nil), .stop(nil), .dismiss])
+        XCTAssertFalse(state.released, "the sheet is still leaving")
+        XCTAssertEqual(state.handle(.dismissed), [.release])
+        assertReleasedForGood(state)
+    }
+
+    /// The person's swipe takes the sheet, the machine hears `closed`, and
+    /// its answer ends the record: the presenter lets go then, with the end.
+    func testASwipeThatTookTheSheetThenTheEndReleasesWithTheEnd() {
+        var state = sheetUp()
+        _ = state.handle(.swipeBegan)
+        XCTAssertEqual(state.handle(.swipeEnded(completed: true)), [.close(paywall)])
+        XCTAssertFalse(state.released, "the record is still open")
+        XCTAssertEqual(state.handle(.report(.rows([.pop(paywall), .end(.finished)]))),
+                       [.schedule(nil), .stop(nil), .release])
+        assertReleasedForGood(state)
+    }
+
+    /// The record ends while the person swipes, and the swipe takes the
+    /// sheet: the presenter lets go when the swipe is over.
+    func testAnEndDuringASwipeThatTakesTheSheetReleasesAfterIt() {
+        var state = sheetUp()
+        _ = state.handle(.swipeBegan)
+        XCTAssertEqual(state.handle(.report(.rows([.end(.finished)]))), [.schedule(nil), .stop(nil)])
+        XCTAssertFalse(state.released, "UIKit is still running the swipe")
+        XCTAssertEqual(state.handle(.swipeEnded(completed: true)), [.release])
+        assertReleasedForGood(state)
+    }
+
+    /// A fault while the sheet is still going up: it goes once it is up,
+    /// and the presenter lets go after that.
+    func testAFaultWhileTheSheetArrivesReleasesAfterItHasGone() {
+        var state = State()
+        _ = state.handle(.started)
+        _ = state.handle(.report(.rows([.present(paywall, presentation: .sheet)])))
+        XCTAssertEqual(state.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork)])
+        XCTAssertFalse(state.released)
+        XCTAssertEqual(state.handle(.presented), [.dismiss])
+        XCTAssertFalse(state.released)
+        XCTAssertEqual(state.handle(.dismissed), [.release])
+        assertReleasedForGood(state)
+    }
+
+    /// A fault while the person swipes: the presenter lets go when the swipe
+    /// takes the sheet, or, when the person lets go of it, after the
+    /// dismissal the fault asked for.
+    func testAFaultDuringASwipeReleasesWhenTheSheetHasGone() {
+        let step = NuxieMachineEdgeFault(code: "engine.step", detail: "closed")
+        var taken = sheetUp()
+        _ = taken.handle(.swipeBegan)
+        XCTAssertEqual(taken.handle(.report(.fault(step))), [.schedule(nil), .stop(step)])
+        XCTAssertEqual(taken.handle(.swipeEnded(completed: true)), [.release])
+        assertReleasedForGood(taken)
+
+        var kept = sheetUp()
+        _ = kept.handle(.swipeBegan)
+        _ = kept.handle(.report(.fault(step)))
+        XCTAssertEqual(kept.handle(.swipeEnded(completed: false)), [.dismiss])
+        XCTAssertFalse(kept.released)
+        XCTAssertEqual(kept.handle(.dismissed), [.release])
+        assertReleasedForGood(kept)
+    }
+
+    /// A fault with no sheet (the evening wake's route has no artwork), a
+    /// presentation that failed, and an edge that never opened: the
+    /// presenter lets go with the fault.
+    func testAFaultWithNoSheetReleasesWithTheFault() {
+        var waiting = waitingForEvening()
+        XCTAssertEqual(waiting.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork), .release])
+        assertReleasedForGood(waiting)
+
+        var failed = State()
+        _ = failed.handle(.started)
+        _ = failed.handle(.report(.rows([.present(paywall, presentation: .sheet)])))
+        let noHost = NuxieMachineEdgeFault(code: "edge.no-host", detail: "the host is off screen")
+        XCTAssertEqual(failed.handle(.presentFailed(noHost)), [.schedule(nil), .stop(noHost), .release])
+        assertReleasedForGood(failed)
+
+        var neverOpened = State()
+        let open = NuxieMachineEdgeFault(code: "edge.open", detail: "the plan did not compile")
+        XCTAssertEqual(neverOpened.handle(.hostFault(open)), [.schedule(nil), .stop(open), .release])
+        assertReleasedForGood(neverOpened)
+    }
+
+    /// An open record keeps everything, with no sheet as with one: after
+    /// "Not now", across its wake, and while nothing is presented.
+    func testAnOpenRecordWithNoSheetIsNotReleased() {
+        var state = waitingForEvening()
+        XCTAssertFalse(state.released)
+        XCTAssertEqual(state.handle(.wakeTaken(evening)), [.schedule(nil)])
+        XCTAssertEqual(state.handle(.report(.rows([.wakeAt(evening + 1)]))), [.schedule(evening + 1)])
+        XCTAssertEqual(state.handle(.dismissed), [])
+        XCTAssertEqual(state.handle(.swipeEnded(completed: true)), [])
+        XCTAssertEqual(state.sheet, .none)
+        XCTAssertEqual(state.record, .open(wakeAt: evening + 1))
+        XCTAssertFalse(state.released)
+
+        var started = State()
+        XCTAssertEqual(started.handle(.started), [])
+        XCTAssertFalse(started.released)
     }
 }
 #endif

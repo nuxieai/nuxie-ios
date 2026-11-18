@@ -1179,8 +1179,9 @@ private final class Owner: @unchecked Sendable {
 // MARK: - The fixture
 
 /// `Fixtures/stillwater-paywall`: the published Screen, Stillwater's four
-/// `.nux` files, and the System fonts the publisher's report names.
-private struct Fixture {
+/// `.nux` files, and the System fonts the publisher's report names. The
+/// presenter's checks open the same Screen.
+struct Fixture {
     let plan: NuxieMachinePlanSource
     let screen: NuxieMachineScreenSource
 

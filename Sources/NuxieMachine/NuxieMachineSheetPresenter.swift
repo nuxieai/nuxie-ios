@@ -44,9 +44,23 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   own moment before any frame or close that comes after it, and a timer
 ///   that fires late (the app was suspended) catches up one wake at a time.
 ///   Waits that outlive the app are not built.
-/// - `end` stops the loop, cancels the timer and releases the session.
+/// - `end` stops the loop, cancels the timer and closes the edge.
 /// - Every fault takes one path: the sheet is dismissed, the code is logged,
 ///   and everything stops.
+///
+/// What the presenter owns has one end of life. The Screen with its edge
+/// and session, the wake timer and the display loop are let go of exactly
+/// once, when the state says `release`: the record is ended or faulted and
+/// no sheet is on screen or in a transition. An open record keeps them all,
+/// with no sheet too (waiting for its wake after "Not now"). The presenter
+/// lets go at once, and work already in the Screen's lane (the edge's
+/// close among it) holds what it uses until it is over, so they are freed
+/// when the lane drains. A presenter freed while its record is still open
+/// leaves nothing scheduled behind: its wake timer is cancelled and its
+/// Screen's loop stopped ([`NuxieMachineSheetSchedule`]). Events that
+/// arrive after the release (a UIKit completion, a late report) find a
+/// final state and change nothing, and the status keeps the record's end
+/// and the last plan read.
 ///
 /// Where the presenter is lives in one [`NuxieMachineSheetState`]; every
 /// event (an edge report, a UIKit transition's start or end, the timer, a
@@ -81,9 +95,14 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// Events waiting for [`send`], which handles one at a time.
     private var events: [NuxieMachineSheetState.Event] = []
     private var sending = false
-    private var wakeTimer: Timer?
+    /// The wake timer and the Screen's loop, which outlive nothing of the
+    /// presenter's.
+    private let scheduled = NuxieMachineSheetSchedule()
     private var started = false
     private let logger = Logger(subsystem: "io.nuxie.sdk", category: "NuxieMachine")
+
+    /// The wake timer while one is set, for checks.
+    package var scheduledWake: (any DispatchSourceTimer)? { scheduled.wake }
 
     /// A presenter that presents from `host` and tells `onStatus` what the
     /// host can show.
@@ -134,6 +153,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             await readPlan()
         }
         guard case .open = state.record else { return }
+        scheduled.screen = controller
         controller.start()
     }
 
@@ -175,6 +195,13 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             controller.stop()
             let edge = controller.edge
             Task { await controller.inLane { try? await edge.close() } }
+        case .release:
+            // The lane's own work keeps what it uses until it is over; the
+            // presenter keeps nothing.
+            logger.info("machine.release")
+            scheduled.cancelWake()
+            scheduled.screen = nil
+            controller = nil
         }
     }
 
@@ -263,16 +290,14 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     // MARK: Waking
 
     private func schedule(_ moment: Int64?) {
-        wakeTimer?.invalidate()
-        wakeTimer = nil
-        guard let moment else { return }
+        guard let moment else {
+            scheduled.cancelWake()
+            return
+        }
         logger.info("machine.wake-at \(moment)")
-        let timer = Timer(fire: Date(timeIntervalSince1970: Double(moment) / 1000), interval: 0, repeats: false) {
-            [weak self] _ in
+        scheduled.setWake(at: moment) { [weak self] in
             Task { @MainActor in await self?.wakeNow() }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        wakeTimer = timer
     }
 
     /// The timer fired: deliver what is due, in the Screen's lane.
@@ -327,6 +352,49 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             "open, wakes at " + Date(timeIntervalSince1970: Double(moment) / 1000).ISO8601Format()
         case .ended: "ended"
         case .fault(let code): "fault \(code)"
+        }
+    }
+}
+
+/// What a presenter scheduled that something else keeps running: the wake
+/// timer, which the main queue keeps until its moment, and the Screen's
+/// display loop, which runs while UIKit or a frame keeps the Screen. The
+/// presenter cancels the timer when the record moves it and when it lets
+/// go of what it owns. Freed with the presenter, whatever the record's
+/// state, this cancels the timer and stops the loop, so neither outlives
+/// the presenter that scheduled it.
+private final class NuxieMachineSheetSchedule {
+    /// The wake timer, while one is set.
+    private(set) var wake: (any DispatchSourceTimer)?
+    /// The Screen whose loop the presenter started.
+    weak var screen: NuxieMachineScreenViewController?
+
+    /// Call `fire` on the main queue at `moment` (milliseconds since the
+    /// Unix epoch) on the wall clock, in place of any wake set before. A
+    /// moment already past fires at once, and one passed while the app was
+    /// suspended fires when it runs again.
+    func setWake(at moment: Int64, _ fire: @escaping @Sendable () -> Void) {
+        cancelWake()
+        let at = max(0, moment)
+        let source = DispatchSource.makeTimerSource(queue: .main)
+        source.setEventHandler { fire() }
+        source.schedule(wallDeadline: DispatchWallTime(
+            timespec: timespec(tv_sec: Int(at / 1000), tv_nsec: Int(at % 1000) * 1_000_000)))
+        source.resume()
+        wake = source
+    }
+
+    func cancelWake() {
+        wake?.cancel()
+        wake = nil
+    }
+
+    deinit {
+        // Cancelling a dispatch timer is safe from any thread; the loop is
+        // stopped on the main actor, where the Screen lives.
+        wake?.cancel()
+        if let screen {
+            Task { @MainActor in screen.stop() }
         }
     }
 }
