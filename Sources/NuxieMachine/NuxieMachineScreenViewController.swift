@@ -18,9 +18,9 @@ import UIKit
 /// frame is needed, no write is waiting to show, no pointer has arrived and
 /// the store owes the edge nothing. A touch, a store's answer still owed, or
 /// [`requestFrame`] from the owner after a delivery wakes it. Off screen (its
-/// sheet gone), it draws nothing and runs frames only while the store owes
-/// an answer, so rows that arrive after the sheet is gone are still
-/// delivered.
+/// sheet gone, or its scene in the background), it draws nothing and runs
+/// frames only while the store owes an answer, so rows that arrive after the
+/// sheet is gone are still delivered.
 @MainActor
 package final class NuxieMachineScreenViewController: UIViewController {
     /// The edge this controller runs frames for. It owns the session.
@@ -52,7 +52,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
     private var frameInFlight = false
     private var frameRequested = true
     private var stopped = false
-    private var appIsActive = true
     /// The display time of the last frame; none after a rest, so the frame
     /// that wakes the loop advances by zero, not by the time it rested.
     private var lastTimestamp: CFTimeInterval?
@@ -102,17 +101,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let link = CADisplayLink(target: DisplayLinkTarget(self), selector: #selector(DisplayLinkTarget.tick(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
-        let center = NotificationCenter.default
+        // Coming back to the foreground draws again: whether the scene is in
+        // the foreground is read from UIKit at each frame.
         notificationTokens = [
-            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) {
-                [weak self] _ in Task { @MainActor in self?.appIsActive = false }
-            },
-            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) {
-                [weak self] _ in Task { @MainActor in
-                    self?.appIsActive = true
-                    self?.requestFrame()
-                }
-            },
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+            ) { [weak self] _ in Task { @MainActor in self?.requestFrame() } },
         ]
         requestFrame()
     }
@@ -187,9 +181,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
         if !another { lastTimestamp = nil }
     }
 
-    /// Whether this Screen is in a window, with a size, in an active app.
+    /// Whether this Screen is in a window of a scene in the foreground,
+    /// with a size.
     private var isDrawable: Bool {
-        appIsActive && surface.window != nil && surface.bounds.width > 0 && surface.bounds.height > 0
+        guard let scene = surface.window?.windowScene,
+              scene.activationState == .foregroundActive || scene.activationState == .foregroundInactive
+        else { return false }
+        return surface.bounds.width > 0 && surface.bounds.height > 0
             && surface.displayScale.isFinite && surface.displayScale > 0
     }
 
