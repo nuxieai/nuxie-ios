@@ -63,6 +63,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The size the engine lays the Screen out at and draws, once applied.
     private var appliedSize: Size?
     private var deviceConfigured = false
+    // Touched off the main actor only by `deinit`, after every other use.
     private nonisolated(unsafe) var notificationTokens: [NSObjectProtocol] = []
 
     private struct Size: Equatable {
@@ -148,10 +149,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
     }
 
     /// Stop the loop for good. A frame in flight finishes; none follows.
+    /// What the loop scheduled goes with it: the display link and the
+    /// foreground observer.
     package func stop() {
         stopped = true
         displayLink?.invalidate()
         displayLink = nil
+        notificationTokens.forEach(NotificationCenter.default.removeObserver)
+        notificationTokens = []
         pendingPointers = []
     }
 

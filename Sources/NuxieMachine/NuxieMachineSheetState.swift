@@ -22,6 +22,11 @@ import Foundation
 ///   the record was open and nothing had asked the sheet to go.
 /// - An ended or faulted record is final. Nothing moves it again, and a
 ///   fault is never overwritten.
+/// - What the presenter owns (the Screen with its edge and session, the
+///   wake timer, the display loop) is let go of once: at the moment the
+///   record is final and no sheet is on screen or in a transition,
+///   whichever of the two came last ([`Effect.release`]). An open record
+///   keeps everything, with a sheet or without one.
 package struct NuxieMachineSheetState: Equatable, Sendable {
     package enum Record: Equatable, Sendable {
         case notStarted
@@ -80,13 +85,18 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         case close(NuxieMachineShown)
         /// Set the wake timer for this moment, or cancel it.
         case schedule(Int64?)
-        /// Stop the loop and release the session; log the fault if one
-        /// ended it.
+        /// The record is final: stop the loop and close the edge; log the
+        /// fault if one ended it.
         case stop(NuxieMachineEdgeFault?)
+        /// Let go of everything the presenter owns. Comes once, after the
+        /// record's `stop`, when no sheet is left for UIKit to finish.
+        case release
     }
 
     package private(set) var record: Record = .notStarted
     package private(set) var sheet: Sheet = .none
+    /// Whether [`Effect.release`] has been said.
+    package private(set) var released = false
 
     package init() {}
 
@@ -96,8 +106,19 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         return nil
     }
 
-    /// Move the state for `event`, and say what to do about it.
+    /// Move the state for `event`, and say what to do about it. The one
+    /// place [`Effect.release`] is said: after any event that leaves the
+    /// record final and no sheet, the first time both hold.
     package mutating func handle(_ event: Event) -> [Effect] {
+        var effects = move(event)
+        if !released, sheet == .none, record.isFinal {
+            released = true
+            effects.append(.release)
+        }
+        return effects
+    }
+
+    private mutating func move(_ event: Event) -> [Effect] {
         switch event {
         case .started:
             guard record == .notStarted else { return [] }
@@ -203,6 +224,16 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         case .notStarted, .open:
             record = .faulted(fault)
             return [.schedule(nil), .stop(fault)] + leave(only: nil)
+        }
+    }
+}
+
+extension NuxieMachineSheetState.Record {
+    /// Ended or faulted: nothing moves it again.
+    var isFinal: Bool {
+        switch self {
+        case .ended, .faulted: true
+        case .notStarted, .open: false
         }
     }
 }
