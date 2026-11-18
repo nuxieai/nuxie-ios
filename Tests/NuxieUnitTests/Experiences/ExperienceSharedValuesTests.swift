@@ -569,9 +569,7 @@ final class ExperienceSharedValuesTests: XCTestCase {
         XCTAssertEqual(movedBand.lowerBound - firstBand.lowerBound, 39)
         let originalInk = before.pixels[(firstBand.lowerBound * 393 * 4)..<(firstBand.upperBound * 393 * 4)]
         let movedInk = after.pixels[(movedBand.lowerBound * 393 * 4)..<(movedBand.upperBound * 393 * 4)]
-        XCTAssertEqual(originalInk.count, movedInk.count)
-        // Integer translation can round Metal's antialiased channels by two units.
-        XCTAssertTrue(zip(originalInk, movedInk).allSatisfy { abs(Int($0) - Int($1)) <= 2 },
+        XCTAssertTrue(pixelsMatchWithinAntialiasing(Data(originalInk), Data(movedInk)),
             "Device's unchanged ink moves by exactly the source's safe-area delta")
         let secondPixels = try await renderCopyPixels(second)
         XCTAssertEqual(secondPixels, before.pixels, "The other screen retains its own environment")
@@ -621,11 +619,12 @@ final class ExperienceSharedValuesTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        XCTAssertEqual(frames[0], frames[2], "Independent selected copies have identical first drawn pixels")
+        XCTAssertTrue(pixelsMatchWithinAntialiasing(frames[0], frames[2]),
+            "Independent selected copies draw the same first frame")
         // The republished source adds Next after the copy. Hiding Tick moves Next up.
         XCTAssertEqual(renderedInkBands(frames[0]).count, 3, "23, Tick and Next are drawn on the first selected frame")
         XCTAssertEqual(renderedInkBands(frames[1]).count, 2, "23 and Next remain when Tick is hidden")
-        XCTAssertNotEqual(frames[0], frames[1])
+        XCTAssertFalse(pixelsMatchWithinAntialiasing(frames[0], frames[1]), "The tolerance still tells a different value apart")
     }
 
     func testComponentCopyKeepsItsOwnCounter() async throws {
@@ -699,6 +698,14 @@ final class ExperienceSharedValuesTests: XCTestCase {
             previous = next
         }
     }
+    /// Two frames of the same content agree when every channel is within two units.
+    /// Metal's antialiased edges can round by that much between draws of identical
+    /// content (an integer translation, or a later draw in the same process). A
+    /// different value or item changes whole glyphs, far beyond two units.
+    private func pixelsMatchWithinAntialiasing(_ first: Data, _ second: Data) -> Bool {
+        first.count == second.count && zip(first, second).allSatisfy { abs(Int($0) - Int($1)) <= 2 }
+    }
+
     private func renderedInkBands(_ pixels: Data) -> [Range<Int>] {
         let background = Array(pixels.suffix(4))
         let rows = (0..<852).filter { y in
