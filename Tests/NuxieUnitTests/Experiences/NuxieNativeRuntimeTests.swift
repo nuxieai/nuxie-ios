@@ -354,11 +354,11 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             XCTAssertEqual(frame.outcome.disposition, .presented)
             if let baselinePixels {
                 let fixedRange = (264 * 390 * 4)..<(484 * 390 * 4)
-                XCTAssertEqual(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange))
+                XCTAssertTrue(pixelsMatchWithinAntialiasing(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange)))
                 if index == fixture.cases.count - 1 {
-                    XCTAssertEqual(frame.pixels, baselinePixels, "Reset restores the original rendered frame")
+                    XCTAssertTrue(pixelsMatchWithinAntialiasing(frame.pixels, baselinePixels), "Reset restores the original rendered frame")
                 } else {
-                    XCTAssertNotEqual(frame.pixels, baselinePixels, "System scaling changes rendered text")
+                    XCTAssertFalse(pixelsMatchWithinAntialiasing(frame.pixels, baselinePixels), "System scaling changes rendered text")
                 }
             } else { baselinePixels = frame.pixels }
         }
@@ -454,11 +454,11 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             if index == 0 {
                 let repeated = try await renderPixels(runtime, width: 390, height: 844)
                 XCTAssertEqual(repeated.outcome.disposition, .presented)
-                if frame.pixels != repeated.pixels {
+                if !pixelsMatchWithinAntialiasing(frame.pixels, repeated.pixels) {
                     try attachMetricPixels(frame.pixels, name: "unchanged-first")
                     try attachMetricPixels(repeated.pixels, name: "unchanged-second")
                 }
-                XCTAssertEqual(frame.pixels, repeated.pixels,
+                XCTAssertTrue(pixelsMatchWithinAntialiasing(frame.pixels, repeated.pixels),
                     "An unchanged scene should retain its pixels across consecutive presentations")
             }
             let presented = try await runtime.captureSemantics()
@@ -467,16 +467,16 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             if let baselinePixels {
                 // The fixed input begins at y=264; only the upper input is bound.
                 let fixedRange = (264 * 390 * 4)..<frame.pixels.count
-                if frame.pixels.subdata(in: fixedRange) != baselinePixels.subdata(in: fixedRange) ||
-                    (index == fixture.cases.count - 1 && frame.pixels != baselinePixels) {
+                if !pixelsMatchWithinAntialiasing(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange)) ||
+                    (index == fixture.cases.count - 1 && !pixelsMatchWithinAntialiasing(frame.pixels, baselinePixels)) {
                     try attachMetricPixels(baselinePixels, name: "baseline-\(index)")
                     try attachMetricPixels(frame.pixels, name: "actual-\(index)")
                 }
-                XCTAssertEqual(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange))
+                XCTAssertTrue(pixelsMatchWithinAntialiasing(frame.pixels.subdata(in: fixedRange), baselinePixels.subdata(in: fixedRange)))
                 if index == fixture.cases.count - 1 {
-                    XCTAssertEqual(frame.pixels, baselinePixels, "Restoring authored metrics restores the rendered frame")
+                    XCTAssertTrue(pixelsMatchWithinAntialiasing(frame.pixels, baselinePixels), "Restoring authored metrics restores the rendered frame")
                 } else {
-                    XCTAssertNotEqual(frame.pixels, baselinePixels, "The bound style must change actual rendered text")
+                    XCTAssertFalse(pixelsMatchWithinAntialiasing(frame.pixels, baselinePixels), "The bound style must change actual rendered text")
                 }
             } else {
                 baselinePixels = frame.pixels

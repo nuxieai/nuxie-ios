@@ -218,6 +218,16 @@ struct FixturePagePreparation {
 }
 
 extension XCTestCase {
+    /// Two rendered frames of the same content agree when every channel is within two units.
+    /// Metal's antialiased edges can round by that much between draws of identical content
+    /// (an integer translation, or a later draw in the same process: UNIV-6545, UNIV-6550).
+    /// A different value, item or layout moves edges by far more. Tests that relax an
+    /// equality with this keep a check, through this same helper, that changed content
+    /// does not match.
+    func pixelsMatchWithinAntialiasing(_ first: Data, _ second: Data) -> Bool {
+        first.count == second.count && zip(first, second).allSatisfy { abs(Int($0) - Int($1)) <= 2 }
+    }
+
     /// Read the published control's settled native geometry before sending input.
     func fixtureControlBounds(in capture: NuxieNativeSemanticCapture, label: String) throws -> CGRect {
         // HTML controls can publish a named tap target with role none. The

@@ -86,10 +86,10 @@ final class ExperiencePageLiveMovesTests: XCTestCase {
     /// pose. Without that zero step the same frame draws the take-off pose.
     func testAStepsFirstPresentedFrameDrawsItsFlightAlreadyMoved() async throws {
         let lane = try await firstStepFrame(throughFrameLane: true)
-        XCTAssertNotEqual(lane.firstFrame, lane.takeOff,
+        XCTAssertFalse(pixelsMatchWithinAntialiasing(lane.firstFrame, lane.takeOff),
             "The first presented frame of a step must draw its flight moved from take-off")
         let unsettled = try await firstStepFrame(throughFrameLane: false)
-        XCTAssertEqual(unsettled.firstFrame, unsettled.takeOff,
+        XCTAssertTrue(pixelsMatchWithinAntialiasing(unsettled.firstFrame, unsettled.takeOff),
             "Control: without the zero step the entered arrival state does not move on that frame")
     }
 
