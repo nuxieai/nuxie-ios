@@ -187,9 +187,12 @@ package struct NuxieMachineFrame: Equatable, Sendable {
     package let reported: [String]
     /// The engine's step, for a host that schedules frames by it.
     package let keepGoing: Bool
-    /// Whether a write landed in this frame's turn, from the frame or from a
-    /// store's answer delivered after it. A write shows on the next step, so
-    /// a host that rests between frames steps once more.
+    /// Whether, when this frame's turn ended, the Screen owed a step: a write
+    /// the frame or a store's answer delivered after its step made has not
+    /// been drawn yet. On the driver path every answer delivered after the
+    /// step counts, since the session holds its writes for the next round.
+    /// A write shows on the next step, so a host that rests between frames
+    /// steps once more.
     package let wrote: Bool
     /// Whether, when this frame's turn ended, a call the edge started at the
     /// store was still unanswered or an answer was waiting. An answer is
@@ -309,8 +312,24 @@ package actor NuxieMachineEdge {
     private var mailbox: [Answer] = []
     /// The store's work in flight, by call, until its answer arrives.
     private var working: [NuxieMachineCallID: Task<Void, Never>] = [:]
-    /// How many writes have landed in the Screen's cells.
-    private var writes = 0
+    /// Whether the presented Screen owes a step: something it has not drawn
+    /// waits for one. This is the one rule a host schedules frames by
+    /// ([`owesStep`], [`NuxieMachineFrame.wrote`]):
+    ///
+    /// - On the row path, a write landed in a cell since the last step.
+    /// - On the driver path, the session holds a scene write until the
+    ///   presented instance's next round, which runs only inside a step, and
+    ///   it cannot say whether it holds one. So every delivery that enters a
+    ///   driven session while a player is presented leaves a step owed
+    ///   ([`deliver`]), and so does opening a player, whose first writes are
+    ///   held for its first step. The step itself clears it.
+    ///
+    /// A step clears it, and so does freeing the player: nothing is drawn
+    /// then.
+    private var stepOwed = false
+
+    /// What [`stepOwed`] says, for an edge that still delivers.
+    private var owed: Bool { fault == nil && !closedScreen && stepOwed }
 
     /// Whether the store owes this edge something a frame would deliver: a
     /// call still in flight, or an answer waiting in the mailbox. A stopped
@@ -482,7 +501,6 @@ package actor NuxieMachineEdge {
             // Answers that arrive during this turn wait for the next frame.
             let answers = mailbox
             mailbox = []
-            let writesBefore = writes
             let stepped = await deliver(turn, stopped: (reported: [String](), keepGoing: false)) { delivery in
                 await step(pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
             }
@@ -492,7 +510,7 @@ package actor NuxieMachineEdge {
                 }
             }
             return NuxieMachineFrame(reported: stepped.reported, keepGoing: stepped.keepGoing,
-                                     wrote: writes != writesBefore, waitsOnStore: storeOwes)
+                                     wrote: owed, waitsOnStore: storeOwes)
         }
     }
 
@@ -564,6 +582,14 @@ package actor NuxieMachineEdge {
                 await apply(rows, now: now, &delivery)
             }
         }
+    }
+
+    /// Whether the presented Screen owes a step ([`stepOwed`]), between
+    /// deliveries. A host asks after each delivery of its own (a start, a
+    /// wake, a close) and runs a frame when it does, so a Screen never rests
+    /// holding a write it has not drawn.
+    package func owesStep() async -> Bool {
+        await inTurn { _ in owed }
     }
 
     /// Whether the session's record is open, between deliveries. For checks:
@@ -646,6 +672,9 @@ package actor NuxieMachineEdge {
         _ body: (inout Delivery) async -> Value
     ) async -> Value {
         guard fault == nil, !closedScreen else { return stopped }
+        // A delivery into a driven session may leave writes held for the
+        // presented instance's next round; only a step runs one ([`stepOwed`]).
+        if case .compiled(.some) = drawing { stepOwed = true }
         var delivery = Delivery(turn)
         let result = await body(&delivery)
         if let report = delivery.report {
@@ -668,6 +697,7 @@ package actor NuxieMachineEdge {
             return await step(player, pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
         case .compiled(nil):
             // Nothing is presented, so nothing is drawn and nothing reports.
+            stepOwed = false
             return ([], false)
         }
     }
@@ -702,6 +732,9 @@ package actor NuxieMachineEdge {
             fail(NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)"), &delivery)
             return ([], false)
         }
+        // The step's first round applied everything held for the instance,
+        // and its later rounds applied their own writes.
+        stepOwed = false
         let rows: [NuxieMachineRow]
         do {
             rows = try session.rows()
@@ -723,6 +756,9 @@ package actor NuxieMachineEdge {
         _ delivery: inout Delivery
     ) async -> (reported: [String], keepGoing: Bool) {
         let stepped = shown
+        // This step lays out every cell written before it; a write the
+        // events below make shows on the next.
+        stepOwed = false
         let step: NuxieNativePlayerStepResult
         do {
             step = try await artwork.runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
@@ -929,7 +965,7 @@ package actor NuxieMachineEdge {
             fail(NuxieMachineEdgeFault(code: "engine.write", detail: "\(cell): \(error)"), &delivery)
             return
         }
-        writes += 1
+        stepOwed = true
         log.append(.write(cell: cell, value: value))
     }
 
@@ -1012,6 +1048,7 @@ package actor NuxieMachineEdge {
             return false
         }
         drawing = .compiled(player)
+        stepOwed = true
         return true
     }
 
@@ -1020,6 +1057,7 @@ package actor NuxieMachineEdge {
     private func closePlayer(_ delivery: inout Delivery) async {
         guard case .compiled(let player?) = drawing else { return }
         drawing = .compiled(nil)
+        stepOwed = false
         do {
             try await player.close()
         } catch {

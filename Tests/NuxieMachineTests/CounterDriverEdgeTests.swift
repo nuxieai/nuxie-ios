@@ -139,6 +139,77 @@ final class CounterDriverEdgeTests: XCTestCase {
     }
 }
 
+// MARK: - A delivery outside a step
+
+/// On the driver path the session holds a scene write until the presented
+/// instance's next round, which runs inside a step. So a delivery that is
+/// not a step (a store's answer, a wake) must leave the Screen asking for
+/// one more step, and a Screen at rest never holds a write it has not drawn.
+/// Each check here runs frames the way the Screen's view does: only while
+/// the edge asks for one, and after a delivery of its own only when the
+/// edge says the Screen owes a step.
+final class DriverStepOwedEdgeTests: XCTestCase {
+    /// A purchase the stand-in store fails, answered after the view has
+    /// settled: the error line shows with no touch.
+    func testAStoreAnswerThatChangesASettledViewIsDrawnWithNoTouch() async throws {
+        let run = try Counter(plan: Counter.answeredPlan())
+        do {
+            await run.edge.start(event: "opened", now: run.now)
+            try await run.layOut()
+            let first = try await run.frame(after: [], name: "1-first-step")
+            XCTAssertFalse(first.text.contains("did not go through"), "Recognized: \(first.text)")
+
+            // "Buy" starts the purchase; the host steps while the edge asks.
+            let buy = run.tap(at: try first.center(of: "Buy"))
+            let bought = await run.edge.frame(pointers: buy, elapsedSeconds: CounterDriverEdgeTests.tick,
+                                              now: run.advance())
+            XCTAssertTrue(bought.waitsOnStore, "the purchase was not started")
+            try await run.settle(another: bought.keepGoing || bought.wrote || bought.waitsOnStore)
+
+            let settled = try await run.look(name: "2-settled-after-the-answer")
+            XCTAssertTrue(settled.text.contains("The purchase did not go through."), "Recognized: \(settled.text)")
+            try await run.expectAtRest()
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A wake that changes the view's text after it has settled: the new
+    /// text shows with no touch.
+    func testAWakeThatChangesASettledViewIsDrawnWithNoTouch() async throws {
+        let run = try Counter(plan: Counter.eveningPlan())
+        do {
+            await run.edge.start(event: "opened", now: run.now)
+            try await run.layOut()
+            let first = try await run.frame(after: [], name: "1-first-step")
+            XCTAssertTrue(first.text.contains("Not evening yet."), "Recognized: \(first.text)")
+            try await run.settle(another: true)
+            try await run.expectAtRest()
+
+            let log = await run.edge.log
+            let asked = log.compactMap { entry -> Int64? in
+                if case .wakeAt(let moment?) = entry { return moment }
+                return nil
+            }
+            let moment = try XCTUnwrap(asked.last, "the record asked for no wake: \(log)")
+            run.jump(to: moment)
+            await run.edge.wake(now: moment)
+            let owed = await run.edge.owesStep()
+            try await run.settle(another: owed)
+
+            let woken = try await run.look(name: "2-settled-after-the-wake")
+            XCTAssertTrue(woken.text.contains("It is evening."), "Recognized: \(woken.text)")
+            try await run.expectAtRest()
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+}
+
 // MARK: - One run
 
 /// A fresh session on the driver path, its clock, and what its owner heard.
@@ -200,6 +271,44 @@ private final class Counter {
         try await edge.close()
     }
 
+    /// Move the clock to `moment`, as a host does before delivering a wake.
+    func jump(to moment: Int64) {
+        now = max(now, moment)
+    }
+
+    /// Frames with no touch, run the way the Screen's view runs them: while
+    /// the last one asked for another (the engine keeps going, a write still
+    /// has to show, or the store owes an answer). `another` is whether the
+    /// first is asked for.
+    func settle(another first: Bool) async throws {
+        var another = first
+        var frames = 0
+        while another {
+            let frame = await edge.frame(elapsedSeconds: CounterDriverEdgeTests.tick, now: advance())
+            let fault = await edge.fault
+            XCTAssertNil(fault, "a frame faulted")
+            if frame.waitsOnStore { await edge.storeAnswered() }
+            another = frame.keepGoing || frame.wrote || frame.waitsOnStore
+            frames += 1
+            guard frames < 240 else {
+                XCTFail("the Screen never came to rest")
+                return
+            }
+        }
+    }
+
+    /// The presented Screen drawn as it is, with no step.
+    func look(name: String) async throws -> DrawnFrame {
+        drawn += 1
+        return try await DrawnFrame.read(presented(), reported: [], name: "counter-\(drawn)-\(name)")
+    }
+
+    /// At rest: the Screen owes no step, so nothing it has not drawn is held.
+    func expectAtRest() async throws {
+        let owes = await edge.owesStep()
+        XCTAssertFalse(owes, "the Screen is at rest with a step owed")
+    }
+
     private func presented() async throws -> NuxieNativeRuntime {
         let screen = await edge.screen()
         return try XCTUnwrap(screen, "nothing is presented")
@@ -217,6 +326,125 @@ private final class Counter {
             files: [NuxieMachineSourceFile(path: "main.nux", text: try text("main")),
                     NuxieMachineSourceFile(path: "counter.nux", text: try text("counter"))],
             root: "main", app: "app", experience: "tally", version: 1)
+    }
+
+    /// A paywall whose "Buy" starts a purchase; the stand-in store fails it,
+    /// and the failure shows a line under `if`.
+    static func answeredPlan() -> NuxieMachinePlanSource {
+        let main = """
+        use products, purchase, store from "nuxie/store"
+        use Paywall from "paywall"
+
+        enum Plan annual
+
+        component Upgrade
+          platforms ios android
+
+          derive catalog = products(Plan,
+            annual = store(ios="app.pro.yearly", android="pro:yearly"))
+
+          state failed = false
+
+          entry
+            on event "opened"
+            do start
+
+          routes
+            paywall  Paywall(failed=failed, buy=buy, close=close)  cover
+
+          action start
+            go(paywall)
+
+          action buy
+            failed = false
+            purchase(catalog[annual], completed=close, failed=mark_failed)
+
+          action mark_failed
+            failed = true
+
+          action close
+            dismiss("closed")
+            exit
+        """
+        let paywall = """
+        component Paywall
+          props
+            failed: boolean
+            buy: action
+            close: action
+
+          view
+            column padding=24 gap=12 background-color=#0d1214
+              text "Go further" color=#eef3f1 font-size=24 id="title"
+              if failed
+                text "The purchase did not go through." color=#e8a598 font-size=16 id="error"
+              button padding=12 background-color=#232c30 press=buy id="buy"
+                text "Buy" color=#eef3f1 font-size=16
+              button padding=12 press=close id="close"
+                text "Close" color=#8a9794 font-size=16
+        """
+        return NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
+                    NuxieMachineSourceFile(path: "paywall.nux", text: paywall + "\n")],
+            root: "main", app: "app", experience: "upgrade", version: 1)
+    }
+
+    /// A line of text the record changes when its evening wait comes due.
+    static func eveningPlan() -> NuxieMachinePlanSource {
+        let main = """
+        use Clock from "clock"
+
+        component Evening
+          platforms ios android
+
+          state armed = false
+          state line = "Not evening yet."
+
+          entry
+            on event "opened"
+            do start
+
+          routes
+            clock  Clock(line=line, close=close)  cover
+
+          action start
+            armed = true
+            go(clock)
+
+          wait evening
+            while armed
+            until next 18:00
+            then ring within 6h
+            else give_up
+
+          action ring
+            armed = false
+            line = "It is evening."
+
+          action give_up
+            armed = false
+            exit
+
+          action close
+            dismiss("closed")
+            exit
+        """
+        let clock = """
+        component Clock
+          props
+            line: string
+            close: action
+
+          view
+            column padding=24 gap=12 background-color=#0d1214
+              text line color=#eef3f1 font-size=24 id="line"
+              button padding=12 press=close id="close"
+                text "Close" color=#8a9794 font-size=16
+        """
+        return NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
+                    NuxieMachineSourceFile(path: "clock.nux", text: clock + "\n")],
+            root: "main", app: "app", experience: "evening", version: 1)
     }
 
     /// A component whose button writes a color the records cannot carry.

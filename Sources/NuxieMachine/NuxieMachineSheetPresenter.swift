@@ -306,7 +306,6 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
                 self?.takeReports()
                 await self?.readPlan()
             }
-            controller.requestFrame()
         }
     }
 
@@ -323,11 +322,11 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         }
     }
 
-    /// The timer fired: deliver what is due, in the Screen's lane.
+    /// The timer fired: deliver what is due, in the Screen's lane, which
+    /// asks for a frame when a wake leaves the Screen a step owed.
     private func wakeNow() async {
         guard let controller else { return }
         await controller.inLane { await catchUp(to: nuxieMachineNow()) }
-        controller.requestFrame()
     }
 
     /// Deliver every wake the record asks for at or before `now`, each at

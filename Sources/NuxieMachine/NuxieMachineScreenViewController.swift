@@ -22,7 +22,7 @@ import UIKit
 /// The loop rests when nothing asks for a frame: the engine's step says no
 /// frame is needed, no write is waiting to show, no pointer has arrived and
 /// the store owes the edge nothing. A touch, a store's answer still owed, or
-/// [`requestFrame`] from the owner after a delivery wakes it. Off screen (its
+/// a delivery in the lane that leaves a step owed wakes it ([`inLane`]). Off screen (its
 /// sheet gone, or its scene in the background), it draws nothing and runs
 /// frames only while the store owes an answer, so rows that arrive after the
 /// sheet is gone are still delivered.
@@ -144,9 +144,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
         requestFrame()
     }
 
-    /// Ask for a frame: after a delivery outside a frame (a start, a close,
-    /// a wake), whose writes show only on the next step and whose calls are
-    /// answered only at a frame.
+    /// Ask for a frame. The lane asks by itself after a delivery that leaves
+    /// the Screen a step owed ([`inLane`]).
     package func requestFrame() {
         guard !stopped else { return }
         frameRequested = true
@@ -158,6 +157,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// edge in it, so they reach the edge one at a time and in order. The
     /// lane outlives the loop: an owner may still call the edge after
     /// [`stop`].
+    ///
+    /// Every delivery reaches the edge in the lane, so the lane is where a
+    /// delivery's writes are made to show: when `body` leaves the Screen a
+    /// step owed (a write not yet drawn, or on the driver path any delivery
+    /// to a presented compiled view, whose writes the session holds for the
+    /// next step), the lane asks for a frame. A Screen never rests holding a
+    /// write it has not drawn.
     package func inLane<Value>(_ body: () async throws -> Value) async rethrows -> Value {
         if laneHeld {
             await withCheckedContinuation { laneWaiting.append($0) }
@@ -172,7 +178,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
                 laneWaiting.removeFirst().resume()
             }
         }
-        return try await body()
+        let value = try await body()
+        if await edge.owesStep() { requestFrame() }
+        return value
     }
 
     /// Stop the loop for good. A frame in flight finishes; none follows.
