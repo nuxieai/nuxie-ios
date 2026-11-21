@@ -618,7 +618,49 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             XCTAssertTrue(after.contains(.reported("tap_close")), "\(after)")
             XCTAssertTrue(after.contains(.dismiss(reason: "paywall_closed")), "\(after)")
             XCTAssertFalse(after.contains(.reported("tap_details")), "\(after)")
-            XCTAssertEqual(after.last, .droppedReport("tap_details"), "\(after)")
+            XCTAssertTrue(after.contains(.droppedReport("tap_details")), "\(after)")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// One frame whose pointers tap Monthly and then "Not now": Monthly's
+    /// writes are for the paywall that "Not now" dismisses in the same
+    /// frame. They belong to a Screen that is gone by the end of the
+    /// delivery, so none lands: the sheet leaves showing what it showed, and
+    /// the record still holds the person's choice.
+    func testWritesForAPaywallDismissedLaterInTheSameFrameAreDropped() async throws {
+        let run = try await Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            let written = await run.edge.log.count
+            func center(_ box: [Int]) -> (Float, Float) {
+                (Float(box[0] + box[2]) / 2, Float(box[1] + box[3]) / 2)
+            }
+            let (monthlyX, monthlyY) = center(Box.monthly)
+            let (closeX, closeY) = center(Box.close)
+            let frame = await run.edge.frame(pointers: [
+                NuxieNativePointerEvent(kind: .down, x: monthlyX, y: monthlyY),
+                NuxieNativePointerEvent(kind: .up, x: monthlyX, y: monthlyY),
+                NuxieNativePointerEvent(kind: .down, x: closeX, y: closeY),
+                NuxieNativePointerEvent(kind: .up, x: closeX, y: closeY),
+            ], elapsedSeconds: Self.tick, now: run.advance())
+            XCTAssertEqual(frame.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_monthly", "tap_close"])
+            let after = await Array(run.edge.log.dropFirst(written))
+            XCTAssertTrue(after.contains(.reported("tap_monthly")), "\(after)")
+            XCTAssertTrue(after.contains(.dismiss(reason: "paywall_closed")), "\(after)")
+            XCTAssertEqual(Self.writes(after).map(\.cell), [], "a write landed in a Screen that is gone: \(after)")
+            let cells = try await run.cells()
+            XCTAssertEqual(cells["monthly_selected"], .bool(false))
+            XCTAssertEqual(cells["annual_selected"], .bool(true))
+            let plan = try await run.edge.slot("plan")
+            XCTAssertEqual(plan, .enumeration("monthly"), "the record holds the choice")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])

@@ -136,11 +136,17 @@ package struct NuxieMachineEdgeFault: Error, Equatable, Sendable {
 package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// An engine event the Screen reported, handed to the session.
     case reported(String)
+    /// The machine presented `route` as `instance`. It is opened only when
+    /// it is still presented at the end of its delivery.
     case present(route: String, instance: UInt64, presentation: NuxieMachinePresentation)
     case pop(instance: UInt64)
     case dismiss(reason: String?)
     /// A write landed in the Screen's cell.
     case write(cell: String, value: NuxieMachineValue)
+    /// A write for an instance that a later row of the same delivery ended:
+    /// it belongs to a Screen that is gone by the end of the delivery, so it
+    /// lands nowhere.
+    case droppedWrite(cell: String, value: NuxieMachineValue)
     /// A call went to the store.
     case call(NuxieMachineCall)
     /// The store's outcome for a call, delivered in its own delivery after
@@ -166,8 +172,8 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
 }
 
 /// One instance the edge shows: the machine's instance number, and which of
-/// the edge's showings it is (1 for the first `present` row the edge
-/// applied, one more for each after). The machine numbers instances afresh
+/// the edge's showings it is (1 for the first presentation the edge
+/// opened, one more for each after). The machine numbers instances afresh
 /// in each record, so two records can show the same instance number; the
 /// showing tells them apart.
 package struct NuxieMachineShown: Equatable, Sendable {
@@ -231,7 +237,8 @@ package final class NuxieMachineFrameAsks: @unchecked Sendable {
 ///   is put on the driver path before it starts. A `present` row opens a
 ///   player on the compiled records, at the presented instance's artboard,
 ///   with the platform's own font loaded into the records' font asset, and
-///   sets the session's driver for that presentation on it once. From then
+///   sets the session's driver for that presentation on it once, when the
+///   instance is still presented at the end of the delivery. From then
 ///   on the step itself carries the machine: the engine's reports go to the
 ///   driver and its writes land inside the same step, so the frame drawn
 ///   after a step shows them. Swift carries no scene write and no tap. A
@@ -273,6 +280,17 @@ package final class NuxieMachineFrameAsks: @unchecked Sendable {
 ///    that begins after it arrived: that step draws what the call's own
 ///    writes show (a busy button) before the answer's writes replace it, on
 ///    the step after.
+///
+/// A third makes a delivery's rows mean what happened in it as a whole: a
+/// delivery's rows are a log of what the machine did during it, while the
+/// session's state is where the last row left it. So the edge works out
+/// what the rows come to first, from the rows alone ([`plan`]), and only
+/// then performs them, in order ([`apply`]). A presentation begun and ended
+/// in one delivery is never opened and never told; one that outlives the
+/// delivery is opened once, from the session's state, which then matches
+/// it; a write for an instance gone by the end lands nowhere; and a fault
+/// in the rows opens nothing. On the row path a frame's engine events go
+/// to the session first, all of them, and their rows are applied together.
 ///
 /// What arrives later belongs to what it was for, never to whatever is open
 /// by then:
@@ -353,7 +371,7 @@ package actor NuxieMachineEdge {
     /// The presented instance of the route, while it is presented, with its
     /// showing. A host names it when the person closes it ([`closed`]).
     package var shown: NuxieMachineShown? { presented?.shown }
-    /// How many `present` rows the edge has applied.
+    /// How many presentations the edge has opened.
     private var showings: UInt64 = 0
     /// The open record's calls the edge has started at the store and not
     /// yet delivered an answer for. The record's `end` row retires them all.
@@ -530,6 +548,20 @@ package actor NuxieMachineEdge {
         }
     }
 
+    /// What the owner draws for the presentation `showing`: the same as
+    /// [`screen`] while that showing is the one presented, and none once a
+    /// row has ended it. A Screen on its way off screen draws nothing more,
+    /// so the presentation that replaced it never shows in it.
+    package func screen(for showing: NuxieMachineShown) async -> NuxieNativeRuntime? {
+        await inTurn { _ in
+            guard !closedScreen, let presented, presented.shown == showing else { return nil }
+            switch drawing {
+            case .artwork(let artwork): return artwork.runtime
+            case .compiled: return presented.player
+            }
+        }
+    }
+
     /// The host saw the event `event` at `now` (milliseconds since the Unix
     /// epoch), and the machine's rows for it are applied.
     package func start(event: String, now: Int64) async {
@@ -610,7 +642,7 @@ package actor NuxieMachineEdge {
                         detail: "\(name) handed in by hand; a compiled view's reports go to its driver"), &delivery)
                     return
                 }
-                await hear(name, on: shown, now: now, &delivery)
+                await hear([name], on: shown, now: now, &delivery)
             }
         }
     }
@@ -792,10 +824,12 @@ package actor NuxieMachineEdge {
         do {
             step = try await player.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
         } catch {
+            let failed = NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)")
             if let rows = try? session.rows(), case .end(.fault, _)? = rows.last {
-                await apply(rows, now: now, &delivery)
+                await apply(rows, now: now, &delivery, then: failed)
+            } else {
+                fail(failed, &delivery)
             }
-            fail(NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)"), &delivery)
             return ([], false)
         }
         // The step's first round applied everything held for the instance,
@@ -812,8 +846,9 @@ package actor NuxieMachineEdge {
         return (step.events.map(\.name), step.keepGoing)
     }
 
-    /// A frame on the row path: step the Screen and hand its events to the
-    /// session, each for the showing the step drew.
+    /// A frame on the row path: step the Screen and hand its named events
+    /// to the session, all for the showing the step drew, as one delivery
+    /// ([`hear`]).
     private func step(
         _ artwork: Artwork,
         pointers: [NuxieNativePointerEvent],
@@ -833,9 +868,11 @@ package actor NuxieMachineEdge {
             return ([], false)
         }
         var reported: [String] = []
+        var named: [String] = []
+        var link: NuxieMachineEdgeFault?
         for event in step.events {
             reported.append(event.name)
-            guard fault == nil else { continue }
+            guard link == nil else { continue }
             // A reserved (`$`) event is the engine's own, and an unnamed one
             // with no link is a bare notification: a phone drops both, as the
             // SDK's Screen does for every Screen it shows. The Screen's named
@@ -843,39 +880,47 @@ package actor NuxieMachineEdge {
             // frame's `reported`.
             if event.name.hasPrefix("$") || (event.name.isEmpty && event.url.isEmpty) { continue }
             guard event.url.isEmpty else {
-                fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
-                    detail: "the Screen reported a link to \(event.url), which this edge cannot open"), &delivery)
+                link = NuxieMachineEdgeFault(code: "edge.unhandled-event",
+                    detail: "the Screen reported a link to \(event.url), which this edge cannot open")
                 continue
             }
-            await hear(event.name, on: stepped, now: now, &delivery)
+            named.append(event.name)
         }
+        await hear(named, on: stepped, now: now, &delivery, then: link)
         return (reported, step.keepGoing)
     }
 
-    /// An engine event the Screen reported for the showing `on`, handed to
-    /// the session. One reported while nothing was shown is a fault; one
-    /// whose showing a row has ended since is dropped.
-    private func hear(_ name: String, on reportedFor: NuxieMachineShown?, now: Int64,
-                      _ delivery: inout Delivery) async {
-        guard fault == nil else { return }
-        guard let reportedFor else {
-            fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
-                detail: "the Screen reported \(name) while nothing is presented"), &delivery)
-            return
+    /// Engine events the Screen reported for the showing `on`, in order, as
+    /// one delivery. Each goes to the session while the rows before it
+    /// still leave that showing presented; once they end it, the rest are
+    /// dropped, since they belong to it. Then every row they made is
+    /// applied together ([`apply`]), so a write made by one event for a
+    /// Screen a later event dismissed lands nowhere. Events reported while
+    /// nothing was shown are a fault. `after` is a fault that follows them,
+    /// if one does.
+    private func hear(_ names: [String], on reportedFor: NuxieMachineShown?, now: Int64,
+                      _ delivery: inout Delivery, then after: NuxieMachineEdgeFault? = nil) async {
+        var rows: [NuxieMachineRow] = []
+        for name in names {
+            guard let reportedFor else {
+                await apply(rows, now: now, &delivery, then: NuxieMachineEdgeFault(code: "edge.unhandled-event",
+                    detail: "the Screen reported \(name) while nothing is presented"))
+                return
+            }
+            let sofar = plan(rows)
+            guard sofar.ends == nil, sofar.fault == nil else {
+                log.append(.droppedReport(name))
+                continue
+            }
+            log.append(.reported(name))
+            do {
+                rows += try session.engineEvent(instance: reportedFor.instance, name: name, now: now)
+            } catch {
+                await refused(error, doing: "the engine event \(name)", now: now, after: rows, &delivery)
+                return
+            }
         }
-        guard reportedFor == shown else {
-            log.append(.droppedReport(name))
-            return
-        }
-        log.append(.reported(name))
-        let rows: [NuxieMachineRow]
-        do {
-            rows = try session.engineEvent(instance: reportedFor.instance, name: name, now: now)
-        } catch {
-            await refused(error, doing: "the engine event \(name)", now: now, &delivery)
-            return
-        }
-        await apply(rows, now: now, &delivery)
+        await apply(rows, now: now, &delivery, then: after)
     }
 
     /// A store's answer, as its own delivery. An answer to a retired call
@@ -928,23 +973,194 @@ package actor NuxieMachineEdge {
 
     // MARK: Rows
 
-    private func apply(_ rows: [NuxieMachineRow], now: Int64, _ delivery: inout Delivery) async {
-        for row in rows {
+    /// What one delivery's rows come to, worked out from the rows alone
+    /// before any of them is performed ([`plan`]).
+    ///
+    /// A delivery's rows are a log of what the machine did during it, in
+    /// order, and the session's state is where the last of them left it. A
+    /// row is never answered by asking the session or the engine about the
+    /// moment it was written, since later rows of the same delivery may
+    /// have moved past it. So the edge first works out the net change from
+    /// the rows (which presentations are still presented when the delivery
+    /// is over, which that were under way at its start are gone, and what
+    /// the stack holds at the end), and only then performs them, in order,
+    /// opening only what outlives the delivery, from the session's state,
+    /// which then matches it.
+    private struct Plan {
+        /// The `present` rows, by position, whose presentation is still
+        /// presented when the delivery is over: each is opened, once, and
+        /// no other is.
+        var opens: Set<Int> = []
+        /// The `scene` writes, by position, whose instance is still
+        /// presented when the delivery is over: each lands, and every other
+        /// is dropped.
+        var lands: Set<Int> = []
+        /// The row, by position, that ends the presentation under way when
+        /// the delivery began, if one does: a `pop` of it, a `dismiss`, or
+        /// the record's `end`.
+        var ends: Int?
+        /// The `pop` and `dismiss` rows, by position, that ended only
+        /// presentations begun in this delivery: none of those reached the
+        /// screen, so nothing is told for them.
+        var quiet: Set<Int> = []
+        /// The first fault and the row it is at. The rows before it are
+        /// performed, opening nothing and landing no write, since no Screen
+        /// outlives a fault; it and every row after are not. At the rows'
+        /// count it comes after all of them.
+        var fault: (at: Int, fault: NuxieMachineEdgeFault)?
+    }
+
+    /// Work out what `rows` come to ([`Plan`]), from the rows and what was
+    /// presented when the delivery began, asking the session and the engine
+    /// nothing. `after` is a fault that follows the rows, if one does.
+    ///
+    /// The faults it finds are every one the rows show on their own: a
+    /// record that ended in a fault, a row this edge cannot carry, a `pop`
+    /// or a write for an instance not presented, a write the Screen has no
+    /// cell for, a call that runs on the server, and at the end a
+    /// presentation this edge cannot draw. This host shows one Screen at a
+    /// time, so a stack that ends the delivery holding two is a fault too,
+    /// found before anything is opened.
+    private func plan(_ rows: [NuxieMachineRow], then after: NuxieMachineEdgeFault? = nil) -> Plan {
+        /// One presentation on the stack: the one under way when the
+        /// delivery began (`row` none) or the one the `present` row at
+        /// `row` began.
+        struct Entry {
+            let row: Int?
+            let instance: UInt64
+            let route: String?
+        }
+        var plan = Plan()
+        var stack = presented.map { [Entry(row: nil, instance: $0.shown.instance, route: nil)] } ?? []
+        /// Each write, by position, the entry it writes, and its cell and
+        /// value.
+        var writes: [(row: Int, entry: Int?, cell: String, value: NuxieMachineValue)] = []
+
+        func faulted(_ at: Int, _ code: String, _ detail: String) -> Plan {
+            var stopped = Plan()
+            stopped.ends = plan.ends
+            stopped.quiet = plan.quiet
+            stopped.fault = (at, NuxieMachineEdgeFault(code: code, detail: detail))
+            return stopped
+        }
+
+        for (at, row) in rows.enumerated() {
+            switch row {
+            case .present(let route, let instance, _):
+                stack.append(Entry(row: at, instance: instance, route: route))
+            case .pop(let instance):
+                guard let index = stack.lastIndex(where: { $0.instance == instance }) else {
+                    return faulted(at, "edge.unhandled-row", "pop \(instance), which is not presented")
+                }
+                // A pop takes the instance and everything presented above it.
+                let removed = stack[index...]
+                stack.removeSubrange(index...)
+                if removed.contains(where: { $0.row == nil }) {
+                    plan.ends = at
+                } else {
+                    plan.quiet.insert(at)
+                }
+            case .dismiss:
+                if stack.contains(where: { $0.row == nil }) {
+                    plan.ends = at
+                } else if !stack.isEmpty {
+                    plan.quiet.insert(at)
+                }
+                stack.removeAll()
+            case .sceneSet(let instance, let object, let key, let value):
+                guard case .artwork = drawing else {
+                    return faulted(at, "edge.unhandled-row",
+                                   "a write to \(object).\(key) as a row; a compiled view is written by its driver")
+                }
+                let cell = nuxieMachineCellName(object: object, key: key)
+                guard let entry = stack.last(where: { $0.instance == instance }) else {
+                    return faulted(at, "edge.unhandled-row",
+                                   "a write to \(cell) of instance \(instance), which is not presented")
+                }
+                writes.append((at, entry.row, cell, value))
+            case .call(let call):
+                guard call.place == .client else {
+                    return faulted(at, "edge.unhandled-row",
+                                   "\(call.externName) runs on the server, which this edge cannot reach")
+                }
+            case .wakeAt, .note:
+                break
+            case .end(let reason, let code):
+                guard reason == .finished || reason == .exited else {
+                    return faulted(at, code ?? "machine.fault", "the record ended in a fault")
+                }
+                // An ended record has nothing presented.
+                if stack.contains(where: { $0.row == nil }) { plan.ends = at }
+                stack.removeAll()
+            case .handOver, .unknown:
+                return faulted(at, "edge.unhandled-row", "\(row)")
+            }
+        }
+
+        // What the stack holds at the end is what is opened: one Screen,
+        // which this edge can draw, and the writes that land in it, each in
+        // a cell the Screen has. Of these faults, the one at the earliest
+        // row stands.
+        let landing = writes.filter { write in stack.contains { $0.row == write.entry } }
+        var found: [(at: Int, code: String, detail: String)] = []
+        for (index, entry) in stack.enumerated() {
+            guard let at = entry.row, let route = entry.route else { continue }
+            if case .artwork(let artwork) = drawing, route != artwork.route {
+                found.append((at, "edge.no-artwork",
+                              "present \(route) as \(entry.instance); this edge draws \(artwork.route)"))
+            } else if index > 0 {
+                found.append((at, "edge.no-host",
+                              "present \(route) as \(entry.instance) while \(stack[index - 1].instance) is presented; "
+                                  + "this host shows one Screen at a time"))
+            }
+        }
+        if case .artwork(let artwork) = drawing {
+            for write in landing {
+                if case .failure(let fault) = Self.mutation(artwork, cell: write.cell, value: write.value) {
+                    found.append((write.row, fault.code, fault.detail))
+                }
+            }
+        }
+        if let first = found.min(by: { $0.at < $1.at }) {
+            return faulted(first.at, first.code, first.detail)
+        }
+        if let after {
+            return faulted(rows.count, after.code, after.detail)
+        }
+        plan.opens = Set(stack.compactMap(\.row))
+        plan.lands = Set(landing.map(\.row))
+        return plan
+    }
+
+    /// Perform one delivery's rows, as [`plan`] worked them out: in order,
+    /// up to the plan's fault if it has one, which then stops the edge.
+    /// `after` is a fault that follows the rows, if one does.
+    ///
+    /// - `present` is opened only when it is still presented at the end;
+    ///   then a player is opened for it on the driver path, from the
+    ///   session's state, and the owner is told.
+    /// - `pop`, `dismiss` and `end` end the presentation under way when the
+    ///   delivery began, at the row that ends it. A `pop` or `dismiss` that
+    ///   ended only presentations begun in this delivery tells nothing.
+    /// - A `scene` write lands only for an instance still presented at the
+    ///   end; otherwise it is dropped.
+    /// - `call`, `wake at`, `end` and `note` are performed in order, as
+    ///   always.
+    ///
+    /// The log takes every row performed. A record that ended in a fault
+    /// logs its `end` too: it is the record's own last row.
+    private func apply(_ rows: [NuxieMachineRow], now: Int64, _ delivery: inout Delivery,
+                       then after: NuxieMachineEdgeFault? = nil) async {
+        let plan = plan(rows, then: after)
+        let performed = plan.fault?.at ?? rows.count
+        for at in 0..<performed {
             guard fault == nil else { return }
+            let row = rows[at]
             switch row {
             case .present(let route, let instance, let presentation):
-                switch drawing {
-                case .artwork(let artwork):
-                    guard route == artwork.route, shown == nil else {
-                        fail(NuxieMachineEdgeFault(code: "edge.no-artwork",
-                            detail: "present \(route) as \(instance); this edge draws \(artwork.route) once"), &delivery)
-                        return
-                    }
-                case .compiled:
-                    guard let shown else { break }
-                    fail(NuxieMachineEdgeFault(code: "edge.no-host",
-                        detail: "present \(route) as \(instance) while \(shown.instance) is presented"), &delivery)
-                    return
+                guard plan.opens.contains(at) else {
+                    log.append(.present(route: route, instance: instance, presentation: presentation))
+                    continue
                 }
                 var player: NuxieNativeRuntime?
                 if case .compiled = drawing {
@@ -958,27 +1174,22 @@ package actor NuxieMachineEdge {
                 log.append(.present(route: route, instance: instance, presentation: presentation))
                 delivery.told(.present(showing, presentation: presentation))
             case .pop(let instance):
-                guard let popped = shown, instance == popped.instance else {
-                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
-                        detail: "pop \(instance), which is not presented"), &delivery)
-                    return
-                }
                 log.append(.pop(instance: instance))
+                guard plan.ends == at, let popped = shown else { continue }
                 await endPresentation(&delivery)
                 delivery.told(.pop(popped))
             case .dismiss(let reason):
                 log.append(.dismiss(reason: reason))
+                guard !plan.quiet.contains(at) else { continue }
                 await endPresentation(&delivery)
                 delivery.told(.dismiss(reason: reason))
-            case .sceneSet(let instance, let object, let key, let value):
-                guard case .artwork(let artwork) = drawing else {
-                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
-                        detail: "a write to \(object).\(key) as a row; a compiled view is written by its driver"),
-                        &delivery)
-                    return
+            case .sceneSet(_, let object, let key, let value):
+                let cell = nuxieMachineCellName(object: object, key: key)
+                guard plan.lands.contains(at), case .artwork(let artwork) = drawing else {
+                    log.append(.droppedWrite(cell: cell, value: value))
+                    continue
                 }
-                await write(artwork, instance: instance, cell: nuxieMachineCellName(object: object, key: key),
-                            value: value, &delivery)
+                await write(artwork, cell: cell, value: value, &delivery)
             case .call(let call):
                 perform(call, &delivery)
             case .wakeAt(let moment):
@@ -989,43 +1200,32 @@ package actor NuxieMachineEdge {
                 // machine drops them, and their answers are dropped here.
                 unanswered.removeAll()
                 log.append(.end(reason: reason, fault: code))
-                guard reason == .finished || reason == .exited else {
-                    fail(NuxieMachineEdgeFault(code: code ?? "machine.fault",
-                        detail: "the record ended in a fault"), &delivery)
-                    return
-                }
+                if plan.ends == at { await endPresentation(&delivery) }
                 delivery.told(.end(reason))
             case .note(let note):
                 log.append(.note(note))
             case .handOver, .unknown:
+                // The plan stops at these.
                 fail(NuxieMachineEdgeFault(code: "edge.unhandled-row", detail: "\(row)"), &delivery)
             }
         }
+        guard fault == nil, let stop = plan.fault else { return }
+        if stop.at < rows.count, case .end(let reason, let code) = rows[stop.at] {
+            unanswered.removeAll()
+            log.append(.end(reason: reason, fault: code))
+        }
+        fail(stop.fault, &delivery)
     }
 
-    /// A `scene` write: the value lands in the Screen's cell
-    /// `state/<cell>` and shows on the next step.
-    private func write(_ artwork: Artwork, instance: UInt64, cell: String, value: NuxieMachineValue,
+    /// A `scene` write the plan found a cell for: the value lands in the
+    /// Screen's cell `state/<cell>` and shows on the next step.
+    private func write(_ artwork: Artwork, cell: String, value: NuxieMachineValue,
                        _ delivery: inout Delivery) async {
-        guard instance == shown?.instance else {
-            fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
-                detail: "a write to \(cell) of instance \(instance), which is not presented"), &delivery)
-            return
-        }
-        let path = "state/\(cell)"
-        let root = artwork.root
         let mutation: NuxieNativeViewModelMutation
-        switch (artwork.cells[cell], value) {
-        case (.bool, .bool(let yes)): mutation = .setBool(instance: root, path: path, value: yes)
-        case (.number, .number(let number)): mutation = .setNumber(instance: root, path: path, value: Float(number))
-        case (.text, .text(let text)): mutation = .setString(instance: root, path: path, value: Data(text.utf8))
-        case (nil, _):
-            fail(NuxieMachineEdgeFault(code: "edge.unknown-cell",
-                detail: "the Screen has no cell \(cell) for \(value)"), &delivery)
-            return
-        default:
-            fail(NuxieMachineEdgeFault(code: "edge.unknown-cell",
-                detail: "the Screen's cell \(cell) does not hold a value like \(value)"), &delivery)
+        switch Self.mutation(artwork, cell: cell, value: value) {
+        case .success(let made): mutation = made
+        case .failure(let fault):
+            fail(fault, &delivery)
             return
         }
         do {
@@ -1036,6 +1236,28 @@ package actor NuxieMachineEdge {
         }
         presented?.stepOwed = true
         log.append(.write(cell: cell, value: value))
+    }
+
+    /// The engine's mutation that sets the Screen's cell `cell` to `value`,
+    /// or the fault when the Screen has no such cell or it holds another
+    /// kind of value.
+    private static func mutation(_ artwork: Artwork, cell: String, value: NuxieMachineValue)
+        -> Result<NuxieNativeViewModelMutation, NuxieMachineEdgeFault>
+    {
+        let path = "state/\(cell)"
+        let root = artwork.root
+        switch (artwork.cells[cell], value) {
+        case (.bool, .bool(let yes)): return .success(.setBool(instance: root, path: path, value: yes))
+        case (.number, .number(let number)):
+            return .success(.setNumber(instance: root, path: path, value: Float(number)))
+        case (.text, .text(let text)): return .success(.setString(instance: root, path: path, value: Data(text.utf8)))
+        case (nil, _):
+            return .failure(NuxieMachineEdgeFault(code: "edge.unknown-cell",
+                detail: "the Screen has no cell \(cell) for \(value)"))
+        default:
+            return .failure(NuxieMachineEdgeFault(code: "edge.unknown-cell",
+                detail: "the Screen's cell \(cell) does not hold a value like \(value)"))
+        }
     }
 
     /// A `call` row: the store's work starts in a task of its own, and the
@@ -1064,14 +1286,17 @@ package actor NuxieMachineEdge {
         }
     }
 
-    /// A call the session refused. A call that ended the session still
-    /// left rows, which end in its fault, and they are applied first.
-    private func refused(_ error: Error, doing what: String, now: Int64, _ delivery: inout Delivery) async {
-        if case NuxieMachineError.faulted(let rows) = error {
-            await apply(rows, now: now, &delivery)
-        }
+    /// A call the session refused, after the rows `earlier` that calls of
+    /// the same delivery made. A call that ended the session still left
+    /// rows, which end in its fault; they follow `earlier`, and all of them
+    /// are applied as one delivery that ends in the fault ([`apply`]).
+    private func refused(_ error: Error, doing what: String, now: Int64, after earlier: [NuxieMachineRow] = [],
+                         _ delivery: inout Delivery) async {
+        var rows = earlier
+        if case NuxieMachineError.faulted(let left) = error { rows += left }
         let code = (error as? NuxieMachineError)?.code ?? "unknown"
-        fail(NuxieMachineEdgeFault(code: "machine.\(code)", detail: "the session refused \(what): \(error)"), &delivery)
+        await apply(rows, now: now, &delivery, then: NuxieMachineEdgeFault(code: "machine.\(code)",
+            detail: "the session refused \(what): \(error)"))
     }
 
     /// The one path for faults: the edge stops, records the code, and the
@@ -1087,7 +1312,9 @@ package actor NuxieMachineEdge {
 
     // MARK: Compiled views
 
-    /// A `present` row on the driver path: a player for `instance` on the
+    /// A `present` row on the driver path whose instance is still presented
+    /// at the end of its delivery, so the session's state, which is where
+    /// the delivery's last row left it, presents it: a player for `instance` on the
     /// compiled records, at the artboard its component is drawn in, with the
     /// session's driver for this presentation set on it once. The writes the
     /// presenting step made are held for that driver and land in the

@@ -189,6 +189,66 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(twice.sheet, .leaving(paywall))
     }
 
+    // MARK: One Screen replaced by another in one delivery
+
+    private let offer = NuxieMachineShown(showing: 2, instance: 5)
+
+    /// The machine dismisses the paywall and presents the next Screen in
+    /// one delivery. The sheet goes down once, and the next one comes up
+    /// when it has gone: the one controller is never asked to show two at
+    /// once, and the record does not fault.
+    func testAReplacementComesUpOnceTheSheetItReplacesHasGone() {
+        var state = sheetUp()
+        XCTAssertEqual(state.handle(.report(.rows([.dismiss(reason: "swapped"), .present(offer, presentation: .cover)]))),
+                       [.dismiss])
+        XCTAssertEqual(state.sheet, .leaving(paywall))
+        XCTAssertEqual(state.record, .open(wakeAt: nil))
+        XCTAssertEqual(state.handle(.dismissed), [.present(offer, .cover)])
+        XCTAssertEqual(state.sheet, .arriving(offer, leaving: false))
+        XCTAssertEqual(state.handle(.presented), [])
+        XCTAssertEqual(state.sheet, .up(offer))
+    }
+
+    /// The same with the machine's pop of the paywall, and while the person
+    /// is swiping it: the replacement waits for the swipe to finish either
+    /// way, and the machine, which ended the paywall itself, hears no close.
+    func testAReplacementAfterAPopWaitsForTheSwipe() {
+        var popped = sheetUp()
+        XCTAssertEqual(popped.handle(.report(.rows([.pop(paywall), .present(offer, presentation: .sheet)]))),
+                       [.dismiss])
+        XCTAssertEqual(popped.handle(.dismissed), [.present(offer, .sheet)])
+
+        var taken = sheetUp()
+        _ = taken.handle(.swipeBegan)
+        XCTAssertEqual(taken.handle(.report(.rows([.dismiss(reason: nil), .present(offer, presentation: .sheet)]))), [])
+        XCTAssertEqual(taken.handle(.swipeEnded(completed: true)), [.present(offer, .sheet)])
+        XCTAssertEqual(taken.sheet, .arriving(offer, leaving: false))
+
+        var kept = sheetUp()
+        _ = kept.handle(.swipeBegan)
+        _ = kept.handle(.report(.rows([.dismiss(reason: nil), .present(offer, presentation: .sheet)])))
+        XCTAssertEqual(kept.handle(.swipeEnded(completed: false)), [.dismiss])
+        XCTAssertEqual(kept.handle(.dismissed), [.present(offer, .sheet)])
+    }
+
+    /// A replacement the machine ends before the sheet it replaces has
+    /// gone, or a fault meanwhile: it is never presented, and a fault lets
+    /// go once the sheet has gone.
+    func testAReplacementEndedBeforeItComesUpIsNeverPresented() {
+        var popped = sheetUp()
+        _ = popped.handle(.report(.rows([.dismiss(reason: "swapped"), .present(offer, presentation: .sheet)])))
+        XCTAssertEqual(popped.handle(.report(.rows([.pop(offer)]))), [])
+        XCTAssertEqual(popped.handle(.dismissed), [])
+        XCTAssertEqual(popped.sheet, .none)
+        XCTAssertEqual(popped.record, .open(wakeAt: nil))
+
+        var faulted = sheetUp()
+        _ = faulted.handle(.report(.rows([.dismiss(reason: "swapped"), .present(offer, presentation: .sheet)])))
+        XCTAssertEqual(faulted.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork)])
+        XCTAssertEqual(faulted.handle(.dismissed), [.release])
+        XCTAssertEqual(faulted.sheet, .none)
+    }
+
     // MARK: Waking and ending
 
     /// The record's wake moment follows its last `wake at`; a wake is taken

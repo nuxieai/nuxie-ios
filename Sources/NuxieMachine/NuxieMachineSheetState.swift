@@ -18,6 +18,11 @@ import Foundation
 ///   is going up, or while the person swipes it, goes once that transition
 ///   is over: at once if the swipe was cancelled, not at all if the swipe
 ///   took it.
+/// - A presentation asked for while the last sheet is going (the machine
+///   dismissed or popped it and presented the next Screen in one delivery)
+///   waits until that sheet has gone, then comes up. The one controller is
+///   never asked to show two at once. One that is ended before then never
+///   comes up.
 /// - The machine hears `closed` only for a swipe that took the sheet while
 ///   the record was open and nothing had asked the sheet to go.
 /// - An ended or faulted record is final. Nothing moves it again, and a
@@ -94,8 +99,17 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         case release
     }
 
+    /// A presentation asked for while the last sheet was going, which comes
+    /// up once that sheet has gone.
+    package struct Next: Equatable, Sendable {
+        package let shown: NuxieMachineShown
+        package let presentation: NuxieMachinePresentation
+    }
+
     package private(set) var record: Record = .notStarted
     package private(set) var sheet: Sheet = .none
+    /// The presentation waiting for the last sheet to go, if one is.
+    package private(set) var next: Next?
     /// Whether [`Effect.release`] has been said.
     package private(set) var released = false
 
@@ -144,7 +158,7 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         case .dismissed:
             guard case .leaving = sheet else { return [] }
             sheet = .none
-            return []
+            return comeUp()
         case .swipeBegan:
             guard case .up(let shown) = sheet else { return [] }
             sheet = .swiping(shown, leaving: false)
@@ -158,7 +172,7 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
             sheet = .none
             // A swipe that took a sheet nothing else had asked to go is the
             // person's close, for the showing it took.
-            guard !leaving, case .open = record else { return [] }
+            guard !leaving, case .open = record else { return comeUp() }
             return [.close(shown)]
         case .wakeTaken(let moment):
             guard record == .open(wakeAt: moment) else { return [] }
@@ -176,12 +190,21 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
                 return fail(NuxieMachineEdgeFault(code: "edge.unsupported-presentation",
                     detail: "present showing \(shown.showing) as \(presentation); only a sheet and a cover are built"))
             }
-            guard sheet == .none else {
+            switch sheet {
+            case .none:
+                sheet = .arriving(shown, leaving: false)
+                return [.present(shown, presentation)]
+            case .leaving, .arriving(_, leaving: true), .swiping(_, leaving: true):
+                guard next == nil else {
+                    return fail(NuxieMachineEdgeFault(code: "edge.no-host",
+                        detail: "present showing \(shown.showing) while another waits for the last sheet to go"))
+                }
+                next = Next(shown: shown, presentation: presentation)
+                return []
+            case .arriving, .up, .swiping:
                 return fail(NuxieMachineEdgeFault(code: "edge.no-host",
                     detail: "present showing \(shown.showing) while the last sheet is still on screen"))
             }
-            sheet = .arriving(shown, leaving: false)
-            return [.present(shown, presentation)]
         case .pop(let shown):
             return leave(only: shown)
         case .dismiss:
@@ -196,8 +219,13 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     }
 
     /// Ask the sheet to go: the one for `only`, or whichever is on screen.
-    /// A sheet in a transition goes when the transition is over.
+    /// A sheet in a transition goes when the transition is over. A
+    /// presentation still waiting to come up never does.
     private mutating func leave(only: NuxieMachineShown?) -> [Effect] {
+        if let waiting = next, only == nil || only == waiting.shown {
+            next = nil
+            if only != nil { return [] }
+        }
         switch sheet {
         case .none, .leaving:
             return []
@@ -214,6 +242,16 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
             sheet = .swiping(shown, leaving: true)
             return []
         }
+    }
+
+    /// Once no sheet is left, the presentation waiting for that brings it
+    /// up, while the record is open.
+    private mutating func comeUp() -> [Effect] {
+        guard sheet == .none, let waiting = next else { return [] }
+        next = nil
+        guard case .open = record else { return [] }
+        sheet = .arriving(waiting.shown, leaving: false)
+        return [.present(waiting.shown, waiting.presentation)]
     }
 
     /// The one path for faults. The first end of a record stands: a fault

@@ -35,7 +35,8 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   has no swipe. Any other presentation is a fault: push and the rest are
 ///   not built.
 /// - `dismiss` dismisses the sheet; a `pop` of the presented showing does
-///   too.
+///   too. A `present` that comes with them, in the same delivery, waits for
+///   that sheet to go and then comes up.
 /// - A swipe down by the person is the native dismissal: the presenter tells
 ///   the edge `closed` for the showing the swipe took, and logs what the
 ///   machine answers.
@@ -259,7 +260,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             return
         }
         logger.info("machine.present-sheet \(shown.showing)")
-        controller.configure(for: presentation)
+        controller.configure(for: presentation, showing: shown)
         controller.presentationController?.delegate = self
         host.present(controller, animated: true) { [weak self] in self?.send(.presented) }
         controller.requestFrame()
