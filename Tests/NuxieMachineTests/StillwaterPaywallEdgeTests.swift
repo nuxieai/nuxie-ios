@@ -607,12 +607,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             }
             let (closeX, closeY) = center(Box.close)
             let (detailsX, detailsY) = center(Box.details)
+            let touched = await run.edge.shown
             let frame = await run.edge.frame(pointers: [
                 NuxieNativePointerEvent(kind: .down, x: closeX, y: closeY),
                 NuxieNativePointerEvent(kind: .up, x: closeX, y: closeY),
                 NuxieNativePointerEvent(kind: .down, x: detailsX, y: detailsY),
                 NuxieNativePointerEvent(kind: .up, x: detailsX, y: detailsY),
-            ], elapsedSeconds: Self.tick, now: run.advance())
+            ], on: touched, elapsedSeconds: Self.tick, now: run.advance())
             XCTAssertEqual(frame.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_close", "tap_details"])
             let after = await Array(run.edge.log.dropFirst(written))
             XCTAssertTrue(after.contains(.reported("tap_close")), "\(after)")
@@ -622,6 +623,41 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A touch belongs to the showing the person touched. "Not now" ends
+    /// the paywall, and while its sheet animates away the person taps "Not
+    /// now" again: those pointers touched a showing that has ended, so they
+    /// go to no one. The frames still run, the Screen reports nothing, and
+    /// the record waits for the evening offer as before, with no fault.
+    func testATouchOnAPaywallThatHasGoneGoesNowhere() async throws {
+        let run = try await Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            let firstShown = await run.edge.shown
+            let first = try XCTUnwrap(firstShown)
+            _ = try await run.tap(Box.close)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            let reports = run.owner.reports.count
+            let written = await run.edge.log.count
+
+            let reported = try await run.tap(Box.close, touching: first)
+            XCTAssertEqual(reported, [], "the departing paywall took the touch")
+            let after = await Array(run.edge.log.dropFirst(written))
+            XCTAssertEqual(after.filter { if case .droppedTouches = $0 { return true }; return false },
+                           [.droppedTouches(first), .droppedTouches(first)], "each frame's pointers go to no one")
+            XCTAssertFalse(after.contains { if case .reported = $0 { return true }; return false }, "\(after)")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            let open = try await run.edge.recordOpen()
+            XCTAssertTrue(open, "the record waits for the evening offer")
+            XCTAssertEqual(run.owner.reports.count, reports, "the owner was told something")
             try await run.close()
         } catch {
             try? await run.close()
@@ -645,12 +681,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             }
             let (monthlyX, monthlyY) = center(Box.monthly)
             let (closeX, closeY) = center(Box.close)
+            let touched = await run.edge.shown
             let frame = await run.edge.frame(pointers: [
                 NuxieNativePointerEvent(kind: .down, x: monthlyX, y: monthlyY),
                 NuxieNativePointerEvent(kind: .up, x: monthlyX, y: monthlyY),
                 NuxieNativePointerEvent(kind: .down, x: closeX, y: closeY),
                 NuxieNativePointerEvent(kind: .up, x: closeX, y: closeY),
-            ], elapsedSeconds: Self.tick, now: run.advance())
+            ], on: touched, elapsedSeconds: Self.tick, now: run.advance())
             XCTAssertEqual(frame.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_monthly", "tap_close"])
             let after = await Array(run.edge.log.dropFirst(written))
             XCTAssertTrue(after.contains(.reported("tap_monthly")), "\(after)")
@@ -748,9 +785,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let tick = Self.tick
             let requests = [
                 Task { _ = await edge.frame(pointers: [NuxieNativePointerEvent(kind: .down, x: x, y: y)],
-                                            elapsedSeconds: tick, now: at) },
+                                            on: shown, elapsedSeconds: tick, now: at) },
                 Task { _ = await edge.frame(pointers: [NuxieNativePointerEvent(kind: .up, x: x, y: y)],
-                                            elapsedSeconds: tick, now: at) },
+                                            on: shown, elapsedSeconds: tick, now: at) },
                 Task { _ = await edge.frame(elapsedSeconds: tick, now: at) },
                 Task { await edge.handleReported("tap_details", now: at) },
                 Task { await edge.closed(shown, now: at) },
@@ -992,11 +1029,12 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let x = Float(Box.buy[0] + Box.buy[2]) / 2
             let y = Float(Box.buy[1] + Box.buy[3]) / 2
             let at = run.advance()
+            let touched = await run.edge.shown
             await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .down, x: x, y: y)],
-                                 elapsedSeconds: Self.tick, now: at)
+                                 on: touched, elapsedSeconds: Self.tick, now: at)
             _ = run.asks.take()
             let tapped = await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .up, x: x, y: y)],
-                                              elapsedSeconds: Self.tick, now: at)
+                                              on: touched, elapsedSeconds: Self.tick, now: at)
             XCTAssertEqual(tapped.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_buy"])
             XCTAssertTrue(run.asks.take(), "the busy button was written")
             await run.edge.frame(elapsedSeconds: Self.tick, now: at)
@@ -1149,13 +1187,19 @@ private final class Run {
     /// pointer. The Screen's named events reported in all of them (the
     /// engine's reserved and unnamed ones left out, as the edge leaves them).
     func tap(_ box: [Int], framesAfter: Int = 3) async throws -> [String] {
+        try await tap(box, touching: edge.shown, framesAfter: framesAfter)
+    }
+
+    /// The same tap, on the Screen of the showing `touched`: the one the
+    /// person's view showed when the pointers arrived.
+    func tap(_ box: [Int], touching touched: NuxieMachineShown?, framesAfter: Int = 3) async throws -> [String] {
         let x = Float(box[0] + box[2]) / 2
         let y = Float(box[1] + box[3]) / 2
         let at = advance()
         var reported: [String] = []
         for kind in [NuxieNativePointerKind.down, .up] {
             reported += await edge.frame(pointers: [NuxieNativePointerEvent(kind: kind, x: x, y: y)],
-                                         elapsedSeconds: 1.0 / 60.0, now: at).reported
+                                         on: touched, elapsedSeconds: 1.0 / 60.0, now: at).reported
         }
         for _ in 0..<framesAfter {
             reported += await edge.frame(elapsedSeconds: 1.0 / 60.0, now: at).reported

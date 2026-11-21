@@ -13,7 +13,9 @@ import UIKit
 /// nothing more, so a Screen leaving the screen keeps its last frame and
 /// never shows the presentation that replaced it.
 ///
-/// Each display tick is one frame: the pointers that arrived, the edge's
+/// Each display tick is one frame: the pointers that arrived, each batch
+/// with the presentation it touched (the edge drops a batch whose
+/// presentation is no longer the one presented), the edge's
 /// frame (engine step, engine events to the machine, writes to cells, the
 /// store's answers), then a draw. Frames run in the Screen's lane
 /// ([`inLane`]), where the owner makes its own calls to the edge, so the
@@ -278,17 +280,23 @@ package final class NuxieMachineScreenViewController: UIViewController {
         guard !stopped, !frameInFlight else { return }
         frameRequested = false
         frameInFlight = true
+        // The pointers go with the presentation they touched. The frame's
+        // wakes run first and may end it, and the edge then drops them.
+        let touched = presented?.shown
         let pointers = presented?.pointers ?? []
         presented?.pointers = []
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.inLane { await self.runFrame(pointers: pointers, elapsedSeconds: elapsed) }
+            await self.inLane {
+                await self.runFrame(pointers: pointers, touched: touched, elapsedSeconds: elapsed)
+            }
         }
     }
 
-    private func runFrame(pointers: [NuxieNativePointerEvent], elapsedSeconds: Float) async {
+    private func runFrame(pointers: [NuxieNativePointerEvent], touched: NuxieMachineShown?,
+                          elapsedSeconds: Float) async {
         let frame: NuxieMachineFrame
         var doing = "resize"
         let now = nuxieMachineNow()
@@ -306,7 +314,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
             var screen: NuxieNativeRuntime?
             if hasSize, let showing { screen = await edge.screen(for: showing) }
             if let screen, let showing { try await applySize(screen, for: showing) }
-            frame = await edge.frame(pointers: pointers, elapsedSeconds: elapsedSeconds, now: now)
+            frame = await edge.frame(pointers: pointers, on: touched, elapsedSeconds: elapsedSeconds, now: now)
             doing = "render"
             if drawing, !stopped, let showing {
                 // A delivery in the frame may have ended the presentation:

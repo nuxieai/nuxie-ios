@@ -116,7 +116,89 @@ final class OneDeliveryEdgeTests: XCTestCase {
         try await run.edge.close()
     }
 
+    // MARK: A touch for the presentation that was replaced
+
+    /// The noon wake replaces the Clock while the person's view still shows
+    /// the first one (UIKit has not dismissed it yet), and their tap on its
+    /// Close button arrives in the next frame. The tap touched the first
+    /// showing, so it goes to no one: the new Clock stays presented, the
+    /// owner is told nothing, and the frame still runs. The same tap on the
+    /// new Clock, once it is the one shown, closes it.
+    func testOnTheDriverPathATapOnTheReplacedScreenGoesToNoOne() async throws {
+        let run = try OneDelivery(compiled: Self.compiledReplacing)
+        await run.edge.start(event: "opened", now: run.now)
+        let firstShown = await run.edge.shown
+        let first = try XCTUnwrap(firstShown, "the start presents the clock")
+        run.jump(to: 12 * Self.hour)
+        await run.edge.wake(now: run.now)
+        let secondShown = await run.edge.shown
+        let second = try XCTUnwrap(secondShown, "the wake presents the clock again")
+        XCTAssertNotEqual(second, first)
+        let screen = await run.edge.screen()
+        let player = try XCTUnwrap(screen, "the new presentation has a player")
+        try await player.setLayoutSize(width: 390, height: 844)
+        _ = try await player.resize(pixelWidth: 780, pixelHeight: 1688)
+        try await expectTapGoesOnlyToItsShowing(first: first, second: second, in: run, at: Self.clockClose)
+    }
+
+    func testOnTheRowPathATapOnTheReplacedPaywallGoesToNoOne() async throws {
+        let run = try await OneDelivery(artwork: Self.artworkReplacing)
+        await run.edge.start(event: "go", now: run.now)
+        let firstShown = await run.edge.shown
+        let first = try XCTUnwrap(firstShown, "the start presents the paywall")
+        run.jump(to: 12 * Self.hour)
+        await run.edge.wake(now: run.now)
+        let secondShown = await run.edge.shown
+        let second = try XCTUnwrap(secondShown, "the wake presents the paywall again")
+        XCTAssertNotEqual(second, first)
+        try await expectTapGoesOnlyToItsShowing(first: first, second: second, in: run, at: Self.paywallNotNow)
+    }
+
+    /// Where the Clock's Close button is: below the line, inside the
+    /// button's wide padding, whether the column stretches it or not.
+    private static let clockClose = (x: Float(150), y: Float(200))
+    /// The center of Stillwater's "Not now" on its 390 by 844 Screen.
+    private static let paywallNotNow = (x: Float(195), y: Float(690))
+
     // MARK: Expectations
+
+    /// A tap at `point` that touched `first`, which a delivery has replaced
+    /// with `second`, goes to no one: no fault, `second` still presented,
+    /// the owner told nothing, and the pointers recorded as dropped. The
+    /// same tap on `second` closes it, which ends the record.
+    private func expectTapGoesOnlyToItsShowing(first: NuxieMachineShown, second: NuxieMachineShown,
+                                               in run: OneDelivery, at point: (x: Float, y: Float),
+                                               file: StaticString = #filePath, line: UInt = #line) async throws {
+        // A frame with no pointer first, as the departing Screen animates
+        // away: it lays the new Screen out, so a tap that reached it would
+        // land on its controls.
+        await run.edge.frame(elapsedSeconds: 1.0 / 60.0, now: run.now)
+        let reports = run.owner.reports.count
+        let written = await run.edge.log.count
+        await run.tap(at: point, touching: first)
+        var fault = await run.edge.fault
+        XCTAssertNil(fault, "a dropped tap faulted", file: file, line: line)
+        let still = await run.edge.shown
+        XCTAssertEqual(still, second, "the tap on the replaced Screen reached the new one", file: file, line: line)
+        XCTAssertEqual(Array(run.owner.reports.dropFirst(reports)), [], "the owner was told", file: file, line: line)
+        let after = await Array(run.edge.log.dropFirst(written))
+        XCTAssertTrue(after.contains(.droppedTouches(first)), "\(after)", file: file, line: line)
+
+        await run.tap(at: point, touching: second)
+        fault = await run.edge.fault
+        XCTAssertNil(fault, "the tap on the new Screen faulted", file: file, line: line)
+        let told = run.owner.reports.dropFirst(reports).flatMap { report -> [NuxieMachineHostRow] in
+            if case .rows(let rows) = report { return rows }
+            return []
+        }
+        XCTAssertTrue(told.contains(.dismiss(reason: "closed")), "the new Screen took no tap: \(told)",
+                      file: file, line: line)
+        XCTAssertTrue(told.contains(.end(.exited)), "\(told)", file: file, line: line)
+        let gone = await run.edge.shown
+        XCTAssertNil(gone, file: file, line: line)
+        try await run.edge.close()
+    }
+
 
     /// The delivery opened nothing and told the owner nothing about showing:
     /// no player, no presentation under way, no `present`, `pop` or
@@ -272,7 +354,7 @@ final class OneDeliveryEdgeTests: XCTestCase {
                       view
                         column padding=24 gap=12 background-color=#0d1214
                           text "One delivery." color=#eef3f1 font-size=24 id="line"
-                          button padding=12 press=close id="close"
+                          button padding=120 press=close id="close"
                             text "Close" color=#8a9794 font-size=16
 
                     """),
@@ -383,6 +465,16 @@ private final class OneDelivery {
     /// Move the clock to `moment`, as a host does before delivering a wake.
     func jump(to moment: Int64) {
         now = max(now, moment)
+    }
+
+    /// One frame whose pointers press and release at `point` on the Screen
+    /// of the showing `touched`: the one the person's view showed when they
+    /// arrived.
+    func tap(at point: (x: Float, y: Float), touching touched: NuxieMachineShown?) async {
+        let pointers = [NuxieNativePointerKind.down, .up].map {
+            NuxieNativePointerEvent(kind: $0, x: point.x, y: point.y)
+        }
+        await edge.frame(pointers: pointers, on: touched, elapsedSeconds: 1.0 / 60.0, now: now)
     }
 }
 
