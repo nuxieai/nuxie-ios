@@ -312,8 +312,8 @@ package final class NuxieMachineFrameAsks: @unchecked Sendable {
 /// `dismiss`. The log keeps every row either way.
 package actor NuxieMachineEdge {
     private let session: NuxieMachineSession
-    /// What draws the presented route.
-    private var drawing: Drawing
+    /// What draws the presented route, chosen once.
+    private let drawing: Drawing
     private let store: any NuxieMachineStore
     /// The owner, told only by [`deliver`].
     private let owner: @Sendable (NuxieMachineEdgeReport) -> Void
@@ -321,9 +321,38 @@ package actor NuxieMachineEdge {
     /// Where this edge asks its host for a frame ([`waitsForFrame`]).
     package nonisolated let frameAsks = NuxieMachineFrameAsks()
 
+    /// Everything that belongs to one presentation, in one value: made
+    /// whole by its `present` row and dropped whole by its `pop` or
+    /// `dismiss` ([`endPresentation`]). What outlives a presentation (the
+    /// session, the record's calls, the mailbox, the log, the published
+    /// Screen on the row path) is kept outside it.
+    private struct Presented {
+        /// The presented instance of the route, with its showing.
+        let shown: NuxieMachineShown
+        /// On the driver path, the instance's player, with the session's
+        /// driver for this presentation set on it.
+        let player: NuxieNativeRuntime?
+        /// Whether the presented Screen owes a step: something it has not
+        /// drawn waits for one.
+        ///
+        /// - On the row path, a write landed in a cell since the last step.
+        /// - On the driver path, the session holds a scene write until the
+        ///   presented instance's next round, which runs only inside a step,
+        ///   and it cannot say whether it holds one. So every delivery that
+        ///   enters a driven session while a player is presented leaves a
+        ///   step owed ([`deliver`]), and so does opening the player, whose
+        ///   first writes are held for its first step.
+        ///
+        /// A step clears it.
+        var stepOwed: Bool
+    }
+
+    /// The presentation under way, while one is.
+    private var presented: Presented?
+
     /// The presented instance of the route, while it is presented, with its
     /// showing. A host names it when the person closes it ([`closed`]).
-    package private(set) var shown: NuxieMachineShown?
+    package var shown: NuxieMachineShown? { presented?.shown }
     /// How many `present` rows the edge has applied.
     private var showings: UInt64 = 0
     /// The open record's calls the edge has started at the store and not
@@ -346,25 +375,11 @@ package actor NuxieMachineEdge {
     private var mailbox: [Answer] = []
     /// The store's work in flight, by call, until its answer arrives.
     private var working: [NuxieMachineCallID: Task<Void, Never>] = [:]
-    /// Whether the presented Screen owes a step: something it has not drawn
-    /// waits for one.
-    ///
-    /// - On the row path, a write landed in a cell since the last step.
-    /// - On the driver path, the session holds a scene write until the
-    ///   presented instance's next round, which runs only inside a step, and
-    ///   it cannot say whether it holds one. So every delivery that enters a
-    ///   driven session while a player is presented leaves a step owed
-    ///   ([`deliver`]), and so does opening a player, whose first writes are
-    ///   held for its first step.
-    ///
-    /// A step clears it, and so does freeing the player: nothing is drawn
-    /// then.
-    private var stepOwed = false
-
     /// Whether work only a frame consumes is waiting for one, the one rule
     /// a host's frames follow. A frame consumes two things:
     ///
-    /// - a step owed ([`stepOwed`]), which only a frame's step pays;
+    /// - a step owed ([`Presented.stepOwed`]), which only a frame's step
+    ///   pays;
     /// - a store's answer in the mailbox, which only a frame's turn
     ///   delivers.
     ///
@@ -380,7 +395,7 @@ package actor NuxieMachineEdge {
     /// fills. So a host that runs a frame for each ask never rests while it
     /// holds, and keeps no state of its own about it.
     private var waitsForFrame: Bool {
-        fault == nil && !closedScreen && (stepOwed || !mailbox.isEmpty)
+        fault == nil && !closedScreen && (presented?.stepOwed == true || !mailbox.isEmpty)
     }
 
     private enum CellKind: Equatable {
@@ -392,9 +407,9 @@ package actor NuxieMachineEdge {
     private enum Drawing {
         /// Hand-written artwork for one route, on the row path.
         case artwork(Artwork)
-        /// The plan's compiled views, on the driver path: the player of the
-        /// presented instance while one is presented.
-        case compiled(NuxieNativeRuntime?)
+        /// The plan's compiled views, on the driver path: each presentation
+        /// opens its own player ([`Presented.player`]).
+        case compiled
     }
 
     /// One published Screen, opened once, with its root view model bound.
@@ -468,7 +483,7 @@ package actor NuxieMachineEdge {
             app: plan.app, experience: plan.experience, version: plan.version)
         try session.driveScene()
         self.session = session
-        self.drawing = .compiled(nil)
+        self.drawing = .compiled
         self.store = store
         self.owner = onReport
     }
@@ -510,7 +525,7 @@ package actor NuxieMachineEdge {
             guard !closedScreen else { return nil }
             switch drawing {
             case .artwork(let artwork): return artwork.runtime
-            case .compiled(let player): return player
+            case .compiled: return presented?.player
             }
         }
     }
@@ -671,11 +686,12 @@ package actor NuxieMachineEdge {
         try await inTurn { _ in
             closedScreen = true
             mailbox = []
+            let player = presented?.player
+            presented = nil
             switch drawing {
             case .artwork(let artwork):
                 try await artwork.runtime.close()
-            case .compiled(let player):
-                drawing = .compiled(nil)
+            case .compiled:
                 try await player?.close()
             }
         }
@@ -716,8 +732,8 @@ package actor NuxieMachineEdge {
     ) async -> Value {
         guard fault == nil, !closedScreen else { return stopped }
         // A delivery into a driven session may leave writes held for the
-        // presented instance's next round; only a step runs one ([`stepOwed`]).
-        if case .compiled(.some) = drawing { stepOwed = true }
+        // presented instance's next round; only a step runs one.
+        if presented?.player != nil { presented?.stepOwed = true }
         var delivery = Delivery(turn)
         let result = await body(&delivery)
         if let report = delivery.report {
@@ -745,12 +761,10 @@ package actor NuxieMachineEdge {
         switch drawing {
         case .artwork(let artwork):
             return await step(artwork, pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
-        case .compiled(let player?):
+        case .compiled:
+            // With nothing presented, nothing is drawn and nothing reports.
+            guard let player = presented?.player else { return ([], false) }
             return await step(player, pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
-        case .compiled(nil):
-            // Nothing is presented, so nothing is drawn and nothing reports.
-            stepOwed = false
-            return ([], false)
         }
     }
 
@@ -786,7 +800,7 @@ package actor NuxieMachineEdge {
         }
         // The step's first round applied everything held for the instance,
         // and its later rounds applied their own writes.
-        stepOwed = false
+        presented?.stepOwed = false
         let rows: [NuxieMachineRow]
         do {
             rows = try session.rows()
@@ -810,7 +824,7 @@ package actor NuxieMachineEdge {
         let stepped = shown
         // This step lays out every cell written before it; a write the
         // events below make shows on the next.
-        stepOwed = false
+        presented?.stepOwed = false
         let step: NuxieNativePlayerStepResult
         do {
             step = try await artwork.runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
@@ -932,28 +946,29 @@ package actor NuxieMachineEdge {
                         detail: "present \(route) as \(instance) while \(shown.instance) is presented"), &delivery)
                     return
                 }
+                var player: NuxieNativeRuntime?
                 if case .compiled = drawing {
-                    guard await openPlayer(for: instance, route: route, &delivery) else { return }
+                    guard let opened = await openPlayer(for: instance, route: route, &delivery) else { return }
+                    player = opened
                 }
                 showings += 1
-                let presented = NuxieMachineShown(showing: showings, instance: instance)
-                shown = presented
+                let showing = NuxieMachineShown(showing: showings, instance: instance)
+                // A new player's first writes are held for its first step.
+                presented = Presented(shown: showing, player: player, stepOwed: player != nil)
                 log.append(.present(route: route, instance: instance, presentation: presentation))
-                delivery.told(.present(presented, presentation: presentation))
+                delivery.told(.present(showing, presentation: presentation))
             case .pop(let instance):
                 guard let popped = shown, instance == popped.instance else {
                     fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
                         detail: "pop \(instance), which is not presented"), &delivery)
                     return
                 }
-                shown = nil
                 log.append(.pop(instance: instance))
-                await closePlayer(&delivery)
+                await endPresentation(&delivery)
                 delivery.told(.pop(popped))
             case .dismiss(let reason):
-                shown = nil
                 log.append(.dismiss(reason: reason))
-                await closePlayer(&delivery)
+                await endPresentation(&delivery)
                 delivery.told(.dismiss(reason: reason))
             case .sceneSet(let instance, let object, let key, let value):
                 guard case .artwork(let artwork) = drawing else {
@@ -1019,7 +1034,7 @@ package actor NuxieMachineEdge {
             fail(NuxieMachineEdgeFault(code: "engine.write", detail: "\(cell): \(error)"), &delivery)
             return
         }
-        stepOwed = true
+        presented?.stepOwed = true
         log.append(.write(cell: cell, value: value))
     }
 
@@ -1076,9 +1091,10 @@ package actor NuxieMachineEdge {
     /// compiled records, at the artboard its component is drawn in, with the
     /// session's driver for this presentation set on it once. The writes the
     /// presenting step made are held for that driver and land in the
-    /// player's first step. False, with the edge stopped, when any of it
+    /// player's first step. None, with the edge stopped, when any of it
     /// fails.
-    private func openPlayer(for instance: UInt64, route: String, _ delivery: inout Delivery) async -> Bool {
+    private func openPlayer(for instance: UInt64, route: String,
+                            _ delivery: inout Delivery) async -> NuxieNativeRuntime? {
         let player: NuxieNativeRuntime
         do {
             let records = try session.sceneRecords()
@@ -1088,10 +1104,10 @@ package actor NuxieMachineEdge {
         } catch NuxieMachineError.noArtboard {
             fail(NuxieMachineEdgeFault(code: "edge.no-artwork",
                 detail: "present \(route) as \(instance); its component has no view"), &delivery)
-            return false
+            return nil
         } catch {
             fail(Self.openFault(error, doing: "open \(route)"), &delivery)
-            return false
+            return nil
         }
         do {
             let driver = try session.sceneDriver(instance: instance, writers: .engine)
@@ -1099,19 +1115,17 @@ package actor NuxieMachineEdge {
         } catch {
             try? await player.close()
             fail(Self.openFault(error, doing: "drive \(route)"), &delivery)
-            return false
+            return nil
         }
-        drawing = .compiled(player)
-        stepOwed = true
-        return true
+        return player
     }
 
-    /// The presented instance's player, freed when its presentation ends:
-    /// freeing it releases its driver, and the session outlives it.
-    private func closePlayer(_ delivery: inout Delivery) async {
-        guard case .compiled(let player?) = drawing else { return }
-        drawing = .compiled(nil)
-        stepOwed = false
+    /// The presentation under way ends, whole: its player, if it has one, is
+    /// freed, which releases its driver; the session outlives it.
+    private func endPresentation(_ delivery: inout Delivery) async {
+        guard let ended = presented else { return }
+        presented = nil
+        guard let player = ended.player else { return }
         do {
             try await player.close()
         } catch {

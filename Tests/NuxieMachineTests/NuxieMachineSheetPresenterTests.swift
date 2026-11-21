@@ -121,10 +121,11 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     /// at a phone's size. Its safe areas are the device's, with a status
     /// bar's and a home indicator's added, so both edges have one.
     @MainActor
-    private static func screen() throws -> (NuxieMachineScreenViewController, UIWindow) {
-        let plan = NuxieMachinePlanSource(
+    private static func screen(
+        plan: NuxieMachinePlanSource = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: waitsForTheEvening)],
             root: "main", app: "app", experience: "evening", version: 1)
+    ) throws -> (NuxieMachineScreenViewController, UIWindow) {
         let edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(), onReport: { _ in })
         let controller = NuxieMachineScreenViewController(edge: edge)
         controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
@@ -133,6 +134,135 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         window.isHidden = false
         return (controller, window)
     }
+
+    /// A compiled Screen presented, dismissed and presented again at the
+    /// same size: each presentation's Screen is a new player, and each is
+    /// laid out at its surface's size, not at the size it opened with. The
+    /// first player is freed before the second opens, so the second can take
+    /// its address; nothing of the first presentation may decide how the
+    /// second is sized.
+    @MainActor
+    func testACompiledScreenPresentedAgainAtTheSameSizeIsSizedToItsSurface() async throws {
+        let (controller, window) = try Self.screen(plan: Self.presentsTwice)
+        let edge = controller.edge
+        let hour: Int64 = 3_600_000
+        await controller.inLane { await edge.start(event: "opened", now: 9 * hour) }
+        controller.configure(for: .cover)
+        controller.start()
+        let surface = try XCTUnwrap(controller.view.subviews.first, "the Screen's surface")
+        window.layoutIfNeeded()
+        let expected = surface.bounds.size
+        let first = try await Self.laidOut(edge, at: expected, "the first presentation", first: nil)
+
+        // The noon wake dismisses the Screen; the evening's presents it again.
+        await controller.inLane { await edge.wake(now: 12 * hour) }
+        let between = await edge.screen()
+        XCTAssertNil(between, "the dismiss freed the first player")
+        await controller.inLane { await edge.wake(now: 18 * hour) }
+        controller.configure(for: .cover)
+        _ = try await Self.laidOut(edge, at: expected, "the second presentation", first: first)
+        controller.stop()
+        withExtendedLifetime(window) {}
+    }
+
+    /// A record that presents its Screen as a cover, dismisses it at noon
+    /// and presents it again in the evening, with no touch.
+    private static let presentsTwice = NuxieMachinePlanSource(
+        files: [
+            NuxieMachineSourceFile(path: "main.nux", text: """
+                use Clock from "clock"
+
+                component Again
+                  platforms ios android
+
+                  state first_up = false
+                  state later = false
+
+                  entry
+                    on event "opened"
+                    do start
+
+                  routes
+                    clock  Clock(close=close)  cover
+
+                  action start
+                    first_up = true
+                    go(clock)
+
+                  wait noon
+                    while first_up
+                    until next 12:00
+                    then hide within 6h
+                    else give_up
+
+                  action hide
+                    first_up = false
+                    later = true
+                    dismiss("hidden")
+
+                  wait evening
+                    while later
+                    until next 18:00
+                    then show_again within 6h
+                    else give_up
+
+                  action show_again
+                    later = false
+                    go(clock)
+
+                  action give_up
+                    first_up = false
+                    later = false
+                    exit
+
+                  action close
+                    dismiss("closed")
+                    exit
+
+                """),
+            NuxieMachineSourceFile(path: "clock.nux", text: """
+                component Clock
+                  props
+                    close: action
+
+                  view
+                    column padding=24 gap=12 background-color=#0d1214
+                      text "The same Screen, again." color=#eef3f1 font-size=24 id="line"
+                      button padding=12 press=close id="close"
+                        text "Close" color=#8a9794 font-size=16
+
+                """),
+        ],
+        root: "main", app: "app", experience: "again", version: 1)
+
+    /// Wait until the presented Screen is laid out at `expected`, as the
+    /// Screen's frames lay it out, and give its address. Only the address is
+    /// kept, so the check holds no player alive; `first` is the first
+    /// presentation's, to say whether the second took it.
+    @MainActor
+    private static func laidOut(_ edge: NuxieMachineEdge, at expected: CGSize, _ what: String,
+                                first: ObjectIdentifier?) async throws -> ObjectIdentifier {
+        let deadline = Date().addingTimeInterval(10)
+        var seen: CGSize?
+        var address: ObjectIdentifier?
+        while Date() < deadline {
+            if let screen = await edge.screen() {
+                address = ObjectIdentifier(screen)
+                let size = try await screen.layoutSize()
+                seen = size
+                if abs(size.width - expected.width) < 1, abs(size.height - expected.height) < 1 {
+                    return ObjectIdentifier(screen)
+                }
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let reused = first.map { $0 == address } ?? false
+        let took = first == nil ? "" : "; it took the first player's address: \(reused)"
+        XCTFail("\(what) was laid out at \(String(describing: seen)), not its surface's \(expected)\(took)")
+        throw NotLaidOut()
+    }
+
+    private struct NotLaidOut: Error {}
 
     /// Configure `controller` for `presentation`, lay it out, and check it:
     /// a cover draws inside the safe area over a black ground, full screen,
