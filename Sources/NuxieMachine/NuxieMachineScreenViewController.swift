@@ -51,11 +51,35 @@ package final class NuxieMachineScreenViewController: UIViewController {
         didSet { updateAccessibility() }
     }
 
-    /// Frames drawn to the screen so far.
-    package private(set) var framesDrawn = 0
+    /// Everything that belongs to one presentation of the Screen, in one
+    /// value: made whole by [`configure`] before UIKit presents the Screen,
+    /// and dropped whole once UIKit has dismissed it. Nothing of a
+    /// presentation is kept anywhere else in the controller, so nothing of
+    /// one can survive into the next by being forgotten; what outlives a
+    /// presentation (the lane, the loop, the edge and the view) is kept
+    /// outside it.
+    private struct Presented {
+        /// How the Screen is presented: a sheet or a cover.
+        let style: NuxieMachinePresentation
+        /// Pointers that arrived and wait for the next frame.
+        var pointers: [NuxieNativePointerEvent] = []
+        /// Frames drawn to the screen.
+        var framesDrawn = 0
+        /// The size the engine lays this presentation's Screen out at and
+        /// draws, once applied. One presentation draws one Screen, so the
+        /// size alone says what was done; nothing names the Screen.
+        var sized: Size?
+    }
 
-    /// How the Screen is presented now, as the last [`configure`] said.
-    package private(set) var presentation: NuxieMachinePresentation = .sheet
+    /// The presentation under way, from its [`configure`] until UIKit has
+    /// dismissed it.
+    private var presented: Presented?
+
+    /// Frames drawn in the presentation under way.
+    package var framesDrawn: Int { presented?.framesDrawn ?? 0 }
+
+    /// How the Screen is presented now, while a presentation is under way.
+    package var presentation: NuxieMachinePresentation? { presented?.style }
 
     private let surface = NuxieMachineSurfaceView()
     /// The container's ground and the two ways the surface sits in it: in
@@ -79,7 +103,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
     ]
     // Touched off the main actor only by `deinit`, after every other use.
     private nonisolated(unsafe) var displayLink: CADisplayLink?
-    private var pendingPointers: [NuxieNativePointerEvent] = []
     private var frameInFlight = false
     private var frameRequested = true
     private var stopped = false
@@ -89,10 +112,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The display time of the last frame; none after a rest, so the frame
     /// that wakes the loop advances by zero, not by the time it rested.
     private var lastTimestamp: CFTimeInterval?
-    /// The size the engine lays the Screen out at and draws, once applied,
-    /// and the Screen it was applied to.
-    private var appliedSize: Size?
-    private var sizedScreen: ObjectIdentifier?
+    /// Whether the surface's layer has been given the engine's Metal device,
+    /// which every Screen the engine opens shares.
     private var deviceConfigured = false
     // Touched off the main actor only by `deinit`, after every other use.
     private nonisolated(unsafe) var notificationTokens: [NSObjectProtocol] = []
@@ -125,8 +146,10 @@ package final class NuxieMachineScreenViewController: UIViewController {
         surface.accessibilityIdentifier = "nuxie-machine-screen"
         surface.accessibilityLabel = "Screen"
         surface.onPointers = { [weak self] pointers in
-            guard let self, !self.stopped else { return }
-            self.pendingPointers += pointers
+            // A pointer belongs to the presentation it touched; with none
+            // under way it goes to no one.
+            guard let self, !self.stopped, self.presented != nil else { return }
+            self.presented?.pointers += pointers
             self.requestFrame()
         }
         surface.onGeometryChange = { [weak self] in self?.requestFrame() }
@@ -154,30 +177,32 @@ package final class NuxieMachineScreenViewController: UIViewController {
         requestFrame()
     }
 
-    /// Set this controller up for one presentation, before UIKit presents
-    /// it. A record keeps one Screen for its whole life (its lane and its
-    /// loop outlive every presentation, and run with none), so the same
-    /// controller is presented again, in either style: everything a
-    /// presentation decides is set here, for every presentation.
-    ///
-    /// - Its style ([`applyStyle`]): everything that depends on a sheet or
-    ///   a cover. Any other presentation is laid out as a sheet; the
-    ///   presenter refuses it before it gets here.
-    /// - What belonged to the presentation before: pointers not yet handed
-    ///   to a frame are dropped, and the count of frames drawn starts again,
-    ///   so the accessibility value says "loading" until this
-    ///   presentation's Screen has drawn its first frame.
+    /// Begin one presentation, before UIKit presents the Screen: a new
+    /// [`Presented`] replaces whatever was there, whole, and the controller
+    /// is set up for its style. A record keeps one Screen controller for its
+    /// whole life (its lane and its loop outlive every presentation, and run
+    /// with none), so the same controller is presented again, in either
+    /// style; a presentation starts from nothing each time. Until its Screen
+    /// draws its first frame, the accessibility value says "loading".
     package func configure(for presentation: NuxieMachinePresentation) {
-        self.presentation = presentation
-        pendingPointers = []
-        framesDrawn = 0
+        presented = Presented(style: presentation)
         updateAccessibility()
         applyStyle()
     }
 
-    /// Everything that depends on how the Screen is presented, set from
-    /// [`presentation`]: the one place each of these is decided, read when
-    /// the view loads and again at every [`configure`].
+    /// The presentation is over once UIKit has dismissed the Screen, by the
+    /// presenter or by the person's swipe: everything of it goes, whole.
+    override package func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isBeingDismissed { presented = nil }
+    }
+
+    /// Everything that depends on how the Screen is presented, set from the
+    /// presentation under way: the one place each of these is decided, read
+    /// when the view loads and again at every [`configure`]. With no
+    /// presentation under way nothing is laid out. Any style other than a
+    /// cover is laid out as a sheet; the presenter refuses the others before
+    /// they get here.
     ///
     /// - A cover: full screen, which has no swipe; the Screen in the safe
     ///   area over a black ground, since a view's safe areas do not reach
@@ -186,7 +211,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     ///   the person can swipe down (the native close); the Screen across
     ///   the whole sheet over no ground.
     private func applyStyle() {
-        let covers = presentation == .cover
+        guard let style = presented?.style else { return }
+        let covers = style == .cover
         modalPresentationStyle = covers ? .fullScreen : .pageSheet
         isModalInPresentation = covers
         if !covers, let sheet = sheetPresentationController {
@@ -237,7 +263,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         displayLink = nil
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
         notificationTokens = []
-        pendingPointers = []
+        presented?.pointers = []
     }
 
     // MARK: Frames
@@ -246,8 +272,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
         guard !stopped, !frameInFlight else { return }
         frameRequested = false
         frameInFlight = true
-        let pointers = pendingPointers
-        pendingPointers = []
+        let pointers = presented?.pointers ?? []
+        presented?.pointers = []
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
@@ -267,8 +293,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
         }
         do {
             let drawing = isDrawable
-            // The Screen this frame steps, sized before the step lays it out.
-            let screen = drawing ? await edge.screen() : nil
+            // The Screen this frame steps, sized before the step lays it out
+            // whenever its view has a size, drawn only when it is on screen.
+            let screen = hasSize ? await edge.screen() : nil
             if let screen { try await applySize(screen) }
             frame = await edge.frame(pointers: pointers, elapsedSeconds: elapsedSeconds, now: now)
             doing = "render"
@@ -301,31 +328,39 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// the engine's step.
     private func rest(after frame: NuxieMachineFrame) {
         guard !stopped else { return }
-        let another = frameRequested || !pendingPointers.isEmpty || (isDrawable && frame.keepGoing)
+        let pointers = !(presented?.pointers.isEmpty ?? true)
+        let another = frameRequested || pointers || (isDrawable && frame.keepGoing)
         displayLink?.isPaused = !another
         if !another { lastTimestamp = nil }
     }
 
-    /// Whether this Screen is in a window of a scene in the foreground,
-    /// with a size.
-    private var isDrawable: Bool {
-        guard let scene = surface.window?.windowScene,
-              scene.activationState == .foregroundActive || scene.activationState == .foregroundInactive
-        else { return false }
-        return surface.bounds.width > 0 && surface.bounds.height > 0
+    /// Whether this Screen's view is in a window, with a size: what the
+    /// engine lays it out at.
+    private var hasSize: Bool {
+        surface.window != nil && surface.bounds.width > 0 && surface.bounds.height > 0
             && surface.displayScale.isFinite && surface.displayScale > 0
     }
 
-    /// Lay the Screen out at the view's size and size the renderer to its
-    /// pixels when either changed, before the step that lays it out. The
-    /// sizes follow the SDK's Screen: pixels are the points times the scale,
-    /// rounded up, and the layout size is the pixels over the scale.
+    /// Whether this Screen is in a window of a scene in the foreground,
+    /// with a size: whether it is drawn.
+    private var isDrawable: Bool {
+        guard hasSize, let scene = surface.window?.windowScene,
+              scene.activationState == .foregroundActive || scene.activationState == .foregroundInactive
+        else { return false }
+        return true
+    }
+
+    /// Lay the presentation's Screen out at the view's size and size the
+    /// renderer to its pixels, before the step that lays it out: at its
+    /// first frame, and again whenever the view's size changes. The sizes
+    /// follow the SDK's Screen: pixels are the points times the scale,
+    /// rounded up, and the layout size is the pixels over the scale. With no
+    /// presentation under way nothing is sized.
     private func applySize(_ runtime: NuxieNativeRuntime) async throws {
         let scale = surface.displayScale
         let size = Size(pixelWidth: Self.pixels(surface.bounds.width, scale),
                         pixelHeight: Self.pixels(surface.bounds.height, scale), scale: Float(scale))
-        let identity = ObjectIdentifier(runtime)
-        guard size != appliedSize || identity != sizedScreen else { return }
+        guard let current = presented, current.sized != size else { return }
         if !deviceConfigured {
             let device = try await runtime.metalDevice().value
             let layer = surface.metalLayer
@@ -342,13 +377,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let outcome = try await runtime.resize(pixelWidth: size.pixelWidth, pixelHeight: size.pixelHeight)
         try Self.requireHealthy(outcome, doing: "resize")
         surface.metalLayer.drawableSize = CGSize(width: Int(size.pixelWidth), height: Int(size.pixelHeight))
-        appliedSize = size
-        sizedScreen = identity
+        presented?.sized = size
     }
 
     /// Draw the Screen as the last step left it, and wait for the GPU.
     private func draw(_ runtime: NuxieNativeRuntime) async throws {
-        guard let size = appliedSize else { return }
+        guard let size = presented?.sized else { return }
         guard let drawable = surface.metalLayer.nextDrawable() else {
             // No drawable this tick: ask for another frame to draw it.
             frameRequested = true
@@ -361,7 +395,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         await completion.wait()
         try Self.requireHealthy(outcome, doing: "render")
         if outcome.disposition == .presented {
-            framesDrawn += 1
+            presented?.framesDrawn += 1
             updateAccessibility()
         } else {
             frameRequested = true
