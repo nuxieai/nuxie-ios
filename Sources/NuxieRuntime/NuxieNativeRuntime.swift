@@ -552,6 +552,63 @@ package struct NuxieNativeMetalDevice: @unchecked Sendable {
     package let value: any MTLDevice
 }
 
+/// A host driver for a player's step, as the engine's `NuxPlayerDriver`
+/// holds it: a context, and the C functions the engine calls with it.
+/// `drive` is a function of the type of `NuxPlayerDriver.drive`, and
+/// `release`, when present, of `NuxPlayerDriver.release`. The engine calls
+/// `drive` once after each step's advance, and again after each round that
+/// changed the scene, on the thread that steps; it calls `release` once,
+/// when the driver is replaced or its player freed. Whoever makes one
+/// vouches for both functions and for `context` living until `release`.
+package struct NuxieNativePlayerDriver: @unchecked Sendable {
+    package let context: UnsafeMutableRawPointer?
+    package let drive: UnsafeRawPointer
+    package let release: UnsafeRawPointer?
+
+    package init(context: UnsafeMutableRawPointer?, drive: UnsafeRawPointer, release: UnsafeRawPointer?) {
+        self.context = context
+        self.drive = drive
+        self.release = release
+    }
+}
+
+/// The addresses of the engine's six scene writer functions
+/// (`nux_scene_writer_set_number`, `_set_unsigned`, `_set_bool`,
+/// `_set_color`, `_set_text` and `_reset`), for a driver that writes
+/// through the writer its round is handed. Each is the C function itself.
+package struct NuxieNativeSceneWriterFunctions: @unchecked Sendable {
+    package let setNumber: UnsafeRawPointer
+    package let setUnsigned: UnsafeRawPointer
+    package let setBool: UnsafeRawPointer
+    package let setColor: UnsafeRawPointer
+    package let setText: UnsafeRawPointer
+    package let reset: UnsafeRawPointer
+
+    /// The engine's own six.
+    package static let engine: NuxieNativeSceneWriterFunctions = {
+        typealias Object = UnsafePointer<NuxSceneObject>?
+        typealias Changed = UnsafeMutablePointer<Bool>?
+        let setNumber: @convention(c) (OpaquePointer?, Object, UInt16, Float, Changed) -> UInt32
+            = nux_scene_writer_set_number
+        let setUnsigned: @convention(c) (OpaquePointer?, Object, UInt16, UInt32, Changed) -> UInt32
+            = nux_scene_writer_set_unsigned
+        let setBool: @convention(c) (OpaquePointer?, Object, UInt16, Bool, Changed) -> UInt32
+            = nux_scene_writer_set_bool
+        let setColor: @convention(c) (OpaquePointer?, Object, UInt16, UInt32, Changed) -> UInt32
+            = nux_scene_writer_set_color
+        let setText: @convention(c) (OpaquePointer?, Object, UInt16, NuxStringView, Changed) -> UInt32
+            = nux_scene_writer_set_text
+        let reset: @convention(c) (OpaquePointer?, Object, Changed) -> UInt32 = nux_scene_writer_reset
+        return NuxieNativeSceneWriterFunctions(
+            setNumber: unsafeBitCast(setNumber, to: UnsafeRawPointer.self),
+            setUnsigned: unsafeBitCast(setUnsigned, to: UnsafeRawPointer.self),
+            setBool: unsafeBitCast(setBool, to: UnsafeRawPointer.self),
+            setColor: unsafeBitCast(setColor, to: UnsafeRawPointer.self),
+            setText: unsafeBitCast(setText, to: UnsafeRawPointer.self),
+            reset: unsafeBitCast(reset, to: UnsafeRawPointer.self))
+    }()
+}
+
 /// A decoded video frame in an IOSurface-backed 32BGRA pixel buffer. The
 /// renderer samples it in place and keeps its own reference while the frame
 /// is shown, so the decoder's pool reuses the buffer only after that.
@@ -728,7 +785,7 @@ package actor NuxieNativePreparedFile {
             try NuxieNativeRuntimeState(
                 executor: executor,
                 bytes: bytes,
-                artboardName: artboardName,
+                artboard: .named(artboardName),
                 selection: player,
                 pixelWidth: pixelWidth,
                 pixelHeight: pixelHeight,
@@ -1102,13 +1159,40 @@ package actor NuxieNativeRuntime {
         bindDefaultViewModel: Bool = false,
         importMode: NuxieNativeImportMode = .portable
     ) async throws -> NuxieNativeRuntime {
+        try await open(bytes: bytes, artboard: .named(artboardName), player: player, pixelWidth: pixelWidth,
+                       pixelHeight: pixelHeight, bindDefaultViewModel: bindDefaultViewModel, importMode: importMode)
+    }
+
+    /// The file's artboard at `artboardIndex` (its position among the file's
+    /// artboards), opened as [`open(bytes:artboardName:)`] opens one by name.
+    package static func open(
+        bytes: Data,
+        artboardIndex: Int,
+        player: NuxieNativePlayerSelection,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32,
+        importMode: NuxieNativeImportMode = .portable
+    ) async throws -> NuxieNativeRuntime {
+        try await open(bytes: bytes, artboard: .index(artboardIndex), player: player, pixelWidth: pixelWidth,
+                       pixelHeight: pixelHeight, bindDefaultViewModel: false, importMode: importMode)
+    }
+
+    private static func open(
+        bytes: Data,
+        artboard: NuxieNativeArtboardChoice,
+        player: NuxieNativePlayerSelection,
+        pixelWidth: UInt32,
+        pixelHeight: UInt32,
+        bindDefaultViewModel: Bool,
+        importMode: NuxieNativeImportMode
+    ) async throws -> NuxieNativeRuntime {
         let executor = NuxieRuntimePinnedThreadExecutor()
         do {
             let state = try await executor.call {
                 try NuxieNativeRuntimeState(
                     executor: executor,
                     bytes: bytes,
-                    artboardName: artboardName,
+                    artboard: artboard,
                     selection: player,
                     pixelWidth: pixelWidth,
                     pixelHeight: pixelHeight,
@@ -1453,6 +1537,15 @@ package actor NuxieNativeRuntime {
         }
     }
 
+    /// Set the player's driver, replacing and releasing any earlier one. The
+    /// engine copies the table; from the next step on, each step asks the
+    /// driver for its writes and settles them before it returns, so the frame
+    /// drawn after it already shows them.
+    package func setDriver(_ driver: NuxieNativePlayerDriver) async throws {
+        let state = try requireState()
+        try await executor.call { try state.player.setDriver(driver) }
+    }
+
     package func enableSemantics() async throws {
         let state = try requireState()
         try await executor.call {
@@ -1563,6 +1656,13 @@ private final class NuxieNativeOwnedHandle: @unchecked Sendable {
     }
 }
 
+/// The artboard a runtime opens: by its name, or by its position among the
+/// file's artboards.
+private enum NuxieNativeArtboardChoice: Sendable {
+    case named(String)
+    case index(Int)
+}
+
 private final class NuxieNativeRuntimeState: @unchecked Sendable {
     private struct FieldOwnerKey: Hashable {
         let nodeID: UInt32
@@ -1592,7 +1692,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
     init(
         executor: NuxieRuntimePinnedThreadExecutor,
         bytes: Data,
-        artboardName: String,
+        artboard artboardChoice: NuxieNativeArtboardChoice,
         selection: NuxieNativePlayerSelection,
         pixelWidth: UInt32,
         pixelHeight: UInt32,
@@ -1624,7 +1724,10 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         }
         let artboard: NuxieNativeArtboardHandle
         do {
-            artboard = try file.makeArtboard(named: artboardName)
+            switch artboardChoice {
+            case .named(let name): artboard = try file.makeArtboard(named: name)
+            case .index(let index): artboard = try file.makeArtboard(at: index)
+            }
         } catch {
             try? file.close()
             try? renderer.close()
@@ -2741,6 +2844,14 @@ private final class NuxieNativeFileHandle: @unchecked Sendable {
         return try ownedCatalog.copy()
     }
 
+    func makeArtboard(at index: Int) throws -> NuxieNativeArtboardHandle {
+        guard index >= 0 else { throw NuxieNativeRuntimeError.invalidNativeValue("artboard index must be nonnegative") }
+        var artboard: OpaquePointer?
+        try requireOK(nux_artboard_instance_new(try owned.require(), index, &artboard), operation: "create artboard")
+        guard let artboard else { throw NuxieNativeRuntimeError.missingHandle("artboard") }
+        return NuxieNativeArtboardHandle(executor: executor, handle: artboard)
+    }
+
     func makeArtboard(named name: String) throws -> NuxieNativeArtboardHandle {
         var artboard: OpaquePointer?
         var result: OpaquePointer?
@@ -2978,6 +3089,15 @@ private final class NuxieNativePlayerHandle: @unchecked Sendable {
             executor: executor,
             free: nux_player_free
         )
+    }
+
+    func setDriver(_ driver: NuxieNativePlayerDriver) throws {
+        var table = NuxPlayerDriver()
+        table.struct_size = UInt32(MemoryLayout<NuxPlayerDriver>.size)
+        table.context = driver.context
+        table.drive = unsafeBitCast(driver.drive, to: type(of: table.drive))
+        table.release = unsafeBitCast(driver.release, to: type(of: table.release))
+        try requireOK(nux_player_driver_set(try owned.require(), &table), operation: "set player driver")
     }
 
     private func withStepName<T>(_ name: String?, _ body: (UnsafePointer<NuxStringView>?) throws -> T) rethrows -> T {
