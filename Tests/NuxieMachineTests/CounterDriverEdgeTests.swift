@@ -142,12 +142,12 @@ final class CounterDriverEdgeTests: XCTestCase {
 // MARK: - A delivery outside a step
 
 /// On the driver path the session holds a scene write until the presented
-/// instance's next round, which runs inside a step. So a delivery that is
-/// not a step (a store's answer, a wake) must leave the Screen asking for
-/// one more step, and a Screen at rest never holds a write it has not drawn.
-/// Each check here runs frames the way the Screen's view does: only while
-/// the edge asks for one, and after a delivery of its own only when the
-/// edge says the Screen owes a step.
+/// instance's next round, which runs inside a step, and only a frame
+/// delivers a store's answer. So whatever leaves such work outside a frame
+/// (a store's answer, a wake) must have the edge ask for one more frame,
+/// and a Screen at rest has nothing waiting for one. Each check here runs
+/// frames the way the Screen's view does: when the edge asks, and while the
+/// engine's step keeps going; nothing else.
 final class DriverStepOwedEdgeTests: XCTestCase {
     /// A purchase the stand-in store fails, answered after the view has
     /// settled: the error line shows with no touch.
@@ -163,8 +163,9 @@ final class DriverStepOwedEdgeTests: XCTestCase {
             let buy = run.tap(at: try first.center(of: "Buy"))
             let bought = await run.edge.frame(pointers: buy, elapsedSeconds: CounterDriverEdgeTests.tick,
                                               now: run.advance())
-            XCTAssertTrue(bought.waitsOnStore, "the purchase was not started")
-            try await run.settle(another: bought.keepGoing || bought.wrote || bought.waitsOnStore)
+            let called = await run.edge.log.contains { if case .call = $0 { return true }; return false }
+            XCTAssertTrue(called, "the purchase was not started")
+            try await run.settle(another: bought.keepGoing)
 
             let settled = try await run.look(name: "2-settled-after-the-answer")
             XCTAssertTrue(settled.text.contains("The purchase did not go through."), "Recognized: \(settled.text)")
@@ -196,11 +197,69 @@ final class DriverStepOwedEdgeTests: XCTestCase {
             let moment = try XCTUnwrap(asked.last, "the record asked for no wake: \(log)")
             run.jump(to: moment)
             await run.edge.wake(now: moment)
-            let owed = await run.edge.owesStep()
-            try await run.settle(another: owed)
+            try await run.afterDelivery()
 
             let woken = try await run.look(name: "2-settled-after-the-wake")
             XCTAssertTrue(woken.text.contains("It is evening."), "Recognized: \(woken.text)")
+            try await run.expectAtRest()
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A wake on a settled view starts a purchase. The store answers with
+    /// no frame running, and only a frame delivers an answer: the record
+    /// takes it and the view shows the failure, with no touch.
+    func testAWakeThatStartsAPurchaseOnAPresentedViewMovesTheRecordOnWithNoTouch() async throws {
+        let run = try Counter(plan: Counter.wakePurchasePlan(presentsFirst: true))
+        do {
+            await run.edge.start(event: "opened", now: run.now)
+            try await run.layOut()
+            let first = try await run.frame(after: [], name: "1-first-step")
+            XCTAssertTrue(first.text.contains("Not evening yet."), "Recognized: \(first.text)")
+            try await run.afterDelivery()
+            try await run.expectAtRest()
+
+            let moment = try await run.wakeAsked()
+            run.jump(to: moment)
+            await run.edge.wake(now: moment)
+            try await run.afterDelivery()
+
+            let failed = try await run.edge.slot("failed")
+            XCTAssertEqual(failed, .bool(true), "the store's answer never reached the record")
+            let shown = try await run.look(name: "2-settled-after-the-answer")
+            XCTAssertTrue(shown.text.contains("The purchase did not go through."), "Recognized: \(shown.text)")
+            try await run.expectAtRest()
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// The same with nothing presented: the record waits with no view, the
+    /// wake starts a purchase, and the answer, delivered at a frame no
+    /// touch asked for, presents the view with the failure.
+    func testAWakeThatStartsAPurchaseWithNothingPresentedMovesTheRecordOnWithNoTouch() async throws {
+        let run = try Counter(plan: Counter.wakePurchasePlan(presentsFirst: false))
+        do {
+            await run.edge.start(event: "opened", now: run.now)
+            try await run.afterDelivery()
+            let nothing = await run.edge.screen()
+            XCTAssertNil(nothing, "the start presents nothing")
+            try await run.expectAtRest()
+
+            let moment = try await run.wakeAsked()
+            run.jump(to: moment)
+            await run.edge.wake(now: moment)
+            try await run.afterDelivery()
+
+            let failed = try await run.edge.slot("failed")
+            XCTAssertEqual(failed, .bool(true), "the store's answer never reached the record")
+            let route = try await run.edge.topRoute()
+            XCTAssertEqual(route?.route, "clock", "the answer presented the view")
             try await run.expectAtRest()
             try await run.close()
         } catch {
@@ -219,9 +278,13 @@ private final class Counter {
     private(set) var now: Int64 = 9 * 3_600_000
     private var drawn = 0
 
+    /// The edge's asks for a frame, as a Screen's view hears them.
+    let asks: FrameAskCount
+
     init(plan: NuxieMachinePlanSource) throws {
         let owner = self.owner
         edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(), onReport: { owner.heard($0) })
+        asks = FrameAskCount(edge)
     }
 
     func advance() -> Int64 {
@@ -276,25 +339,28 @@ private final class Counter {
         now = max(now, moment)
     }
 
-    /// Frames with no touch, run the way the Screen's view runs them: while
-    /// the last one asked for another (the engine keeps going, a write still
-    /// has to show, or the store owes an answer). `another` is whether the
-    /// first is asked for.
+    /// Frames with no touch, run the way the Screen's view runs them: for
+    /// each ask the edge made, and while the engine's step keeps going.
+    /// `another` is whether the engine's last step asked to keep going.
     func settle(another first: Bool) async throws {
-        var another = first
-        var frames = 0
-        while another {
-            let frame = await edge.frame(elapsedSeconds: CounterDriverEdgeTests.tick, now: advance())
-            let fault = await edge.fault
-            XCTAssertNil(fault, "a frame faulted")
-            if frame.waitsOnStore { await edge.storeAnswered() }
-            another = frame.keepGoing || frame.wrote || frame.waitsOnStore
-            frames += 1
-            guard frames < 240 else {
-                XCTFail("the Screen never came to rest")
-                return
-            }
+        try await settleAsAView(edge, asks: asks, keepGoing: first, onScreen: true,
+                                now: { self.advance() }, elapsedSeconds: CounterDriverEdgeTests.tick)
+    }
+
+    /// What a Screen's view does after a delivery of its own (a start, a
+    /// wake): nothing, unless the edge asks.
+    func afterDelivery() async throws {
+        try await settle(another: false)
+    }
+
+    /// The moment the record last asked to be woken at.
+    func wakeAsked() async throws -> Int64 {
+        let log = await edge.log
+        let asked = log.compactMap { entry -> Int64? in
+            if case .wakeAt(let moment?) = entry { return moment }
+            return nil
         }
+        return try XCTUnwrap(asked.last, "the record asked for no wake: \(log)")
     }
 
     /// The presented Screen drawn as it is, with no step.
@@ -303,10 +369,12 @@ private final class Counter {
         return try await DrawnFrame.read(presented(), reported: [], name: "counter-\(drawn)-\(name)")
     }
 
-    /// At rest: the Screen owes no step, so nothing it has not drawn is held.
+    /// At rest: nothing only a frame consumes waits (no step owed, no answer
+    /// to deliver), and no ask is left unanswered.
     func expectAtRest() async throws {
-        let owes = await edge.owesStep()
-        XCTAssertFalse(owes, "the Screen is at rest with a step owed")
+        let waiting = await edge.waitingForFrame()
+        XCTAssertFalse(waiting, "the Screen is at rest with work waiting for a frame")
+        XCTAssertFalse(asks.take(), "the Screen is at rest with an ask unanswered")
     }
 
     private func presented() async throws -> NuxieNativeRuntime {
@@ -421,6 +489,77 @@ private final class Counter {
             armed = false
             line = "It is evening."
 
+          action give_up
+            armed = false
+            exit
+
+          action close
+            dismiss("closed")
+            exit
+        """
+        let clock = """
+        component Clock
+          props
+            line: string
+            close: action
+
+          view
+            column padding=24 gap=12 background-color=#0d1214
+              text line color=#eef3f1 font-size=24 id="line"
+              button padding=12 press=close id="close"
+                text "Close" color=#8a9794 font-size=16
+        """
+        return NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
+                    NuxieMachineSourceFile(path: "clock.nux", text: clock + "\n")],
+            root: "main", app: "app", experience: "evening", version: 1)
+    }
+
+    /// A record that waits for the evening, then starts a purchase there;
+    /// the stand-in store fails it, and the failure changes the line. With
+    /// `presentsFirst` the start presents the view; without it the record
+    /// waits with nothing presented and the failure presents it.
+    static func wakePurchasePlan(presentsFirst: Bool) -> NuxieMachinePlanSource {
+        let main = """
+        use products, purchase, store from "nuxie/store"
+        use Clock from "clock"
+
+        enum Plan annual
+
+        component Evening
+          platforms ios android
+
+          derive catalog = products(Plan,
+            annual = store(ios="app.pro.yearly", android="pro:yearly"))
+
+          state armed = false
+          state failed = false
+          state line = "Not evening yet."
+
+          entry
+            on event "opened"
+            do start
+
+          routes
+            clock  Clock(line=line, close=close)  cover
+
+          action start
+            armed = true
+        \(presentsFirst ? "    go(clock)\n" : "")
+          wait evening
+            while armed
+            until next 18:00
+            then ring within 6h
+            else give_up
+
+          action ring
+            armed = false
+            purchase(catalog[annual], completed=close, failed=mark_failed)
+
+          action mark_failed
+            failed = true
+            line = "The purchase did not go through."
+        \(presentsFirst ? "" : "    go(clock)\n")
           action give_up
             armed = false
             exit

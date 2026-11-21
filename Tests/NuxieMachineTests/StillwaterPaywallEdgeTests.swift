@@ -898,21 +898,52 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// Each frame says what a host that rests between frames needs: whether
-    /// a write landed (it shows on the next step) and whether the store
-    /// still owes an answer (it is delivered only at a frame). Both hold
-    /// while a purchase is held, and neither once its answer has shown.
-    func testEachFrameSaysWhetherAnotherIsNeeded() async throws {
+    /// "Not now" dismisses the paywall, and the evening's wake starts a
+    /// purchase (in this variant of the plan) that writes no cell: nothing
+    /// is presented. The store answers with no frame running, and only a
+    /// frame delivers an answer: the record takes it with no touch.
+    func testAWakeThatStartsAPurchaseOnTheRowPathMovesTheRecordOnWithNoTouch() async throws {
+        let run = try await Run(plan: Fixture.load().purchasingInTheEvening())
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.settle()
+            _ = try await run.tap(Box.close)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            try await run.afterDelivery(onScreen: false)
+
+            let written = await run.edge.log.count
+            run.jump(to: 18 * Self.hour)
+            await run.edge.wake(now: run.now)
+            try await run.afterDelivery(onScreen: false)
+            let after = await Array(run.edge.log.dropFirst(written))
+            let failed = try await run.edge.slot("failed")
+            XCTAssertEqual(failed, .bool(true), "the store's answer never reached the record: \(after)")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// The edge asks for a frame exactly when it leaves work only a frame
+    /// consumes: a write to show (it shows on the next step) or a store's
+    /// answer to deliver. A purchase in flight is not such work: its answer
+    /// asks when it arrives, so nothing has to run frames while it is held.
+    func testTheEdgeAsksForAFrameExactlyWhenOneHasWorkWaiting() async throws {
         let run = try await Run(holdingStore: true)
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
-            let first = await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
-            XCTAssertFalse(first.wrote, "the start's writes landed in the start, not in a frame")
-            XCTAssertFalse(first.waitsOnStore)
+            XCTAssertTrue(run.asks.take(), "the start's writes wait for a step")
+            await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
+            XCTAssertFalse(run.asks.take(), "the first step showed the start's writes")
             try await run.settle()
-            let quiet = await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
-            XCTAssertFalse(quiet.wrote)
-            XCTAssertFalse(quiet.waitsOnStore)
+            _ = run.asks.take()
+            await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
+            XCTAssertFalse(run.asks.take(), "a quiet frame leaves nothing waiting")
+            let quiet = await run.edge.waitingForFrame()
+            XCTAssertFalse(quiet)
 
             // The pointer's up reports `tap_buy`: the machine writes the busy
             // button and calls the store, which holds its answer.
@@ -921,24 +952,29 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let at = run.advance()
             await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .down, x: x, y: y)],
                                  elapsedSeconds: Self.tick, now: at)
+            _ = run.asks.take()
             let tapped = await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .up, x: x, y: y)],
                                               elapsedSeconds: Self.tick, now: at)
             XCTAssertEqual(tapped.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_buy"])
-            XCTAssertTrue(tapped.wrote, "the busy button was written")
-            XCTAssertTrue(tapped.waitsOnStore, "the purchase is in flight")
-            let holding = await run.edge.frame(elapsedSeconds: Self.tick, now: at)
-            XCTAssertFalse(holding.wrote)
-            XCTAssertTrue(holding.waitsOnStore, "the purchase is still in flight")
+            XCTAssertTrue(run.asks.take(), "the busy button was written")
+            await run.edge.frame(elapsedSeconds: Self.tick, now: at)
+            XCTAssertFalse(run.asks.take(), "a purchase in flight waits on the store, not on a frame")
+            let holding = await run.edge.waitingForFrame()
+            XCTAssertFalse(holding)
 
-            // The answer arrives and waits for a frame, which delivers it.
+            // The answer arrives, asks for the frame that delivers it, and
+            // that frame's delivery asks for the step that shows it.
             run.store.release()
             await run.edge.storeAnswered()
-            let delivering = await run.edge.frame(elapsedSeconds: Self.tick, now: at)
-            XCTAssertTrue(delivering.wrote, "the answer wrote the error line and the button")
-            XCTAssertFalse(delivering.waitsOnStore, "nothing is owed once the answer is delivered")
-            let rested = await run.edge.frame(elapsedSeconds: Self.tick, now: at)
-            XCTAssertFalse(rested.wrote)
-            XCTAssertFalse(rested.waitsOnStore)
+            XCTAssertTrue(run.asks.take(), "the answer asked for its frame")
+            let arrived = await run.edge.waitingForFrame()
+            XCTAssertTrue(arrived)
+            await run.edge.frame(elapsedSeconds: Self.tick, now: at)
+            XCTAssertTrue(run.asks.take(), "the answer wrote the error line and the button")
+            await run.edge.frame(elapsedSeconds: Self.tick, now: at)
+            XCTAssertFalse(run.asks.take(), "nothing waits once the answer has shown")
+            let rested = await run.edge.waitingForFrame()
+            XCTAssertFalse(rested)
             try await run.close()
         } catch {
             run.store.release()
@@ -1018,6 +1054,8 @@ private final class Run {
     let edge: NuxieMachineEdge
     let store: RecordingStore
     let owner = Owner()
+    /// The edge's asks for a frame, as a Screen's view hears them.
+    let asks: FrameAskCount
     private(set) var now: Int64 = 9 * 3_600_000
     private var frames = 0
 
@@ -1034,6 +1072,13 @@ private final class Run {
         edge = try await NuxieMachineEdge(
             plan: plan ?? fixture.plan, screen: fixture.screen, store: store,
             onReport: { owner.heard($0) })
+        asks = FrameAskCount(edge)
+    }
+
+    /// Move the clock to `moment`, as a host does before delivering a wake:
+    /// the machine takes nothing earlier than its last step.
+    func jump(to moment: Int64) {
+        now = max(now, moment)
     }
 
     /// The clock a second on, as the Mac test spaces its calls.
@@ -1047,6 +1092,14 @@ private final class Run {
         for _ in 0..<count {
             await edge.frame(elapsedSeconds: 1.0 / 60.0, now: now)
         }
+    }
+
+    /// What a Screen's view does after a delivery of its own (a start, a
+    /// wake): nothing, unless the edge asks. Off screen, the engine's own
+    /// animation asks for no frame either.
+    func afterDelivery(onScreen: Bool) async throws {
+        try await settleAsAView(edge, asks: asks, keepGoing: false, onScreen: onScreen,
+                                now: { self.now }, elapsedSeconds: 1.0 / 60.0)
     }
 
     /// A pointer down and up at the center of `box`, a second after the
@@ -1219,6 +1272,24 @@ struct Fixture {
                                            weight: $0.weight, style: $0.style)
                 }))
     }
+
+    /// Stillwater's plan with the evening's `show_offer` starting a purchase
+    /// of the offer in place of presenting it, which this Screen has no
+    /// artwork for. Its own tests, which expect the offer, are left out.
+    func purchasingInTheEvening() throws -> NuxieMachinePlanSource {
+        let presents = "  action show_offer\n    offer_due = false\n    go(offer)\n"
+        let purchases = "  action show_offer\n    offer_due = false\n"
+            + "    purchase(catalog[annual_offer], completed=go(done, replace), failed=mark_failed)\n"
+        let files = try plan.files.map { file -> NuxieMachineSourceFile in
+            guard file.path == "main.nux" else { return file }
+            _ = try XCTUnwrap(file.text.range(of: presents), "main.nux presents the offer in the evening")
+            let text = file.text.replacingOccurrences(of: presents, with: purchases)
+            let tests = try XCTUnwrap(text.range(of: "  test \"")?.lowerBound, "main.nux has its tests")
+            return NuxieMachineSourceFile(path: file.path, text: String(text[..<tests]))
+        }
+        return NuxieMachinePlanSource(files: files, root: plan.root, app: plan.app,
+                                      experience: plan.experience, version: plan.version)
+    }
 }
 
 // MARK: - Reading frames back
@@ -1274,6 +1345,45 @@ enum Pixels {
         attachment.lifetime = .keepAlways
         XCTContext.runActivity(named: name) { $0.add(attachment) }
     }
+}
+
+/// The asks an edge made for a frame, as a Screen's view hears them.
+final class FrameAskCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked = 0
+
+    init(_ edge: NuxieMachineEdge) {
+        edge.frameAsks.listen { [self] in lock.withLock { asked += 1 } }
+    }
+
+    /// Whether the edge asked since the last take.
+    func take() -> Bool {
+        lock.withLock {
+            defer { asked = 0 }
+            return asked > 0
+        }
+    }
+}
+
+/// Frames run the way a Screen's view runs them: one for the edge's asks
+/// since the last, and on screen while the engine's step keeps going;
+/// nothing else. With nothing asked, the store's work in flight is waited
+/// for, and its answer must ask by itself. `keepGoing` is what the engine's
+/// last step said.
+func settleAsAView(_ edge: NuxieMachineEdge, asks: FrameAskCount, keepGoing first: Bool, onScreen: Bool,
+                   now: () -> Int64, elapsedSeconds: Float) async throws {
+    var keepGoing = first
+    for _ in 0..<240 {
+        if !asks.take() && !(onScreen && keepGoing) {
+            await edge.storeAnswered()
+            guard asks.take() else { return }
+        }
+        let frame = await edge.frame(elapsedSeconds: elapsedSeconds, now: now())
+        let fault = await edge.fault
+        XCTAssertNil(fault, "a frame faulted")
+        keepGoing = frame.keepGoing
+    }
+    XCTFail("the Screen never came to rest")
 }
 
 /// A completion the renderer calls once, awaited with a deadline.

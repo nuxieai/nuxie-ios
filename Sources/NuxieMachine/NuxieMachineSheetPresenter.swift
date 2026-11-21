@@ -322,8 +322,9 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         }
     }
 
-    /// The timer fired: deliver what is due, in the Screen's lane, which
-    /// asks for a frame when a wake leaves the Screen a step owed.
+    /// The timer fired: deliver what is due, in the Screen's lane. A wake
+    /// that leaves work for a frame (a step owed, a store's answer to come)
+    /// has the edge ask for it.
     private func wakeNow() async {
         guard let controller else { return }
         await controller.inLane { await catchUp(to: nuxieMachineNow()) }
