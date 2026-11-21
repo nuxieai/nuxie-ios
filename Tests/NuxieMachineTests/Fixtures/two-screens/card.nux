@@ -1,0 +1,25 @@
+component Card
+  props
+    title: string
+    next: action
+    previous: action
+    swap: action
+    blink: action
+    flash: action
+    close: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text title color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=next id="next"
+        text "Deeper" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=previous id="previous"
+        text "Back" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=swap id="swap"
+        text "Swap" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=blink id="blink"
+        text "Blink" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=flash id="flash"
+        text "Flash" color=#eef3f1 font-size=16
+      button padding=12 press=close id="close"
+        text "Close" color=#8a9794 font-size=16

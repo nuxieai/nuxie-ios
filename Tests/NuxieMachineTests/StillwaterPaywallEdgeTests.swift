@@ -292,7 +292,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             // A stopped edge takes nothing more and tells nothing more.
             let presented = try XCTUnwrap(Self.presentedInstance(log))
             await run.edge.start(event: "go", now: run.advance())
-            await run.edge.closed(NuxieMachineShown(showing: 1, instance: presented), now: run.advance())
+            await run.edge.closed(NuxieMachineShown(journey: 1, instance: presented), now: run.advance())
             await run.edge.handleReported("tap_label", now: run.advance())
             try await run.settle()
             let after = await run.edge.log
@@ -327,7 +327,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let closing = await Array(run.edge.log.dropFirst(written))
             let whole = await run.edge.log
             let presented = try XCTUnwrap(Self.presentedInstance(whole))
-            XCTAssertEqual(closing, [.pop(instance: presented), .wakeAt(nil)])
+            XCTAssertEqual(closing, [.pop(instance: presented), .wakeAt(nil), .gone(shown)])
             let waiting = try await run.edge.recordOpen()
             XCTAssertTrue(waiting, "the record waits for the purchase")
             let noFault = await run.edge.fault
@@ -824,35 +824,40 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
 
     // MARK: What the owner hears
 
-    /// The owner hears each delivery's rows for it, in one report: the
-    /// start's `present`, with the showing the edge numbered, first; a tap
-    /// on a plan presents and dismisses nothing; "Not now" tells its
-    /// `dismiss` and its wake. (The machine restates its wake moment, none
-    /// until "Not now", in each delivery.)
+    /// The owner hears each delivery's rows for it, in one report, with
+    /// what is shown: the start shows the paywall, with the identity the
+    /// session gave it; a tap on a plan shows the same and dismisses
+    /// nothing; "Not now" shows nothing and tells its `dismiss` and its
+    /// wake. (The machine restates its wake moment, none until "Not now",
+    /// in each delivery.)
     func testEachDeliveryReportsTheRowsItsOwnerPerforms() async throws {
         let run = try await Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
             let log = await run.edge.log
             let instance = try XCTUnwrap(Self.presentedInstance(log))
-            guard case .rows(let started)? = run.owner.reports.first, run.owner.reports.count == 1 else {
+            guard case .delivered(let shown, let started)? = run.owner.reports.first, run.owner.reports.count == 1
+            else {
                 return XCTFail("\(run.owner.reports)")
             }
-            XCTAssertEqual(started.first,
-                           .present(NuxieMachineShown(showing: 1, instance: instance), presentation: .sheet))
+            let paywall = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: instance),
+                                                route: "paywall", presentation: .sheet)
+            XCTAssertEqual(shown, [paywall])
             XCTAssertFalse(started.contains(.wakeAt(18 * Self.hour)), "\(started)")
             try await run.settle()
             let beforeMonthly = run.owner.reports.count
             _ = try await run.tap(Box.monthly)
-            for case .rows(let rows) in run.owner.reports.dropFirst(beforeMonthly) {
-                XCTAssertTrue(rows.allSatisfy { $0 == .wakeAt(nil) }, "a plan tap presents nothing: \(rows)")
+            for case .delivered(let shownNow, let rows) in run.owner.reports.dropFirst(beforeMonthly) {
+                XCTAssertTrue(rows.allSatisfy { $0 == .wakeAt(nil) }, "a plan tap dismisses nothing: \(rows)")
+                XCTAssertEqual(shownNow, [paywall], "a plan tap changes what is shown")
             }
             XCTAssertNil(run.owner.reports.dropFirst(beforeMonthly).compactMap(\.dismissal).first)
 
             _ = try await run.tap(Box.close)
-            guard case .rows(let rows)? = run.owner.reports.last else {
+            guard case .delivered(let closedShown, let rows)? = run.owner.reports.last else {
                 return XCTFail("\(run.owner.reports)")
             }
+            XCTAssertEqual(closedShown, [])
             XCTAssertTrue(rows.contains(.dismiss(reason: "paywall_closed")), "\(rows)")
             XCTAssertTrue(rows.contains(.wakeAt(18 * Self.hour)), "\(rows)")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
@@ -863,8 +868,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// A swipe down's close tells the owner the machine's pop of the showing
-    /// the person closed and the record's normal end, with no dismissal.
+    /// A swipe down's close tells the owner that nothing is shown and the
+    /// record's normal end, with no dismissal.
     func testASwipeDownReportsThePopAndTheEnd() async throws {
         let run = try await Run()
         do {
@@ -873,10 +878,10 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let current = await run.edge.shown
             let shown = try XCTUnwrap(current)
             await run.edge.closed(shown, now: run.advance())
-            guard case .rows(let rows)? = run.owner.reports.last else {
+            guard case .delivered(let shownNow, let rows)? = run.owner.reports.last else {
                 return XCTFail("\(run.owner.reports)")
             }
-            XCTAssertTrue(rows.contains(.pop(shown)), "\(rows)")
+            XCTAssertEqual(shownNow, [], "\(rows)")
             XCTAssertEqual(rows.last, .end(.finished), "\(rows)")
             XCTAssertEqual(run.owner.dismissals, [], "the person already took the sheet")
             try await run.close()
@@ -886,22 +891,24 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// A fault that adds nothing to the log still reaches the owner, as the
+    /// A fault with no row of its own still reaches the owner, as the
     /// fault: here the engine's step fails because its Screen was closed
-    /// under the edge.
+    /// under the edge. The log says only that the paywall went.
     func testAnEngineStepFailureTellsTheOwnerTheFault() async throws {
         let run = try await Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
             try await run.settle()
             let written = await run.edge.log.count
+            let stack = await run.edge.stack
+            let paywall = try XCTUnwrap(stack.last).shown
             try await run.edge.screen()?.close()
             await run.edge.frame(elapsedSeconds: Self.tick, now: run.advance())
             let recorded = await run.edge.fault
             let fault = try XCTUnwrap(recorded, "the step failed")
             XCTAssertEqual(fault.code, "engine.step")
-            let after = await run.edge.log.count
-            XCTAssertEqual(after, written, "the failed step logged nothing")
+            let after = await Array(run.edge.log.dropFirst(written))
+            XCTAssertEqual(after, [.gone(paywall)], "the failed step logged a row")
             XCTAssertEqual(run.owner.reports.last, .fault(fault))
             XCTAssertEqual(run.owner.dismissals.filter { $0 == .fault(fault) }.count, 1)
             try await run.close()
@@ -936,8 +943,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed"), .fault(fault)])
             XCTAssertEqual(run.owner.reports.last, .fault(fault), "the fault reaches the owner as its report")
             let after = await Array(run.edge.log.dropFirst(written))
-            XCTAssertFalse(after.contains { if case .present = $0 { return true }; return false },
-                           "an offer with no artwork is never recorded as presented: \(after)")
+            XCTAssertFalse(after.contains { if case .opened = $0 { return true }; return false },
+                           "an offer with no artwork was opened: \(after)")
             try await run.close()
         } catch {
             try? await run.close()

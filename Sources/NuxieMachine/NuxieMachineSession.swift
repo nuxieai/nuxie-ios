@@ -131,6 +131,27 @@ package final class NuxieMachineSession {
         return open
     }
 
+    /// What is shown: the record's presented stack, bottom first, each
+    /// with its identity, its route and how it is presented. Empty before
+    /// the first start, once the record has ended, and once a fault has
+    /// ended the session.
+    package func presented() throws -> [NuxieMachinePresented] {
+        var count = 0
+        try NuxieMachineError.check(nux_machine_presented_count(handle, &count))
+        return try (0..<count).map { index in
+            var journey: UInt64 = 0
+            var instance: UInt64 = 0
+            var route = NuxMachineStr(ptr: nil, len: 0)
+            var presentation: UInt32 = 0
+            try NuxieMachineError.check(
+                nux_machine_presented(handle, index, &journey, &instance, &route, &presentation))
+            return NuxieMachinePresented(
+                shown: NuxieMachineShown(journey: journey, instance: instance),
+                route: NuxieMachineStrings.copy(route) ?? "",
+                presentation: NuxieMachinePresentation(rawValue: presentation) ?? .unknown)
+        }
+    }
+
     /// The route presented on top and its instance, or none.
     package func topRoute() throws -> (route: String, instance: UInt64)? {
         var has = false
@@ -168,11 +189,11 @@ package final class NuxieMachineSession {
         return Data(bytes: bytes, count: length)
     }
 
-    /// The artboard the presented instance `instance` is drawn in, by its
-    /// position among the records' artboards.
-    package func sceneArtboard(instance: UInt64) throws -> Int {
+    /// The artboard the presentation `shown` is drawn in, by its position
+    /// among the records' artboards.
+    package func sceneArtboard(for shown: NuxieMachineShown) throws -> Int {
         var artboard = 0
-        try NuxieMachineError.check(nux_machine_scene_artboard(handle, instance, &artboard))
+        try NuxieMachineError.check(nux_machine_scene_artboard(handle, shown.journey, shown.instance, &artboard))
         return artboard
     }
 
@@ -191,10 +212,10 @@ package final class NuxieMachineSession {
         try NuxieMachineError.check(nux_machine_set_now(handle, now))
     }
 
-    /// A driver for one presentation of the instance `instance`, whose
-    /// rounds write through the engine's functions `writers`. One per
-    /// player, and a new one for each presentation.
-    package func sceneDriver(instance: UInt64, writers: NuxieNativeSceneWriterFunctions) throws
+    /// A driver for the presentation `shown`, whose rounds write through
+    /// the engine's functions `writers`. One per player, and a new one for
+    /// each presentation.
+    package func sceneDriver(for shown: NuxieMachineShown, writers: NuxieNativeSceneWriterFunctions) throws
         -> NuxieNativePlayerDriver
     {
         // Each field takes the engine function with the layout the header
@@ -207,7 +228,7 @@ package final class NuxieMachineSession {
         calls.set_text = unsafeBitCast(writers.setText, to: type(of: calls.set_text))
         calls.reset = unsafeBitCast(writers.reset, to: type(of: calls.reset))
         var driver = NuxMachinePlayerDriver()
-        try NuxieMachineError.check(nux_machine_scene_driver(handle, instance, &calls, &driver))
+        try NuxieMachineError.check(nux_machine_scene_driver(handle, shown.journey, shown.instance, &calls, &driver))
         guard let drive = unsafeBitCast(driver.drive, to: UnsafeRawPointer?.self) else {
             throw NuxieMachineError.nullArgument
         }
@@ -292,11 +313,12 @@ package final class NuxieMachineSession {
 
 /// One row of a call's effects, copied out of the session.
 package enum NuxieMachineRow: Equatable, Sendable {
-    /// Present this route as this instance.
+    /// The machine presented this route as this instance. What is shown
+    /// is read from the record ([`presented`]), not from this row.
     case present(route: String, instance: UInt64, presentation: NuxieMachinePresentation)
-    /// Remove this presented instance.
+    /// The machine popped this instance.
     case pop(instance: UInt64)
-    /// Close whatever is presented, with a reason or none.
+    /// The machine dismissed what was presented, with a reason or none.
     case dismiss(reason: String?)
     /// Set the property `key` of the object named `object` of the presented
     /// instance `instance` to `value`.
@@ -413,7 +435,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case noRecord
     /// No entry starts on an event of this name.
     case unknownEvent
-    /// No presented instance has this number.
+    /// No presentation the record shows has this identity.
     case unknownInstance
     /// The instance's component has no handled object of this name.
     case unknownObject
