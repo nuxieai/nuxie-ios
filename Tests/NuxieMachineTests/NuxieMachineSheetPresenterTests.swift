@@ -147,7 +147,8 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         let edge = controller.edge
         let hour: Int64 = 3_600_000
         await controller.inLane { await edge.start(event: "opened", now: 9 * hour) }
-        controller.configure(for: .cover)
+        let firstShown = await edge.shown
+        controller.configure(for: .cover, showing: try XCTUnwrap(firstShown))
         controller.start()
         let surface = try XCTUnwrap(controller.view.subviews.first, "the Screen's surface")
         window.layoutIfNeeded()
@@ -159,7 +160,8 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         let between = await edge.screen()
         XCTAssertNil(between, "the dismiss freed the first player")
         await controller.inLane { await edge.wake(now: 18 * hour) }
-        controller.configure(for: .cover)
+        let secondShown = await edge.shown
+        controller.configure(for: .cover, showing: try XCTUnwrap(secondShown))
         _ = try await Self.laidOut(edge, at: expected, "the second presentation", first: first)
         controller.stop()
         withExtendedLifetime(window) {}
@@ -272,7 +274,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     @MainActor
     private static func expect(_ controller: NuxieMachineScreenViewController,
                                laidOutAs presentation: NuxieMachinePresentation) throws {
-        controller.configure(for: presentation)
+        controller.configure(for: presentation, showing: NuxieMachineShown(showing: 1, instance: 1))
         let view = try XCTUnwrap(controller.view)
         let window = try XCTUnwrap(view.window, "the Screen is in its window")
         view.setNeedsLayout()

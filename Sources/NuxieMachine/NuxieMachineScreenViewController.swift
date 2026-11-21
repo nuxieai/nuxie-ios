@@ -6,9 +6,12 @@ import UIKit
 
 /// Hosts the one Screen a [`NuxieMachineEdge`] drives: the Metal surface the
 /// engine draws into and the display link that runs the edge's frames. What
-/// it draws is the edge's [`screen`](NuxieMachineEdge.screen()) at each frame:
-/// the published Screen, or the player of the presented instance's compiled
-/// view, which changes with each presentation.
+/// it draws is the edge's Screen for the presentation it was configured for
+/// ([`NuxieMachineEdge.screen(for:)`]) at each frame: the published Screen,
+/// or the player of the presented instance's compiled view, which changes
+/// with each presentation. Once a row has ended that presentation it draws
+/// nothing more, so a Screen leaving the screen keeps its last frame and
+/// never shows the presentation that replaced it.
 ///
 /// Each display tick is one frame: the pointers that arrived, the edge's
 /// frame (engine step, engine events to the machine, writes to cells, the
@@ -59,6 +62,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// presentation (the lane, the loop, the edge and the view) is kept
     /// outside it.
     private struct Presented {
+        /// The edge's presentation this one shows.
+        let shown: NuxieMachineShown
         /// How the Screen is presented: a sheet or a cover.
         let style: NuxieMachinePresentation
         /// Pointers that arrived and wait for the next frame.
@@ -177,15 +182,16 @@ package final class NuxieMachineScreenViewController: UIViewController {
         requestFrame()
     }
 
-    /// Begin one presentation, before UIKit presents the Screen: a new
+    /// Begin one presentation, the edge's `shown`, before UIKit presents the
+    /// Screen: a new
     /// [`Presented`] replaces whatever was there, whole, and the controller
     /// is set up for its style. A record keeps one Screen controller for its
     /// whole life (its lane and its loop outlive every presentation, and run
     /// with none), so the same controller is presented again, in either
     /// style; a presentation starts from nothing each time. Until its Screen
     /// draws its first frame, the accessibility value says "loading".
-    package func configure(for presentation: NuxieMachinePresentation) {
-        presented = Presented(style: presentation)
+    package func configure(for presentation: NuxieMachinePresentation, showing shown: NuxieMachineShown) {
+        presented = Presented(shown: shown, style: presentation)
         updateAccessibility()
         applyStyle()
     }
@@ -293,19 +299,21 @@ package final class NuxieMachineScreenViewController: UIViewController {
         }
         do {
             let drawing = isDrawable
-            // The Screen this frame steps, sized before the step lays it out
-            // whenever its view has a size, drawn only when it is on screen.
-            let screen = hasSize ? await edge.screen() : nil
-            if let screen { try await applySize(screen) }
+            // The presentation's Screen this frame steps, sized before the
+            // step lays it out whenever its view has a size, drawn only when
+            // it is on screen.
+            let showing = presented?.shown
+            var screen: NuxieNativeRuntime?
+            if hasSize, let showing { screen = await edge.screen(for: showing) }
+            if let screen, let showing { try await applySize(screen, for: showing) }
             frame = await edge.frame(pointers: pointers, elapsedSeconds: elapsedSeconds, now: now)
             doing = "render"
-            if drawing, !stopped {
-                // A delivery in the frame may have closed the Screen or
-                // presented a new one: only the Screen the frame sized and
-                // stepped is drawn, and a new one waits for the next frame.
-                let after = await edge.screen()
+            if drawing, !stopped, let showing {
+                // A delivery in the frame may have ended the presentation:
+                // only the Screen the frame sized and stepped is drawn.
+                let after = await edge.screen(for: showing)
                 if let after, after === screen {
-                    try await draw(after)
+                    try await draw(after, for: showing)
                 } else if after != nil {
                     frameRequested = true
                 }
@@ -354,13 +362,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// renderer to its pixels, before the step that lays it out: at its
     /// first frame, and again whenever the view's size changes. The sizes
     /// follow the SDK's Screen: pixels are the points times the scale,
-    /// rounded up, and the layout size is the pixels over the scale. With no
-    /// presentation under way nothing is sized.
-    private func applySize(_ runtime: NuxieNativeRuntime) async throws {
+    /// rounded up, and the layout size is the pixels over the scale. Only
+    /// the presentation `showing` is sized, while it is the one under way.
+    private func applySize(_ runtime: NuxieNativeRuntime, for showing: NuxieMachineShown) async throws {
         let scale = surface.displayScale
         let size = Size(pixelWidth: Self.pixels(surface.bounds.width, scale),
                         pixelHeight: Self.pixels(surface.bounds.height, scale), scale: Float(scale))
-        guard let current = presented, current.sized != size else { return }
+        guard let current = presented, current.shown == showing, current.sized != size else { return }
         if !deviceConfigured {
             let device = try await runtime.metalDevice().value
             let layer = surface.metalLayer
@@ -377,12 +385,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let outcome = try await runtime.resize(pixelWidth: size.pixelWidth, pixelHeight: size.pixelHeight)
         try Self.requireHealthy(outcome, doing: "resize")
         surface.metalLayer.drawableSize = CGSize(width: Int(size.pixelWidth), height: Int(size.pixelHeight))
-        presented?.sized = size
+        if presented?.shown == showing { presented?.sized = size }
     }
 
     /// Draw the Screen as the last step left it, and wait for the GPU.
-    private func draw(_ runtime: NuxieNativeRuntime) async throws {
-        guard let size = presented?.sized else { return }
+    private func draw(_ runtime: NuxieNativeRuntime, for showing: NuxieMachineShown) async throws {
+        guard let current = presented, current.shown == showing, let size = current.sized else { return }
         guard let drawable = surface.metalLayer.nextDrawable() else {
             // No drawable this tick: ask for another frame to draw it.
             frameRequested = true
@@ -395,7 +403,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         await completion.wait()
         try Self.requireHealthy(outcome, doing: "render")
         if outcome.disposition == .presented {
-            presented?.framesDrawn += 1
+            if presented?.shown == showing { presented?.framesDrawn += 1 }
             updateAccessibility()
         } else {
             frameRequested = true
