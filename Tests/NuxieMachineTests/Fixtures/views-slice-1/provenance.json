@@ -1,0 +1,22 @@
+{
+  "note": "The counter for the Nux machine suite: a component drawn from its .nux source alone. The two .nux files are copied from the views-slice-1 fixture folder of the parent's .nux compiler crate, each named here by its git blob id at parentCommit. The plan's views are compiled on the device; nothing else is published.",
+  "plan": {
+    "root": "main",
+    "app": "app",
+    "experience": "tally",
+    "version": 1
+  },
+  "parentCommit": "c13cf403ea0a2901f97f1444173173a984d0453b",
+  "files": {
+    "main.nux": {
+      "sha256": "6d6d4c950b399e669a54082acf281b08ec1f92ba08c1d59f30c0a4a64ff71170",
+      "sizeBytes": 557,
+      "parentBlob": "2b62586a37b4414acb2b7f074f294c4a107a567f"
+    },
+    "counter.nux": {
+      "sha256": "b04feab319ce1cef7a7a51cab122740bbcf932f1c7116a237f6ec7f661ad396d",
+      "sizeBytes": 1431,
+      "parentBlob": "4054e807d20fcf4710c9ae8527c42ee33e00b253"
+    }
+  }
+}
