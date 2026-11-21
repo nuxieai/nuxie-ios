@@ -1,0 +1,70 @@
+use Card from "card"
+
+component Stack
+  platforms ios android
+
+  entry
+    on event "opened"
+    do open
+
+  routes
+    first   Card(title="First", next=deeper, previous=leave, swap=swap, blink=blink, flash=flash, close=close)  cover
+    second  Card(title="Second", next=deeper, previous=leave, swap=swap, blink=blink, flash=flash, close=close)  sheet
+
+  action open
+    go(first)
+
+  action deeper
+    go(second)
+
+  action leave
+    back
+
+  action swap
+    go(second, replace)
+
+  action blink
+    go(second)
+    back
+
+  action flash
+    go(second)
+    dismiss("flashed")
+
+  action close
+    dismiss("closed")
+    exit
+
+  test "a sheet opens over the cover, and back returns to the cover"
+    event "opened"
+    expect route first
+    tap "next"
+    expect route second
+    tap "previous"
+    expect route first
+
+  test "a swap puts the sheet in the cover's place"
+    event "opened"
+    tap "swap"
+    expect route second
+    tap "previous"
+    expect route none
+    expect ended
+
+  test "a sheet shown and taken back in one tap leaves the cover"
+    event "opened"
+    tap "blink"
+    expect route first
+
+  test "a sheet shown and dismissed in one tap ends the Journey"
+    event "opened"
+    tap "flash"
+    expect route none
+    expect ended
+
+  test "close ends the Journey"
+    event "opened"
+    tap "next"
+    tap "close"
+    expect route none
+    expect ended

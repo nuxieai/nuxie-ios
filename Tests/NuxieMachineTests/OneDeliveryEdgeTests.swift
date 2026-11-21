@@ -5,12 +5,12 @@ import NuxieRuntime
 
 /// One delivery whose rows begin a presentation and end it, or end one and
 /// begin another. A delivery's rows are a log of what the machine did in
-/// it, and the session's state is where the last row left it, so the edge
-/// works out what the rows come to before it opens anything: a presentation
-/// begun and ended in one delivery is never opened and never reaches the
-/// screen, and one that outlives the delivery is opened once, from the state
-/// that matches it. Each case runs on the driver path (the plan's compiled
-/// views) and on the row path (Stillwater's published Screen as the
+/// it, and the record's presented stack is where the last row left it, so
+/// the edge opens nothing from the rows: when the delivery is over it shows
+/// what the stack holds. A presentation begun and ended in one delivery is
+/// never opened and never reaches the screen, and one that outlives the
+/// delivery is opened once. Each case runs on the driver path (the plan's
+/// compiled views) and on the row path (Stillwater's published Screen as the
 /// paywall's artwork).
 final class OneDeliveryEdgeTests: XCTestCase {
     private static let hour: Int64 = 3_600_000
@@ -55,16 +55,32 @@ final class OneDeliveryEdgeTests: XCTestCase {
 
     // MARK: Two presentations that both outlive the delivery
 
-    /// Two Screens presented in one delivery would both be on the stack when
-    /// it is over, and this host shows one Screen at a time. The delivery
-    /// ends in the one fault path before anything is opened: no player, no
-    /// presentation, and the owner hears the fault alone.
-    func testOnTheDriverPathTwoScreensPresentedInOneDeliveryOpenNothing() async throws {
+    /// Two Screens presented in one delivery are both on the stack when it
+    /// is over: each is opened once, bottom first, with a player of its own,
+    /// and the owner is told both in one report.
+    func testOnTheDriverPathTwoScreensPresentedInOneDeliveryAreEachOpenedOnce() async throws {
         let run = try OneDelivery(compiled: Self.compiled(["go(clock)", "go(other)"], twoRoutes: true))
         await run.edge.start(event: "opened", now: run.now)
-        try await expectOneFaultAndNothingOpened(run, code: "edge.no-host")
+        let fault = await run.edge.fault
+        XCTAssertNil(fault)
+        let stack = await run.edge.stack
+        XCTAssertEqual(stack.map(\.route), ["clock", "other"])
+        let opened = await run.edge.log.filter { if case .opened = $0 { true } else { false } }
+        XCTAssertEqual(opened, stack.map { .opened($0.shown) })
+        let bottom = await run.edge.screen(for: stack[0].shown)
+        let top = await run.edge.screen(for: stack[1].shown)
+        XCTAssertNotNil(bottom)
+        XCTAssertNotNil(top)
+        XCTAssertFalse(bottom === top, "the two presentations share a player")
+        XCTAssertEqual(run.owner.reports.count, 1, "\(run.owner.reports)")
+        guard case .delivered(let shown, _)? = run.owner.reports.first else { return XCTFail("\(run.owner.reports)") }
+        XCTAssertEqual(shown, stack)
+        try await run.edge.close()
     }
 
+    /// The artwork draws one presentation at a time: two paywalls on the
+    /// stack end the delivery in the one fault path, before anything is
+    /// opened.
     func testOnTheRowPathTwoPaywallsPresentedInOneDeliveryShowNothing() async throws {
         let run = try await OneDelivery(artwork: Self.artwork(["go(paywall)", "go(paywall)"]))
         await run.edge.start(event: "go", now: run.now)
@@ -75,8 +91,8 @@ final class OneDeliveryEdgeTests: XCTestCase {
 
     /// The noon wake dismisses the Screen and presents it again: the first
     /// presentation's player is freed, and the second, a new instance, is
-    /// opened once from the session's state, which presents it. The owner
-    /// hears the dismissal, then the new presentation.
+    /// opened once, as the session shows it. The owner hears the dismissal
+    /// and what is shown now.
     func testOnTheDriverPathAScreenReplacedInOneDeliveryOpensTheNewOneOnce() async throws {
         let run = try OneDelivery(compiled: Self.compiledReplacing)
         await run.edge.start(event: "opened", now: run.now)
@@ -188,7 +204,7 @@ final class OneDeliveryEdgeTests: XCTestCase {
         fault = await run.edge.fault
         XCTAssertNil(fault, "the tap on the new Screen faulted", file: file, line: line)
         let told = run.owner.reports.dropFirst(reports).flatMap { report -> [NuxieMachineHostRow] in
-            if case .rows(let rows) = report { return rows }
+            if case .delivered(_, let rows) = report { return rows }
             return []
         }
         XCTAssertTrue(told.contains(.dismiss(reason: "closed")), "the new Screen took no tap: \(told)",
@@ -201,8 +217,8 @@ final class OneDeliveryEdgeTests: XCTestCase {
 
 
     /// The delivery opened nothing and told the owner nothing about showing:
-    /// no player, no presentation under way, no `present`, `pop` or
-    /// `dismiss` told, and no fault. The record ended for `ending`, and the
+    /// no player, no presentation opened, nothing shown in any report, no
+    /// dismissal told, and no fault. The record ended for `ending`, and the
     /// owner was told so.
     private func expectNothingShown(_ run: OneDelivery, endedAs ending: NuxieMachineEnding,
                                     file: StaticString = #filePath, line: UInt = #line) async throws {
@@ -215,10 +231,15 @@ final class OneDeliveryEdgeTests: XCTestCase {
             XCTAssertNil(player, "a player was opened", file: file, line: line)
         }
         let told = run.owner.reports.flatMap { report -> [NuxieMachineHostRow] in
-            if case .rows(let rows) = report { return rows }
+            if case .delivered(_, let rows) = report { return rows }
             return []
         }
         XCTAssertFalse(told.contains { Self.isShowing($0) }, "the owner was told \(told)", file: file, line: line)
+        for case .delivered(let shownThen, _) in run.owner.reports {
+            XCTAssertEqual(shownThen, [], "the owner was shown \(shownThen)", file: file, line: line)
+        }
+        let opened = await run.edge.log.filter { if case .opened = $0 { true } else { false } }
+        XCTAssertEqual(opened, [], "the edge opened \(opened)", file: file, line: line)
         XCTAssertTrue(told.contains(.end(ending)), "the owner was not told the end: \(run.owner.reports)",
                       file: file, line: line)
         try await run.edge.close()
@@ -238,6 +259,8 @@ final class OneDeliveryEdgeTests: XCTestCase {
             XCTAssertNil(player, "a player was opened before the fault", file: file, line: line)
         }
         XCTAssertEqual(run.owner.reports, [.fault(fault)], "the owner hears the fault alone", file: file, line: line)
+        let opened = await run.edge.log.filter { if case .opened = $0 { true } else { false } }
+        XCTAssertEqual(opened, [], "the edge opened \(opened)", file: file, line: line)
         try await run.edge.close()
     }
 
@@ -252,22 +275,25 @@ final class OneDeliveryEdgeTests: XCTestCase {
         XCTAssertNil(fault, "the replacement faulted", file: file, line: line)
         let shown = await run.edge.shown
         let second = try XCTUnwrap(shown, "nothing is presented after the replacement", file: file, line: line)
-        XCTAssertEqual(second.showing, first.showing + 1, file: file, line: line)
+        XCTAssertEqual(second.journey, first.journey, file: file, line: line)
         XCTAssertNotEqual(second.instance, first.instance, "the replacement is a new instance", file: file, line: line)
         let reports = Array(run.owner.reports.dropFirst(written))
-        guard reports.count == 1, case .rows(let rows) = reports[0] else {
+        guard reports.count == 1, case .delivered(let shownNow, let rows) = reports[0] else {
             XCTFail("one report for the wake: \(reports)", file: file, line: line)
             return second
         }
-        XCTAssertEqual(rows.filter { Self.isShowing($0) },
-                       [.dismiss(reason: "swapped"), .present(second, presentation: presentation)],
+        XCTAssertEqual(rows.filter { Self.isShowing($0) }, [.dismiss(reason: "swapped")], file: file, line: line)
+        XCTAssertEqual(shownNow.map(\.shown), [second], file: file, line: line)
+        XCTAssertEqual(shownNow.map(\.presentation), [presentation], file: file, line: line)
+        let log = await run.edge.log
+        XCTAssertEqual(log.filter { if case .opened = $0 { true } else { false } }.suffix(1), [.opened(second)],
                        file: file, line: line)
         return second
     }
 
     private static func isShowing(_ row: NuxieMachineHostRow) -> Bool {
         switch row {
-        case .present, .pop, .dismiss: return true
+        case .dismiss: return true
         case .wakeAt, .end: return false
         }
     }

@@ -96,38 +96,41 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
-    // MARK: One Screen, presented again in another style
+    // MARK: Each presentation laid out as its own style
 
-    /// A record keeps one Screen for its whole life, so the controller a
-    /// sheet was presented in can be presented next as a cover. Each is laid
-    /// out and set up as its own style, whichever came first.
+    /// A sheet and a cover are each a controller of their own, laid out and
+    /// set up as their style.
     @MainActor
-    func testASheetThenACoverAreEachLaidOutAsTheirOwnStyle() throws {
-        let (controller, window) = try Self.screen()
-        try Self.expect(controller, laidOutAs: .sheet)
-        try Self.expect(controller, laidOutAs: .cover)
-        withExtendedLifetime(window) {}
+    func testASheetAndACoverAreEachLaidOutAsTheirOwnStyle() throws {
+        let loop = try Self.loop()
+        for presentation in [NuxieMachinePresentation.sheet, .cover] {
+            let (controller, window) = Self.screen(presenting: presentation, loop: loop)
+            try Self.expect(controller, laidOutAs: presentation)
+            withExtendedLifetime(window) {}
+        }
     }
 
+    /// A loop over an edge whose session presents nothing.
     @MainActor
-    func testACoverThenASheetAreEachLaidOutAsTheirOwnStyle() throws {
-        let (controller, window) = try Self.screen()
-        try Self.expect(controller, laidOutAs: .cover)
-        try Self.expect(controller, laidOutAs: .sheet)
-        withExtendedLifetime(window) {}
-    }
-
-    /// A Screen over a session that presents nothing, the root of a window
-    /// at a phone's size. Its safe areas are the device's, with a status
-    /// bar's and a home indicator's added, so both edges have one.
-    @MainActor
-    private static func screen(
+    private static func loop(
         plan: NuxieMachinePlanSource = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: waitsForTheEvening)],
             root: "main", app: "app", experience: "evening", version: 1)
-    ) throws -> (NuxieMachineScreenViewController, UIWindow) {
+    ) throws -> NuxieMachineScreenLoop {
         let edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(), onReport: { _ in })
-        let controller = NuxieMachineScreenViewController(edge: edge)
+        return NuxieMachineScreenLoop(edge: edge)
+    }
+
+    /// A Screen for one presentation, the root of a window at a phone's
+    /// size. Its safe areas are the device's, with a status bar's and a home
+    /// indicator's added, so both edges have one.
+    @MainActor
+    private static func screen(
+        presenting presentation: NuxieMachinePresentation, loop: NuxieMachineScreenLoop,
+        shown: NuxieMachineShown = NuxieMachineShown(journey: 1, instance: 1), route: String = "screen"
+    ) -> (NuxieMachineScreenViewController, UIWindow) {
+        let presented = NuxieMachinePresented(shown: shown, route: route, presentation: presentation)
+        let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop)
         controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = controller
@@ -136,34 +139,43 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     }
 
     /// A compiled Screen presented, dismissed and presented again at the
-    /// same size: each presentation's Screen is a new player, and each is
-    /// laid out at its surface's size, not at the size it opened with. The
-    /// first player is freed before the second opens, so the second can take
-    /// its address; nothing of the first presentation may decide how the
-    /// second is sized.
+    /// same size: each presentation is a new controller over a new player,
+    /// and each is laid out at its surface's size, not at the size it opened
+    /// with. The first player is freed before the second opens, so the
+    /// second can take its address; nothing of the first presentation may
+    /// decide how the second is sized.
     @MainActor
     func testACompiledScreenPresentedAgainAtTheSameSizeIsSizedToItsSurface() async throws {
-        let (controller, window) = try Self.screen(plan: Self.presentsTwice)
-        let edge = controller.edge
+        let loop = try Self.loop(plan: Self.presentsTwice)
+        let edge = loop.edge
         let hour: Int64 = 3_600_000
-        await controller.inLane { await edge.start(event: "opened", now: 9 * hour) }
-        let firstShown = await edge.shown
-        controller.configure(for: .cover, showing: try XCTUnwrap(firstShown))
-        controller.start()
+        await loop.inLane { await edge.start(event: "opened", now: 9 * hour) }
+        let firstStack = await edge.stack
+        let firstShown = try XCTUnwrap(firstStack.last)
+        let (controller, window) = Self.screen(presenting: .cover, loop: loop, shown: firstShown.shown,
+                                               route: firstShown.route)
+        loop.screens = [controller]
+        loop.start()
         let surface = try XCTUnwrap(controller.view.subviews.first, "the Screen's surface")
         window.layoutIfNeeded()
         let expected = surface.bounds.size
         let first = try await Self.laidOut(edge, at: expected, "the first presentation", first: nil)
 
         // The noon wake dismisses the Screen; the evening's presents it again.
-        await controller.inLane { await edge.wake(now: 12 * hour) }
+        await loop.inLane { await edge.wake(now: 12 * hour) }
         let between = await edge.screen()
         XCTAssertNil(between, "the dismiss freed the first player")
-        await controller.inLane { await edge.wake(now: 18 * hour) }
-        let secondShown = await edge.shown
-        controller.configure(for: .cover, showing: try XCTUnwrap(secondShown))
+        loop.screens = []
+        await loop.inLane { await edge.wake(now: 18 * hour) }
+        let secondStack = await edge.stack
+        let secondShown = try XCTUnwrap(secondStack.last)
+        XCTAssertNotEqual(secondShown.shown, firstShown.shown, "presented again is a new presentation")
+        let again = NuxieMachineScreenViewController(presenting: secondShown, loop: loop)
+        again.additionalSafeAreaInsets = controller.additionalSafeAreaInsets
+        window.rootViewController = again
+        loop.screens = [again]
         _ = try await Self.laidOut(edge, at: expected, "the second presentation", first: first)
-        controller.stop()
+        loop.stop()
         withExtendedLifetime(window) {}
     }
 
@@ -266,7 +278,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
     private struct NotLaidOut: Error {}
 
-    /// Configure `controller` for `presentation`, lay it out, and check it:
+    /// Lay out `controller`, made for `presentation`, and check it:
     /// a cover draws inside the safe area over a black ground, full screen,
     /// with no swipe; a sheet draws across its whole view over no ground, as
     /// a page sheet at the large detent with no grabber, which the person
@@ -274,7 +286,6 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     @MainActor
     private static func expect(_ controller: NuxieMachineScreenViewController,
                                laidOutAs presentation: NuxieMachinePresentation) throws {
-        controller.configure(for: presentation, showing: NuxieMachineShown(showing: 1, instance: 1))
         let view = try XCTUnwrap(controller.view)
         let window = try XCTUnwrap(view.window, "the Screen is in its window")
         view.setNeedsLayout()

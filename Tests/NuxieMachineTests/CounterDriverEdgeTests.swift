@@ -18,9 +18,9 @@ import NuxieRuntime
 /// The view is a column: the count line, the line under `if noted`, a line
 /// below it, then the buttons "Count", "Hide the note" and "Close".
 final class CounterDriverEdgeTests: XCTestCase {
-    fileprivate static let width = 390
-    fileprivate static let height = 844
-    fileprivate static let tick: Float = 1.0 / 60.0
+    static let width = 390
+    static let height = 844
+    static let tick: Float = 1.0 / 60.0
 
     /// 1. The writes the presenting step made reach the engine in the
     ///    player's first step: the first frame drawn shows the starting
@@ -658,8 +658,9 @@ private final class CounterOwner: @unchecked Sendable {
 // MARK: - Reading a frame
 
 /// One frame drawn at twice the layout size, and the lines text recognition
-/// found in it, with their boxes in layout points.
-private struct DrawnFrame {
+/// found in it, with their boxes in layout points. The stack checks read
+/// their Screens with it too.
+struct DrawnFrame {
     let reported: [String]
     let lines: [(text: String, box: CGRect)]
 
