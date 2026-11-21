@@ -24,6 +24,9 @@ private struct ExperienceRuntimeHostView: UIViewControllerRepresentable {
         if ProcessInfo.processInfo.arguments.contains("--nuxie-machine-paywall") {
             return UINavigationController(rootViewController: NuxieMachineHostViewController())
         }
+        if ProcessInfo.processInfo.arguments.contains("--nuxie-machine-counter") {
+            return UINavigationController(rootViewController: NuxieMachineCounterHostViewController())
+        }
         #endif
         if ProcessInfo.processInfo.arguments.contains("--nuxie-accessibility-qualification")
             || ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification") {

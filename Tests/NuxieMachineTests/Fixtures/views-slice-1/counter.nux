@@ -1,0 +1,43 @@
+fn twice(x: number): number = x * 2
+
+component Counter
+  props
+    close: action
+
+  state count = 0
+  state noted = false
+  state shade = "#11223380"
+  state way = "row"
+
+  action bump
+    count = count + 1
+    noted = true
+
+  action hide_note
+    noted = false
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text `Tapped ${count} times` color=#eef3f1 font-size=24 id="count"
+      if noted
+        text "You have counted at least once." color=#9fcdb9 font-size=16 id="note"
+      text "This line sits below the note." color=#8a9794 font-size=14 id="below"
+      button padding=12 background-color=#232c30 press=bump id="bump"
+        text "Count" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=hide_note id="hide"
+        text "Hide the note" color=#eef3f1 font-size=16
+      button padding=12 press=close id="close"
+        text "Close" color=#8a9794 font-size=16
+      text `Total: ${1}` id="total"
+      text `Doubled: ${twice(21)}` id="doubled"
+      text (40 + 2) id="sum"
+      box padding=(8 + 4) id="padded"
+        text "Padded" id="inside"
+      box padding=twice(5) id="twice"
+        text "Twice" id="within"
+      box padding=12 id="literal"
+        text "Literal" id="beside"
+      box background-color=#11223380 id="painted"
+      box background-color=shade id="shaded"
+      column flex-direction="row" id="across"
+      column flex-direction=way id="along"
