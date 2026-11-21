@@ -110,7 +110,8 @@ final class CounterDriverEdgeTests: XCTestCase {
             let spoil = try first.center(of: "Spoil the color")
             let written = await run.edge.log.count
 
-            let stepped = await run.edge.frame(pointers: run.tap(at: spoil), elapsedSeconds: Self.tick,
+            let touched = await run.edge.shown
+            let stepped = await run.edge.frame(pointers: run.tap(at: spoil), on: touched, elapsedSeconds: Self.tick,
                                                now: run.advance())
             let recorded = await run.edge.fault
             let fault = try XCTUnwrap(recorded, "the failed round stopped nothing")
@@ -161,7 +162,8 @@ final class DriverStepOwedEdgeTests: XCTestCase {
 
             // "Buy" starts the purchase; the host steps while the edge asks.
             let buy = run.tap(at: try first.center(of: "Buy"))
-            let bought = await run.edge.frame(pointers: buy, elapsedSeconds: CounterDriverEdgeTests.tick,
+            let touched = await run.edge.shown
+            let bought = await run.edge.frame(pointers: buy, on: touched, elapsedSeconds: CounterDriverEdgeTests.tick,
                                               now: run.advance())
             let called = await run.edge.log.contains { if case .call = $0 { return true }; return false }
             XCTAssertTrue(called, "the purchase was not started")
@@ -311,7 +313,9 @@ private final class Counter {
     /// One frame with `pointers`, then the Screen drawn as that step left
     /// it, read back and read with text recognition.
     func frame(after pointers: [NuxieNativePointerEvent], name: String) async throws -> DrawnFrame {
-        let stepped = await edge.frame(pointers: pointers, elapsedSeconds: CounterDriverEdgeTests.tick, now: advance())
+        let touched = await edge.shown
+        let stepped = await edge.frame(pointers: pointers, on: touched, elapsedSeconds: CounterDriverEdgeTests.tick,
+                                       now: advance())
         let fault = await edge.fault
         XCTAssertNil(fault, "the frame faulted")
         drawn += 1

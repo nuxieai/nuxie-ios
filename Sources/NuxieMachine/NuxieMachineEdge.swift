@@ -164,6 +164,11 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// The person closed a showing that had already ended. The close
     /// belongs to it, so it goes to no one.
     case droppedClose(NuxieMachineShown)
+    /// Pointers that touched the showing named (none when nothing was
+    /// shown) arrived in a frame where another showing, or none, is
+    /// presented. They belong to the Screen the person touched, so they go
+    /// to no one; the frame still runs.
+    case droppedTouches(NuxieMachineShown?)
     /// The record asks for a `wake` at this moment, or at none. The host's
     /// timer delivers it ([`wake`]).
     case wakeAt(Int64?)
@@ -583,9 +588,17 @@ package actor NuxieMachineEdge {
     /// the time the engine advances by. The frame's turn delivers the frame,
     /// then each store answer that arrived before the turn began, each as
     /// its own delivery.
+    ///
+    /// `pointers` touched the Screen of the showing `touched`: the one the
+    /// person's view showed when they arrived. They reach the engine only
+    /// while that showing is the one presented when the frame steps; a
+    /// delivery since (a wake that ended it, or replaced it with another)
+    /// leaves them going to no one, recorded as dropped, and the frame runs
+    /// without them. Pointers that touched no showing go to no one either.
     @discardableResult
     package func frame(
         pointers: [NuxieNativePointerEvent] = [],
+        on touched: NuxieMachineShown? = nil,
         elapsedSeconds: Float,
         now: Int64
     ) async -> NuxieMachineFrame {
@@ -594,7 +607,12 @@ package actor NuxieMachineEdge {
             let answers = mailbox
             mailbox = []
             let stepped = await deliver(turn, stopped: (reported: [String](), keepGoing: false)) { delivery in
-                await step(pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
+                var forwarded = pointers
+                if !pointers.isEmpty, touched == nil || touched != shown {
+                    log.append(.droppedTouches(touched))
+                    forwarded = []
+                }
+                return await step(pointers: forwarded, elapsedSeconds: elapsedSeconds, now: now, &delivery)
             }
             for arrived in answers {
                 await deliver(turn, stopped: ()) { delivery in
