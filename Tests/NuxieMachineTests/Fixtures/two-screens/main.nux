@@ -3,13 +3,15 @@ use Card from "card"
 component Stack
   platforms ios android
 
+  state taps = 0
+
   entry
     on event "opened"
     do open
 
   routes
-    first   Card(title="First", next=deeper, previous=leave, swap=swap, blink=blink, flash=flash, close=close)  cover
-    second  Card(title="Second", next=deeper, previous=leave, swap=swap, blink=blink, flash=flash, close=close)  sheet
+    first   Card(title="First", taps=taps, bump=bump, next=deeper, previous=leave, swap=swap, blink=blink, flash=flash, close=close)  cover
+    second  Card(title="Second", taps=taps, bump=bump, next=deeper, previous=leave, swap=swap, blink=blink, flash=flash, close=close)  sheet
 
   action open
     go(first)
@@ -19,6 +21,9 @@ component Stack
 
   action leave
     back
+
+  action bump
+    taps = taps + 1
 
   action swap
     go(second, replace)
@@ -42,6 +47,17 @@ component Stack
     expect route second
     tap "previous"
     expect route first
+
+  test "a tap on the sheet changes what the cover under it shows"
+    event "opened"
+    expect text "taps" == "Taps: 0"
+    tap "next"
+    tap "bump"
+    expect state taps == 1
+    expect text "taps" == "Taps: 1"
+    tap "previous"
+    expect route first
+    expect text "taps" == "Taps: 1"
 
   test "a swap puts the sheet in the cover's place"
     event "opened"

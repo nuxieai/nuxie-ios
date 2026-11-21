@@ -282,6 +282,55 @@ final class PresentedStackEdgeTests: XCTestCase {
         }
     }
 
+    /// A tap on the sheet's Bump adds one to the root's `taps`, which the
+    /// cover under the sheet shows too. The sheet's round writes for the
+    /// cover, and the cover draws the new count in the frame the tap ran,
+    /// with no further frame or touch. Then both Screens go quiet: nothing
+    /// waits for a frame, and neither engine keeps going.
+    func testATapOnTheSheetThatChangesWhatTheCoverShowsIsDrawnOnTheCoverInTheSameFrame() async throws {
+        let run = try Stack()
+        do {
+            await run.edge.start(event: "opened", now: run.now)
+            let first = try await run.top()
+            let cover = try await run.player(first)
+            try await run.tap("Deeper", on: first)
+            let second = try await run.top()
+            XCTAssertNotEqual(second, first)
+            let before = try await run.look(first, name: "cover-before-bump")
+            XCTAssertEqual(try Self.taps(before), "Taps: 0")
+
+            try await run.tap("Bump", on: second)
+            let counted = try await run.edge.slot("taps")
+            XCTAssertEqual(counted, .number(1))
+            // The cover is read as the tap's frame left it: no frame since.
+            let after = try await DrawnFrame.read(cover, reported: [], name: "stack-cover-after-bump")
+            XCTAssertEqual(try Self.taps(after), "Taps: 1", "the cover still shows the count from before the tap")
+            let waiting = await run.edge.waitingForFrame()
+            XCTAssertFalse(waiting, "the tap's frame left work waiting for another")
+
+            var keepGoing = true
+            for _ in 0..<120 where keepGoing {
+                keepGoing = await run.edge.frame(elapsedSeconds: CounterDriverEdgeTests.tick, now: run.advance()).keepGoing
+            }
+            XCTAssertFalse(keepGoing, "the Screens never went quiet")
+            let quiet = await run.edge.waitingForFrame()
+            XCTAssertFalse(quiet, "a quiet stack still waits for a frame")
+            let sheet = try await DrawnFrame.read(try await run.player(second), reported: [], name: "stack-sheet-quiet")
+            XCTAssertEqual(try Self.taps(sheet), "Taps: 1")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// The line of `frame` that shows the count of taps.
+    private static func taps(_ frame: DrawnFrame) throws -> String {
+        try XCTUnwrap(frame.lines.first { $0.text.hasPrefix("Taps") }?.text, "no count among \(frame.lines.map(\.text))")
+    }
+
     private static func isSync(_ entry: NuxieMachineEdgeEntry) -> Bool {
         switch entry {
         case .opened, .gone: return true
@@ -348,10 +397,23 @@ private final class Stack {
         [.down, .up].map { NuxieNativePointerEvent(kind: $0, x: Float(point.x), y: Float(point.y)) }
     }
 
-    /// Tap the button that shows `word` on the Screen of `shown`.
+    /// Tap the button that shows `word` on the Screen of `shown`. Text
+    /// recognition reads without language correction and now and then
+    /// reads a stray mark beside a label ("BlinkR"), so with no line that is
+    /// the word alone, the one line that starts with it is the button.
     func tap(_ word: String, on shown: NuxieMachineShown) async throws {
         let seen = try await look(shown, name: word)
-        await edge.frame(pointers: press(at: try seen.center(of: word)), on: shown,
+        let point: CGPoint
+        if let exact = try? seen.center(of: word) {
+            point = exact
+        } else {
+            let starting = seen.lines.filter { $0.text.hasPrefix(word) }
+            guard starting.count == 1, let line = starting.first else {
+                throw DrawnFrame.Missing(line: word, found: seen.lines.map(\.text))
+            }
+            point = CGPoint(x: line.box.midX, y: line.box.midY)
+        }
+        await edge.frame(pointers: press(at: point), on: shown,
                          elapsedSeconds: CounterDriverEdgeTests.tick, now: advance())
         let fault = await edge.fault
         XCTAssertNil(fault, "the tap on \(word) faulted")

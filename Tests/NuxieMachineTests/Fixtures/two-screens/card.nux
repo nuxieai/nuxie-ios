@@ -1,6 +1,8 @@
 component Card
   props
     title: string
+    taps: number
+    bump: action
     next: action
     previous: action
     swap: action
@@ -11,6 +13,9 @@ component Card
   view
     column padding=24 gap=12 background-color=#0d1214
       text title color=#eef3f1 font-size=24 id="title"
+      text `Taps: ${taps}` color=#9fcdb9 font-size=18 id="taps"
+      button padding=12 background-color=#232c30 press=bump id="bump"
+        text "Bump" color=#eef3f1 font-size=16
       button padding=12 background-color=#232c30 press=next id="next"
         text "Deeper" color=#eef3f1 font-size=16
       button padding=12 background-color=#232c30 press=previous id="previous"

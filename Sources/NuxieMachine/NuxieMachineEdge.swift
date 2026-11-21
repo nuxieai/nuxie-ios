@@ -382,19 +382,17 @@ package actor NuxieMachineEdge {
         /// On the driver path, the presentation's player, with the
         /// session's driver for this presentation set on it.
         let player: NuxieNativeRuntime?
-        /// Whether the presented Screen owes a step: something it has not
-        /// drawn waits for one.
+        /// Whether the Screen has something no step has drawn that only the
+        /// edge knows of:
         ///
         /// - On the row path, a write landed in a cell since the last step.
-        /// - On the driver path, the session holds a scene write until the
-        ///   presentation's next round, which runs only inside a step, and
-        ///   it cannot say whether it holds one. So every delivery that
-        ///   enters a driven session leaves a step owed for each player
-        ///   ([`deliver`]), and so does opening a player, whose first writes
-        ///   are held for its first step.
+        /// - On the driver path, the player has not stepped since it opened,
+        ///   so it has drawn nothing yet.
         ///
-        /// A step clears it.
-        var stepOwed: Bool
+        /// A step clears it. The writes a driven session holds for the
+        /// presentation are not here: the session is asked for them
+        /// ([`owesStep`]).
+        var undrawn: Bool
     }
 
     /// The presentations the edge holds, bottom first: after every
@@ -429,7 +427,7 @@ package actor NuxieMachineEdge {
     /// Whether work only a frame consumes is waiting for one, the one rule
     /// a host's frames follow. A frame consumes two things:
     ///
-    /// - a step owed ([`Screen.stepOwed`]), which only a frame's step pays;
+    /// - a step owed ([`owesStep`]), which only a frame's step pays;
     /// - a store's answer in the mailbox, which only a frame's turn
     ///   delivers.
     ///
@@ -441,11 +439,41 @@ package actor NuxieMachineEdge {
     ///
     /// The edge asks for a frame ([`askIfWaiting`]) wherever it can leave
     /// this true: at the end of each delivery, the only place a step comes
-    /// to be owed, and when an answer arrives, the only place the mailbox
-    /// fills. So a host that runs a frame for each ask never rests while it
-    /// holds, and keeps no state of its own about it.
+    /// to be owed (a frame's rounds included), and when an answer arrives,
+    /// the only place the mailbox fills. So a host that runs a frame for
+    /// each ask never rests while it holds, and keeps no state of its own
+    /// about it.
     private var waitsForFrame: Bool {
-        fault == nil && !closedScreen && (screens.contains(where: \.stepOwed) || !mailbox.isEmpty)
+        fault == nil && !closedScreen && (!mailbox.isEmpty || screens.contains(where: owesStep))
+    }
+
+    /// Whether the presentation `screen` owes a step: something it has not
+    /// drawn waits for one. That is what the edge knows of
+    /// ([`Screen.undrawn`]), and on the driver path also whether the session
+    /// holds writes for the presentation that only its player's next round
+    /// applies (`nux_machine.h`, THE DRIVER PATH, step 8). Any delivery can
+    /// leave such writes, a round of another presentation's player
+    /// included, so the session is asked each time and the edge keeps no
+    /// account of them.
+    ///
+    /// A read that fails for another reason than the two that mean nothing
+    /// is held counts as owed: the frame it asks for meets the failure in
+    /// its step, as a fault ([`stepPlayers`]).
+    private func owesStep(_ screen: Screen) -> Bool {
+        if screen.undrawn { return true }
+        guard screen.player != nil else { return false }
+        return (try? holdsWrites(screen.presented.shown)) ?? true
+    }
+
+    /// Whether the driven session holds writes for the presentation `shown`
+    /// that no round has applied. A session that has ended, or no longer
+    /// shows the presentation, holds none for it.
+    private func holdsWrites(_ shown: NuxieMachineShown) throws -> Bool {
+        do {
+            return try session.holdsWrites(for: shown)
+        } catch NuxieMachineError.ended, NuxieMachineError.unknownInstance {
+            return false
+        }
     }
 
     private enum CellKind: Equatable {
@@ -823,11 +851,6 @@ package actor NuxieMachineEdge {
         _ body: (inout Delivery) async -> Value
     ) async -> Value {
         guard fault == nil, !closedScreen else { return stopped }
-        // A delivery into a driven session may leave writes held for each
-        // presentation's next round; only a step runs one.
-        for index in screens.indices where screens[index].player != nil {
-            screens[index].stepOwed = true
-        }
         var delivery = Delivery(turn, before: screens.map(\.presented.shown))
         let result = await body(&delivery)
         await sync(&delivery)
@@ -927,11 +950,10 @@ package actor NuxieMachineEdge {
         switch drawing {
         case .artwork:
             screens.append(Screen(presented: presented, player: nil,
-                                  stepOwed: delivery.landed.contains(presented.shown.instance)))
+                                  undrawn: delivery.landed.contains(presented.shown.instance)))
         case .compiled:
             guard let player = await openPlayer(for: presented, &delivery) else { return }
-            // A new player's first writes are held for its first step.
-            screens.append(Screen(presented: presented, player: player, stepOwed: true))
+            screens.append(Screen(presented: presented, player: player, undrawn: true))
         }
         log.append(.opened(presented.shown))
     }
@@ -974,6 +996,13 @@ package actor NuxieMachineEdge {
         }
     }
 
+    /// The most settling passes one frame runs ([`stepPlayers`]). The
+    /// engine bounds a step's driver rounds the same way. A frame that
+    /// still owes steps after the last pass ends there: the writes stay
+    /// held, the edge asks for another frame, and that frame's steps apply
+    /// them.
+    private static let settlingPasses = 8
+
     /// A frame on the driver path: tell the session the moment, and step
     /// each presentation's player, bottom first. Each step carries the
     /// machine: the session's driver hears the engine's reports and its
@@ -981,10 +1010,19 @@ package actor NuxieMachineEdge {
     /// step left are applied. A player whose presentation the session no
     /// longer shows (an earlier step of this frame ended it) is not stepped:
     /// its rounds would do nothing, and the sync closes it. The pointers go
-    /// to the step of the presentation they touched. A step that failed
-    /// because a round failed has ended the session by its one fault path,
-    /// and its rows end in that fault; they are applied, which stops the
-    /// edge, and the sync then frees every player.
+    /// to the step of the presentation they touched.
+    ///
+    /// A round of one presentation can hold writes for another, one already
+    /// stepped in this frame among them (a tap on a sheet that changes what
+    /// the cover under it shows). So the frame settles before it is drawn:
+    /// it asks the session which presentations hold writes and steps those
+    /// players again, bottom first, with no time and no touches, until none
+    /// does, at most [`settlingPasses`] times. The frame drawn shows what the
+    /// machine wrote in it, on every Screen.
+    ///
+    /// A step that failed because a round failed has ended the session by
+    /// its one fault path, and its rows end in that fault; they are applied,
+    /// which stops the edge, and the sync then frees every player.
     private func stepPlayers(
         pointers: [NuxieNativePointerEvent],
         on touched: NuxieMachineShown?,
@@ -1001,47 +1039,82 @@ package actor NuxieMachineEdge {
         var reported: [String] = []
         var keepGoing = false
         var waiting = pointers
-        for (shown, player) in screens.compactMap({ screen in screen.player.map { (screen.presented.shown, $0) } }) {
+        let players = screens.compactMap { screen in screen.player.map { (shown: screen.presented.shown, player: $0) } }
+        for (shown, player) in players {
             guard fault == nil else { break }
-            guard showing().contains(where: { $0.shown == shown }) else { continue }
             var forwarded: [NuxieNativePointerEvent] = []
             if shown == touched {
                 forwarded = waiting
                 waiting = []
             }
-            let step: NuxieNativePlayerStepResult
-            do {
-                step = try await player.step(pointers: forwarded, elapsedSeconds: elapsedSeconds)
-            } catch {
-                let failed = NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)")
-                if let rows = try? session.rows(), case .end(.fault, _)? = rows.last {
-                    await apply(rows, now: now, &delivery, then: failed)
-                } else {
-                    fail(failed, &delivery)
-                }
-                break
-            }
-            // The step's first round applied everything held for the
-            // presentation, and its later rounds applied their own writes.
-            if let index = screens.firstIndex(where: { $0.presented.shown == shown }) {
-                screens[index].stepOwed = false
-            }
+            guard let step = await stepPlayer(player, of: shown, pointers: forwarded, elapsedSeconds: elapsedSeconds,
+                                              now: now, &delivery) else { continue }
             reported += step.events.map(\.name)
             keepGoing = keepGoing || step.keepGoing
-            let rows: [NuxieMachineRow]
-            do {
-                rows = try session.rows()
-            } catch {
-                await refused(error, doing: "the step's rows", now: now, &delivery)
-                break
-            }
-            await apply(rows, now: now, &delivery)
         }
         if !waiting.isEmpty, fault == nil {
             // The presentation they touched ended earlier in this frame.
             log.append(.droppedTouches(touched))
         }
+        for _ in 0..<Self.settlingPasses {
+            guard fault == nil else { break }
+            let owing: [(shown: NuxieMachineShown, player: NuxieNativeRuntime)]
+            do {
+                owing = try players.filter { try holdsWrites($0.shown) }
+            } catch {
+                await refused(error, doing: "which presentations hold writes", now: now, &delivery)
+                break
+            }
+            guard !owing.isEmpty else { break }
+            for (shown, player) in owing {
+                guard fault == nil else { break }
+                guard let step = await stepPlayer(player, of: shown, pointers: [], elapsedSeconds: 0, now: now,
+                                                  &delivery) else { continue }
+                reported += step.events.map(\.name)
+                keepGoing = keepGoing || step.keepGoing
+            }
+        }
         return fault == nil ? (reported, keepGoing) : ([], false)
+    }
+
+    /// One step of the player of the presentation `shown`, then the rows it
+    /// left applied. None when the session no longer shows the
+    /// presentation (it is not stepped) or the step faulted.
+    private func stepPlayer(
+        _ player: NuxieNativeRuntime,
+        of shown: NuxieMachineShown,
+        pointers: [NuxieNativePointerEvent],
+        elapsedSeconds: Float,
+        now: Int64,
+        _ delivery: inout Delivery
+    ) async -> NuxieNativePlayerStepResult? {
+        guard showing().contains(where: { $0.shown == shown }) else { return nil }
+        let step: NuxieNativePlayerStepResult
+        do {
+            step = try await player.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
+        } catch {
+            let failed = NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)")
+            if let rows = try? session.rows(), case .end(.fault, _)? = rows.last {
+                await apply(rows, now: now, &delivery, then: failed)
+            } else {
+                fail(failed, &delivery)
+            }
+            return nil
+        }
+        // The step's first round applied everything held for the
+        // presentation, and its later rounds applied their own writes.
+        if let index = screens.firstIndex(where: { $0.presented.shown == shown }) {
+            screens[index].undrawn = false
+        }
+        let rows: [NuxieMachineRow]
+        do {
+            rows = try session.rows()
+        } catch {
+            await refused(error, doing: "the step's rows", now: now, &delivery)
+            return nil
+        }
+        await apply(rows, now: now, &delivery)
+        return step
     }
 
     /// A frame on the row path: step the Screen and hand its named events
@@ -1057,7 +1130,7 @@ package actor NuxieMachineEdge {
         let stepped = shown
         // This step lays out every cell written before it; a write the
         // events below make shows on the next.
-        for index in screens.indices { screens[index].stepOwed = false }
+        for index in screens.indices { screens[index].undrawn = false }
         let step: NuxieNativePlayerStepResult
         do {
             step = try await artwork.runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
@@ -1269,7 +1342,7 @@ package actor NuxieMachineEdge {
         }
         delivery.landed.insert(instance)
         for index in screens.indices where screens[index].presented.shown.instance == instance {
-            screens[index].stepOwed = true
+            screens[index].undrawn = true
         }
         log.append(.write(cell: cell, value: value))
     }

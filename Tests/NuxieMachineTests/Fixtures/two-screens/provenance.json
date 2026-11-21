@@ -1,22 +1,22 @@
 {
-  "note": "Two routes for the Nux machine suite's stack checks: a cover and a sheet over it, with buttons that present, pop, replace, present and pop or dismiss in one tap, and close. The two .nux files are copied from the two-screens fixture folder of the parent's machine C interface crate tests, each named here by its git blob id at parentCommit. The plan's views are compiled on the device; nothing else is published.",
+  "note": "Two routes for the Nux machine suite's stack checks: a cover and a sheet over it, with buttons that present, pop, replace, present and pop or dismiss in one tap, and close. Both show the root's count of taps, and each has a button that adds one to it. The two .nux files are copied from the two-screens fixture folder of the parent's machine C interface crate tests, each named here by its git blob id at parentCommit. The plan's views are compiled on the device; nothing else is published.",
   "plan": {
     "root": "main",
     "app": "app",
     "experience": "stack",
     "version": 1
   },
-  "parentCommit": "aa74fe0657c3ca587afd087d6d1c3adf35ca9911",
+  "parentCommit": "7484e036d1ce5b7ddf7b309e52c85d24e9f805ea",
   "files": {
     "main.nux": {
-      "sha256": "0d0ba510ec59634021313dcaf0b19435f2e10115c1c23cbc77cd8c17436d661c",
-      "sizeBytes": 1367,
-      "parentBlob": "6c492855a9ee7a86aedd944a5b8dcc4666a432bc"
+      "sha256": "6b94a48f2247116b803b638abac03df94e776505e31dd6e20594cb48333e9e91",
+      "sizeBytes": 1757,
+      "parentBlob": "5b820b6c4d984b80aa2fc61eab117a1d3b7000aa"
     },
     "card.nux": {
-      "sha256": "b0aa11783adb57046645c203ccd295b03c4ea74fe3c22adcc5f25c8e37b11a4a",
-      "sizeBytes": 963,
-      "parentBlob": "b822dfb84b2670753b37b27f5b2a475bfd4aef5c"
+      "sha256": "33a53cb3cc11915719fa7e9624d15c9f355407b6542d8eb986b81951f236b49a",
+      "sizeBytes": 1178,
+      "parentBlob": "fdeb5c900f866ffe63359e5df5278dcc8ec7369e"
     }
   }
 }

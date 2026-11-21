@@ -206,6 +206,18 @@ package final class NuxieMachineSession {
         return has ? asset : nil
     }
 
+    /// Whether the session holds scene writes for the presentation `shown`
+    /// that no round of its driver has applied yet, written by any delivery,
+    /// a round of another presentation's driver included. Such a
+    /// presentation's player owes a step (`nux_machine.h`, THE DRIVER PATH,
+    /// step 8). Throws `ended` once the session has ended and
+    /// `unknownInstance` for a presentation it does not show.
+    package func holdsWrites(for shown: NuxieMachineShown) throws -> Bool {
+        var holds = false
+        try NuxieMachineError.check(nux_machine_scene_holds_writes(handle, shown.journey, shown.instance, &holds))
+        return holds
+    }
+
     /// The moment a driver's later rounds step the machine at, until a call
     /// hands in another. Delivers nothing; the rows stay as they are.
     package func setNow(_ now: Int64) throws {
