@@ -54,12 +54,29 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Frames drawn to the screen so far.
     package private(set) var framesDrawn = 0
 
-    /// Lay the Screen out in the safe area, over a black ground, rather than
-    /// across the whole view. Set before the view loads: a cover takes the
-    /// whole screen, and a view's safe areas do not reach the engine yet.
-    package var fillsSafeAreaOnly = false
+    /// How the Screen is presented now, as the last [`configure`] said.
+    package private(set) var presentation: NuxieMachinePresentation = .sheet
 
     private let surface = NuxieMachineSurfaceView()
+    /// The container's ground and the two ways the surface sits in it: in
+    /// the safe area, for a cover, or across the whole view, for a sheet.
+    /// Made once with the view; which one is active is [`applyStyle`]'s.
+    private let container = UIView()
+    private lazy var inSafeArea: [NSLayoutConstraint] = {
+        let bounds = container.safeAreaLayoutGuide
+        return [
+            surface.leadingAnchor.constraint(equalTo: bounds.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: bounds.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: bounds.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: bounds.bottomAnchor),
+        ]
+    }()
+    private lazy var acrossView: [NSLayoutConstraint] = [
+        surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+        surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        surface.topAnchor.constraint(equalTo: container.topAnchor),
+        surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+    ]
     // Touched off the main actor only by `deinit`, after every other use.
     private nonisolated(unsafe) var displayLink: CADisplayLink?
     private var pendingPointers: [NuxieNativePointerEvent] = []
@@ -113,23 +130,10 @@ package final class NuxieMachineScreenViewController: UIViewController {
             self.requestFrame()
         }
         surface.onGeometryChange = { [weak self] in self?.requestFrame() }
-        let container = UIView()
-        container.backgroundColor = fillsSafeAreaOnly ? .black : .clear
         surface.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(surface)
-        let bounds = container.safeAreaLayoutGuide
-        NSLayoutConstraint.activate(fillsSafeAreaOnly ? [
-            surface.leadingAnchor.constraint(equalTo: bounds.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: bounds.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: bounds.topAnchor),
-            surface.bottomAnchor.constraint(equalTo: bounds.bottomAnchor),
-        ] : [
-            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: container.topAnchor),
-            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
         view = container
+        applyStyle()
         updateAccessibility()
     }
 
@@ -148,6 +152,51 @@ package final class NuxieMachineScreenViewController: UIViewController {
             ) { [weak self] _ in Task { @MainActor in self?.requestFrame() } },
         ]
         requestFrame()
+    }
+
+    /// Set this controller up for one presentation, before UIKit presents
+    /// it. A record keeps one Screen for its whole life (its lane and its
+    /// loop outlive every presentation, and run with none), so the same
+    /// controller is presented again, in either style: everything a
+    /// presentation decides is set here, for every presentation.
+    ///
+    /// - Its style ([`applyStyle`]): everything that depends on a sheet or
+    ///   a cover. Any other presentation is laid out as a sheet; the
+    ///   presenter refuses it before it gets here.
+    /// - What belonged to the presentation before: pointers not yet handed
+    ///   to a frame are dropped, and the count of frames drawn starts again,
+    ///   so the accessibility value says "loading" until this
+    ///   presentation's Screen has drawn its first frame.
+    package func configure(for presentation: NuxieMachinePresentation) {
+        self.presentation = presentation
+        pendingPointers = []
+        framesDrawn = 0
+        updateAccessibility()
+        applyStyle()
+    }
+
+    /// Everything that depends on how the Screen is presented, set from
+    /// [`presentation`]: the one place each of these is decided, read when
+    /// the view loads and again at every [`configure`].
+    ///
+    /// - A cover: full screen, which has no swipe; the Screen in the safe
+    ///   area over a black ground, since a view's safe areas do not reach
+    ///   the engine yet.
+    /// - A sheet: a page sheet at the large detent with no grabber, which
+    ///   the person can swipe down (the native close); the Screen across
+    ///   the whole sheet over no ground.
+    private func applyStyle() {
+        let covers = presentation == .cover
+        modalPresentationStyle = covers ? .fullScreen : .pageSheet
+        isModalInPresentation = covers
+        if !covers, let sheet = sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = false
+        }
+        guard isViewLoaded else { return }
+        container.backgroundColor = covers ? .black : .clear
+        NSLayoutConstraint.deactivate(covers ? acrossView : inSafeArea)
+        NSLayoutConstraint.activate(covers ? inSafeArea : acrossView)
     }
 
     /// Ask for a frame. Every ask the edge makes comes here.

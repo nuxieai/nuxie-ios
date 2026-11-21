@@ -259,16 +259,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             return
         }
         logger.info("machine.present-sheet \(shown.showing)")
-        if presentation == .cover {
-            controller.modalPresentationStyle = .fullScreen
-            controller.fillsSafeAreaOnly = true
-        } else {
-            controller.modalPresentationStyle = .pageSheet
-            if let sheet = controller.sheetPresentationController {
-                sheet.detents = [.large()]
-                sheet.prefersGrabberVisible = false
-            }
-        }
+        controller.configure(for: presentation)
         controller.presentationController?.delegate = self
         host.present(controller, animated: true) { [weak self] in self?.send(.presented) }
         controller.requestFrame()
