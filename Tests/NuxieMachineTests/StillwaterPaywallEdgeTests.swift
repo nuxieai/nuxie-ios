@@ -816,7 +816,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             await run.edge.start(event: "onboarding_completed", now: run.now)
             try await run.settle()
             let written = await run.edge.log.count
-            try await run.edge.runtime.close()
+            try await run.edge.screen()?.close()
             await run.edge.frame(elapsedSeconds: Self.tick, now: run.advance())
             let recorded = await run.edge.fault
             let fault = try XCTUnwrap(recorded, "the step failed")
@@ -1078,7 +1078,9 @@ private final class Run {
 
     /// The Screen's cells as the engine holds them now.
     func cells() async throws -> [String: NuxieNativeViewModelValue] {
-        let snapshot = try await edge.runtime.snapshot()
+        let screen = await edge.screen()
+        let runtime = try XCTUnwrap(screen, "the edge has a Screen")
+        let snapshot = try await runtime.snapshot()
         guard case .referencedInstance(let state)? = snapshot.values.first(where: {
             $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "state"
         })?.value else { return [:] }
@@ -1091,7 +1093,9 @@ private final class Run {
     /// attachment named `stillwater-paywall-<name>`.
     func frame(_ name: String) async throws -> Data {
         frames += 1
-        let pixels = try await Pixels.render(edge.runtime, width: 390, height: 844)
+        let screen = await edge.screen()
+        let runtime = try XCTUnwrap(screen, "the edge has a Screen")
+        let pixels = try await Pixels.render(runtime, width: 390, height: 844)
         try await Pixels.attach(pixels, width: 390, height: 844, name: "stillwater-paywall-\(frames)-\(name)")
         return pixels
     }
@@ -1219,7 +1223,7 @@ struct Fixture {
 
 // MARK: - Reading frames back
 
-private enum Pixels {
+enum Pixels {
     /// One frame of the engine's Screen into a drawable, read back as BGRA
     /// rows, as the SDK's native runtime tests read theirs.
     static func render(_ runtime: NuxieNativeRuntime, width: Int, height: Int) async throws -> Data {
@@ -1273,7 +1277,7 @@ private enum Pixels {
 }
 
 /// A completion the renderer calls once, awaited with a deadline.
-private final class Signal: @unchecked Sendable {
+final class Signal: @unchecked Sendable {
     private let lock = NSLock()
     private var fired = false
 

@@ -5,7 +5,10 @@ import QuartzCore
 import UIKit
 
 /// Hosts the one Screen a [`NuxieMachineEdge`] drives: the Metal surface the
-/// engine draws into and the display link that runs the edge's frames.
+/// engine draws into and the display link that runs the edge's frames. What
+/// it draws is the edge's [`screen`](NuxieMachineEdge.screen()) at each frame:
+/// the published Screen, or the player of the presented instance's compiled
+/// view, which changes with each presentation.
 ///
 /// Each display tick is one frame: the pointers that arrived, the edge's
 /// frame (engine step, engine events to the machine, writes to cells, the
@@ -38,14 +41,20 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package var onFault: (@MainActor (NuxieMachineEdgeFault) -> Void)?
 
     /// What the host knows about the record, as this Screen's accessibility
-    /// value once its first frame is drawn. A Screen's own controls have no
-    /// accessibility elements yet, so this is the one a check can read.
+    /// value once its first frame is drawn, followed by how many frames have
+    /// been drawn. A Screen's own controls have no accessibility elements
+    /// yet, so this is the one a check can read.
     package var statusText = "" {
         didSet { updateAccessibility() }
     }
 
     /// Frames drawn to the screen so far.
     package private(set) var framesDrawn = 0
+
+    /// Lay the Screen out in the safe area, over a black ground, rather than
+    /// across the whole view. Set before the view loads: a cover takes the
+    /// whole screen, and a view's safe areas do not reach the engine yet.
+    package var fillsSafeAreaOnly = false
 
     private let surface = NuxieMachineSurfaceView()
     // Touched off the main actor only by `deinit`, after every other use.
@@ -60,8 +69,10 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The display time of the last frame; none after a rest, so the frame
     /// that wakes the loop advances by zero, not by the time it rested.
     private var lastTimestamp: CFTimeInterval?
-    /// The size the engine lays the Screen out at and draws, once applied.
+    /// The size the engine lays the Screen out at and draws, once applied,
+    /// and the Screen it was applied to.
     private var appliedSize: Size?
+    private var sizedScreen: ObjectIdentifier?
     private var deviceConfigured = false
     // Touched off the main actor only by `deinit`, after every other use.
     private nonisolated(unsafe) var notificationTokens: [NSObjectProtocol] = []
@@ -96,7 +107,23 @@ package final class NuxieMachineScreenViewController: UIViewController {
             self.requestFrame()
         }
         surface.onGeometryChange = { [weak self] in self?.requestFrame() }
-        view = surface
+        let container = UIView()
+        container.backgroundColor = fillsSafeAreaOnly ? .black : .clear
+        surface.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(surface)
+        let bounds = container.safeAreaLayoutGuide
+        NSLayoutConstraint.activate(fillsSafeAreaOnly ? [
+            surface.leadingAnchor.constraint(equalTo: bounds.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: bounds.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: bounds.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: bounds.bottomAnchor),
+        ] : [
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        view = container
         updateAccessibility()
     }
 
@@ -187,10 +214,22 @@ package final class NuxieMachineScreenViewController: UIViewController {
         }
         do {
             let drawing = isDrawable
-            if drawing { try await applySize() }
+            // The Screen this frame steps, sized before the step lays it out.
+            let screen = drawing ? await edge.screen() : nil
+            if let screen { try await applySize(screen) }
             frame = await edge.frame(pointers: pointers, elapsedSeconds: elapsedSeconds, now: now)
             doing = "render"
-            if drawing, !stopped { try await draw() }
+            if drawing, !stopped {
+                // A delivery in the frame may have closed the Screen or
+                // presented a new one: only the Screen the frame sized and
+                // stepped is drawn, and a new one waits for the next frame.
+                let after = await edge.screen()
+                if let after, after === screen {
+                    try await draw(after)
+                } else if after != nil {
+                    frameRequested = true
+                }
+            }
         } catch {
             frameInFlight = false
             let fault = error as? NuxieMachineEdgeFault
@@ -228,12 +267,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// pixels when either changed, before the step that lays it out. The
     /// sizes follow the SDK's Screen: pixels are the points times the scale,
     /// rounded up, and the layout size is the pixels over the scale.
-    private func applySize() async throws {
+    private func applySize(_ runtime: NuxieNativeRuntime) async throws {
         let scale = surface.displayScale
         let size = Size(pixelWidth: Self.pixels(surface.bounds.width, scale),
                         pixelHeight: Self.pixels(surface.bounds.height, scale), scale: Float(scale))
-        guard size != appliedSize else { return }
-        let runtime = edge.runtime
+        let identity = ObjectIdentifier(runtime)
+        guard size != appliedSize || identity != sizedScreen else { return }
         if !deviceConfigured {
             let device = try await runtime.metalDevice().value
             let layer = surface.metalLayer
@@ -251,10 +290,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
         try Self.requireHealthy(outcome, doing: "resize")
         surface.metalLayer.drawableSize = CGSize(width: Int(size.pixelWidth), height: Int(size.pixelHeight))
         appliedSize = size
+        sizedScreen = identity
     }
 
     /// Draw the Screen as the last step left it, and wait for the GPU.
-    private func draw() async throws {
+    private func draw(_ runtime: NuxieNativeRuntime) async throws {
         guard let size = appliedSize else { return }
         guard let drawable = surface.metalLayer.nextDrawable() else {
             // No drawable this tick: ask for another frame to draw it.
@@ -262,21 +302,21 @@ package final class NuxieMachineScreenViewController: UIViewController {
             return
         }
         let completion = NuxieMachineFrameCompletion()
-        let outcome = try await edge.runtime.render(
+        let outcome = try await runtime.render(
             layoutScaleFactor: size.scale, drawable: .available(NuxieNativeDrawable(drawable)),
             completion: { completion.fire() })
         await completion.wait()
         try Self.requireHealthy(outcome, doing: "render")
         if outcome.disposition == .presented {
             framesDrawn += 1
-            if framesDrawn == 1 { updateAccessibility() }
+            updateAccessibility()
         } else {
             frameRequested = true
         }
     }
 
     private func updateAccessibility() {
-        surface.accessibilityValue = framesDrawn > 0 ? statusText : "loading"
+        surface.accessibilityValue = framesDrawn > 0 ? "\(statusText) Frames drawn: \(framesDrawn)." : "loading"
     }
 
     private static func requireHealthy(_ outcome: NuxieNativeRendererOutcome, doing what: String) throws {

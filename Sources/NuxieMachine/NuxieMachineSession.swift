@@ -1,5 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
+import NuxieRuntime
 @_implementationOnly import NuxMachineC
 
 // FOR TESTS ONLY. The Nux machine's library carries the `.nux` compiler and a
@@ -147,6 +148,71 @@ package final class NuxieMachineSession {
         }
         try NuxieMachineError.check(status)
         return try NuxieMachineValue(value)
+    }
+
+    // MARK: The driver path
+
+    /// Put the session on the driver path, before its first start: its
+    /// scene writes are never rows, and each presented instance's are held
+    /// for that instance's driver (`nux_machine.h`, THE DRIVER PATH).
+    package func driveScene() throws {
+        try NuxieMachineError.check(nux_machine_drive_scene(handle))
+    }
+
+    /// The engine's records of the plan's views, copied.
+    package func sceneRecords() throws -> Data {
+        var bytes: UnsafePointer<UInt8>?
+        var length = 0
+        try NuxieMachineError.check(nux_machine_scene_records(handle, &bytes, &length))
+        guard let bytes else { return Data() }
+        return Data(bytes: bytes, count: length)
+    }
+
+    /// The artboard the presented instance `instance` is drawn in, by its
+    /// position among the records' artboards.
+    package func sceneArtboard(instance: UInt64) throws -> Int {
+        var artboard = 0
+        try NuxieMachineError.check(nux_machine_scene_artboard(handle, instance, &artboard))
+        return artboard
+    }
+
+    /// The records' asset the platform's own font goes into, by its position
+    /// among their assets, or none when no view shows text.
+    package func scenePlatformFont() throws -> Int? {
+        var has = false
+        var asset = 0
+        try NuxieMachineError.check(nux_machine_scene_platform_font(handle, &has, &asset))
+        return has ? asset : nil
+    }
+
+    /// The moment a driver's later rounds step the machine at, until a call
+    /// hands in another. Delivers nothing; the rows stay as they are.
+    package func setNow(_ now: Int64) throws {
+        try NuxieMachineError.check(nux_machine_set_now(handle, now))
+    }
+
+    /// A driver for one presentation of the instance `instance`, whose
+    /// rounds write through the engine's functions `writers`. One per
+    /// player, and a new one for each presentation.
+    package func sceneDriver(instance: UInt64, writers: NuxieNativeSceneWriterFunctions) throws
+        -> NuxieNativePlayerDriver
+    {
+        // Each field takes the engine function with the layout the header
+        // gives it.
+        var calls = NuxMachineSceneWriterCalls()
+        calls.set_number = unsafeBitCast(writers.setNumber, to: type(of: calls.set_number))
+        calls.set_unsigned = unsafeBitCast(writers.setUnsigned, to: type(of: calls.set_unsigned))
+        calls.set_bool = unsafeBitCast(writers.setBool, to: type(of: calls.set_bool))
+        calls.set_color = unsafeBitCast(writers.setColor, to: type(of: calls.set_color))
+        calls.set_text = unsafeBitCast(writers.setText, to: type(of: calls.set_text))
+        calls.reset = unsafeBitCast(writers.reset, to: type(of: calls.reset))
+        var driver = NuxMachinePlayerDriver()
+        try NuxieMachineError.check(nux_machine_scene_driver(handle, instance, &calls, &driver))
+        guard let drive = unsafeBitCast(driver.drive, to: UnsafeRawPointer?.self) else {
+            throw NuxieMachineError.nullArgument
+        }
+        return NuxieNativePlayerDriver(context: driver.context, drive: drive,
+                                       release: unsafeBitCast(driver.release, to: UnsafeRawPointer?.self))
     }
 
     // MARK: Rows
@@ -367,6 +433,13 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case outOfRange
     /// The row at this index is of another kind.
     case wrongKind
+    /// A record has started, so the path of the session's scene writes is
+    /// fixed.
+    case started
+    /// The session is on the row path: it hands out no driver.
+    case notDriven
+    /// The instance's component has no view, so no artboard.
+    case noArtboard
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
 
@@ -394,6 +467,9 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .valueNotCarried: "value_not_carried"
         case .outOfRange: "out_of_range"
         case .wrongKind: "wrong_kind"
+        case .started: "started"
+        case .notDriven: "not_driven"
+        case .noArtboard: "no_artboard"
         case .unknownStatus(let status): "status_\(status)"
         }
     }
@@ -427,6 +503,9 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_VALUE_NOT_CARRIED): .valueNotCarried,
         UInt32(NUX_MACHINE_OUT_OF_RANGE): .outOfRange,
         UInt32(NUX_MACHINE_WRONG_KIND): .wrongKind,
+        UInt32(NUX_MACHINE_STARTED): .started,
+        UInt32(NUX_MACHINE_NOT_DRIVEN): .notDriven,
+        UInt32(NUX_MACHINE_NO_ARTBOARD): .noArtboard,
     ]
 }
 

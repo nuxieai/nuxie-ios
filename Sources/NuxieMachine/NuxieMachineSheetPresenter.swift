@@ -30,8 +30,10 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 /// Does what the machine's rows say with UIKit, for one edge and its Screen.
 ///
 /// - `present` with the sheet presentation presents the Screen as a native
-///   sheet at the large detent, from the host's view controller. Any other
-///   presentation is a fault: push and the rest are not built.
+///   sheet at the large detent, from the host's view controller, and with
+///   the cover presentation as a native cover over the whole screen, which
+///   has no swipe. Any other presentation is a fault: push and the rest are
+///   not built.
 /// - `dismiss` dismisses the sheet; a `pop` of the presented showing does
 ///   too.
 /// - A swipe down by the person is the native dismissal: the presenter tells
@@ -112,22 +114,38 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         super.init()
     }
 
-    /// Compile the plan, open the Screen, and start a record on `event`.
-    /// What the machine says to present opens as a sheet. A presenter starts
-    /// once.
+    /// Compile the plan, open its hand-written artwork, and start a record
+    /// on `event`. What the machine says to present opens as a sheet. A
+    /// presenter starts once.
     package func start(
         plan: NuxieMachinePlanSource,
         screen: NuxieMachineScreenSource,
         store: any NuxieMachineStore,
         event: String
     ) async {
+        await start(event: event) { inbox in
+            try await NuxieMachineEdge(plan: plan, screen: screen, store: store, onReport: { inbox.post($0) })
+        }
+    }
+
+    /// Compile the plan and start a record on `event`; each instance the
+    /// machine presents is drawn from the plan's own views. A presenter
+    /// starts once.
+    package func start(plan: NuxieMachinePlanSource, store: any NuxieMachineStore, event: String) async {
+        await start(event: event) { inbox in
+            try NuxieMachineEdge(plan: plan, store: store, onReport: { inbox.post($0) })
+        }
+    }
+
+    private func start(
+        event: String,
+        opening: (NuxieMachineReportInbox) async throws -> NuxieMachineEdge
+    ) async {
         guard !started else { return }
         started = true
-        let inbox = reports
         let edge: NuxieMachineEdge
         do {
-            edge = try await NuxieMachineEdge(plan: plan, screen: screen, store: store,
-                                              onReport: { inbox.post($0) })
+            edge = try await opening(reports)
         } catch {
             send(.hostFault(error as? NuxieMachineEdgeFault
                 ?? NuxieMachineEdgeFault(code: "edge.open", detail: "\(error)")))
@@ -178,8 +196,8 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
 
     private func perform(_ effect: NuxieMachineSheetState.Effect) {
         switch effect {
-        case .present(let shown):
-            presentSheet(shown)
+        case .present(let shown, let presentation):
+            presentSheet(shown, as: presentation)
         case .dismiss:
             logger.info("machine.dismiss-sheet")
             controller?.dismiss(animated: true) { [weak self] in self?.send(.dismissed) }
@@ -234,17 +252,22 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
 
     // MARK: The sheet
 
-    private func presentSheet(_ shown: NuxieMachineShown) {
+    private func presentSheet(_ shown: NuxieMachineShown, as presentation: NuxieMachinePresentation) {
         guard let controller, let host, host.viewIfLoaded?.window != nil, host.presentedViewController == nil else {
             send(.presentFailed(NuxieMachineEdgeFault(code: "edge.no-host",
                 detail: "nothing can present the sheet: the host is gone, off screen or already presenting")))
             return
         }
         logger.info("machine.present-sheet \(shown.showing)")
-        controller.modalPresentationStyle = .pageSheet
-        if let sheet = controller.sheetPresentationController {
-            sheet.detents = [.large()]
-            sheet.prefersGrabberVisible = false
+        if presentation == .cover {
+            controller.modalPresentationStyle = .fullScreen
+            controller.fillsSafeAreaOnly = true
+        } else {
+            controller.modalPresentationStyle = .pageSheet
+            if let sheet = controller.sheetPresentationController {
+                sheet.detents = [.large()]
+                sheet.prefersGrabberVisible = false
+            }
         }
         controller.presentationController?.delegate = self
         host.present(controller, animated: true) { [weak self] in self?.send(.presented) }
