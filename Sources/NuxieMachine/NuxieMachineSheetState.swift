@@ -77,8 +77,9 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     }
 
     package enum Effect: Equatable, Sendable {
-        /// Present the sheet for this showing.
-        case present(NuxieMachineShown)
+        /// Present the sheet for this showing: a sheet, or a cover over the
+        /// whole screen.
+        case present(NuxieMachineShown, NuxieMachinePresentation)
         /// Dismiss the sheet.
         case dismiss
         /// Tell the edge the person closed this showing.
@@ -171,16 +172,16 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     private mutating func perform(_ row: NuxieMachineHostRow) -> [Effect] {
         switch row {
         case .present(let shown, let presentation):
-            guard presentation == .sheet else {
+            guard presentation == .sheet || presentation == .cover else {
                 return fail(NuxieMachineEdgeFault(code: "edge.unsupported-presentation",
-                    detail: "present showing \(shown.showing) as \(presentation); only a sheet is built"))
+                    detail: "present showing \(shown.showing) as \(presentation); only a sheet and a cover are built"))
             }
             guard sheet == .none else {
                 return fail(NuxieMachineEdgeFault(code: "edge.no-host",
                     detail: "present showing \(shown.showing) while the last sheet is still on screen"))
             }
             sheet = .arriving(shown, leaving: false)
-            return [.present(shown)]
+            return [.present(shown, presentation)]
         case .pop(let shown):
             return leave(only: shown)
         case .dismiss:

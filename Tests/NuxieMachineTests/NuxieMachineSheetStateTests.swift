@@ -18,7 +18,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     private func sheetUp() -> State {
         var state = State()
         XCTAssertEqual(state.handle(.started), [])
-        XCTAssertEqual(state.handle(.report(.rows([.present(paywall, presentation: .sheet)]))), [.present(paywall)])
+        XCTAssertEqual(state.handle(.report(.rows([.present(paywall, presentation: .sheet)]))), [.present(paywall, .sheet)])
         XCTAssertEqual(state.sheet, .arriving(paywall, leaving: false))
         XCTAssertEqual(state.handle(.presented), [])
         XCTAssertEqual(state.sheet, .up(paywall))
@@ -142,7 +142,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = State()
         _ = state.handle(.started)
         XCTAssertEqual(state.handle(.report(.rows([.present(paywall, presentation: .sheet), .wakeAt(evening)]))),
-                       [.present(paywall), .schedule(evening)])
+                       [.present(paywall, .sheet), .schedule(evening)])
         let noHost = NuxieMachineEdgeFault(code: "edge.no-host", detail: "the host is off screen")
         XCTAssertEqual(state.handle(.presentFailed(noHost)), [.schedule(nil), .stop(noHost), .release])
         XCTAssertEqual(state.record, .faulted(noHost))
@@ -157,9 +157,24 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.record, .faulted(noHost))
     }
 
+    /// A cover is presented as a sheet is, over the whole screen, and the
+    /// machine's dismissal takes it away again.
+    func testACoverIsPresentedAndTheMachineDismissesIt() {
+        var state = State()
+        _ = state.handle(.started)
+        XCTAssertEqual(state.handle(.report(.rows([.present(paywall, presentation: .cover)]))),
+                       [.present(paywall, .cover)])
+        XCTAssertEqual(state.handle(.presented), [])
+        XCTAssertEqual(state.sheet, .up(paywall))
+        XCTAssertEqual(state.handle(.report(.rows([.dismiss(reason: "closed"), .end(.exited)]))),
+                       [.dismiss, .schedule(nil), .stop(nil)])
+        XCTAssertEqual(state.handle(.dismissed), [.release])
+        XCTAssertEqual(state.record, .ended)
+    }
+
     /// A present the presenter cannot build is a fault, and so is a second
     /// sheet while the first is still on screen.
-    func testAPresentationThatIsNotASheetFaults() {
+    func testAPresentationThatIsNotASheetOrACoverFaults() {
         var state = State()
         _ = state.handle(.started)
         let effects = state.handle(.report(.rows([.present(paywall, presentation: .push)])))

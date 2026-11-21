@@ -198,18 +198,34 @@ package struct NuxieMachineFrame: Equatable, Sendable {
     package let waitsOnStore: Bool
 }
 
-/// The edge between one session of the Nux machine and one published Screen
-/// on the engine, with no window: the machine's writes land in the Screen's
-/// cells, and the taps the Screen reports go to the machine.
+/// The edge between one session of the Nux machine and the engine, with no
+/// window. What it is handed decides how the machine's writes reach the
+/// engine, for the whole session:
 ///
-/// One frame, in this slice: step the engine with the pointers that
-/// arrived; hand each reported event to the session by name; apply each
-/// `scene` write to its cell; start each `call` at the store; record
-/// `present`, `pop`, `dismiss`, `end`, `wake at` and `note`. A write shows on
-/// the next step. The edge has no window and no clock: its owner draws the
-/// Screen, schedules frames, performs the rows each delivery reports and
-/// delivers `wake` when the moment comes. The log is the record of what the
-/// edge did, for checks; an owner acts only on what it is told.
+/// - **The plan's own views** ([`init(plan:store:onReport:)`]). The session
+///   is put on the driver path before it starts. A `present` row opens a
+///   player on the compiled records, at the presented instance's artboard,
+///   with the platform's own font loaded into the records' font asset, and
+///   sets the session's driver for that presentation on it once. From then
+///   on the step itself carries the machine: the engine's reports go to the
+///   driver and its writes land inside the same step, so the frame drawn
+///   after a step shows them. Swift carries no scene write and no tap. A
+///   `pop` or `dismiss` of the instance frees its player.
+/// - **Hand-written artwork** ([`init(plan:screen:store:onReport:)`]). The
+///   session stays on the row path: the published Screen is opened once,
+///   each `scene` write lands in one of its cells by the name rule and shows
+///   on the next step, and each event the Screen reports is handed to the
+///   session by name. This path exists for the artwork alone and goes with
+///   it.
+///
+/// One frame: step the engine with the pointers that arrived; on the row
+/// path hand each reported event to the session and apply each `scene`
+/// write to its cell; start each `call` at the store; record `present`,
+/// `pop`, `dismiss`, `end`, `wake at` and `note`. The edge has no window and
+/// no clock: its owner draws [`screen`], schedules frames, performs the rows
+/// each delivery reports and delivers `wake` when the moment comes. The log
+/// is the record of what the edge did, for checks; an owner acts only on
+/// what it is told.
 ///
 /// Two rules make a delivery (a start, a frame, a reported event, a close,
 /// a store's answer) one whole thing:
@@ -261,14 +277,10 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 /// Otherwise the owner hears at most one dismissal: the machine's first
 /// `dismiss`. The log keeps every row either way.
 package actor NuxieMachineEdge {
-    /// The engine's Screen, for its owner to draw.
-    package nonisolated let runtime: NuxieNativeRuntime
     private let session: NuxieMachineSession
-    private let route: String
+    /// What draws the presented route.
+    private var drawing: Drawing
     private let store: any NuxieMachineStore
-    private let root: NuxieNativeViewModelReference
-    /// The Screen's cells, by name, with the kind of value each holds.
-    private let cells: [String: CellKind]
     /// The owner, told only by [`deliver`].
     private let owner: @Sendable (NuxieMachineEdgeReport) -> Void
 
@@ -309,6 +321,26 @@ package actor NuxieMachineEdge {
 
     private enum CellKind: Equatable {
         case bool, number, text
+    }
+
+    /// What draws the presented route, chosen once by what the edge was
+    /// handed.
+    private enum Drawing {
+        /// Hand-written artwork for one route, on the row path.
+        case artwork(Artwork)
+        /// The plan's compiled views, on the driver path: the player of the
+        /// presented instance while one is presented.
+        case compiled(NuxieNativeRuntime?)
+    }
+
+    /// One published Screen, opened once, with its root view model bound.
+    private struct Artwork {
+        let runtime: NuxieNativeRuntime
+        /// The plan's route this Screen is the artwork for.
+        let route: String
+        let root: NuxieNativeViewModelReference
+        /// The Screen's cells, by name, with the kind of value each holds.
+        let cells: [String: CellKind]
     }
 
     /// The store's answer to one call: its outcome's name, or why it could
@@ -355,12 +387,32 @@ package actor NuxieMachineEdge {
         }
     }
 
-    /// Compile the plan into a session, and open the Screen on the engine
-    /// with its root view model bound and its System fonts supplied by this
-    /// device. `onReport` hears one report per delivery that did something
-    /// for it: the fault when the delivery ended in one, otherwise the rows
-    /// it performs, in order. It is called inside the edge's turn, so it
-    /// must not wait on the edge.
+    /// Compile the plan into a session that draws its own views: the
+    /// session goes on the driver path, and each presented instance is
+    /// drawn from the compiled records by a player the session drives.
+    /// `onReport` hears one report per delivery that did something for it:
+    /// the fault when the delivery ended in one, otherwise the rows it
+    /// performs, in order. It is called inside the edge's turn, so it must
+    /// not wait on the edge.
+    package init(
+        plan: NuxieMachinePlanSource,
+        store: any NuxieMachineStore,
+        onReport: @escaping @Sendable (NuxieMachineEdgeReport) -> Void
+    ) throws {
+        let session = try NuxieMachineSession(
+            files: plan.files.map { ($0.path, $0.text) }, root: plan.root,
+            app: plan.app, experience: plan.experience, version: plan.version)
+        try session.driveScene()
+        self.session = session
+        self.drawing = .compiled(nil)
+        self.store = store
+        self.owner = onReport
+    }
+
+    /// Compile the plan into a session on the row path, and open its
+    /// hand-written artwork, the published Screen, on the engine with its
+    /// root view model bound and its System fonts supplied by this device.
+    /// `onReport` is as above.
     package init(
         plan: NuxieMachinePlanSource,
         screen: NuxieMachineScreenSource,
@@ -374,17 +426,29 @@ package actor NuxieMachineEdge {
         do {
             let root = try await runtime.rootViewModelReference()
             let snapshot = try await runtime.snapshot(root)
-            self.cells = Self.cells(of: snapshot)
-            self.root = root
+            self.drawing = .artwork(Artwork(runtime: runtime, route: screen.route, root: root,
+                                            cells: Self.cells(of: snapshot)))
         } catch {
             try? await runtime.close()
             throw error
         }
         self.session = session
-        self.runtime = runtime
-        self.route = screen.route
         self.store = store
         self.owner = onReport
+    }
+
+    /// What the owner draws now, between deliveries: the published Screen,
+    /// or the player of the presented instance's compiled view while one is
+    /// presented. None when nothing is presented on the driver path, or
+    /// once the edge has closed.
+    package func screen() async -> NuxieNativeRuntime? {
+        await inTurn { _ in
+            guard !closedScreen else { return nil }
+            switch drawing {
+            case .artwork(let artwork): return artwork.runtime
+            case .compiled(let player): return player
+            }
+        }
     }
 
     /// The host saw the event `event` at `now` (milliseconds since the Unix
@@ -458,10 +522,17 @@ package actor NuxieMachineEdge {
 
     /// An engine event the Screen reported, handed to the session by the name
     /// the engine gave it. Package-visible so a check can hand the edge an
-    /// event the published Screen never reports.
+    /// event the published Screen never reports. On the driver path the
+    /// engine's reports reach the session only through its driver, so one
+    /// handed in here is a fault.
     package func handleReported(_ name: String, now: Int64) async {
         await inTurn { turn in
             await deliver(turn, stopped: ()) { delivery in
+                guard case .artwork = drawing else {
+                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-event",
+                        detail: "\(name) handed in by hand; a compiled view's reports go to its driver"), &delivery)
+                    return
+                }
                 await hear(name, on: shown, now: now, &delivery)
             }
         }
@@ -525,12 +596,19 @@ package actor NuxieMachineEdge {
 
     /// Close the Screen on the engine, after the delivery in progress. The
     /// edge delivers nothing more, and answers that arrive later are not
-    /// delivered. The session is freed with the edge.
+    /// delivered. A presented instance's player is freed here, before the
+    /// session, which is freed with the edge.
     package func close() async throws {
         try await inTurn { _ in
             closedScreen = true
             mailbox = []
-            try await runtime.close()
+            switch drawing {
+            case .artwork(let artwork):
+                try await artwork.runtime.close()
+            case .compiled(let player):
+                drawing = .compiled(nil)
+                try await player?.close()
+            }
         }
     }
 
@@ -576,9 +654,69 @@ package actor NuxieMachineEdge {
         return result
     }
 
-    /// A frame's delivery: step the engine and hand the Screen's events to
-    /// the session, each for the showing the step drew.
+    /// A frame's delivery: step what draws the presented route.
     private func step(
+        pointers: [NuxieNativePointerEvent],
+        elapsedSeconds: Float,
+        now: Int64,
+        _ delivery: inout Delivery
+    ) async -> (reported: [String], keepGoing: Bool) {
+        switch drawing {
+        case .artwork(let artwork):
+            return await step(artwork, pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
+        case .compiled(let player?):
+            return await step(player, pointers: pointers, elapsedSeconds: elapsedSeconds, now: now, &delivery)
+        case .compiled(nil):
+            // Nothing is presented, so nothing is drawn and nothing reports.
+            return ([], false)
+        }
+    }
+
+    /// A frame on the driver path: tell the session the moment, and step
+    /// the player. The step carries the machine: the session's driver hears
+    /// the engine's reports and its writes land in the same step, before it
+    /// returns. Then the rows the step left are applied. A step that failed
+    /// because a round failed has ended the session by its one fault path,
+    /// and its rows end in that fault; they are applied, which frees the
+    /// player and stops the edge.
+    private func step(
+        _ player: NuxieNativeRuntime,
+        pointers: [NuxieNativePointerEvent],
+        elapsedSeconds: Float,
+        now: Int64,
+        _ delivery: inout Delivery
+    ) async -> (reported: [String], keepGoing: Bool) {
+        do {
+            try session.setNow(now)
+        } catch {
+            await refused(error, doing: "the moment \(now)", now: now, &delivery)
+            return ([], false)
+        }
+        let step: NuxieNativePlayerStepResult
+        do {
+            step = try await player.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
+        } catch {
+            if let rows = try? session.rows(), case .end(.fault, _)? = rows.last {
+                await apply(rows, now: now, &delivery)
+            }
+            fail(NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)"), &delivery)
+            return ([], false)
+        }
+        let rows: [NuxieMachineRow]
+        do {
+            rows = try session.rows()
+        } catch {
+            await refused(error, doing: "the step's rows", now: now, &delivery)
+            return ([], false)
+        }
+        await apply(rows, now: now, &delivery)
+        return (step.events.map(\.name), step.keepGoing)
+    }
+
+    /// A frame on the row path: step the Screen and hand its events to the
+    /// session, each for the showing the step drew.
+    private func step(
+        _ artwork: Artwork,
         pointers: [NuxieNativePointerEvent],
         elapsedSeconds: Float,
         now: Int64,
@@ -587,7 +725,7 @@ package actor NuxieMachineEdge {
         let stepped = shown
         let step: NuxieNativePlayerStepResult
         do {
-            step = try await runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
+            step = try await artwork.runtime.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
         } catch {
             fail(NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)"), &delivery)
             return ([], false)
@@ -691,10 +829,21 @@ package actor NuxieMachineEdge {
             guard fault == nil else { return }
             switch row {
             case .present(let route, let instance, let presentation):
-                guard route == self.route, shown == nil else {
-                    fail(NuxieMachineEdgeFault(code: "edge.no-artwork",
-                        detail: "present \(route) as \(instance); this edge draws \(self.route) once"), &delivery)
+                switch drawing {
+                case .artwork(let artwork):
+                    guard route == artwork.route, shown == nil else {
+                        fail(NuxieMachineEdgeFault(code: "edge.no-artwork",
+                            detail: "present \(route) as \(instance); this edge draws \(artwork.route) once"), &delivery)
+                        return
+                    }
+                case .compiled:
+                    guard let shown else { break }
+                    fail(NuxieMachineEdgeFault(code: "edge.no-host",
+                        detail: "present \(route) as \(instance) while \(shown.instance) is presented"), &delivery)
                     return
+                }
+                if case .compiled = drawing {
+                    guard await openPlayer(for: instance, route: route, &delivery) else { return }
                 }
                 showings += 1
                 let presented = NuxieMachineShown(showing: showings, instance: instance)
@@ -709,14 +858,22 @@ package actor NuxieMachineEdge {
                 }
                 shown = nil
                 log.append(.pop(instance: instance))
+                await closePlayer(&delivery)
                 delivery.told(.pop(popped))
             case .dismiss(let reason):
                 shown = nil
                 log.append(.dismiss(reason: reason))
+                await closePlayer(&delivery)
                 delivery.told(.dismiss(reason: reason))
             case .sceneSet(let instance, let object, let key, let value):
-                await write(instance: instance, cell: nuxieMachineCellName(object: object, key: key), value: value,
-                            &delivery)
+                guard case .artwork(let artwork) = drawing else {
+                    fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
+                        detail: "a write to \(object).\(key) as a row; a compiled view is written by its driver"),
+                        &delivery)
+                    return
+                }
+                await write(artwork, instance: instance, cell: nuxieMachineCellName(object: object, key: key),
+                            value: value, &delivery)
             case .call(let call):
                 perform(call, &delivery)
             case .wakeAt(let moment):
@@ -743,15 +900,17 @@ package actor NuxieMachineEdge {
 
     /// A `scene` write: the value lands in the Screen's cell
     /// `state/<cell>` and shows on the next step.
-    private func write(instance: UInt64, cell: String, value: NuxieMachineValue, _ delivery: inout Delivery) async {
+    private func write(_ artwork: Artwork, instance: UInt64, cell: String, value: NuxieMachineValue,
+                       _ delivery: inout Delivery) async {
         guard instance == shown?.instance else {
             fail(NuxieMachineEdgeFault(code: "edge.unhandled-row",
                 detail: "a write to \(cell) of instance \(instance), which is not presented"), &delivery)
             return
         }
         let path = "state/\(cell)"
+        let root = artwork.root
         let mutation: NuxieNativeViewModelMutation
-        switch (cells[cell], value) {
+        switch (artwork.cells[cell], value) {
         case (.bool, .bool(let yes)): mutation = .setBool(instance: root, path: path, value: yes)
         case (.number, .number(let number)): mutation = .setNumber(instance: root, path: path, value: Float(number))
         case (.text, .text(let text)): mutation = .setString(instance: root, path: path, value: Data(text.utf8))
@@ -765,7 +924,7 @@ package actor NuxieMachineEdge {
             return
         }
         do {
-            _ = try await runtime.mutateViewModel([mutation])
+            _ = try await artwork.runtime.mutateViewModel([mutation])
         } catch {
             fail(NuxieMachineEdgeFault(code: "engine.write", detail: "\(cell): \(error)"), &delivery)
             return
@@ -819,6 +978,100 @@ package actor NuxieMachineEdge {
         self.fault = fault
         mailbox = []
         delivery.faulted(fault)
+    }
+
+    // MARK: Compiled views
+
+    /// A `present` row on the driver path: a player for `instance` on the
+    /// compiled records, at the artboard its component is drawn in, with the
+    /// session's driver for this presentation set on it once. The writes the
+    /// presenting step made are held for that driver and land in the
+    /// player's first step. False, with the edge stopped, when any of it
+    /// fails.
+    private func openPlayer(for instance: UInt64, route: String, _ delivery: inout Delivery) async -> Bool {
+        let player: NuxieNativeRuntime
+        do {
+            let records = try session.sceneRecords()
+            let artboard = try session.sceneArtboard(instance: instance)
+            let font = try session.scenePlatformFont()
+            player = try await Self.openRecords(records, artboard: artboard, platformFont: font)
+        } catch NuxieMachineError.noArtboard {
+            fail(NuxieMachineEdgeFault(code: "edge.no-artwork",
+                detail: "present \(route) as \(instance); its component has no view"), &delivery)
+            return false
+        } catch {
+            fail(Self.openFault(error, doing: "open \(route)"), &delivery)
+            return false
+        }
+        do {
+            let driver = try session.sceneDriver(instance: instance, writers: .engine)
+            try await player.setDriver(driver)
+        } catch {
+            try? await player.close()
+            fail(Self.openFault(error, doing: "drive \(route)"), &delivery)
+            return false
+        }
+        drawing = .compiled(player)
+        return true
+    }
+
+    /// The presented instance's player, freed when its presentation ends:
+    /// freeing it releases its driver, and the session outlives it.
+    private func closePlayer(_ delivery: inout Delivery) async {
+        guard case .compiled(let player?) = drawing else { return }
+        drawing = .compiled(nil)
+        do {
+            try await player.close()
+        } catch {
+            fail(NuxieMachineEdgeFault(code: "engine.close", detail: "\(error)"), &delivery)
+        }
+    }
+
+    private static func openFault(_ error: any Error, doing what: String) -> NuxieMachineEdgeFault {
+        if let fault = error as? NuxieMachineEdgeFault { return fault }
+        if let refused = error as? NuxieMachineError {
+            return NuxieMachineEdgeFault(code: "machine.\(refused.code)", detail: "the session refused to \(what)")
+        }
+        return NuxieMachineEdgeFault(code: "engine.open", detail: "\(what): \(error)")
+    }
+
+    /// The compiled records opened on the engine at `artboard`, on its state
+    /// machine, with no view model. Text in a compiled view names no font,
+    /// so it is drawn in the platform's own: this device's system face,
+    /// supplied as the SDK supplies a published Screen's System font, into
+    /// the one asset the session names. The records hold no other asset.
+    private static func openRecords(_ records: Data, artboard: Int, platformFont: Int?) async throws
+        -> NuxieNativeRuntime
+    {
+        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: records)
+        var leases: [ExperienceRuntimeSystemFontCache.Lease] = []
+        var external: [Int: Data] = [:]
+        for asset in assets where !asset.isEmbedded {
+            guard asset.kind == .font, asset.ordinal == platformFont else {
+                throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
+                    detail: "the compiled records need \(asset.name), which is not the platform's font")
+            }
+            // The regular face: a compiled view names no weight yet.
+            let lease = try ExperienceRuntimeSystemFontCache.shared.prepare(weight: "400", style: "normal")
+            leases.append(lease)
+            external[asset.ordinal] = lease.candidate.bytes
+        }
+        if let platformFont, external[platformFont] == nil {
+            throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
+                detail: "the compiled records have no font asset at \(platformFont)")
+        }
+        do {
+            // A phone's size in points until the owner lays it out at its
+            // view's size, before the first step.
+            let player = try await NuxieNativeRuntime.open(
+                bytes: records, artboardIndex: artboard, player: .defaultScene, pixelWidth: 390, pixelHeight: 844,
+                importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: external))
+            ExperienceRuntimeSystemFontCache.shared.didImport(leases)
+            return player
+        } catch {
+            ExperienceRuntimeSystemFontCache.shared.didFailImport(leases)
+            throw error
+        }
     }
 
     // MARK: Opening
