@@ -19,13 +19,16 @@ import UIKit
 /// Screens are, and drawn at the display's scale. One frame is in flight at a time, and a frame's draw waits for the
 /// GPU, so a frame never starts before the last one is on screen.
 ///
-/// The loop rests when nothing asks for a frame: the engine's step says no
-/// frame is needed, no write is waiting to show, no pointer has arrived and
-/// the store owes the edge nothing. A touch, a store's answer still owed, or
-/// a delivery in the lane that leaves a step owed wakes it ([`inLane`]). Off screen (its
-/// sheet gone, or its scene in the background), it draws nothing and runs
-/// frames only while the store owes an answer, so rows that arrive after the
-/// sheet is gone are still delivered.
+/// The loop rests when nothing asks for a frame. The edge asks for one
+/// whenever it leaves work only a frame consumes (a step owed, a store's
+/// answer to deliver), wherever that work came from: a frame, a wake, a
+/// close, a start or the store ([`NuxieMachineEdge.frameAsks`]). The view
+/// asks for its own reasons: a touch, a new size, coming back to the
+/// foreground, a drawable it did not get, and on screen the engine's step
+/// saying it needs another. The view keeps no record of the edge's work.
+/// Off screen (its sheet gone, or its scene in the background), it draws
+/// nothing and runs frames only when the edge asks, so rows that arrive
+/// after the sheet is gone are still delivered.
 @MainActor
 package final class NuxieMachineScreenViewController: UIViewController {
     /// The edge this controller runs frames for. It owns the session.
@@ -86,6 +89,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package init(edge: NuxieMachineEdge) {
         self.edge = edge
         super.init(nibName: nil, bundle: nil)
+        edge.frameAsks.listen { [weak self] in
+            Task { @MainActor in self?.requestFrame() }
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -144,8 +150,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         requestFrame()
     }
 
-    /// Ask for a frame. The lane asks by itself after a delivery that leaves
-    /// the Screen a step owed ([`inLane`]).
+    /// Ask for a frame. Every ask the edge makes comes here.
     package func requestFrame() {
         guard !stopped else { return }
         frameRequested = true
@@ -157,13 +162,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// edge in it, so they reach the edge one at a time and in order. The
     /// lane outlives the loop: an owner may still call the edge after
     /// [`stop`].
-    ///
-    /// Every delivery reaches the edge in the lane, so the lane is where a
-    /// delivery's writes are made to show: when `body` leaves the Screen a
-    /// step owed (a write not yet drawn, or on the driver path any delivery
-    /// to a presented compiled view, whose writes the session holds for the
-    /// next step), the lane asks for a frame. A Screen never rests holding a
-    /// write it has not drawn.
     package func inLane<Value>(_ body: () async throws -> Value) async rethrows -> Value {
         if laneHeld {
             await withCheckedContinuation { laneWaiting.append($0) }
@@ -178,9 +176,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
                 laneWaiting.removeFirst().resume()
             }
         }
-        let value = try await body()
-        if await edge.owesStep() { requestFrame() }
-        return value
+        return try await body()
     }
 
     /// Stop the loop for good. A frame in flight finishes; none follows.
@@ -251,12 +247,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
         rest(after: frame)
     }
 
-    /// Rest unless something asks for another frame.
+    /// Rest unless something asks for another frame: an ask since this
+    /// frame began (the edge's or the view's own), a pointer, or on screen
+    /// the engine's step.
     private func rest(after frame: NuxieMachineFrame) {
         guard !stopped else { return }
-        let onScreen = isDrawable
-        let another = frame.waitsOnStore || frameRequested || !pendingPointers.isEmpty
-            || (onScreen && (frame.keepGoing || frame.wrote))
+        let another = frameRequested || !pendingPointers.isEmpty || (isDrawable && frame.keepGoing)
         displayLink?.isPaused = !another
         if !another { lastTimestamp = nil }
     }

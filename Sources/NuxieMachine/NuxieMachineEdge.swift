@@ -185,20 +185,42 @@ package struct NuxieMachineFrame: Equatable, Sendable {
     /// The engine events the Screen reported in this frame, in order,
     /// reserved ones included.
     package let reported: [String]
-    /// The engine's step, for a host that schedules frames by it.
+    /// The engine's step: whether the engine itself needs another frame (an
+    /// animation still running). Whatever the edge has waiting for a frame
+    /// it asks for on its own ([`NuxieMachineEdge.frameAsks`]).
     package let keepGoing: Bool
-    /// Whether, when this frame's turn ended, the Screen owed a step: a write
-    /// the frame or a store's answer delivered after its step made has not
-    /// been drawn yet. On the driver path every answer delivered after the
-    /// step counts, since the session holds its writes for the next round.
-    /// A write shows on the next step, so a host that rests between frames
-    /// steps once more.
-    package let wrote: Bool
-    /// Whether, when this frame's turn ended, a call the edge started at the
-    /// store was still unanswered or an answer was waiting. An answer is
-    /// delivered only at a frame, so a host that rests between frames keeps
-    /// them going while this holds.
-    package let waitsOnStore: Bool
+}
+
+/// Where an edge asks its host for a frame. The edge asks whenever it leaves
+/// work that only a frame consumes ([`NuxieMachineEdge`]'s rule for frames);
+/// the host runs a frame for each ask, on its own schedule. An ask made
+/// before a host listens is heard when it starts to, so none is lost to the
+/// order the two are made in.
+package final class NuxieMachineFrameAsks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var listener: (@Sendable () -> Void)?
+    private var unheard = false
+
+    package init() {}
+
+    /// Hear every ask from now on, on whatever thread the edge asks on, in
+    /// place of any listener before.
+    package func listen(_ listener: @escaping @Sendable () -> Void) {
+        let missed = lock.withLock { () -> Bool in
+            self.listener = listener
+            defer { unheard = false }
+            return unheard
+        }
+        if missed { listener() }
+    }
+
+    fileprivate func ask() {
+        let listener = lock.withLock { () -> (@Sendable () -> Void)? in
+            if self.listener == nil { unheard = true }
+            return self.listener
+        }
+        listener?()
+    }
 }
 
 /// The edge between one session of the Nux machine and the engine, with no
@@ -243,7 +265,8 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 /// 2. A delivery never waits on the store. A `call` row starts the store's
 ///    work in a task of its own and the delivery goes on. When the store
 ///    answers, the answer waits in the edge's mailbox
-///    ([`arrived`], which applies nothing and tells no one). Each frame's
+///    ([`arrived`], which applies nothing, tells the owner nothing and asks
+///    the host for the frame that will deliver it). Each frame's
 ///    turn takes the answers that arrived before it began, delivers the
 ///    frame, then delivers each answer as its own delivery, in arrival
 ///    order. So an answer is applied right after the step of the first frame
@@ -263,6 +286,14 @@ package struct NuxieMachineFrame: Equatable, Sendable {
 /// - An engine event belongs to the showing the frame stepped, and a close
 ///   to the showing the host names ([`NuxieMachineShown`]). Once a row has
 ///   ended that showing, both are recorded as dropped and go to no one.
+///
+/// A host may rest between frames, so one rule says when it must not: only a
+/// frame consumes some of the edge's work, and the edge asks for a frame
+/// ([`frameAsks`]) wherever it leaves such work waiting ([`waitsForFrame`]:
+/// at the end of each delivery and when a store's answer arrives). A host
+/// keeps no record of what the edge has waiting; it runs a frame for each
+/// ask, and otherwise only for its own reasons (a touch, the engine's
+/// `keepGoing`, a new size).
 ///
 /// Nothing is ignored silently. A reported event the session refuses, a row
 /// this edge cannot perform, a cell the Screen does not have and a call the
@@ -286,6 +317,9 @@ package actor NuxieMachineEdge {
     private let store: any NuxieMachineStore
     /// The owner, told only by [`deliver`].
     private let owner: @Sendable (NuxieMachineEdgeReport) -> Void
+
+    /// Where this edge asks its host for a frame ([`waitsForFrame`]).
+    package nonisolated let frameAsks = NuxieMachineFrameAsks()
 
     /// The presented instance of the route, while it is presented, with its
     /// showing. A host names it when the person closes it ([`closed`]).
@@ -313,8 +347,7 @@ package actor NuxieMachineEdge {
     /// The store's work in flight, by call, until its answer arrives.
     private var working: [NuxieMachineCallID: Task<Void, Never>] = [:]
     /// Whether the presented Screen owes a step: something it has not drawn
-    /// waits for one. This is the one rule a host schedules frames by
-    /// ([`owesStep`], [`NuxieMachineFrame.wrote`]):
+    /// waits for one.
     ///
     /// - On the row path, a write landed in a cell since the last step.
     /// - On the driver path, the session holds a scene write until the
@@ -322,20 +355,32 @@ package actor NuxieMachineEdge {
     ///   it cannot say whether it holds one. So every delivery that enters a
     ///   driven session while a player is presented leaves a step owed
     ///   ([`deliver`]), and so does opening a player, whose first writes are
-    ///   held for its first step. The step itself clears it.
+    ///   held for its first step.
     ///
     /// A step clears it, and so does freeing the player: nothing is drawn
     /// then.
     private var stepOwed = false
 
-    /// What [`stepOwed`] says, for an edge that still delivers.
-    private var owed: Bool { fault == nil && !closedScreen && stepOwed }
-
-    /// Whether the store owes this edge something a frame would deliver: a
-    /// call still in flight, or an answer waiting in the mailbox. A stopped
-    /// or closed edge delivers nothing, so it owes nothing.
-    private var storeOwes: Bool {
-        fault == nil && !closedScreen && (!working.isEmpty || !mailbox.isEmpty)
+    /// Whether work only a frame consumes is waiting for one, the one rule
+    /// a host's frames follow. A frame consumes two things:
+    ///
+    /// - a step owed ([`stepOwed`]), which only a frame's step pays;
+    /// - a store's answer in the mailbox, which only a frame's turn
+    ///   delivers.
+    ///
+    /// Everything else a frame does is asked for by its host: the pointers
+    /// it carries, the engine's own `keepGoing`, a new size. A call still in
+    /// flight is not on the list: it waits on the store, not on a frame, and
+    /// its answer asks when it arrives. A stopped or closed edge delivers
+    /// nothing, so nothing of it waits.
+    ///
+    /// The edge asks for a frame ([`askIfWaiting`]) wherever it can leave
+    /// this true: at the end of each delivery, the only place a step comes
+    /// to be owed, and when an answer arrives, the only place the mailbox
+    /// fills. So a host that runs a frame for each ask never rests while it
+    /// holds, and keeps no state of its own about it.
+    private var waitsForFrame: Bool {
+        fault == nil && !closedScreen && (stepOwed || !mailbox.isEmpty)
     }
 
     private enum CellKind: Equatable {
@@ -509,8 +554,7 @@ package actor NuxieMachineEdge {
                     await answer(arrived, now: now, &delivery)
                 }
             }
-            return NuxieMachineFrame(reported: stepped.reported, keepGoing: stepped.keepGoing,
-                                     wrote: owed, waitsOnStore: storeOwes)
+            return NuxieMachineFrame(reported: stepped.reported, keepGoing: stepped.keepGoing)
         }
     }
 
@@ -584,12 +628,11 @@ package actor NuxieMachineEdge {
         }
     }
 
-    /// Whether the presented Screen owes a step ([`stepOwed`]), between
-    /// deliveries. A host asks after each delivery of its own (a start, a
-    /// wake, a close) and runs a frame when it does, so a Screen never rests
-    /// holding a write it has not drawn.
-    package func owesStep() async -> Bool {
-        await inTurn { _ in owed }
+    /// Whether work only a frame consumes waits for one ([`waitsForFrame`]),
+    /// between deliveries. For checks: a host runs frames by the edge's asks
+    /// ([`frameAsks`]) and never needs to read this.
+    package func waitingForFrame() async -> Bool {
+        await inTurn { _ in waitsForFrame }
     }
 
     /// Whether the session's record is open, between deliveries. For checks:
@@ -680,7 +723,16 @@ package actor NuxieMachineEdge {
         if let report = delivery.report {
             owner(report)
         }
+        askIfWaiting()
         return result
+    }
+
+    /// Ask the host for a frame when work only a frame consumes waits for
+    /// one ([`waitsForFrame`]). Called where such work is left: at the end
+    /// of each delivery ([`deliver`]) and when an answer arrives
+    /// ([`arrived`]).
+    private func askIfWaiting() {
+        if waitsForFrame { frameAsks.ask() }
     }
 
     /// A frame's delivery: step what draws the presented route.
@@ -850,12 +902,14 @@ package actor NuxieMachineEdge {
     }
 
     /// The store answered `call`: the answer waits for the next frame's
-    /// turn. It applies nothing and tells no one, so it needs no turn. An
-    /// answer for a stopped or closed edge is not kept.
+    /// turn, and the host is asked for that frame. It applies nothing and
+    /// tells the owner nothing, so it needs no turn. An answer for a stopped
+    /// or closed edge is not kept.
     private func arrived(_ call: NuxieMachineCall, _ outcome: Result<String, any Error>) {
         working[call.id] = nil
         guard fault == nil, !closedScreen else { return }
         mailbox.append(Answer(call: call, outcome: outcome))
+        askIfWaiting()
     }
 
     // MARK: Rows
