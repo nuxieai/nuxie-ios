@@ -30,7 +30,7 @@ component Counter
         text "Close" color=#8a9794 font-size=16
       text `Total: ${1}` id="total"
       text `Doubled: ${twice(21)}` id="doubled"
-      text (40 + 2) id="sum"
+      text `${40 + 2}` id="sum"
       box padding=(8 + 4) id="padded"
         text "Padded" id="inside"
       box padding=twice(5) id="twice"
