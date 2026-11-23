@@ -79,6 +79,32 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
+    func testAViewWhoseAccessibilityIsHiddenTakesNoActionFromARetainedElement() {
+        let window = UIView()
+        let screen = UIView()
+        let surface = UIView()
+        window.addSubview(screen)
+        screen.addSubview(surface)
+        let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: surface)
+        var requests: [NuxieNativeSemanticAction] = []
+        update(element, captureID: UUID(), node: node(actions: 7), frame: .zero,
+            traits: .button) { _, _, action in requests.append(action); return true }
+        XCTAssertTrue(element.accessibilityActivate())
+        screen.accessibilityElementsHidden = true
+        XCTAssertFalse(element.accessibilityActivate(), "A covered Screen takes no activation")
+        element.accessibilityIncrement()
+        element.accessibilityDecrement()
+        screen.accessibilityElementsHidden = false
+        surface.accessibilityElementsHidden = true
+        XCTAssertFalse(element.accessibilityActivate(), "Nor does a surface whose elements are hidden")
+        surface.accessibilityElementsHidden = false
+        window.accessibilityElementsHidden = true
+        XCTAssertFalse(element.accessibilityActivate(), "Nor a Screen in a window under another")
+        window.accessibilityElementsHidden = false
+        XCTAssertTrue(element.accessibilityActivate())
+        XCTAssertEqual(requests, [.tap, .tap])
+    }
+
     func testHiddenControlCannotActivate() {
         let container = UIView()
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
