@@ -914,8 +914,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try await run.settle()
             let open = try await run.look("open")
             try await run.tap(open.center(of: "Continue"))
-            try await run.afterDelivery(onScreen: true)
-            _ = run.asks.take()
+            // Frames for every ask the tap left, none waiting on the store.
+            try await run.answerAsks()
             XCTAssertEqual(run.store.calls.map(\.externName), ["purchase"])
             let holding = await run.edge.waitingForFrame()
             XCTAssertFalse(holding, "a purchase in flight waits on the store, not on a frame")
@@ -1137,6 +1137,16 @@ private final class Run {
     func afterDelivery(onScreen: Bool) async throws {
         try await settleAsAView(edge, asks: asks, keepGoing: false, onScreen: onScreen,
                                 now: { self.now }, elapsedSeconds: StillwaterPaywallEdgeTests.tick)
+    }
+
+    /// One frame for each ask the edge made, until it asks no more. Unlike
+    /// a view at rest, this never waits on the store's work in flight.
+    func answerAsks() async throws {
+        for _ in 0..<240 {
+            guard asks.take() else { return }
+            await edge.frame(elapsedSeconds: StillwaterPaywallEdgeTests.tick, now: now)
+        }
+        XCTFail("the edge never stopped asking for frames")
     }
 
     /// Frames run as a view runs them, for the asks made so far.
