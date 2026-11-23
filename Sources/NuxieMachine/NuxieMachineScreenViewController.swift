@@ -33,8 +33,10 @@ package final class NuxieMachineScreenViewController: UIViewController {
     }
 
     /// Whether a screen reader can reach this Screen: false while another
-    /// presentation is over it. The Screen under a sheet keeps its elements,
-    /// hidden, so its place is kept for when the sheet has gone.
+    /// presentation is over it, from the moment that one starts to arrive.
+    /// The Screen under a sheet keeps its elements, hidden, so its place is
+    /// kept for when the sheet has gone, and none of them takes an action
+    /// until then.
     package var reachable = true {
         didSet { viewIfLoaded?.accessibilityElementsHidden = !reachable }
     }
@@ -219,9 +221,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// listener hears the same event and the engine's own check of a
     /// disabled button applies. A disabled element never gets here (its
     /// element refuses), nor does an activation of a snapshot already
-    /// replaced.
+    /// replaced, nor one while this Screen is out of reach.
     private func activate(_ nodeID: UInt32, in captureID: UUID, _ action: NuxieNativeSemanticAction) -> Bool {
-        guard action == .tap, let capture = latest, capture.id == captureID,
+        guard reachable, action == .tap, let capture = latest, capture.id == captureID,
               let node = capture.tree.nodes.first(where: { $0.id == nodeID }) else { return false }
         let frame = node.bounds.intersection(surface.bounds)
         guard !frame.isNull, !frame.isEmpty else { return false }

@@ -123,6 +123,57 @@ final class CounterAccessibilityTests: XCTestCase {
         }
     }
 
+    /// 4. A Screen under another presentation takes no activation. The
+    ///    cover's "Count" element, kept from before, is activated once a
+    ///    sheet has started to arrive over it and again while the sheet is
+    ///    up: nothing is sent and the count stays. Once the sheet starts to
+    ///    leave, the same element counts again. Reach follows the
+    ///    presenter's state, set on the controller as the presenter sets it
+    ///    after every event; a sheet cannot be presented in this suite,
+    ///    which has no app.
+    @MainActor
+    func testACoveredScreenTakesNoActivationUntilTheSheetOverItLeaves() async throws {
+        let reader = try await Reader.open(Counter.counterPlan(), name: "counter")
+        do {
+            _ = try await reader.frame(name: "1-first")
+            let count = try reader.element("Count")
+            let cover = reader.controller.presented
+            let sheet = NuxieMachinePresented(
+                shown: NuxieMachineShown(journey: cover.shown.journey, instance: cover.shown.instance + 100),
+                route: "sheet", presentation: .sheet)
+            var state = NuxieMachineSheetState()
+            _ = state.handle(.started)
+            _ = state.handle(.report(.delivered(shown: [cover], rows: [])))
+            _ = state.handle(.presented(cover.shown))
+            reader.reach(state)
+            XCTAssertTrue(reader.controller.reachable, "the cover is in reach while it is on top")
+
+            XCTAssertEqual(state.handle(.report(.delivered(shown: [cover, sheet], rows: []))),
+                           [.present(sheet, over: cover.shown)])
+            reader.reach(state)
+            XCTAssertFalse(count.accessibilityActivate(), "a button under an arriving sheet does not activate")
+            XCTAssertEqual(reader.controller.takePointers(), [], "nothing went out as the sheet arrives")
+            _ = state.handle(.presented(sheet.shown))
+            reader.reach(state)
+            XCTAssertFalse(count.accessibilityActivate(), "a button under a sheet does not activate")
+            XCTAssertEqual(reader.controller.takePointers(), [], "nothing went out under the sheet")
+            _ = try await reader.frame(name: "2-covered")
+            XCTAssertEqual(reader.read.first, .text("Tapped 0 times"), "the count did not change")
+
+            XCTAssertEqual(state.handle(.report(.delivered(shown: [cover], rows: []))), [.dismiss(sheet.shown)])
+            reader.reach(state)
+            XCTAssertTrue(reader.controller.reachable, "the cover is in reach again as the sheet leaves")
+            XCTAssertTrue(count.accessibilityActivate(), "the same button activates again")
+            let tapped = try await reader.frame(pointers: reader.controller.takePointers(), name: "3-uncovered")
+            XCTAssertTrue(tapped.reported.contains("tap"), "the engine reported the tap: \(tapped.reported)")
+            XCTAssertEqual(reader.read.first, .text("Tapped 1 times"))
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
     /// A button that disables itself once pressed.
     static let holdPlan = NuxieMachinePlanSource(
         files: [
@@ -269,6 +320,12 @@ private final class Reader {
     /// screen frames UIKit gives in the host app.
     func onScreen(_ element: UIAccessibilityElement) -> CGRect {
         surface.convert(element.accessibilityFrameInContainerSpace, to: nil)
+    }
+
+    /// Set whether the controller is in reach as the presenter does after
+    /// every event: in reach when it shows the state's top presentation.
+    func reach(_ state: NuxieMachineSheetState) {
+        controller.reachable = state.reachable == controller.shown
     }
 
     func element(_ label: String) throws -> UIAccessibilityElement {

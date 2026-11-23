@@ -70,10 +70,25 @@ package final class ExperienceSemanticAccessibilityElement: UIAccessibilityEleme
         return true
     }
 
+    /// Whether a screen reader's action on an element of `view` may reach
+    /// its Screen: the view takes interaction, and no view from it up hides
+    /// its accessibility elements. A Screen under another presentation is
+    /// hidden that way, so an element kept from before it was covered takes
+    /// no action, whichever action it is asked for.
+    package static func allowsAccessibilityAction(in view: UIView) -> Bool {
+        guard allowsInteraction(in: view) else { return false }
+        var current: UIView? = view
+        while let ancestor = current {
+            if ancestor.accessibilityElementsHidden { return false }
+            current = ancestor.superview
+        }
+        return true
+    }
+
     private func perform(_ action: NuxieNativeSemanticAction) -> Bool {
         guard isAccessibilityElement,
               let container = accessibilityContainer as? UIView,
-              Self.allowsInteraction(in: container),
+              Self.allowsAccessibilityAction(in: container),
               let captureID, let node, let submit,
               node.stateFlags & NuxieNativeSemanticNode.disabled == 0,
               actions & (1 << action.rawValue) != 0 else { return false }
