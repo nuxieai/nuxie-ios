@@ -173,17 +173,16 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Draw the Screen as the last step left it, and wait for the GPU.
     /// Whether it reached the screen: false when it needs another frame.
     ///
-    /// A Screen drawn from compiled views is read again with every frame
-    /// drawn: the frame's step settled every write the machine made, its
-    /// settle passes included, so the snapshot taken with the frame is what
-    /// the frame shows ([`show`]).
+    /// The Screen is read again with every frame drawn: the frame's step
+    /// settled every write the machine made, its settle passes included, so
+    /// the snapshot taken with the frame is what the frame shows ([`show`]).
     fileprivate func draw(_ runtime: NuxieNativeRuntime) async throws -> Bool {
         guard let size = sized else { return true }
         guard let drawable = surface.metalLayer.nextDrawable() else { return false }
         let completion = NuxieMachineFrameCompletion()
         let frame = try await runtime.renderFrame(
             layoutScaleFactor: size.scale, drawable: .available(NuxieNativeDrawable(drawable)),
-            capturesSemantics: loop?.edge.readsAloud ?? false, completion: { completion.fire() })
+            capturesSemantics: true, completion: { completion.fire() })
         await completion.wait()
         try Self.requireHealthy(frame.outcome, doing: "render")
         guard frame.outcome.disposition == .presented else { return false }
@@ -259,8 +258,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
 ///
 /// Each display tick is one frame: the pointers that arrived, with the
 /// presentation they touched (the edge drops them when it no longer shows
-/// it), the edge's frame (each presentation's engine step, engine events to
-/// the machine, writes to cells, the store's answers), then a draw of each
+/// it), the edge's frame (each presentation's engine step, which carries the
+/// machine, and the store's answers), then a draw of each
 /// Screen the frame stepped. Frames run in the loop's lane ([`inLane`]),
 /// where the owner makes its own calls to the edge, so the edge hears a
 /// frame, a wake and a close in the order they were asked for. One frame is

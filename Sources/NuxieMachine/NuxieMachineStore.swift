@@ -16,9 +16,8 @@ package enum NuxieMachineStoreFault: Error, Equatable, Sendable {
 }
 
 /// STAND-IN for a store. It buys nothing and talks to no store: it answers
-/// `purchase` with `failed`, and any other extern with a fault. `failed`
-/// keeps the slice to one Screen, because `completed` goes to a route this
-/// slice draws no artwork for. A real store replaces it in a later slice.
+/// `purchase` with `failed`, and any other extern with a fault. A real
+/// store replaces it in a later slice.
 package struct NuxieMachineStandInStore: NuxieMachineStore {
     package init() {}
 

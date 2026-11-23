@@ -236,11 +236,13 @@ final class PresentedStackEdgeTests: XCTestCase {
             let second = try await run.top()
             let written = await run.edge.log.count
             let reports = run.owner.reports.count
-            // A report handed in by hand is a fault on the driver path.
-            await run.edge.handleReported("tap_next", now: run.advance())
+            // The top player closed under the edge: its next step fails.
+            let top = await run.edge.screen(for: second)
+            try await XCTUnwrap(top).close()
+            await run.edge.frame(elapsedSeconds: CounterDriverEdgeTests.tick, now: run.advance())
             let recorded = await run.edge.fault
             let fault = try XCTUnwrap(recorded)
-            XCTAssertEqual(fault.code, "edge.unhandled-event")
+            XCTAssertEqual(fault.code, "engine.step")
             let since = await Array(run.edge.log.dropFirst(written))
             XCTAssertEqual(since.filter(Self.isSync), [.gone(second), .gone(first)], "\(since)")
             let after = await run.edge.stack

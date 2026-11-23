@@ -32,7 +32,7 @@ def nuxie_machine_module(name):
     )
 
 def nuxie_machine_tests(name):
-    """The simulator suite that drives a published Screen with the machine."""
+    """The simulator suite that drives the plan's compiled views with the machine."""
     if not MACHINE_STAGED:
         return
     sdk_test_library(
@@ -46,7 +46,7 @@ def nuxie_machine_tests(name):
         name = name + "_fixtures",
         testonly = True,
         structured_resources = native.glob(["Fixtures/**"]),
-        # Package-relative: the bundle holds stillwater-paywall/<file>.
+        # Package-relative: the bundle holds stillwater/<file>.
         strip_structured_resources_prefixes = ["Fixtures"],
         # The staged runtime host app bundles the same files.
         visibility = ["//:__pkg__"],

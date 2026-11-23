@@ -10,7 +10,9 @@ import NuxieRuntime
 
 /// One session of the Nux machine, over the C interface in `nux_machine.h`:
 /// a plan compiled from `.nux` source, the record of one Journey through it,
-/// and the effects of the last call as rows.
+/// and the effects of the last call as rows. Every session is driven: its
+/// scene writes are never rows, and each presented instance's are held for
+/// that instance's driver (`nux_machine.h`, THE DRIVER PATH).
 ///
 /// Confined, not an actor: the header lets one thread at a time use a
 /// session, and this class is not `Sendable`, so the compiler keeps each
@@ -79,16 +81,6 @@ package final class NuxieMachineSession {
         if status == NuxieMachineStatus.declined {
             // The reason is a static string: it does not expire.
             throw NuxieMachineError.declined(NuxieMachineStrings.copy(declined))
-        }
-        return try delivered(status)
-    }
-
-    /// An engine event on the presented instance `instance`, by the name the
-    /// engine reported. The session reads `tap_<object>` as a tap on
-    /// `<object>`; the name rule is the session's, not the caller's.
-    package func engineEvent(instance: UInt64, name: String, now: Int64) throws -> [NuxieMachineRow] {
-        let status = NuxieMachineStrings.lend([name]) { views in
-            nux_machine_engine_event(handle, instance, views[0], now)
         }
         return try delivered(status)
     }
@@ -172,13 +164,6 @@ package final class NuxieMachineSession {
     }
 
     // MARK: The driver path
-
-    /// Put the session on the driver path, before its first start: its
-    /// scene writes are never rows, and each presented instance's are held
-    /// for that instance's driver (`nux_machine.h`, THE DRIVER PATH).
-    package func driveScene() throws {
-        try NuxieMachineError.check(nux_machine_drive_scene(handle))
-    }
 
     /// The engine's records of the plan's views, copied.
     package func sceneRecords() throws -> Data {
@@ -281,14 +266,6 @@ package final class NuxieMachineSession {
             var reason = NuxMachineStr(ptr: nil, len: 0)
             try NuxieMachineError.check(nux_machine_effect_dismiss(handle, index, &has, &reason))
             return .dismiss(reason: has ? NuxieMachineStrings.copy(reason) ?? "" : nil)
-        case NuxieMachineStatus.rowSceneSet:
-            var instance: UInt64 = 0
-            var object = NuxMachineStr(ptr: nil, len: 0)
-            var key = NuxMachineStr(ptr: nil, len: 0)
-            var value = NuxMachineValue(kind: 0, boolean: false, number: 0, text: NuxMachineStr(ptr: nil, len: 0))
-            try NuxieMachineError.check(nux_machine_effect_scene_set(handle, index, &instance, &object, &key, &value))
-            return .sceneSet(instance: instance, object: NuxieMachineStrings.copy(object) ?? "",
-                             key: NuxieMachineStrings.copy(key) ?? "", value: try NuxieMachineValue(value))
         case NuxieMachineStatus.rowCall:
             var id = NuxMachineCallId(record: 0, generation: 0, counter: 0)
             var name = NuxMachineStr(ptr: nil, len: 0)
@@ -332,9 +309,6 @@ package enum NuxieMachineRow: Equatable, Sendable {
     case pop(instance: UInt64)
     /// The machine dismissed what was presented, with a reason or none.
     case dismiss(reason: String?)
-    /// Set the property `key` of the object named `object` of the presented
-    /// instance `instance` to `value`.
-    case sceneSet(instance: UInt64, object: String, key: String, value: NuxieMachineValue)
     /// Perform an extern.
     case call(NuxieMachineCall)
     /// Deliver a wake at this moment (milliseconds since the Unix epoch), or
@@ -449,10 +423,6 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case unknownEvent
     /// No presentation the record shows has this identity.
     case unknownInstance
-    /// The instance's component has no handled object of this name.
-    case unknownObject
-    /// The engine event's name is not one the session reads.
-    case unknownEngineEvent
     /// No unanswered call has this id.
     case unknownCall
     /// The called extern has no outcome of this name.
@@ -467,11 +437,6 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case outOfRange
     /// The row at this index is of another kind.
     case wrongKind
-    /// A record has started, so the path of the session's scene writes is
-    /// fixed.
-    case started
-    /// The session is on the row path: it hands out no driver.
-    case notDriven
     /// The instance's component has no view, so no artboard.
     case noArtboard
     /// A status this module does not know: the header grew.
@@ -492,8 +457,6 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .noRecord: "no_record"
         case .unknownEvent: "unknown_event"
         case .unknownInstance: "unknown_instance"
-        case .unknownObject: "unknown_object"
-        case .unknownEngineEvent: "unknown_engine_event"
         case .unknownCall: "unknown_call"
         case .unknownOutcome: "unknown_outcome"
         case .outcomeHasFields: "outcome_has_fields"
@@ -501,8 +464,6 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .valueNotCarried: "value_not_carried"
         case .outOfRange: "out_of_range"
         case .wrongKind: "wrong_kind"
-        case .started: "started"
-        case .notDriven: "not_driven"
         case .noArtboard: "no_artboard"
         case .unknownStatus(let status): "status_\(status)"
         }
@@ -528,8 +489,6 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_NO_RECORD): .noRecord,
         UInt32(NUX_MACHINE_UNKNOWN_EVENT): .unknownEvent,
         UInt32(NUX_MACHINE_UNKNOWN_INSTANCE): .unknownInstance,
-        UInt32(NUX_MACHINE_UNKNOWN_OBJECT): .unknownObject,
-        UInt32(NUX_MACHINE_UNKNOWN_ENGINE_EVENT): .unknownEngineEvent,
         UInt32(NUX_MACHINE_UNKNOWN_CALL): .unknownCall,
         UInt32(NUX_MACHINE_UNKNOWN_OUTCOME): .unknownOutcome,
         UInt32(NUX_MACHINE_OUTCOME_HAS_FIELDS): .outcomeHasFields,
@@ -537,8 +496,6 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_VALUE_NOT_CARRIED): .valueNotCarried,
         UInt32(NUX_MACHINE_OUT_OF_RANGE): .outOfRange,
         UInt32(NUX_MACHINE_WRONG_KIND): .wrongKind,
-        UInt32(NUX_MACHINE_STARTED): .started,
-        UInt32(NUX_MACHINE_NOT_DRIVEN): .notDriven,
         UInt32(NUX_MACHINE_NO_ARTBOARD): .noArtboard,
     ]
 }
@@ -553,7 +510,6 @@ private enum NuxieMachineStatus {
     static let rowPresent = UInt32(NUX_MACHINE_ROW_PRESENT)
     static let rowPop = UInt32(NUX_MACHINE_ROW_POP)
     static let rowDismiss = UInt32(NUX_MACHINE_ROW_DISMISS)
-    static let rowSceneSet = UInt32(NUX_MACHINE_ROW_SCENE_SET)
     static let rowCall = UInt32(NUX_MACHINE_ROW_CALL)
     static let rowWakeAt = UInt32(NUX_MACHINE_ROW_WAKE_AT)
     static let rowEnd = UInt32(NUX_MACHINE_ROW_END)
