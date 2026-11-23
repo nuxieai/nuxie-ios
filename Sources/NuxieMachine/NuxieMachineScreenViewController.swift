@@ -202,18 +202,39 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package func show(_ capture: NuxieNativeSemanticCapture) {
         latest = capture
         semantics.update(capture: capture, nativeControls: [:], project: { [surface] node in
-            guard let traits = ExperienceSemanticAccessibilityContainer.traits(for: node) else { return nil }
-            // The artboard is laid out at the surface's size with its origin
-            // at zero: a point on it is the same point on the surface.
-            let frame = node.bounds.intersection(surface.bounds)
-            guard !frame.isNull, !frame.isInfinite, !frame.isEmpty else { return nil }
-            let presses = traits.contains(.button) || traits.contains(.link)
-            return .init(frame: frame, traits: traits, value: node.value.isEmpty ? nil : node.value,
-                         actions: presses ? 1 << NuxieNativeSemanticAction.tap.rawValue : 0)
+            Self.projection(for: node, on: surface.bounds)
         }, submit: { [weak self] captureID, nodeID, action in
             self?.activate(nodeID, in: captureID, action) ?? false
         })
     }
+
+    /// How a machine Screen whose surface has `bounds` shows `node`, or none
+    /// for a node no element stands for: one with no role UIKit reads, or
+    /// one drawn nowhere on the surface. A button or a link takes a tap. A
+    /// radio is a button, selected while its check state is checked; one
+    /// not checked, or mixed, is not selected.
+    package static func projection(
+        for node: NuxieNativeSemanticNode,
+        on bounds: CGRect
+    ) -> ExperienceSemanticAccessibilityContainer.Projection? {
+        guard var traits = ExperienceSemanticAccessibilityContainer.traits(for: node) else { return nil }
+        // The artboard is laid out at the surface's size with its origin
+        // at zero: a point on it is the same point on the surface.
+        let frame = node.bounds.intersection(bounds)
+        guard !frame.isNull, !frame.isInfinite, !frame.isEmpty else { return nil }
+        if node.role == NuxieNativeSemanticRole.radioButton.rawValue,
+           node.stateFlags & checkState == NuxieNativeSemanticNode.checked {
+            traits.insert(.selected)
+        }
+        let presses = traits.contains(.button) || traits.contains(.link)
+        return .init(frame: frame, traits: traits, value: node.value.isEmpty ? nil : node.value,
+                     actions: presses ? 1 << NuxieNativeSemanticAction.tap.rawValue : 0)
+    }
+
+    /// The engine's check state: two bits of a node's state, unchecked,
+    /// checked (`NuxieNativeSemanticNode.checked`) or mixed
+    /// (`NuxieNativeSemanticNode.mixed`).
+    private static let checkState = NuxieNativeSemanticNode.checked | NuxieNativeSemanticNode.mixed
 
     /// Activating an element is a tap: a press and release at its center
     /// through the surface's pointer path, as a touch arrives, so the same
