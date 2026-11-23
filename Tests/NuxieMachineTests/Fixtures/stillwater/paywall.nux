@@ -1,0 +1,106 @@
+use Product from "nuxie/store"
+
+enum Plan annual monthly annual_offer
+
+theme
+  night = #0d1214
+  panel = #151c1f
+  edge = #232c30
+  mint = #9fcdb9
+  ink = #eef3f1
+  soft = #c9d3d0
+  quiet = #8a9794
+  faint = #6c7875
+  alarm = #f0a28e
+
+style Mark
+  width=40 height=40 border-radius=20 border-width=1.5 border-color=#4f6b61
+  align-items=center justify-content=center
+
+style Title
+  margin-top=28 color=ink font-size=32 font-weight=700 line-height=38 letter-spacing=-0.4
+
+style Card
+  height=72 padding="0 20" gap=14 flex-direction=row align-items=center
+  background-color=panel border-radius=18 border-width=1 border-color=edge
+
+style CardOn from Card
+  border-width=2 border-color=mint
+
+style Radio
+  width=22 height=22 border-radius=11 border-width=1.5 border-color=#5d6a67
+  align-items=center justify-content=center
+
+style CardText
+  color=ink font-size=17 font-weight=600 line-height=22
+
+style Buy
+  height=56 margin-top=28 border-radius=28 background-color=mint
+  align-items=center justify-content=center
+  :disabled
+    background-color=#4f665e
+
+style BuyLabel
+  color=night font-size=17 font-weight=700 line-height=24
+
+style Note
+  font-size=14 line-height=20 text-align=center
+
+style Link
+  flex=1 height=44 align-items=center justify-content=center
+
+style LinkLabel
+  color=quiet font-size=14 font-weight=500 line-height=20
+
+component Paywall
+  props
+    headline: string
+    plans: Product[]
+    selected: Plan
+    busy: boolean
+    failed: boolean
+    select: action(Plan)
+    buy: action
+    restore: action
+    close: action
+
+  state details_open = false
+
+  action toggle_details
+    details_open = not details_open
+
+  view
+    column width=100% height=100% padding="64 24 34" justify-content=space-between background-color=night id="page"
+      column
+        box class=Mark
+          box width=12 height=12 border-radius=6 background-color=mint
+        text headline class=Title id="title"
+        column gap=12 margin-top=40
+          button class=(if selected == annual then CardOn else Card) press=select(annual) id="annual"
+            box class=Radio
+              if selected == annual
+                box width=12 height=12 border-radius=6 background-color=mint
+            text "Yearly" class=CardText flex=1
+            text (plans[0]?.price ?? "") class=CardText text-align=right id="annual_price"
+          button class=(if selected == monthly then CardOn else Card) press=select(monthly) id="monthly"
+            box class=Radio
+              if selected == monthly
+                box width=12 height=12 border-radius=6 background-color=mint
+            text "Monthly" class=CardText flex=1
+            text (plans[1]?.price ?? "") class=CardText text-align=right id="monthly_price"
+        button class=Buy disabled=busy press=buy id="buy"
+          text (if selected == annual_offer then "Claim the offer" else "Continue") class=BuyLabel
+        box height=52 padding-top=12
+          if failed
+            text "The purchase did not go through. Try again in a moment." class=Note color=alarm id="error"
+      column id="footer"
+        button height=48 align-items=center justify-content=center press=close id="close"
+          text "Not now" color=soft font-size=16 font-weight=600 line-height=22
+        row gap=12 margin-top=4
+          button class=Link press=restore id="restore"
+            text "Restore purchases" class=LinkLabel
+          button class=Link press=toggle_details id="details"
+            text "About the trial" class=LinkLabel
+        box height=40 margin-top=8
+          if details_open
+            text "Billed through the store after the trial. Cancel any time." class=Note color=faint font-size=13 id="terms"

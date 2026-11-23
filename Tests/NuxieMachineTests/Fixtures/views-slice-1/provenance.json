@@ -6,7 +6,7 @@
     "experience": "tally",
     "version": 1
   },
-  "parentCommit": "d20099ede938ca7e0df499cdebefd99bf162a089",
+  "parentCommit": "a895b4df0ee3ffbb5adfe39b4d4d1196793b278c",
   "files": {
     "main.nux": {
       "sha256": "6d6d4c950b399e669a54082acf281b08ec1f92ba08c1d59f30c0a4a64ff71170",
@@ -14,9 +14,9 @@
       "parentBlob": "2b62586a37b4414acb2b7f074f294c4a107a567f"
     },
     "counter.nux": {
-      "sha256": "0a20c672df16fb459382445795021393d13c4da5730c6e5505008aa7e9209779",
-      "sizeBytes": 1434,
-      "parentBlob": "59c7f73a49b87a725d9b28d96ff452633c847590"
+      "sha256": "a84a7058242772b0118c50bf60e1968e3c53763c11b61de641fb8e278011fd4b",
+      "sizeBytes": 1518,
+      "parentBlob": "f353851c8b2bec35a835e3f6c3169430ab1b8a92"
     }
   }
 }
