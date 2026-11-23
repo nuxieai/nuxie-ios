@@ -333,7 +333,7 @@ private final class HostLines {
 private final class ProbeStore: NuxieMachineStore {
     private let standIn = NuxieMachineStandInStore()
 
-    func perform(_ call: NuxieMachineCall) async throws -> String {
+    func perform(_ call: NuxieMachineCall) async throws -> NuxieMachineReply {
         try await standIn.perform(call)
     }
 }

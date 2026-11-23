@@ -140,14 +140,15 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     case gone(NuxieMachineShown)
     /// A call went to the store.
     case call(NuxieMachineCall)
-    /// The store's outcome for a call, delivered in its own delivery after
-    /// the frame that took it (an awaited call's to the session).
-    case answer(NuxieMachineCallID, outcome: String)
+    /// The store's reply to a call (the answer's fields or a failure),
+    /// delivered in its own delivery after the frame that took it (an
+    /// awaited call's to the session).
+    case reply(NuxieMachineCallID, NuxieMachineReply)
     /// The store answered a retired call: the record that issued it has
-    /// ended, and the machine dropped the call with it, so the answer is
-    /// dropped too, whatever record is open by then. `outcome` is none when
-    /// the store failed.
-    case dropped(NuxieMachineCallID, outcome: String?)
+    /// ended, and the machine dropped the call with it, so the reply is
+    /// dropped too, whatever record is open by then. `reply` is none when
+    /// the store could not perform the call.
+    case dropped(NuxieMachineCallID, reply: NuxieMachineReply?)
     /// The person closed a presentation the edge no longer holds. The close
     /// belongs to it, so it goes to no one.
     case droppedClose(NuxieMachineShown)
@@ -399,11 +400,11 @@ package actor NuxieMachineEdge {
         }
     }
 
-    /// The store's answer to one call: its outcome's name, or why it could
-    /// not perform the call.
+    /// The store's answer to one call: its reply, or why it could not
+    /// perform the call.
     private struct Answer {
         let call: NuxieMachineCall
-        let outcome: Result<String, any Error>
+        let reply: Result<NuxieMachineReply, any Error>
     }
 
     /// Proof that the holder is inside a turn. Only [`inTurn`] makes one,
@@ -916,18 +917,19 @@ package actor NuxieMachineEdge {
     /// the call with it, and a store that failed for it has nothing left to
     /// fail. Otherwise the call is the open record's own and unanswered: a
     /// store that could not perform it is a fault, an unawaited call's
-    /// outcome is recorded, and an awaited call's goes to the session, whose
-    /// refusal (`unknown_call` included) is a fault.
+    /// reply is recorded, and an awaited call's goes to the session as it
+    /// came, the answer's fields or the store's failure, whose refusal
+    /// (`unknown_call` and `reply_does_not_fit` included) is a fault.
     private func answer(_ answer: Answer, now: Int64, _ delivery: inout Delivery) async {
         let call = answer.call
         guard unanswered.remove(call.id) != nil else {
-            log.append(.dropped(call.id, outcome: try? answer.outcome.get()))
+            log.append(.dropped(call.id, reply: try? answer.reply.get()))
             return
         }
-        let outcome: String
-        switch answer.outcome {
-        case .success(let named):
-            outcome = named
+        let reply: NuxieMachineReply
+        switch answer.reply {
+        case .success(let given):
+            reply = given
         case .failure(NuxieMachineStoreFault.unknownExtern(let name)):
             fail(NuxieMachineEdgeFault(code: "store.unknown-extern",
                 detail: "the store cannot perform \(name)"), &delivery)
@@ -936,13 +938,13 @@ package actor NuxieMachineEdge {
             fail(NuxieMachineEdgeFault(code: "store.failed", detail: "\(call.externName): \(error)"), &delivery)
             return
         }
-        log.append(.answer(call.id, outcome: outcome))
+        log.append(.reply(call.id, reply))
         guard call.awaited else { return }
         let rows: [NuxieMachineRow]
         do {
-            rows = try session.answer(call.id, outcome: outcome, now: now)
+            rows = try session.reply(call.id, reply, now: now)
         } catch {
-            await refused(error, doing: "answer \(outcome)", now: now, &delivery)
+            await refused(error, doing: "the reply \(reply)", now: now, &delivery)
             return
         }
         await apply(rows, now: now, &delivery)
@@ -952,10 +954,10 @@ package actor NuxieMachineEdge {
     /// turn, and the host is asked for that frame. It applies nothing and
     /// tells the owner nothing, so it needs no turn. An answer for a stopped
     /// or closed edge is not kept.
-    private func arrived(_ call: NuxieMachineCall, _ outcome: Result<String, any Error>) {
+    private func arrived(_ call: NuxieMachineCall, _ reply: Result<NuxieMachineReply, any Error>) {
         working[call.id] = nil
         guard fault == nil, !closedScreen else { return }
-        mailbox.append(Answer(call: call, outcome: outcome))
+        mailbox.append(Answer(call: call, reply: reply))
         askIfWaiting()
     }
 
@@ -1025,13 +1027,13 @@ package actor NuxieMachineEdge {
         // It is recorded before this method returns, and its answer needs
         // the actor, so the answer cannot arrive before it is recorded.
         working[call.id] = Task { [weak self] in
-            let outcome: Result<String, any Error>
+            let reply: Result<NuxieMachineReply, any Error>
             do {
-                outcome = .success(try await store.perform(call))
+                reply = .success(try await store.perform(call))
             } catch {
-                outcome = .failure(error)
+                reply = .failure(error)
             }
-            await self?.arrived(call, outcome)
+            await self?.arrived(call, reply)
         }
     }
 

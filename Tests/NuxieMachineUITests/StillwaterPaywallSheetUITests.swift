@@ -5,7 +5,7 @@ import XCTest
 /// `--nuxie-machine-paywall`; "Finish onboarding" starts a record with
 /// `onboarding_completed`, and the machine's `present` row opens the
 /// paywall as a sheet, drawn from `paywall.nux` alone. The host's store
-/// answers a purchase with `failed` after a second and a half, so the
+/// answers a purchase with status `failed` after a second and a half, so the
 /// paywall is seen while it buys.
 ///
 /// The paywall is found the way a screen reader finds it: each line is a
@@ -68,7 +68,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         waitFor(buy, "enabled == false", "the buy button stayed enabled while it bought")
         keep("3-buying", app, screen)
 
-        // 4. Failed: the store answers `failed`; the error line is read
+        // 4. Failed: the purchase's status is `failed`; the error line is read
         // under the button, which is enabled again.
         XCTAssertTrue(app.staticTexts[Self.errorLine].waitForExistence(timeout: 10), app.debugDescription)
         waitFor(buy, "enabled == true", "the buy button stayed disabled after the answer")

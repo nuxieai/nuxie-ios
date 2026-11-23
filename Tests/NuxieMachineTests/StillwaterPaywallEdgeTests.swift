@@ -93,18 +93,19 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let buy = try monthly.region(of: "Continue")
             XCTAssertTrue(Self.changes(monthly, buying, buy), "the buy button never looks busy")
 
-            // 4. The store answers `failed`: the button is enabled again and
-            // the error line shows, with no touch.
+            // 4. The store answers a purchase whose status is `failed`: the
+            // button is enabled again and the error line shows, with no
+            // touch.
             run.store.release()
             await run.edge.storeAnswered()
             try await run.settle()
             let failed = try await run.look("4-failed")
-            let answered = await run.edge.log.dropFirst(written).compactMap { entry -> String? in
-                if case .answer(_, let outcome) = entry { return outcome }
+            let answered = await run.edge.log.dropFirst(written).compactMap { entry -> NuxieMachineReply? in
+                if case .reply(_, let reply) = entry { return reply }
                 return nil
             }
-            XCTAssertEqual(answered, ["failed"])
-            let marked = try await run.edge.slot("failed")
+            XCTAssertEqual(answered, [.purchase(.failed)])
+            let marked = try await run.edge.slot("purchase_failed")
             XCTAssertEqual(marked, .bool(true))
             XCTAssertTrue(failed.has(Self.errorLine), "\(failed.reading)")
             XCTAssertTrue(try failed.isEnabled("Continue"), "\(failed.reading)")
@@ -245,7 +246,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try await run.settle(frames: 2)
             let late = await Array(run.edge.log.dropFirst(beforeAnswer))
             let call = try XCTUnwrap(run.store.calls.first)
-            XCTAssertEqual(late, [.answer(call.id, outcome: "failed"), .note(.ended),
+            XCTAssertEqual(late, [.reply(call.id, .purchase(.failed)), .note(.ended),
                                   .end(reason: .finished, fault: nil)])
             let afterAnswer = try await run.edge.recordOpen()
             XCTAssertFalse(afterAnswer, "the answer ends the record")
@@ -265,9 +266,11 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// call it started has not been answered.
     private static let leavesPlan = NuxieMachinePlanSource(
         files: [NuxieMachineSourceFile(path: "main.nux", text: """
-            use restore from "nuxie/store"
+            use restore, Purchase, PurchaseStatus from "nuxie/store"
 
             component App
+              mutation restored: Purchase  then restored_purchases
+
               routes
                 paywall  Card  sheet
                   restore=restore_purchases
@@ -277,7 +280,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                 do go(paywall)
 
               action restore_purchases
-                restore(completed=leave)
+                send restored = restore()
+
+              action restored_purchases
+                if restored != none
+                  if restored.status == completed
+                    dismiss("left")
+                    exit
 
               action leave
                 dismiss("left")
@@ -322,7 +331,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let late = await Array(run.edge.log.dropFirst(beforeAnswer))
             let call = try XCTUnwrap(run.store.calls.first)
             XCTAssertEqual(call.externName, "restore")
-            XCTAssertEqual(late, [.dropped(call.id, outcome: nil)])
+            XCTAssertEqual(late, [.dropped(call.id, reply: nil)])
             let noFault = await run.edge.fault
             XCTAssertNil(noFault, "a late answer is no fault")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")], "a late answer tells nothing")
@@ -345,7 +354,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// The same with a successful awaited answer: it is dropped, not handed
     /// to the second record (whose machine would answer `unknown_call`).
     func testAnAnswerForAnEndedRecordLeavesTheNextRecordAlone() async throws {
-        try await checkAnAnswerForAnEndedRecord(answering: ["restore": "completed"], dropped: "completed")
+        try await checkAnAnswerForAnEndedRecord(answering: ["restore": .purchase(.completed)],
+                                                dropped: .purchase(.completed))
     }
 
     /// Hold `restore`, leave (the record ends), start `go` again (a second
@@ -353,7 +363,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// untouched, its owner hears nothing for it, the log has one dropped
     /// entry for the old call, nothing faults, and a tap on the second
     /// record is still handled.
-    private func checkAnAnswerForAnEndedRecord(answering: [String: String], dropped outcome: String?) async throws {
+    private func checkAnAnswerForAnEndedRecord(answering: [String: NuxieMachineReply],
+                                               dropped reply: NuxieMachineReply?) async throws {
         let run = try Run(plan: Self.leavesPlan, holdingStore: true, answering: answering)
         do {
             await run.edge.start(event: "go", now: run.now)
@@ -381,7 +392,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let late = await Array(run.edge.log.dropFirst(beforeAnswer))
             let call = try XCTUnwrap(run.store.calls.first)
             XCTAssertEqual(call.externName, "restore")
-            XCTAssertEqual(late, [.dropped(call.id, outcome: outcome)])
+            XCTAssertEqual(late, [.dropped(call.id, reply: reply)])
             let whole = await run.edge.log
             XCTAssertEqual(whole.filter {
                 if case .dropped = $0 { return true }
@@ -412,9 +423,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     }
 
     /// An answer for the open record's own unanswered call is delivered,
-    /// once: `restore` answered `completed` runs `leave`.
+    /// once: `restore` answered with status `completed` runs `leave`.
     func testAnAnswerForTheOpenRecordsOwnCallIsDeliveredOnce() async throws {
-        let run = try Run(plan: Self.leavesPlan, holdingStore: true, answering: ["restore": "completed"])
+        let run = try Run(plan: Self.leavesPlan, holdingStore: true, answering: ["restore": .purchase(.completed)])
         do {
             await run.edge.start(event: "go", now: run.now)
             try await run.layOut()
@@ -429,10 +440,10 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let call = try XCTUnwrap(run.store.calls.first)
             XCTAssertEqual(after.filter {
                 switch $0 {
-                case .answer, .dropped: return true
+                case .reply, .dropped: return true
                 default: return false
                 }
-            }, [.answer(call.id, outcome: "completed")], "\(after)")
+            }, [.reply(call.id, .purchase(.completed))], "\(after)")
             XCTAssertTrue(after.contains(.dismiss(reason: "left")), "\(after)")
             XCTAssertTrue(after.contains(.end(reason: .exited, fault: nil)), "\(after)")
             let noFault = await run.edge.fault
@@ -440,6 +451,76 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")])
             let open = try await run.edge.recordOpen()
             XCTAssertFalse(open, "the answer's `leave` ends the record")
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A purchase the store could not reach the store for is replied to with
+    /// the store's failure, as it gave it. The machine takes it: the
+    /// purchase is no longer pending, so the buy button is enabled again,
+    /// and a failure runs no `then`, so no error line shows. Nothing faults
+    /// and the paywall stays.
+    func testAStoreFailureReachesTheMachineAndRunsNothing() async throws {
+        let failure = NuxieMachineFailure(code: .offline, reason: "store.unreachable",
+                                          message: "You are offline. Try again when you are connected.")
+        let run = try Run(holdingStore: true, answering: ["purchase": .failure(failure)])
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
+            try await run.settle()
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Continue"))
+            let buying = try await run.look("buying")
+            XCTAssertFalse(try buying.isEnabled("Continue"), "\(buying.reading)")
+            let written = await run.edge.log.count
+
+            run.store.release()
+            await run.edge.storeAnswered()
+            try await run.settle()
+            let after = await Array(run.edge.log.dropFirst(written))
+            let call = try XCTUnwrap(run.store.calls.first)
+            XCTAssertEqual(after.filter { if case .reply = $0 { return true }; return false },
+                           [.reply(call.id, .failure(failure))], "\(after)")
+            let settled = try await run.look("settled")
+            XCTAssertTrue(try settled.isEnabled("Continue"), "\(settled.reading)")
+            XCTAssertFalse(settled.has(Self.errorLine), "\(settled.reading)")
+            let marked = try await run.edge.slot("purchase_failed")
+            XCTAssertEqual(marked, .bool(false), "a failure runs no `then`")
+            let route = try await run.edge.topRoute()
+            XCTAssertEqual(route?.route, "paywall")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault)
+            XCTAssertEqual(run.owner.dismissals, [])
+            try await run.close()
+        } catch {
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A reply whose fields are not those of the declaration's answer type
+    /// (a `Purchase` with no status) is refused by the session, and the
+    /// refusal takes the one fault path.
+    func testAReplyThatDoesNotFitFaults() async throws {
+        let run = try Run(holdingStore: true, answering: ["purchase": .answer([])])
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
+            try await run.settle()
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Continue"))
+            run.store.release()
+            await run.edge.storeAnswered()
+            try await run.settle(frames: 1)
+            let recorded = await run.edge.fault
+            let fault = try XCTUnwrap(recorded)
+            XCTAssertEqual(fault.code, "machine.reply_does_not_fit")
+            XCTAssertEqual(run.owner.dismissals, [.fault(fault)], "the owner hears one dismissal")
             try await run.close()
         } catch {
             run.store.release()
@@ -619,7 +700,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             await run.edge.storeAnswered()
             try await run.settle()
             let after = await Array(run.edge.log.dropFirst(written))
-            XCTAssertEqual(after.filter { if case .answer = $0 { return true }; return false }.count, 1,
+            XCTAssertEqual(after.filter { if case .reply = $0 { return true }; return false }.count, 1,
                            "the answer applies once: \(after)")
             let settled = try await run.look("settled")
             XCTAssertTrue(try settled.isEnabled("Continue"), "\(settled.reading)")
@@ -890,7 +971,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             await run.edge.wake(now: run.now)
             try await run.afterDelivery(onScreen: false)
             let after = await Array(run.edge.log.dropFirst(written))
-            let failed = try await run.edge.slot("failed")
+            let failed = try await run.edge.slot("purchase_failed")
             XCTAssertEqual(failed, .bool(true), "the store's answer never reached the record: \(after)")
             let fault = await run.edge.fault
             XCTAssertNil(fault)
@@ -1092,10 +1173,10 @@ private final class Run {
     private var looked = 0
 
     /// Stillwater's plan, or `plan`. A holding store answers each call only
-    /// when the test releases it, and `answering` names an outcome for an
+    /// when the test releases it, and `answering` gives a reply for an
     /// extern in place of the stand-in's.
     init(plan: NuxieMachinePlanSource? = nil, holdingStore: Bool = false,
-         answering: [String: String] = [:]) throws {
+         answering: [String: NuxieMachineReply] = [:]) throws {
         let store = RecordingStore(holds: holdingStore, answering: answering)
         self.store = store
         let owner = self.owner
@@ -1214,7 +1295,7 @@ private final class Run {
 }
 
 /// A store that hands every call to the stand-in, or answers it with the
-/// outcome `answering` names for its extern, and keeps them. A holding one
+/// reply `answering` gives for its extern, and keeps them. A holding one
 /// gives each answer only when the test releases it: a release that comes
 /// before its call lets that call answer at once.
 private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
@@ -1222,11 +1303,11 @@ private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
     private var received: [NuxieMachineCall] = []
     private let standIn = NuxieMachineStandInStore()
     private let holds: Bool
-    private let answering: [String: String]
+    private let answering: [String: NuxieMachineReply]
     private var held: [CheckedContinuation<Void, Never>] = []
     private var releasedEarly = 0
 
-    init(holds: Bool, answering: [String: String]) {
+    init(holds: Bool, answering: [String: NuxieMachineReply]) {
         self.holds = holds
         self.answering = answering
     }
@@ -1235,7 +1316,7 @@ private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
         lock.withLock { received }
     }
 
-    func perform(_ call: NuxieMachineCall) async throws -> String {
+    func perform(_ call: NuxieMachineCall) async throws -> NuxieMachineReply {
         lock.withLock { received.append(call) }
         if holds {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -1250,7 +1331,7 @@ private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
                 if goes { continuation.resume() }
             }
         }
-        if let outcome = answering[call.externName] { return outcome }
+        if let reply = answering[call.externName] { return reply }
         return try await standIn.perform(call)
     }
 
@@ -1330,7 +1411,7 @@ enum Fixture {
         let plan = try load()
         let presents = "  action show_offer\n    offer_due = false\n    go(offer)\n"
         let purchases = "  action show_offer\n    offer_due = false\n"
-            + "    purchase(catalog[annual_offer], completed=go(done, replace), failed=mark_failed)\n"
+            + "    send bought = purchase(catalog[annual_offer])\n"
         let files = try plan.files.map { file -> NuxieMachineSourceFile in
             guard file.path == "main.nux" else { return file }
             _ = try XCTUnwrap(file.text.range(of: presents), "main.nux presents the offer in the evening")
