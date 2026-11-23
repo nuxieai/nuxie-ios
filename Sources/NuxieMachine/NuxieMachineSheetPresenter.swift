@@ -201,6 +201,8 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         let held = state.natives.map(\.shown)
         controllers = controllers.filter { held.contains($0.key) }
         loop?.screens = held.compactMap { controllers[$0] }
+        let reached = state.reachable
+        for (shown, controller) in controllers { controller.reachable = shown == reached }
         publish()
     }
 

@@ -23,12 +23,20 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package let presented: NuxieMachinePresented
     package var shown: NuxieMachineShown { presented.shown }
 
-    /// What the host knows about the record, as this Screen's accessibility
-    /// value once its first frame is drawn, followed by how many frames have
-    /// been drawn. A Screen's own controls have no accessibility elements
-    /// yet, so this is the one a check can read.
+    /// What the host knows about the record, as the accessibility value of
+    /// this Screen's view once its first frame is drawn, followed by how
+    /// many frames have been drawn. The view is no element of its own: a
+    /// check finds it by its identifier, and a screen reader reads only the
+    /// Screen's lines and buttons.
     package var statusText = "" {
         didSet { updateAccessibility() }
+    }
+
+    /// Whether a screen reader can reach this Screen: false while another
+    /// presentation is over it. The Screen under a sheet keeps its elements,
+    /// hidden, so its place is kept for when the sheet has gone.
+    package var reachable = true {
+        didSet { viewIfLoaded?.accessibilityElementsHidden = !reachable }
     }
 
     /// Frames drawn to the screen.
@@ -43,6 +51,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
     private weak var loop: NuxieMachineScreenLoop?
     private let surface = NuxieMachineSurfaceView()
     private let container = UIView()
+    /// The Screen's lines and buttons, as its surface's accessibility
+    /// elements: the engine's semantic snapshot of each frame drawn, shown
+    /// the way every Screen the engine draws shows it.
+    private lazy var semantics = ExperienceSemanticAccessibilityContainer(view: surface)
+    /// The snapshot the elements show now; an activation acts on it only.
+    private var latest: NuxieNativeSemanticCapture?
     /// Whether the surface's layer has been given the engine's Metal device,
     /// which every Screen the engine opens shares.
     private var deviceConfigured = false
@@ -83,9 +97,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
     }
 
     override package func loadView() {
-        surface.isAccessibilityElement = true
-        surface.accessibilityIdentifier = "nuxie-machine-screen"
-        surface.accessibilityLabel = "Screen"
+        container.accessibilityIdentifier = "nuxie-machine-screen"
+        container.accessibilityLabel = "Screen"
+        container.accessibilityElementsHidden = !reachable
+        surface.isAccessibilityElement = false
+        semantics.setActive(true)
         surface.onPointers = { [weak self] pointers in
             guard let self, let loop = self.loop, !loop.stopped else { return }
             self.pointers += pointers
@@ -154,23 +170,73 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// Draw the Screen as the last step left it, and wait for the GPU.
     /// Whether it reached the screen: false when it needs another frame.
+    ///
+    /// A Screen drawn from compiled views is read again with every frame
+    /// drawn: the frame's step settled every write the machine made, its
+    /// settle passes included, so the snapshot taken with the frame is what
+    /// the frame shows ([`show`]).
     fileprivate func draw(_ runtime: NuxieNativeRuntime) async throws -> Bool {
         guard let size = sized else { return true }
         guard let drawable = surface.metalLayer.nextDrawable() else { return false }
         let completion = NuxieMachineFrameCompletion()
-        let outcome = try await runtime.render(
+        let frame = try await runtime.renderFrame(
             layoutScaleFactor: size.scale, drawable: .available(NuxieNativeDrawable(drawable)),
-            completion: { completion.fire() })
+            capturesSemantics: loop?.edge.readsAloud ?? false, completion: { completion.fire() })
         await completion.wait()
-        try Self.requireHealthy(outcome, doing: "render")
-        guard outcome.disposition == .presented else { return false }
+        try Self.requireHealthy(frame.outcome, doing: "render")
+        guard frame.outcome.disposition == .presented else { return false }
         framesDrawn += 1
         updateAccessibility()
+        if let semantics = frame.semantics { show(semantics) }
         return true
     }
 
+    /// Show `capture`, the semantic snapshot of a frame this Screen drew,
+    /// as its surface's accessibility elements, in the order it is read:
+    /// each line as static text, each button as a button named by the words
+    /// beneath it, each where the frame drew it. An element the frame no
+    /// longer has goes; one it still has is the same element, read anew.
+    /// When elements appear, go or move, the reader is told the layout
+    /// changed.
+    package func show(_ capture: NuxieNativeSemanticCapture) {
+        latest = capture
+        semantics.update(capture: capture, nativeControls: [:], project: { [surface] node in
+            guard let traits = ExperienceSemanticAccessibilityContainer.traits(for: node) else { return nil }
+            // The artboard is laid out at the surface's size with its origin
+            // at zero: a point on it is the same point on the surface.
+            let frame = node.bounds.intersection(surface.bounds)
+            guard !frame.isNull, !frame.isInfinite, !frame.isEmpty else { return nil }
+            let presses = traits.contains(.button) || traits.contains(.link)
+            return .init(frame: frame, traits: traits, value: node.value.isEmpty ? nil : node.value,
+                         actions: presses ? 1 << NuxieNativeSemanticAction.tap.rawValue : 0)
+        }, submit: { [weak self] captureID, nodeID, action in
+            self?.activate(nodeID, in: captureID, action) ?? false
+        })
+    }
+
+    /// Activating an element is a tap: a press and release at its center
+    /// through the surface's pointer path, as a touch arrives, so the same
+    /// listener hears the same event and the engine's own check of a
+    /// disabled button applies. A disabled element never gets here (its
+    /// element refuses), nor does an activation of a snapshot already
+    /// replaced.
+    private func activate(_ nodeID: UInt32, in captureID: UUID, _ action: NuxieNativeSemanticAction) -> Bool {
+        guard action == .tap, let capture = latest, capture.id == captureID,
+              let node = capture.tree.nodes.first(where: { $0.id == nodeID }) else { return false }
+        let frame = node.bounds.intersection(surface.bounds)
+        guard !frame.isNull, !frame.isEmpty else { return false }
+        return surface.tap(at: CGPoint(x: frame.midX, y: frame.midY))
+    }
+
+    /// The pointers that arrived for this Screen since the last frame took
+    /// them, oldest first; the next frame carries them.
+    package func takePointers() -> [NuxieNativePointerEvent] {
+        defer { pointers = [] }
+        return pointers
+    }
+
     private func updateAccessibility() {
-        surface.accessibilityValue = framesDrawn > 0 ? "\(statusText) Frames drawn: \(framesDrawn)." : "loading"
+        container.accessibilityValue = framesDrawn > 0 ? "\(statusText) Frames drawn: \(framesDrawn)." : "loading"
     }
 
     private static func requireHealthy(_ outcome: NuxieNativeRendererOutcome, doing what: String) throws {
@@ -324,8 +390,7 @@ package final class NuxieMachineScreenLoop {
         // run first and may end it, and the edge then drops them.
         let touching = screens.last { !$0.pointers.isEmpty }
         let touched = touching?.shown
-        let pointers = touching?.pointers ?? []
-        touching?.pointers = []
+        let pointers = touching?.takePointers() ?? []
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
