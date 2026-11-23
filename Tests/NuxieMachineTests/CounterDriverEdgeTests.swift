@@ -56,15 +56,15 @@ final class CounterDriverEdgeTests: XCTestCase {
         do {
             await run.edge.start(event: "opened", now: run.now)
             try await run.layOut()
-            let first = try await run.frame(after: [], name: "1-first-step")
+            let first = try await run.frame(after: [], name: "1-first-step", capturesSemantics: true)
             let count = try first.center(of: "Count")
-            let below = try first.box(of: "This line sits below the note.")
+            let below = try first.laidOut("This line sits below the note.")
 
-            let tapped = try await run.frame(after: run.tap(at: count), name: "2-tap-step")
+            let tapped = try await run.frame(after: run.tap(at: count), name: "2-tap-step", capturesSemantics: true)
             XCTAssertTrue(tapped.reported.contains("tap"), "the engine reported the tap: \(tapped.reported)")
             XCTAssertTrue(tapped.text.contains("Tapped 1 times"), "Recognized: \(tapped.text)")
             XCTAssertTrue(tapped.text.contains("You have counted at least once."), "Recognized: \(tapped.text)")
-            let moved = try tapped.box(of: "This line sits below the note.")
+            let moved = try tapped.laidOut("This line sits below the note.")
             XCTAssertGreaterThan(moved.minY - below.minY, 16, "the line below moved down: \(below) to \(moved)")
 
             // With no input, the step's writes laid out, nothing asks for
@@ -78,9 +78,9 @@ final class CounterDriverEdgeTests: XCTestCase {
             // "Hide the note" takes it away, and the line below comes back.
             let settled = try await run.frame(after: [], name: "3-settled")
             let hidden = try await run.frame(after: run.tap(at: settled.center(of: "Hide the note")),
-                                             name: "4-hide-step")
+                                             name: "4-hide-step", capturesSemantics: true)
             XCTAssertFalse(hidden.text.contains("You have counted"), "Recognized: \(hidden.text)")
-            let back = try hidden.box(of: "This line sits below the note.")
+            let back = try hidden.laidOut("This line sits below the note.")
             XCTAssertEqual(back.minY, below.minY, accuracy: 1, "the line below came back")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
@@ -305,15 +305,18 @@ final class Counter {
     }
 
     /// One frame with `pointers`, then the Screen drawn as that step left
-    /// it, read back and read with text recognition.
-    func frame(after pointers: [NuxieNativePointerEvent], name: String) async throws -> DrawnFrame {
+    /// it, read back and read with text recognition; with
+    /// `capturesSemantics`, also read for its semantic snapshot.
+    func frame(after pointers: [NuxieNativePointerEvent], name: String,
+               capturesSemantics: Bool = false) async throws -> DrawnFrame {
         let touched = await edge.shown
         let stepped = await edge.frame(pointers: pointers, on: touched, elapsedSeconds: CounterDriverEdgeTests.tick,
                                        now: advance())
         let fault = await edge.fault
         XCTAssertNil(fault, "the frame faulted")
         drawn += 1
-        return try await DrawnFrame.read(presented(), reported: stepped.reported, name: "counter-\(drawn)-\(name)")
+        return try await DrawnFrame.read(presented(), reported: stepped.reported, name: "counter-\(drawn)-\(name)",
+                                         capturesSemantics: capturesSemantics)
     }
 
     func close() async throws {
@@ -661,6 +664,18 @@ struct DrawnFrame {
             throw Missing(line: line, found: lines.map(\.text))
         }
         return found.box
+    }
+
+    /// Where the semantic snapshot lays the text `line` out, in points. A
+    /// recognized line's box is only near the glyphs it found, so a check on
+    /// where a line sits reads the layout. The frame must have been read
+    /// with its snapshot.
+    func laidOut(_ line: String) throws -> CGRect {
+        let nodes = try XCTUnwrap(semantics, "the frame was read without its semantic snapshot").tree.visibleReadingOrder
+        guard let found = nodes.first(where: { $0.label == line }) else {
+            throw Missing(line: line, found: nodes.map(\.label))
+        }
+        return found.bounds
     }
 
     func center(of line: String) throws -> CGPoint {
