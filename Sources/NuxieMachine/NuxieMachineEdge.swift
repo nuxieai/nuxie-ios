@@ -144,10 +144,11 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// delivered in its own delivery after the frame that took it (an
     /// awaited call's to the session).
     case reply(NuxieMachineCallID, NuxieMachineReply)
-    /// The store answered a retired call: the record that issued it has
-    /// ended, and the machine dropped the call with it, so the reply is
-    /// dropped too, whatever record is open by then. `reply` is none when
-    /// the store could not perform the call.
+    /// The store answered a call whose send is no longer out: the record
+    /// that issued it has ended, and the machine dropped the call with it,
+    /// or a newer send into the same mutation (or `none` assigned to it)
+    /// let it go. The reply is dropped, whatever record is open by then.
+    /// `reply` is none when the store could not perform a retired call.
     case dropped(NuxieMachineCallID, reply: NuxieMachineReply?)
     /// The person closed a presentation the edge no longer holds. The close
     /// belongs to it, so it goes to no one.
@@ -269,7 +270,8 @@ package final class NuxieMachineFrameAsks: @unchecked Sendable {
 ///   ([`unanswered`]); the record's `end` row retires them all, as the
 ///   machine drops them. An answer to a retired call is recorded as
 ///   [`dropped`](NuxieMachineEdgeEntry.dropped): nothing applied, no one
-///   told, no fault.
+///   told, no fault. So is one the session no longer has out (a newer send
+///   into the same mutation let it go), which only the session can tell.
 /// - A touch belongs to the presentation the person touched, and a close to
 ///   the one the host names. Once the session no longer shows that
 ///   presentation, each is recorded as dropped and goes to no one.
@@ -918,8 +920,16 @@ package actor NuxieMachineEdge {
     /// fail. Otherwise the call is the open record's own and unanswered: a
     /// store that could not perform it is a fault, an unawaited call's
     /// reply is recorded, and an awaited call's goes to the session as it
-    /// came, the answer's fields or the store's failure, whose refusal
-    /// (`unknown_call` and `reply_does_not_fit` included) is a fault.
+    /// came, the answer's fields or the store's failure.
+    ///
+    /// The session may no longer have that send out: a newer send into the
+    /// same mutation let it go, or `none` was assigned to it. The call was
+    /// still performed, and its reply is a late one, not a refusal: the
+    /// session answers `unknown_call`, and the reply is dropped as one to a
+    /// retired call is, nothing applied and no fault. Only the session can
+    /// tell, so the edge asks it first and logs the reply after: `.reply`
+    /// for one it took or refused, `.dropped` for one it did not have out.
+    /// Any other refusal (`reply_does_not_fit` included) is a fault.
     private func answer(_ answer: Answer, now: Int64, _ delivery: inout Delivery) async {
         let call = answer.call
         guard unanswered.remove(call.id) != nil else {
@@ -938,15 +948,22 @@ package actor NuxieMachineEdge {
             fail(NuxieMachineEdgeFault(code: "store.failed", detail: "\(call.externName): \(error)"), &delivery)
             return
         }
-        log.append(.reply(call.id, reply))
-        guard call.awaited else { return }
+        guard call.awaited else {
+            log.append(.reply(call.id, reply))
+            return
+        }
         let rows: [NuxieMachineRow]
         do {
             rows = try session.reply(call.id, reply, now: now)
+        } catch NuxieMachineError.unknownCall {
+            log.append(.dropped(call.id, reply: reply))
+            return
         } catch {
+            log.append(.reply(call.id, reply))
             await refused(error, doing: "the reply \(reply)", now: now, &delivery)
             return
         }
+        log.append(.reply(call.id, reply))
         await apply(rows, now: now, &delivery)
     }
 

@@ -503,6 +503,86 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
+    /// A second send into a mutation lets the first go: the first call is
+    /// still performed, and its reply, when it comes, is for a send no longer
+    /// out. "Restore purchases" twice before the store answers sends
+    /// `bought = restore()` twice. The older reply, arriving first, is
+    /// dropped: logged, nothing applied, no fault. The newer one lands and
+    /// runs `purchased`, so the paywall stays and shows the error line.
+    func testAReplyToASendANewerSendLetGoIsDropped() async throws {
+        let run = try Run(holdingStore: true, answering: ["restore": .purchase(.failed)])
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
+            try await run.settle()
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Restore purchases"))
+            try await run.settle()
+            try await run.tap(open.center(of: "Restore purchases"))
+            try await run.settle()
+            let calls = run.store.calls
+            XCTAssertEqual(calls.map(\.externName), ["restore", "restore"])
+            let resting = await run.edge.waitingForFrame()
+            XCTAssertFalse(resting, "nothing waits for a frame while the store holds both")
+
+            // The older call's reply arrives and is delivered alone.
+            let beforeOlder = await run.edge.log.count
+            run.store.release()
+            try await waitUntil("the older reply arrived") { await run.edge.waitingForFrame() }
+            try await run.settle()
+            let older = await Array(run.edge.log.dropFirst(beforeOlder))
+            XCTAssertEqual(older.filter(Self.isReplyOrDropped), [.dropped(calls[0].id, reply: .purchase(.failed))],
+                           "\(older)")
+            let noFault = await run.edge.fault
+            XCTAssertNil(noFault, "a late reply to a send no longer out is no fault")
+            let stillOpen = try await run.edge.recordOpen()
+            XCTAssertTrue(stillOpen)
+            let untouched = try await run.edge.slot("purchase_failed")
+            XCTAssertEqual(untouched, .bool(false), "a dropped reply applies nothing")
+
+            // The newer call's reply lands: `purchased` marks the failure.
+            let beforeNewer = await run.edge.log.count
+            run.store.release()
+            await run.edge.storeAnswered()
+            try await run.settle()
+            let newer = await Array(run.edge.log.dropFirst(beforeNewer))
+            XCTAssertEqual(newer.filter(Self.isReplyOrDropped), [.reply(calls[1].id, .purchase(.failed))],
+                           "\(newer)")
+            let marked = try await run.edge.slot("purchase_failed")
+            XCTAssertEqual(marked, .bool(true))
+            let settled = try await run.look("settled")
+            XCTAssertTrue(settled.has(Self.errorLine), "\(settled.reading)")
+            let route = try await run.edge.topRoute()
+            XCTAssertEqual(route?.route, "paywall")
+            let stillNoFault = await run.edge.fault
+            XCTAssertNil(stillNoFault)
+            XCTAssertEqual(run.owner.dismissals, [])
+            XCTAssertEqual(run.store.calls.count, 2)
+            try await run.close()
+        } catch {
+            run.store.release()
+            run.store.release()
+            try? await run.close()
+            throw error
+        }
+    }
+
+    private static func isReplyOrDropped(_ entry: NuxieMachineEdgeEntry) -> Bool {
+        switch entry {
+        case .reply, .dropped: return true
+        default: return false
+        }
+    }
+
+    /// Wait, a little at a time and for two seconds at most, until `done`.
+    private func waitUntil(_ what: String, _ done: () async -> Bool) async throws {
+        for _ in 0..<200 {
+            if await done() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("waited two seconds and \(what) did not happen")
+    }
+
     /// A reply whose fields are not those of the declaration's answer type
     /// (a `Purchase` with no status) is refused by the session, and the
     /// refusal takes the one fault path.
