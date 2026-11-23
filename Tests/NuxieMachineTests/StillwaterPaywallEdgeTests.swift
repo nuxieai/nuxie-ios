@@ -9,135 +9,124 @@ import NuxieMachine
 import NuxieRuntime
 
 /// Stillwater's paywall on a simulator, with no window: the machine compiled
-/// from Stillwater's four `.nux` files drives the published Screen through
-/// the engine and Metal, real pointers go in, and the frames are read back.
-/// The script and what every cell holds are the parent repository's Mac
-/// play test of the same Screen (`stillwater_paywall_tests`): start, a
-/// pointer on Monthly, on the buy button (the store answers `failed`), on
-/// "About the trial", then "Not now", or a swipe down in a second run.
+/// from Stillwater's four `.nux` files, and the paywall drawn from
+/// `paywall.nux` alone, as the session's records open it. Real pointers go
+/// in, inside the engine's step the session's driver carries the machine,
+/// and each frame is drawn with Metal and read back with its semantic
+/// snapshot. Where a control is comes from that snapshot: the place a
+/// screen reader would name.
+///
+/// The script is the parent repository's headless story of the same
+/// paywall, in five frames: open, Monthly chosen, buying, failed, and the
+/// trial's terms open. Then "Not now", or a swipe down in a second run.
 ///
 /// Pixel checks compare a region of one frame with the same region of the
-/// frame before. A region "changes" when at least `changedAtLeast` of its
-/// pixels move by more than `difference` in some channel, and "holds" when
-/// at most `steadyAtMost` do: a selection ring, a dot, a dim or a line of
-/// text moves far more pixels than that, and antialiasing far fewer.
+/// frame before, both drawn at twice the layout size. A region "changes"
+/// when at least `changedAtLeast` of its pixels move by more than
+/// `difference` in some channel, and "holds" when at most `steadyAtMost`
+/// do: a selection ring, a dot, a dim or a line of text moves far more
+/// pixels than that, and antialiasing far fewer.
 final class StillwaterPaywallEdgeTests: XCTestCase {
-    // MARK: The Screen's known layout
-
-    /// Boxes on the 390 by 844 Screen, `[x0, y0, x1, y1]`, worked out from
-    /// its CSS alone, as the Mac play test's `BOXES` are. The error line and
-    /// the terms line keep their slots shown or not, so no box moves.
-    private enum Box {
-        static let title: [Int] = [24, 134, 366, 210]
-        static let annual: [Int] = [24, 250, 366, 322]
-        static let monthly: [Int] = [24, 334, 366, 406]
-        static let buy: [Int] = [24, 434, 366, 490]
-        static let error: [Int] = [24, 490, 366, 542]
-        static let close: [Int] = [24, 666, 366, 714]
-        static let restore: [Int] = [24, 718, 189, 762]
-        static let details: [Int] = [201, 718, 366, 762]
-        static let terms: [Int] = [24, 770, 366, 810]
-    }
-
-    private static let width = 390
-    private static let height = 844
     private static let difference = 48
-    private static let changedAtLeast = 150
-    private static let steadyAtMost = 24
-    private static let edge = 2
+    private static let changedAtLeast = 600
+    private static let steadyAtMost = 96
+    /// How far a control's region grows on every side, in points: a card's
+    /// border draws on its bounds' last row and column.
+    private static let edge: CGFloat = 2
 
-    /// 09:00 on day zero, in milliseconds, as the Mac test starts.
+    /// 09:00 on day zero, in milliseconds.
     private static let nine: Int64 = 9 * 3_600_000
     private static let hour: Int64 = 3_600_000
     /// One frame at 60 frames a second.
-    private static let tick: Float = 1.0 / 60.0
+    static let tick: Float = 1.0 / 60.0
 
-    // MARK: The script
+    static let errorLine = "The purchase did not go through. Try again in a moment."
+    static let termsLine = "Billed through the store after the trial. Cancel any time."
 
-    func testAPointerOnAPlanCardSelectsItThroughTheMachine() async throws {
-        let run = try await Run()
+    // MARK: The story in five frames
+
+    func testThePaywallStoryInFiveFrames() async throws {
+        let run = try Run(holdingStore: true)
         do {
-            // 1. The start presents the paywall as a sheet, and after one
-            // frame every cell holds what the machine wrote.
+            // 1. The start presents the paywall as a sheet, drawn from its
+            // compiled view: every line and button is there, and nothing
+            // under an `if` shows.
             await run.edge.start(event: "onboarding_completed", now: run.now)
             let presented = await run.edge.log.compactMap { entry -> String? in
                 if case .present(let route, _, let presentation) = entry, presentation == .sheet { return route }
                 return nil
             }
             XCTAssertEqual(presented, ["paywall"], "the start presents the paywall as a sheet")
+            try await run.layOut()
             try await run.settle()
-            let cells = try await run.cells()
-            XCTAssertEqual(cells["title_text"], .bytes(Data("Ten quiet minutes,\nevery day.".utf8)))
-            XCTAssertEqual(cells["annual_selected"], .bool(true))
-            XCTAssertEqual(cells["annual_price"], .bytes(Data("$59.99".utf8)))
-            XCTAssertEqual(cells["monthly_selected"], .bool(false))
-            XCTAssertEqual(cells["monthly_price"], .bytes(Data("$9.99".utf8)))
-            XCTAssertEqual(cells["buy_label"], .bytes(Data("Continue".utf8)))
-            XCTAssertEqual(cells["buy_busy"], .bool(false))
-            XCTAssertEqual(cells["error_visible"], .bool(false))
-            XCTAssertEqual(cells["terms_visible"], .bool(false))
-            let start = try await run.frame("start")
+            let open = try await run.look("1-open")
+            XCTAssertTrue(open.has("Ten quiet minutes,"), "\(open.reading)")
+            XCTAssertTrue(try open.node("Yearly").label.contains("$59.99"), "\(open.reading)")
+            XCTAssertTrue(try open.node("Monthly").label.contains("$9.99"), "\(open.reading)")
+            XCTAssertTrue(try open.isEnabled("Continue"), "\(open.reading)")
+            XCTAssertTrue(open.has("Not now"), "\(open.reading)")
+            XCTAssertTrue(open.has("Restore purchases"), "\(open.reading)")
+            XCTAssertTrue(open.has("About the trial"), "\(open.reading)")
+            XCTAssertFalse(open.has(Self.errorLine), "\(open.reading)")
+            XCTAssertFalse(open.has(Self.termsLine), "\(open.reading)")
 
-            // 2. A pointer on the Monthly card: one `tap_monthly`, the
-            // record's plan is monthly, and both cards look different.
-            var written = await run.edge.log.count
-            let monthlyTap = try await run.tap(Box.monthly)
-            XCTAssertEqual(monthlyTap, ["tap_monthly"])
+            // 2. A pointer on the Monthly card: the record's plan is
+            // monthly, and both cards look different; nothing else does.
+            try await run.tap(open.center(of: "Monthly"))
             let plan = try await run.edge.slot("plan")
             XCTAssertEqual(plan, .enumeration("monthly"))
-            let monthlyWrites = await run.writes(since: written)
-            XCTAssertEqual(monthlyWrites.filter { $0.cell == "monthly_selected" }.map(\.value), [.bool(true)])
-            XCTAssertEqual(monthlyWrites.filter { $0.cell == "annual_selected" }.map(\.value), [.bool(false)])
-            let monthly = try await run.frame("monthly")
-            XCTAssertTrue(Self.changes(start, monthly, Box.monthly), "the Monthly card looks the same")
-            XCTAssertTrue(Self.changes(start, monthly, Box.annual), "the Yearly card looks the same")
-            XCTAssertTrue(Self.holds(start, monthly, outside: [Box.annual, Box.monthly]),
-                          "something outside the two cards changed")
+            let monthly = try await run.look("2-monthly-chosen")
+            let cards = [try open.region(of: "Yearly"), try open.region(of: "Monthly")]
+            XCTAssertTrue(Self.changes(open, monthly, cards[1]), "the Monthly card looks the same")
+            XCTAssertTrue(Self.changes(open, monthly, cards[0]), "the Yearly card looks the same")
+            XCTAssertTrue(Self.holds(open, monthly, outside: cards), "something outside the two cards changed")
 
             // 3. A pointer on the buy button: one awaited purchase reaches
-            // the store, which answers `failed`; the button is busy, then not,
-            // and the error line shows. The answer is applied after the step
-            // of the first frame that begins after it arrived, so the frame
-            // after the tap draws the busy button whenever the store answers.
-            // Once it has answered, two more frames apply and show it.
-            written = await run.edge.log.count
-            let buyTap = try await run.tap(Box.buy, framesAfter: 1)
-            XCTAssertEqual(buyTap, ["tap_buy"])
-            let buying = try await run.frame("buying")
+            // the store, which holds its answer. The button is disabled, read
+            // as not enabled, and dimmed.
+            var written = await run.edge.log.count
+            try await run.tap(monthly.center(of: "Continue"))
+            let buying = try await run.look("3-buying")
+            XCTAssertEqual(run.store.calls.map(\.externName), ["purchase"])
+            XCTAssertEqual(run.store.calls.map(\.awaited), [true])
+            XCTAssertFalse(try buying.isEnabled("Continue"), "\(buying.reading)")
+            let buy = try monthly.region(of: "Continue")
+            XCTAssertTrue(Self.changes(monthly, buying, buy), "the buy button never looks busy")
+
+            // 4. The store answers `failed`: the button is enabled again and
+            // the error line shows, with no touch.
+            run.store.release()
             await run.edge.storeAnswered()
-            try await run.settle(frames: 2)
-            let failed = try await run.frame("failed")
-            let calls = run.store.calls
-            XCTAssertEqual(calls.map(\.externName), ["purchase"])
-            XCTAssertEqual(calls.map(\.awaited), [true])
+            try await run.settle()
+            let failed = try await run.look("4-failed")
             let answered = await run.edge.log.dropFirst(written).compactMap { entry -> String? in
                 if case .answer(_, let outcome) = entry { return outcome }
                 return nil
             }
             XCTAssertEqual(answered, ["failed"])
-            let buyWrites = await run.writes(since: written)
-            XCTAssertEqual(buyWrites.filter { $0.cell == "buy_busy" }.map(\.value), [.bool(true), .bool(false)])
-            XCTAssertEqual(buyWrites.filter { $0.cell == "error_visible" }.map(\.value), [.bool(true)])
-            XCTAssertTrue(Self.changes(monthly, failed, Box.error), "the error line does not show")
-            XCTAssertTrue(Self.holds(monthly, failed, Box.buy), "the buy button stays dimmed")
-            XCTAssertTrue(Self.changes(monthly, buying, Box.buy), "the buy button never looks busy")
+            let marked = try await run.edge.slot("failed")
+            XCTAssertEqual(marked, .bool(true))
+            XCTAssertTrue(failed.has(Self.errorLine), "\(failed.reading)")
+            XCTAssertTrue(try failed.isEnabled("Continue"), "\(failed.reading)")
+            XCTAssertTrue(Self.changes(monthly, failed, try failed.region(of: Self.errorLine)),
+                          "the error line does not show")
+            XCTAssertTrue(Self.holds(monthly, failed, buy), "the buy button stays dimmed")
 
-            // 4. A pointer on "About the trial": the terms line shows.
-            let detailsTap = try await run.tap(Box.details)
-            XCTAssertEqual(detailsTap, ["tap_details"])
-            let details = try await run.frame("details")
-            XCTAssertTrue(Self.changes(failed, details, Box.terms), "the terms line does not show")
+            // 5. A pointer on "About the trial": the terms line shows.
+            try await run.tap(failed.center(of: "About the trial"))
+            let details = try await run.look("5-details-open")
+            XCTAssertTrue(details.has(Self.termsLine), "\(details.reading)")
+            XCTAssertTrue(Self.changes(failed, details, try details.region(of: Self.termsLine)),
+                          "the terms line does not show")
 
-            // 5. A pointer on "Not now": the paywall is dismissed, the record
-            // stays open, and the evening offer's wake is recorded.
+            // Then "Not now": the paywall is dismissed, the record stays
+            // open, and the evening offer's wake is recorded.
             written = await run.edge.log.count
-            let closeTap = try await run.tap(Box.close)
-            XCTAssertEqual(closeTap, ["tap_close"])
+            try await run.tap(details.center(of: "Not now"))
             let closing = await Array(run.edge.log.dropFirst(written))
             XCTAssertTrue(closing.contains(.dismiss(reason: "paywall_closed")), "\(closing)")
             XCTAssertTrue(closing.contains(.wakeAt(18 * Self.hour)), "\(closing)")
-            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
-            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")], "the owner hears one dismissal")
             let stillOpen = try await run.edge.recordOpen()
             XCTAssertTrue(stillOpen, "the record waits for the evening offer")
             let noFault = await run.edge.fault
@@ -145,22 +134,26 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             XCTAssertEqual(run.store.calls.count, 1, "one call in the whole script")
             try await run.close()
         } catch {
+            run.store.release()
             try? await run.close()
             throw error
         }
     }
 
     func testASwipeDownEndsTheRecord() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            var tapped = try await run.tap(Box.monthly)
-            tapped += try await run.tap(Box.buy)
-            // The store's answer is applied in the frames of the next tap.
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Monthly"))
+            try await run.tap(open.center(of: "Continue"))
+            // The stand-in store's answer is delivered in the next frames.
             await run.edge.storeAnswered()
-            tapped += try await run.tap(Box.details)
-            XCTAssertEqual(tapped, ["tap_monthly", "tap_buy", "tap_details"])
+            try await run.tap(open.center(of: "About the trial"))
+            let detailsOpen = try await run.look("details-open")
+            XCTAssertTrue(detailsOpen.has(Self.termsLine), "\(detailsOpen.reading)")
             let written = await run.edge.log.count
             let current = await run.edge.shown
             let shown = try XCTUnwrap(current)
@@ -170,9 +163,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                 if case .pop = $0 { return true }
                 if case .end = $0 { return true }
                 return false
-            }, [.pop(instance: 2), .end(reason: .finished, fault: nil)])
-            let open = try await run.edge.recordOpen()
-            XCTAssertFalse(open, "a swipe down ends the record")
+            }, [.pop(instance: shown.instance), .end(reason: .finished, fault: nil)])
+            let ended = try await run.edge.recordOpen()
+            XCTAssertFalse(ended, "a swipe down ends the record")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertTrue(run.owner.dismissals.isEmpty, "a swipe down has already closed the sheet")
@@ -183,41 +176,18 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// A reported event the plan does not handle ends in the one fault path:
-    /// the edge stops, records the code, and tells its owner to dismiss. A
-    /// stopped edge steps nothing more.
-    func testAnEventThePlanDoesNotHandleFaults() async throws {
-        let run = try await Run()
-        do {
-            await run.edge.start(event: "onboarding_completed", now: run.now)
-            try await run.settle()
-            await run.edge.handleReported("tap_nothing", now: run.advance())
-            let recorded = await run.edge.fault
-            let fault = try XCTUnwrap(recorded)
-            XCTAssertEqual(fault.code, "machine.unknown_object")
-            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
-            XCTAssertEqual(run.owner.dismissals, [.fault(fault)])
-            let afterFault = try await run.tap(Box.monthly)
-            XCTAssertEqual(afterFault, [], "a stopped edge steps nothing")
-            await run.edge.handleReported("tap_nothing", now: run.advance())
-            XCTAssertEqual(run.owner.dismissals.count, 1, "a stopped edge tells nothing more")
-            try await run.close()
-        } catch {
-            try? await run.close()
-            throw error
-        }
-    }
-
-    /// A store asked for an extern it cannot perform ends in the same fault
+    /// A store asked for an extern it cannot perform ends in the one fault
     /// path. "Restore purchases" calls `restore`, which the stand-in store
-    /// does not answer.
+    /// does not answer. A stopped edge steps nothing more and tells nothing
+    /// more.
     func testAStoreAskedForAnUnknownExternFaults() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            let restoreTap = try await run.tap(Box.restore)
-            XCTAssertEqual(restoreTap, ["tap_restore"])
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Restore purchases"))
             // The store's refusal arrives as an answer, which the next frame
             // delivers.
             await run.edge.storeAnswered()
@@ -226,77 +196,11 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let fault = try XCTUnwrap(recorded)
             XCTAssertEqual(fault.code, "store.unknown-extern")
             XCTAssertEqual(run.store.calls.map(\.externName), ["restore"])
-            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
-            XCTAssertEqual(run.owner.dismissals, [.fault(fault)])
-            let afterFault = try await run.tap(Box.monthly)
+            XCTAssertEqual(run.owner.dismissals, [.fault(fault)], "the owner hears one dismissal")
+            let screen = await run.edge.screen()
+            XCTAssertNil(screen, "the fault closed the paywall")
+            let afterFault = try await run.tap(open.center(of: "Monthly"))
             XCTAssertEqual(afterFault, [], "a stopped edge steps nothing")
-            XCTAssertEqual(run.owner.dismissals.count, 1, "a stopped edge tells nothing more")
-            try await run.close()
-        } catch {
-            try? await run.close()
-            throw error
-        }
-    }
-
-    /// A Screen whose view has an `if` with an `else`: presenting it shows
-    /// the `else`, a write the machine's C interface cannot carry (the
-    /// interface crate's `tests/refusals.rs`, its route renamed so the
-    /// Stillwater Screen is its artwork). The header documents what the
-    /// call leaves: the effects up to that write, a dismiss with no reason,
-    /// and an end whose fault is "engine.failed".
-    private static let showsARegion = """
-        component App
-          routes
-            paywall  Card(on=false)  sheet
-          entry
-            on event "go"
-            do go(paywall)
-
-        component Card
-          props
-            on: boolean
-          view
-            column
-              text "Hi" id="label"
-              if on
-                box id="yes"
-              else
-                box id="no"
-
-        """
-
-    /// A write the machine cannot carry ends in the one fault path, and the
-    /// owner hears that fault alone: not the machine's dismiss row before
-    /// it. The record keeps both rows.
-    func testAWriteTheMachineCannotCarryTellsOneFaultDismissal() async throws {
-        let plan = NuxieMachinePlanSource(
-            files: [NuxieMachineSourceFile(path: "main.nux", text: Self.showsARegion)],
-            root: "main", app: "app", experience: "card", version: 1)
-        let run = try await Run(plan: plan)
-        do {
-            await run.edge.start(event: "go", now: run.now)
-            let log = await run.edge.log
-            XCTAssertTrue(log.contains { entry in
-                if case .present("paywall", _, .sheet) = entry { return true }
-                return false
-            }, "\(log)")
-            XCTAssertEqual(Array(log.suffix(2)), [.dismiss(reason: nil), .end(reason: .fault, fault: "engine.failed")])
-            let recorded = await run.edge.fault
-            let fault = try XCTUnwrap(recorded)
-            XCTAssertEqual(fault.code, "engine.failed")
-            XCTAssertEqual(run.owner.dismissals.count, 1, "the owner hears one dismissal")
-            XCTAssertEqual(run.owner.dismissals, [.fault(fault)])
-            let open = try await run.edge.recordOpen()
-            XCTAssertFalse(open, "the fault ended the session")
-
-            // A stopped edge takes nothing more and tells nothing more.
-            let presented = try XCTUnwrap(Self.presentedInstance(log))
-            await run.edge.start(event: "go", now: run.advance())
-            await run.edge.closed(NuxieMachineShown(journey: 1, instance: presented), now: run.advance())
-            await run.edge.handleReported("tap_label", now: run.advance())
-            try await run.settle()
-            let after = await run.edge.log
-            XCTAssertEqual(after, log, "a stopped edge records nothing more")
             XCTAssertEqual(run.owner.dismissals.count, 1, "a stopped edge tells nothing more")
             try await run.close()
         } catch {
@@ -310,24 +214,24 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// A swipe down while the store has not answered the purchase is a
     /// normal close, as the machine's rows say: it pops the paywall with no
     /// `dismiss` row (the gesture has already closed the sheet) and asks for
-    /// no wake, and the record stays open for the purchase. The owner hears no dismissal and
-    /// nothing faults. The store's answer, released after, goes to the
-    /// session, whose rows end the record; it tells nothing.
+    /// no wake, and the record stays open for the purchase. The owner hears
+    /// no dismissal and nothing faults. The store's answer, released after,
+    /// goes to the session, whose rows end the record; it tells nothing.
     func testASwipeDownWhileThePurchaseWaitsIsANormalClose() async throws {
-        let run = try await Run(holdingStore: true)
+        let run = try Run(holdingStore: true)
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            let buyTap = try await run.tap(Box.buy)
-            XCTAssertEqual(buyTap, ["tap_buy"])
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Continue"))
+            XCTAssertEqual(run.store.calls.map(\.externName), ["purchase"])
             let written = await run.edge.log.count
             let current = await run.edge.shown
             let shown = try XCTUnwrap(current)
             await run.edge.closed(shown, now: run.advance())
             let closing = await Array(run.edge.log.dropFirst(written))
-            let whole = await run.edge.log
-            let presented = try XCTUnwrap(Self.presentedInstance(whole))
-            XCTAssertEqual(closing, [.pop(instance: presented), .wakeAt(nil), .gone(shown)])
+            XCTAssertEqual(closing, [.pop(instance: shown.instance), .wakeAt(nil), .gone(shown)])
             let waiting = try await run.edge.recordOpen()
             XCTAssertTrue(waiting, "the record waits for the purchase")
             let noFault = await run.edge.fault
@@ -341,11 +245,10 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try await run.settle(frames: 2)
             let late = await Array(run.edge.log.dropFirst(beforeAnswer))
             let call = try XCTUnwrap(run.store.calls.first)
-            XCTAssertEqual(call.externName, "purchase")
             XCTAssertEqual(late, [.answer(call.id, outcome: "failed"), .note(.ended),
                                   .end(reason: .finished, fault: nil)])
-            let open = try await run.edge.recordOpen()
-            XCTAssertFalse(open, "the answer ends the record")
+            let afterAnswer = try await run.edge.recordOpen()
+            XCTAssertFalse(afterAnswer, "the answer ends the record")
             let stillNoFault = await run.edge.fault
             XCTAssertNil(stillNoFault)
             XCTAssertEqual(run.owner.dismissals, [], "the answer tells nothing")
@@ -358,56 +261,55 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// A Screen whose `close` dismisses and exits while the `restore` call
-    /// it started has not been answered. Its route is renamed so the
-    /// Stillwater Screen is its artwork, and its buttons hold no state, so
-    /// it writes no cell.
-    private static let leavesWhileRestoring = """
-        use restore from "nuxie/store"
+    /// A paywall whose "Not now" dismisses and exits while the `restore`
+    /// call it started has not been answered.
+    private static let leavesPlan = NuxieMachinePlanSource(
+        files: [NuxieMachineSourceFile(path: "main.nux", text: """
+            use restore from "nuxie/store"
 
-        component App
-          routes
-            paywall  Card  sheet
-              restore=restore_purchases
-              close=leave
-          entry
-            on event "go"
-            do go(paywall)
+            component App
+              routes
+                paywall  Card  sheet
+                  restore=restore_purchases
+                  close=leave
+              entry
+                on event "go"
+                do go(paywall)
 
-          action restore_purchases
-            restore(completed=leave)
+              action restore_purchases
+                restore(completed=leave)
 
-          action leave
-            dismiss("left")
-            exit
+              action leave
+                dismiss("left")
+                exit
 
-        component Card
-          props
-            restore: action
-            close: action
-          view
-            column
-              button id="restore" press=restore
-                text "Restore purchases"
-              button id="close" press=close
-                text "Not now"
+            component Card
+              props
+                restore: action
+                close: action
+              view
+                column width=100% height=100% padding=24 gap=12 background-color=#0d1214
+                  button height=48 justify-content=center press=restore id="restore"
+                    text "Restore purchases" color=#eef3f1 font-size=16
+                  button height=48 justify-content=center press=close id="close"
+                    text "Not now" color=#c9d3d0 font-size=16
 
-        """
+            """)],
+        root: "main", app: "app", experience: "leaves", version: 1)
 
     /// An answer that arrives after its record ended is dropped: the
     /// machine dropped the call when the record ended, so it is recorded as
     /// dropped, applies nothing, tells nothing and is no fault, even when
     /// the store failed the call.
     func testAnAnswerAfterTheRecordEndedIsDropped() async throws {
-        let plan = NuxieMachinePlanSource(
-            files: [NuxieMachineSourceFile(path: "main.nux", text: Self.leavesWhileRestoring)],
-            root: "main", app: "app", experience: "leaves", version: 1)
-        let run = try await Run(plan: plan, holdingStore: true)
+        let run = try Run(plan: Self.leavesPlan, holdingStore: true)
         do {
             await run.edge.start(event: "go", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            await run.edge.handleReported("tap_restore", now: run.advance())
-            await run.edge.handleReported("tap_close", now: run.advance())
+            let card = try await run.look("card")
+            try await run.tap(card.center(of: "Restore purchases"))
+            try await run.tap(card.center(of: "Not now"))
             let open = try await run.edge.recordOpen()
             XCTAssertFalse(open, "leaving ends the record")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")], "the owner hears one dismissal")
@@ -432,10 +334,6 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    private static let leavesPlan = NuxieMachinePlanSource(
-        files: [NuxieMachineSourceFile(path: "main.nux", text: leavesWhileRestoring)],
-        root: "main", app: "app", experience: "leaves", version: 1)
-
     /// An answer belongs to the record that issued its call, not to the
     /// record open when it arrives. A store refusal of the first record's
     /// `restore`, released after that record ended and a second started,
@@ -450,23 +348,26 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         try await checkAnAnswerForAnEndedRecord(answering: ["restore": "completed"], dropped: "completed")
     }
 
-    /// Hold `restore`, close (the record ends), start `go` again (a second
+    /// Hold `restore`, leave (the record ends), start `go` again (a second
     /// record), then release the store. The second record's showing is
     /// untouched, its owner hears nothing for it, the log has one dropped
     /// entry for the old call, nothing faults, and a tap on the second
     /// record is still handled.
     private func checkAnAnswerForAnEndedRecord(answering: [String: String], dropped outcome: String?) async throws {
-        let run = try await Run(plan: Self.leavesPlan, holdingStore: true, answering: answering)
+        let run = try Run(plan: Self.leavesPlan, holdingStore: true, answering: answering)
         do {
             await run.edge.start(event: "go", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            await run.edge.handleReported("tap_restore", now: run.advance())
-            await run.edge.handleReported("tap_close", now: run.advance())
+            let card = try await run.look("first-card")
+            try await run.tap(card.center(of: "Restore purchases"))
+            try await run.tap(card.center(of: "Not now"))
             let firstOpen = try await run.edge.recordOpen()
             XCTAssertFalse(firstOpen, "leaving ends the first record")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")])
 
             await run.edge.start(event: "go", now: run.advance())
+            try await run.layOut()
             try await run.settle()
             let second = await run.edge.shown
             let secondShown = try XCTUnwrap(second, "the second record shows the paywall")
@@ -496,8 +397,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                            "the owner hears nothing for the second record")
 
             // The second record still works: a tap on "Not now" is handled.
-            let closeTap = try await run.tap(Box.close)
-            XCTAssertEqual(closeTap, ["tap_close"])
+            let again = try await run.look("second-card")
+            try await run.tap(again.center(of: "Not now"))
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left"), .machine(reason: "left")])
             let finalFault = await run.edge.fault
             XCTAssertNil(finalFault)
@@ -513,11 +414,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// An answer for the open record's own unanswered call is delivered,
     /// once: `restore` answered `completed` runs `leave`.
     func testAnAnswerForTheOpenRecordsOwnCallIsDeliveredOnce() async throws {
-        let run = try await Run(plan: Self.leavesPlan, holdingStore: true, answering: ["restore": "completed"])
+        let run = try Run(plan: Self.leavesPlan, holdingStore: true, answering: ["restore": "completed"])
         do {
             await run.edge.start(event: "go", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            await run.edge.handleReported("tap_restore", now: run.advance())
+            let card = try await run.look("card")
+            try await run.tap(card.center(of: "Restore purchases"))
             let written = await run.edge.log.count
             run.store.release()
             await run.edge.storeAnswered()
@@ -550,16 +453,19 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// the first record's showing after a second record shows its own is
     /// dropped and leaves the second alone; closing the second's is handled.
     func testACloseForAnEndedShowingIsDropped() async throws {
-        let run = try await Run(plan: Self.leavesPlan)
+        let run = try Run(plan: Self.leavesPlan)
         do {
             await run.edge.start(event: "go", now: run.now)
+            try await run.layOut()
             try await run.settle()
             let firstShown = await run.edge.shown
             let first = try XCTUnwrap(firstShown)
-            await run.edge.handleReported("tap_close", now: run.advance())
+            let card = try await run.look("first-card")
+            try await run.tap(card.center(of: "Not now"))
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")])
 
             await run.edge.start(event: "go", now: run.advance())
+            try await run.layOut()
             try await run.settle()
             let secondShown = await run.edge.shown
             let second = try XCTUnwrap(secondShown)
@@ -592,37 +498,33 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// An engine event belongs to the showing the frame stepped. One frame
-    /// whose pointers tap "Not now" and then "About the trial": "Not now"
-    /// dismisses the paywall, so "About the trial", reported for the same
-    /// showing, is dropped rather than heard by nothing or by another.
-    func testAnEventReportedAfterItsShowingEndedInTheSameFrameIsDropped() async throws {
-        let run = try await Run()
+    /// One frame whose pointers tap "Not now" and then "About the trial":
+    /// "Not now" dismisses the paywall, so the second tap, on a paywall
+    /// the machine no longer shows, changes nothing. Nothing faults, the
+    /// owner hears the one dismissal, and the record waits for the evening
+    /// offer.
+    func testATapAfterItsPaywallWasDismissedInTheSameFrameChangesNothing() async throws {
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
+            let open = try await run.look("open")
             let written = await run.edge.log.count
-            func center(_ box: [Int]) -> (Float, Float) {
-                (Float(box[0] + box[2]) / 2, Float(box[1] + box[3]) / 2)
-            }
-            let (closeX, closeY) = center(Box.close)
-            let (detailsX, detailsY) = center(Box.details)
             let touched = await run.edge.shown
-            let frame = await run.edge.frame(pointers: [
-                NuxieNativePointerEvent(kind: .down, x: closeX, y: closeY),
-                NuxieNativePointerEvent(kind: .up, x: closeX, y: closeY),
-                NuxieNativePointerEvent(kind: .down, x: detailsX, y: detailsY),
-                NuxieNativePointerEvent(kind: .up, x: detailsX, y: detailsY),
-            ], on: touched, elapsedSeconds: Self.tick, now: run.advance())
-            XCTAssertEqual(frame.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_close", "tap_details"])
+            await run.edge.frame(pointers: try Run.press(at: open.center(of: "Not now"))
+                                     + Run.press(at: open.center(of: "About the trial")),
+                                 on: touched, elapsedSeconds: Self.tick, now: run.advance())
             let after = await Array(run.edge.log.dropFirst(written))
-            XCTAssertTrue(after.contains(.reported("tap_close")), "\(after)")
-            XCTAssertTrue(after.contains(.dismiss(reason: "paywall_closed")), "\(after)")
-            XCTAssertFalse(after.contains(.reported("tap_details")), "\(after)")
-            XCTAssertTrue(after.contains(.droppedReport("tap_details")), "\(after)")
+            XCTAssertEqual(after.filter { if case .dismiss = $0 { return true }; return false },
+                           [.dismiss(reason: "paywall_closed")], "\(after)")
             let noFault = await run.edge.fault
-            XCTAssertNil(noFault)
+            XCTAssertNil(noFault, "\(after)")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            let stack = await run.edge.stack
+            XCTAssertEqual(stack, [], "the paywall is still shown")
+            let waiting = try await run.edge.recordOpen()
+            XCTAssertTrue(waiting, "the record waits for the evening offer")
             try await run.close()
         } catch {
             try? await run.close()
@@ -633,30 +535,32 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// A touch belongs to the showing the person touched. "Not now" ends
     /// the paywall, and while its sheet animates away the person taps "Not
     /// now" again: those pointers touched a showing that has ended, so they
-    /// go to no one. The frames still run, the Screen reports nothing, and
-    /// the record waits for the evening offer as before, with no fault.
+    /// go to no one. The frames still run, nothing reports, and the record
+    /// waits for the evening offer as before, with no fault.
     func testATouchOnAPaywallThatHasGoneGoesNowhere() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
             let firstShown = await run.edge.shown
             let first = try XCTUnwrap(firstShown)
-            _ = try await run.tap(Box.close)
+            let open = try await run.look("open")
+            let notNow = try open.center(of: "Not now")
+            try await run.tap(notNow)
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
             let reports = run.owner.reports.count
             let written = await run.edge.log.count
 
-            let reported = try await run.tap(Box.close, touching: first)
+            let reported = try await run.tap(notNow, touching: first)
             XCTAssertEqual(reported, [], "the departing paywall took the touch")
             let after = await Array(run.edge.log.dropFirst(written))
             XCTAssertEqual(after.filter { if case .droppedTouches = $0 { return true }; return false },
                            [.droppedTouches(first), .droppedTouches(first)], "each frame's pointers go to no one")
-            XCTAssertFalse(after.contains { if case .reported = $0 { return true }; return false }, "\(after)")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
-            let open = try await run.edge.recordOpen()
-            XCTAssertTrue(open, "the record waits for the evening offer")
+            let waiting = try await run.edge.recordOpen()
+            XCTAssertTrue(waiting, "the record waits for the evening offer")
             XCTAssertEqual(run.owner.reports.count, reports, "the owner was told something")
             try await run.close()
         } catch {
@@ -665,37 +569,23 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// One frame whose pointers tap Monthly and then "Not now": Monthly's
-    /// writes are for the paywall that "Not now" dismisses in the same
-    /// frame. They belong to a Screen that is gone by the end of the
-    /// delivery, so none lands: the sheet leaves showing what it showed, and
-    /// the record still holds the person's choice.
-    func testWritesForAPaywallDismissedLaterInTheSameFrameAreDropped() async throws {
-        let run = try await Run()
+    /// One frame whose pointers tap Monthly and then "Not now": the choice
+    /// lands in the record before "Not now" dismisses the paywall in the
+    /// same frame. Nothing faults and the owner hears the one dismissal.
+    func testAChoiceAndADismissalInOneFrameBothReachTheRecord() async throws {
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
+            let open = try await run.look("open")
             let written = await run.edge.log.count
-            func center(_ box: [Int]) -> (Float, Float) {
-                (Float(box[0] + box[2]) / 2, Float(box[1] + box[3]) / 2)
-            }
-            let (monthlyX, monthlyY) = center(Box.monthly)
-            let (closeX, closeY) = center(Box.close)
             let touched = await run.edge.shown
-            let frame = await run.edge.frame(pointers: [
-                NuxieNativePointerEvent(kind: .down, x: monthlyX, y: monthlyY),
-                NuxieNativePointerEvent(kind: .up, x: monthlyX, y: monthlyY),
-                NuxieNativePointerEvent(kind: .down, x: closeX, y: closeY),
-                NuxieNativePointerEvent(kind: .up, x: closeX, y: closeY),
-            ], on: touched, elapsedSeconds: Self.tick, now: run.advance())
-            XCTAssertEqual(frame.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_monthly", "tap_close"])
+            await run.edge.frame(pointers: try Run.press(at: open.center(of: "Monthly"))
+                                     + Run.press(at: open.center(of: "Not now")),
+                                 on: touched, elapsedSeconds: Self.tick, now: run.advance())
             let after = await Array(run.edge.log.dropFirst(written))
-            XCTAssertTrue(after.contains(.reported("tap_monthly")), "\(after)")
             XCTAssertTrue(after.contains(.dismiss(reason: "paywall_closed")), "\(after)")
-            XCTAssertEqual(Self.writes(after).map(\.cell), [], "a write landed in a Screen that is gone: \(after)")
-            let cells = try await run.cells()
-            XCTAssertEqual(cells["monthly_selected"], .bool(false))
-            XCTAssertEqual(cells["annual_selected"], .bool(true))
             let plan = try await run.edge.slot("plan")
             XCTAssertEqual(plan, .enumeration("monthly"), "the record holds the choice")
             let noFault = await run.edge.fault
@@ -708,46 +598,33 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// Frames and a tap on another control while the store has not answered
-    /// are handled, in order; the answer, released after, applies its rows
-    /// once, after the tap's.
+    /// A tap on another control while the store has not answered is
+    /// handled at once; the answer, released after, applies once, and its
+    /// changes join the tap's.
     func testATapWhileThePurchaseWaitsIsHandledAndTheAnswerAppliesOnce() async throws {
-        let run = try await Run(holdingStore: true)
+        let run = try Run(holdingStore: true)
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
+            let open = try await run.look("open")
             let written = await run.edge.log.count
-            let buyTap = try await run.tap(Box.buy)
-            XCTAssertEqual(buyTap, ["tap_buy"])
-            let detailsTap = try await run.tap(Box.details)
-            XCTAssertEqual(detailsTap, ["tap_details"])
-            let waiting = try await run.cells()
-            XCTAssertEqual(waiting["buy_busy"], .bool(true), "the button is busy while the store has not answered")
-            XCTAssertEqual(waiting["terms_visible"], .bool(true), "the tap was handled while the store worked")
+            try await run.tap(open.center(of: "Continue"))
+            try await run.tap(open.center(of: "About the trial"))
+            let waiting = try await run.look("waiting")
+            XCTAssertFalse(try waiting.isEnabled("Continue"), "the button is busy while the store has not answered")
+            XCTAssertTrue(waiting.has(Self.termsLine), "the tap was handled while the store worked")
 
             run.store.release()
             await run.edge.storeAnswered()
-            try await run.settle(frames: 2)
+            try await run.settle()
             let after = await Array(run.edge.log.dropFirst(written))
-            let answers = after.indices.filter {
-                if case .answer = after[$0] { return true }
-                return false
-            }
-            XCTAssertEqual(answers.count, 1, "the answer applies once: \(after)")
-            let details = try XCTUnwrap(after.firstIndex(of: .reported("tap_details")))
-            let answer = try XCTUnwrap(answers.first)
-            XCTAssertLessThan(details, answer, "the tap is handled before the answer arrives")
-            let writes = Self.writes(after)
-            XCTAssertEqual(writes.filter { $0.cell == "buy_busy" }.map(\.value), [.bool(true), .bool(false)])
-            XCTAssertEqual(writes.filter { $0.cell == "error_visible" }.map(\.value), [.bool(true)])
-            XCTAssertEqual(writes.filter { $0.cell == "terms_visible" }.map(\.value), [.bool(true)])
-            let answeredWrites = Self.writes(Array(after[answer...]))
-            XCTAssertEqual(Set(answeredWrites.map(\.cell)), ["buy_busy", "error_visible"],
-                           "the answer's rows come after it")
-            let settled = try await run.cells()
-            XCTAssertEqual(settled["buy_busy"], .bool(false))
-            XCTAssertEqual(settled["error_visible"], .bool(true))
-            XCTAssertEqual(settled["terms_visible"], .bool(true))
+            XCTAssertEqual(after.filter { if case .answer = $0 { return true }; return false }.count, 1,
+                           "the answer applies once: \(after)")
+            let settled = try await run.look("settled")
+            XCTAssertTrue(try settled.isEnabled("Continue"), "\(settled.reading)")
+            XCTAssertTrue(settled.has(Self.errorLine), "\(settled.reading)")
+            XCTAssertTrue(settled.has(Self.termsLine), "\(settled.reading)")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertEqual(run.owner.dismissals, [])
@@ -762,34 +639,35 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
 
     /// Requests asked for together, none awaited before the next is asked,
     /// are applied in arrival order, each whole: a pointer down and up on
-    /// Monthly and a frame after (whose `tap_monthly` writes suspend on the
-    /// engine), "About the trial" reported, then a swipe down. Were a
-    /// delivery to start while another is suspended, the swipe down would pop
-    /// the paywall between Monthly's writes, and the rest would fault.
+    /// Monthly, a frame after, a tap on "About the trial", then a swipe
+    /// down. Were a delivery to start while another is suspended, the swipe
+    /// down would pop the paywall inside a step, and the rest would fault.
     ///
     /// The tasks start on the main actor in the order they are made, so each
     /// reaches the edge before the next one is asked.
     @MainActor
     func testRequestsAskedTogetherApplyInArrivalOrderEachWhole() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
+            let open = try await run.look("open")
             let written = await run.edge.log.count
             let edge = run.edge
             let current = await edge.shown
             let shown = try XCTUnwrap(current)
-            let x = Float(Box.monthly[0] + Box.monthly[2]) / 2
-            let y = Float(Box.monthly[1] + Box.monthly[3]) / 2
+            let monthly = try open.center(of: "Monthly")
+            let details = Run.press(at: try open.center(of: "About the trial"))
             let at = run.advance()
             let tick = Self.tick
             let requests = [
-                Task { _ = await edge.frame(pointers: [NuxieNativePointerEvent(kind: .down, x: x, y: y)],
+                Task { _ = await edge.frame(pointers: [Run.pointer(.down, at: monthly)],
                                             on: shown, elapsedSeconds: tick, now: at) },
-                Task { _ = await edge.frame(pointers: [NuxieNativePointerEvent(kind: .up, x: x, y: y)],
+                Task { _ = await edge.frame(pointers: [Run.pointer(.up, at: monthly)],
                                             on: shown, elapsedSeconds: tick, now: at) },
                 Task { _ = await edge.frame(elapsedSeconds: tick, now: at) },
-                Task { await edge.handleReported("tap_details", now: at) },
+                Task { _ = await edge.frame(pointers: details, on: shown, elapsedSeconds: tick, now: at) },
                 Task { await edge.closed(shown, now: at) },
             ]
             for request in requests { await request.value }
@@ -797,23 +675,12 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let after = await Array(edge.log.dropFirst(written))
             let noFault = await edge.fault
             XCTAssertNil(noFault, "\(after)")
-            let whole = await edge.log
-            let presented = try XCTUnwrap(Self.presentedInstance(whole))
-            XCTAssertEqual(after.filter { entry in
-                if case .reported = entry { return true }
-                return Self.isPresentation(entry)
-            }, [.reported("tap_monthly"), .reported("tap_details"), .pop(instance: presented),
-                .end(reason: .finished, fault: nil)])
-            let monthly = try XCTUnwrap(after.firstIndex(of: .reported("tap_monthly")))
-            let details = try XCTUnwrap(after.firstIndex(of: .reported("tap_details")))
-            let pop = try XCTUnwrap(after.firstIndex(of: .pop(instance: presented)))
-            let monthlyWrites = Self.writes(Array(after[monthly..<details]))
-            XCTAssertEqual(monthlyWrites.filter { $0.cell == "monthly_selected" }.map(\.value), [.bool(true)])
-            XCTAssertEqual(monthlyWrites.filter { $0.cell == "annual_selected" }.map(\.value), [.bool(false)])
-            XCTAssertEqual(Self.writes(Array(after[details..<pop])).map(\.cell), ["terms_visible"])
-            XCTAssertEqual(Self.writes(Array(after[pop...])).count, 0)
-            let open = try await edge.recordOpen()
-            XCTAssertFalse(open)
+            XCTAssertEqual(after.filter(Self.isPresentation),
+                           [.pop(instance: shown.instance), .end(reason: .finished, fault: nil)])
+            let plan = try await edge.slot("plan")
+            XCTAssertEqual(plan, .enumeration("monthly"), "the Monthly tap landed before the swipe")
+            let ended = try await edge.recordOpen()
+            XCTAssertFalse(ended)
             XCTAssertEqual(run.owner.dismissals, [])
             try await run.close()
         } catch {
@@ -831,7 +698,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// wake. (The machine restates its wake moment, none until "Not now",
     /// in each delivery.)
     func testEachDeliveryReportsTheRowsItsOwnerPerforms() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
             let log = await run.edge.log
@@ -844,16 +711,18 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                                                 route: "paywall", presentation: .sheet)
             XCTAssertEqual(shown, [paywall])
             XCTAssertFalse(started.contains(.wakeAt(18 * Self.hour)), "\(started)")
+            try await run.layOut()
             try await run.settle()
+            let open = try await run.look("open")
             let beforeMonthly = run.owner.reports.count
-            _ = try await run.tap(Box.monthly)
+            try await run.tap(open.center(of: "Monthly"))
             for case .delivered(let shownNow, let rows) in run.owner.reports.dropFirst(beforeMonthly) {
                 XCTAssertTrue(rows.allSatisfy { $0 == .wakeAt(nil) }, "a plan tap dismisses nothing: \(rows)")
                 XCTAssertEqual(shownNow, [paywall], "a plan tap changes what is shown")
             }
             XCTAssertNil(run.owner.reports.dropFirst(beforeMonthly).compactMap(\.dismissal).first)
 
-            _ = try await run.tap(Box.close)
+            try await run.tap(open.center(of: "Not now"))
             guard case .delivered(let closedShown, let rows)? = run.owner.reports.last else {
                 return XCTFail("\(run.owner.reports)")
             }
@@ -871,9 +740,10 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// A swipe down's close tells the owner that nothing is shown and the
     /// record's normal end, with no dismissal.
     func testASwipeDownReportsThePopAndTheEnd() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
             let current = await run.edge.shown
             let shown = try XCTUnwrap(current)
@@ -895,9 +765,10 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// fault: here the engine's step fails because its Screen was closed
     /// under the edge. The log says only that the paywall went.
     func testAnEngineStepFailureTellsTheOwnerTheFault() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
             let written = await run.edge.log.count
             let stack = await run.edge.stack
@@ -921,30 +792,43 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     // MARK: Waking and resting
 
     /// "Not now" leaves the evening offer owed and asks for a wake at 18:00.
-    /// Delivered then, the wake runs Stillwater's `show_offer`, which goes
-    /// to the `offer` route: a route this edge has no artwork for, so the
-    /// wake ends in the one fault path, and the owner hears that fault once.
-    func testAWakeAtTheEveningMomentIsDeliveredToTheMachine() async throws {
-        let run = try await Run()
+    /// Delivered then, the wake runs Stillwater's `show_offer`, which
+    /// presents the offer as a sheet: the edge opens it from the session's
+    /// records, as it opened the paywall, and the owner hears it shown.
+    func testAWakeAtTheEveningMomentOpensTheOffer() async throws {
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            _ = try await run.tap(Box.close)
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Not now"))
             let asked = await run.edge.log
             XCTAssertTrue(asked.contains(.wakeAt(18 * Self.hour)), "\(asked)")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
             let written = asked.count
 
-            await run.edge.wake(now: 18 * Self.hour)
-            let recorded = await run.edge.fault
-            let fault = try XCTUnwrap(recorded, "the wake reached the machine")
-            XCTAssertEqual(fault.code, "edge.no-artwork")
-            XCTAssertTrue(fault.detail.contains("offer"), fault.detail)
-            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed"), .fault(fault)])
-            XCTAssertEqual(run.owner.reports.last, .fault(fault), "the fault reaches the owner as its report")
+            run.jump(to: 18 * Self.hour)
+            await run.edge.wake(now: run.now)
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            let stack = await run.edge.stack
+            let offer = try XCTUnwrap(stack.last, "the wake presents nothing")
+            XCTAssertEqual(offer.route, "offer")
+            XCTAssertEqual(offer.presentation, .sheet)
             let after = await Array(run.edge.log.dropFirst(written))
-            XCTAssertFalse(after.contains { if case .opened = $0 { return true }; return false },
-                           "an offer with no artwork was opened: \(after)")
+            XCTAssertTrue(after.contains(.opened(offer.shown)), "\(after)")
+            guard case .delivered(let shown, _)? = run.owner.reports.last else {
+                return XCTFail("\(run.owner.reports)")
+            }
+            XCTAssertEqual(shown, [offer])
+
+            try await run.layOut()
+            try await run.settle()
+            let drawn = try await run.look("offer")
+            XCTAssertTrue(drawn.has("A year of quiet minutes, for less."), "\(drawn.reading)")
+            XCTAssertTrue(try drawn.isEnabled("Claim the offer"), "\(drawn.reading)")
+            XCTAssertTrue(drawn.has("No thanks"), "\(drawn.reading)")
             try await run.close()
         } catch {
             try? await run.close()
@@ -958,25 +842,27 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// for still reaches it afterwards. So a host that comes back late
     /// delivers each wake at its own moment, not at the clock's.
     func testAWakeAtAMomentTheRecordDidNotAskForChangesNothing() async throws {
-        let run = try await Run()
+        let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            _ = try await run.tap(Box.close)
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Not now"))
             let written = await run.edge.log.count
 
             await run.edge.wake(now: 2 * 24 * Self.hour + Self.nine)
             let after = await Array(run.edge.log.dropFirst(written))
             XCTAssertEqual(after, [], "a wake at another moment is not the one asked for")
-            let open = try await run.edge.recordOpen()
-            XCTAssertTrue(open)
+            let waiting = try await run.edge.recordOpen()
+            XCTAssertTrue(waiting)
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
 
             await run.edge.wake(now: 18 * Self.hour)
-            let recorded = await run.edge.fault
-            XCTAssertEqual(recorded?.code, "edge.no-artwork", "the wake at the moment asked for reached the machine")
+            let route = try await run.edge.topRoute()
+            XCTAssertEqual(route?.route, "offer", "the wake at the moment asked for reached the machine")
             try await run.close()
         } catch {
             try? await run.close()
@@ -985,15 +871,17 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     }
 
     /// "Not now" dismisses the paywall, and the evening's wake starts a
-    /// purchase (in this variant of the plan) that writes no cell: nothing
-    /// is presented. The store answers with no frame running, and only a
-    /// frame delivers an answer: the record takes it with no touch.
-    func testAWakeThatStartsAPurchaseOnTheRowPathMovesTheRecordOnWithNoTouch() async throws {
-        let run = try await Run(plan: Fixture.load().purchasingInTheEvening())
+    /// purchase (in this variant of the plan) with nothing presented. The
+    /// store answers with no frame running, and only a frame delivers an
+    /// answer: the record takes it with no touch.
+    func testAWakeThatStartsAPurchaseWithNothingPresentedMovesTheRecordOnWithNoTouch() async throws {
+        let run = try Run(plan: Fixture.purchasingInTheEvening())
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
             try await run.settle()
-            _ = try await run.tap(Box.close)
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Not now"))
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
             try await run.afterDelivery(onScreen: false)
 
@@ -1013,55 +901,37 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// The edge asks for a frame exactly when it leaves work only a frame
-    /// consumes: a write to show (it shows on the next step) or a store's
-    /// answer to deliver. A purchase in flight is not such work: its answer
-    /// asks when it arrives, so nothing has to run frames while it is held.
-    func testTheEdgeAsksForAFrameExactlyWhenOneHasWorkWaiting() async throws {
-        let run = try await Run(holdingStore: true)
+    /// A purchase in flight is no work a frame consumes: while the store
+    /// holds its answer the edge asks for no frame. The answer asks for the
+    /// frame that delivers it, and frames run as a view runs them show the
+    /// error line, then rest.
+    func testAPurchaseInFlightAsksForNoFrameAndItsAnswerDoes() async throws {
+        let run = try Run(holdingStore: true)
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
-            XCTAssertTrue(run.asks.take(), "the start's writes wait for a step")
-            await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
-            XCTAssertFalse(run.asks.take(), "the first step showed the start's writes")
+            XCTAssertTrue(run.asks.take(), "the start's writes wait for the paywall's first step")
+            try await run.layOut()
             try await run.settle()
+            let open = try await run.look("open")
+            try await run.tap(open.center(of: "Continue"))
+            try await run.afterDelivery(onScreen: true)
             _ = run.asks.take()
-            await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
-            XCTAssertFalse(run.asks.take(), "a quiet frame leaves nothing waiting")
-            let quiet = await run.edge.waitingForFrame()
-            XCTAssertFalse(quiet)
-
-            // The pointer's up reports `tap_buy`: the machine writes the busy
-            // button and calls the store, which holds its answer.
-            let x = Float(Box.buy[0] + Box.buy[2]) / 2
-            let y = Float(Box.buy[1] + Box.buy[3]) / 2
-            let at = run.advance()
-            let touched = await run.edge.shown
-            await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .down, x: x, y: y)],
-                                 on: touched, elapsedSeconds: Self.tick, now: at)
-            _ = run.asks.take()
-            let tapped = await run.edge.frame(pointers: [NuxieNativePointerEvent(kind: .up, x: x, y: y)],
-                                              on: touched, elapsedSeconds: Self.tick, now: at)
-            XCTAssertEqual(tapped.reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }, ["tap_buy"])
-            XCTAssertTrue(run.asks.take(), "the busy button was written")
-            await run.edge.frame(elapsedSeconds: Self.tick, now: at)
-            XCTAssertFalse(run.asks.take(), "a purchase in flight waits on the store, not on a frame")
+            XCTAssertEqual(run.store.calls.map(\.externName), ["purchase"])
             let holding = await run.edge.waitingForFrame()
-            XCTAssertFalse(holding)
+            XCTAssertFalse(holding, "a purchase in flight waits on the store, not on a frame")
+            XCTAssertFalse(run.asks.take(), "a purchase in flight asked for a frame")
 
-            // The answer arrives, asks for the frame that delivers it, and
-            // that frame's delivery asks for the step that shows it.
             run.store.release()
             await run.edge.storeAnswered()
             XCTAssertTrue(run.asks.take(), "the answer asked for its frame")
             let arrived = await run.edge.waitingForFrame()
             XCTAssertTrue(arrived)
-            await run.edge.frame(elapsedSeconds: Self.tick, now: at)
-            XCTAssertTrue(run.asks.take(), "the answer wrote the error line and the button")
-            await run.edge.frame(elapsedSeconds: Self.tick, now: at)
-            XCTAssertFalse(run.asks.take(), "nothing waits once the answer has shown")
+            try await run.runAsAView()
+            let failed = try await run.look("failed")
+            XCTAssertTrue(failed.has(Self.errorLine), "\(failed.reading)")
             let rested = await run.edge.waitingForFrame()
-            XCTAssertFalse(rested)
+            XCTAssertFalse(rested, "work waits once the answer has shown")
+            XCTAssertFalse(run.asks.take(), "an ask is left unanswered at rest")
             try await run.close()
         } catch {
             run.store.release()
@@ -1084,43 +954,45 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }.first
     }
 
-    private static func writes(_ entries: [NuxieMachineEdgeEntry]) -> [(cell: String, value: NuxieMachineValue)] {
-        entries.compactMap { entry in
-            if case .write(let cell, let value) = entry { return (cell, value) }
-            return nil
-        }
-    }
-
     // MARK: Pixels
 
-    /// Whether the region `box` of `after` differs from `before`.
-    private static func changes(_ before: Data, _ after: Data, _ box: [Int]) -> Bool {
-        moved(before, after, in: box) >= changedAtLeast
+    /// Whether `region` of `after` differs from `before`.
+    private static func changes(_ before: Look, _ after: Look, _ region: CGRect) -> Bool {
+        moved(before, after, in: region) >= changedAtLeast
     }
 
-    /// Whether the region `box` of `after` is the region of `before`.
-    private static func holds(_ before: Data, _ after: Data, _ box: [Int]) -> Bool {
-        moved(before, after, in: box) <= steadyAtMost
+    /// Whether `region` of `after` is the region of `before`.
+    private static func holds(_ before: Look, _ after: Look, _ region: CGRect) -> Bool {
+        moved(before, after, in: region) <= steadyAtMost
     }
 
-    /// Whether everything outside the boxes `except` holds. Each box grows
-    /// by `edge` on every side: a card's border draws on the box's last row
-    /// and column, which the box itself leaves out.
-    private static func holds(_ before: Data, _ after: Data, outside except: [[Int]]) -> Bool {
-        let grown = except.map { [$0[0] - edge, $0[1] - edge, $0[2] + edge, $0[3] + edge] }
-        return moved(before, after, in: [0, 0, width, height], except: grown) <= steadyAtMost
+    /// Whether everything outside the regions `except` holds. Each region
+    /// grows by `edge` on every side.
+    private static func holds(_ before: Look, _ after: Look, outside except: [CGRect]) -> Bool {
+        let grown = except.map { $0.insetBy(dx: -edge, dy: -edge) }
+        return moved(before, after, in: CGRect(origin: .zero, size: Look.size), except: grown) <= steadyAtMost
     }
 
-    /// How many pixels in `box`, and not in `except`, move by more than
-    /// `difference` in some channel.
-    private static func moved(_ before: Data, _ after: Data, in box: [Int], except: [[Int]] = []) -> Int {
-        precondition(before.count == after.count && before.count == width * height * 4)
+    /// How many pixels in `region`, and not in `except`, move by more than
+    /// `difference` in some channel. Regions are in points.
+    private static func moved(_ before: Look, _ after: Look, in region: CGRect, except: [CGRect] = []) -> Int {
+        let scale = CGFloat(Look.scale)
+        let width = Int(Look.size.width) * Look.scale
+        let height = Int(Look.size.height) * Look.scale
+        precondition(before.pixels.count == after.pixels.count && before.pixels.count == width * height * 4)
+        let pixelRegion = CGRect(x: region.minX * scale, y: region.minY * scale,
+                                 width: region.width * scale, height: region.height * scale)
+            .intersection(CGRect(x: 0, y: 0, width: width, height: height))
+        let left = except.map {
+            CGRect(x: $0.minX * scale, y: $0.minY * scale, width: $0.width * scale, height: $0.height * scale)
+        }
         var count = 0
-        before.withUnsafeBytes { first in
-            after.withUnsafeBytes { second in
-                for y in box[1]..<box[3] {
-                    for x in box[0]..<box[2] {
-                        if except.contains(where: { x >= $0[0] && x < $0[2] && y >= $0[1] && y < $0[3] }) { continue }
+        before.pixels.withUnsafeBytes { first in
+            after.pixels.withUnsafeBytes { second in
+                for y in Int(pixelRegion.minY)..<Int(pixelRegion.maxY) {
+                    for x in Int(pixelRegion.minX)..<Int(pixelRegion.maxX) {
+                        let point = CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)
+                        if left.contains(where: { $0.contains(point) }) { continue }
                         let at = (y * width + x) * 4
                         for channel in 0..<4 where abs(Int(first[at + channel]) - Int(second[at + channel])) > difference {
                             count += 1
@@ -1134,9 +1006,81 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     }
 }
 
+// MARK: - One look at the paywall
+
+/// The top presentation drawn at twice its layout size, read back as BGRA,
+/// with its semantic snapshot: the nodes a screen reader reads, in reading
+/// order, with where each is in points.
+struct Look {
+    static let scale = 2
+    static let size = CGSize(width: 390, height: 844)
+
+    let pixels: Data
+    let nodes: [NuxieNativeSemanticNode]
+
+    struct Missing: Error, CustomStringConvertible {
+        let words: String
+        let reading: [String]
+        var description: String { "nothing reads \"\(words)\" among \(reading)" }
+    }
+
+    /// The nodes an element stands for, as the Screen's accessibility
+    /// container shows them: those with a role, and groups only when named.
+    private var read: [NuxieNativeSemanticNode] {
+        nodes.filter { node in
+            switch NuxieNativeSemanticRole(rawValue: node.role) {
+            case nil, .none?: return false
+            case .group?, .list?, .listItem?, .tabList?, .dialog?, .alertDialog?, .radioGroup?:
+                return !node.label.isEmpty
+            default: return true
+            }
+        }
+    }
+
+    /// What a screen reader reads, top to bottom: each element's role and
+    /// words, and "not enabled" for a disabled one.
+    var reading: [String] {
+        read.map { node in
+            let role = NuxieNativeSemanticRole(rawValue: node.role).map { "\($0)" } ?? "\(node.role)"
+            let disabled = node.stateFlags & NuxieNativeSemanticNode.disabled != 0 ? ", not enabled" : ""
+            return "\(role) \"\(node.label)\"\(disabled)"
+        }
+    }
+
+    /// Whether some element's words begin with `words`.
+    func has(_ words: String) -> Bool {
+        read.contains { $0.label.hasPrefix(words) }
+    }
+
+    /// The first element whose words begin with `words`: a button is named
+    /// by all the words beneath it, so a plan card's name is followed by its
+    /// price.
+    func node(_ words: String) throws -> NuxieNativeSemanticNode {
+        guard let found = read.first(where: { $0.label.hasPrefix(words) }) else {
+            throw Missing(words: words, reading: reading)
+        }
+        return found
+    }
+
+    func isEnabled(_ words: String) throws -> Bool {
+        try node(words).stateFlags & NuxieNativeSemanticNode.disabled == 0
+    }
+
+    /// Where the element is, in points.
+    func region(of words: String) throws -> CGRect {
+        try node(words).bounds
+    }
+
+    /// Where an activation presses the element: its center, in points.
+    func center(of words: String) throws -> CGPoint {
+        let bounds = try region(of: words)
+        return CGPoint(x: bounds.midX, y: bounds.midY)
+    }
+}
+
 // MARK: - One run of the script
 
-/// A fresh session and Screen, its clock, and what its store and owner heard.
+/// A fresh session, its clock, and what its store and owner heard.
 private final class Run {
     let edge: NuxieMachineEdge
     let store: RecordingStore
@@ -1144,21 +1088,17 @@ private final class Run {
     /// The edge's asks for a frame, as a Screen's view hears them.
     let asks: FrameAskCount
     private(set) var now: Int64 = 9 * 3_600_000
-    private var frames = 0
+    private var looked = 0
 
-    /// Stillwater's plan over its Screen, or `plan` over the same Screen.
-    /// A holding store answers each call only when the test releases it,
-    /// and `answering` names an outcome for an extern in place of the
-    /// stand-in's.
+    /// Stillwater's plan, or `plan`. A holding store answers each call only
+    /// when the test releases it, and `answering` names an outcome for an
+    /// extern in place of the stand-in's.
     init(plan: NuxieMachinePlanSource? = nil, holdingStore: Bool = false,
-         answering: [String: String] = [:]) async throws {
-        let fixture = try Fixture.load()
+         answering: [String: String] = [:]) throws {
         let store = RecordingStore(holds: holdingStore, answering: answering)
         self.store = store
         let owner = self.owner
-        edge = try await NuxieMachineEdge(
-            plan: plan ?? fixture.plan, screen: fixture.screen, store: store,
-            onReport: { owner.heard($0) })
+        edge = try NuxieMachineEdge(plan: plan ?? Fixture.load(), store: store, onReport: { owner.heard($0) })
         asks = FrameAskCount(edge)
     }
 
@@ -1168,16 +1108,26 @@ private final class Run {
         now = max(now, moment)
     }
 
-    /// The clock a second on, as the Mac test spaces its calls.
+    /// The clock a second on.
     func advance() -> Int64 {
         now += 1000
         return now
     }
 
-    /// Frames with no pointer, for the writes of the last frame to show.
+    /// Lay the top presentation out at a phone's size in points and size
+    /// its renderer for a frame drawn at twice that, as a Screen's view
+    /// does before its first step.
+    func layOut() async throws {
+        let screen = try await top()
+        try await screen.setLayoutSize(width: Float(Look.size.width), height: Float(Look.size.height))
+        _ = try await screen.resize(pixelWidth: UInt32(Look.scale) * UInt32(Look.size.width),
+                                    pixelHeight: UInt32(Look.scale) * UInt32(Look.size.height))
+    }
+
+    /// Frames with no pointer.
     func settle(frames count: Int = 3) async throws {
         for _ in 0..<count {
-            await edge.frame(elapsedSeconds: 1.0 / 60.0, now: now)
+            await edge.frame(elapsedSeconds: StillwaterPaywallEdgeTests.tick, now: now)
         }
     }
 
@@ -1186,68 +1136,69 @@ private final class Run {
     /// animation asks for no frame either.
     func afterDelivery(onScreen: Bool) async throws {
         try await settleAsAView(edge, asks: asks, keepGoing: false, onScreen: onScreen,
-                                now: { self.now }, elapsedSeconds: 1.0 / 60.0)
+                                now: { self.now }, elapsedSeconds: StillwaterPaywallEdgeTests.tick)
     }
 
-    /// A pointer down and up at the center of `box`, a second after the
-    /// last call, each in its own frame, then `framesAfter` frames with no
-    /// pointer. The Screen's named events reported in all of them (the
-    /// engine's reserved and unnamed ones left out, as the edge leaves them).
-    func tap(_ box: [Int], framesAfter: Int = 3) async throws -> [String] {
-        try await tap(box, touching: edge.shown, framesAfter: framesAfter)
+    /// Frames run as a view runs them, for the asks made so far.
+    func runAsAView() async throws {
+        try await settleAsAView(edge, asks: asks, keepGoing: true, onScreen: true,
+                                now: { self.now }, elapsedSeconds: StillwaterPaywallEdgeTests.tick)
+    }
+
+    /// A press and release at `point`, in points on the Screen.
+    static func press(at point: CGPoint) -> [NuxieNativePointerEvent] {
+        [pointer(.down, at: point), pointer(.up, at: point)]
+    }
+
+    static func pointer(_ kind: NuxieNativePointerKind, at point: CGPoint) -> NuxieNativePointerEvent {
+        NuxieNativePointerEvent(kind: kind, x: Float(point.x), y: Float(point.y))
+    }
+
+    /// A pointer down and up at `point`, a second after the last call, each
+    /// in its own frame, then `framesAfter` frames with no pointer, on the
+    /// presentation shown now. What the engine reported in all of them.
+    @discardableResult
+    func tap(_ point: CGPoint, framesAfter: Int = 3) async throws -> [String] {
+        try await tap(point, touching: edge.shown, framesAfter: framesAfter)
     }
 
     /// The same tap, on the Screen of the showing `touched`: the one the
     /// person's view showed when the pointers arrived.
-    func tap(_ box: [Int], touching touched: NuxieMachineShown?, framesAfter: Int = 3) async throws -> [String] {
-        let x = Float(box[0] + box[2]) / 2
-        let y = Float(box[1] + box[3]) / 2
+    @discardableResult
+    func tap(_ point: CGPoint, touching touched: NuxieMachineShown?, framesAfter: Int = 3) async throws -> [String] {
         let at = advance()
         var reported: [String] = []
         for kind in [NuxieNativePointerKind.down, .up] {
-            reported += await edge.frame(pointers: [NuxieNativePointerEvent(kind: kind, x: x, y: y)],
-                                         on: touched, elapsedSeconds: 1.0 / 60.0, now: at).reported
+            reported += await edge.frame(pointers: [Self.pointer(kind, at: point)], on: touched,
+                                         elapsedSeconds: StillwaterPaywallEdgeTests.tick, now: at).reported
         }
         for _ in 0..<framesAfter {
-            reported += await edge.frame(elapsedSeconds: 1.0 / 60.0, now: at).reported
+            reported += await edge.frame(elapsedSeconds: StillwaterPaywallEdgeTests.tick, now: at).reported
         }
-        return reported.filter { !$0.hasPrefix("$") && !$0.isEmpty }
+        return reported
     }
 
-    /// The writes the edge made after its first `count` log entries.
-    func writes(since count: Int) async -> [(cell: String, value: NuxieMachineValue)] {
-        await edge.log.dropFirst(count).compactMap { entry in
-            if case .write(let cell, let value) = entry { return (cell, value) }
-            return nil
-        }
-    }
-
-    /// The Screen's cells as the engine holds them now.
-    func cells() async throws -> [String: NuxieNativeViewModelValue] {
-        let screen = await edge.screen()
-        let runtime = try XCTUnwrap(screen, "the edge has a Screen")
-        let snapshot = try await runtime.snapshot()
-        guard case .referencedInstance(let state)? = snapshot.values.first(where: {
-            $0.ownerInstanceID == snapshot.rootInstanceID && $0.name == "state"
-        })?.value else { return [:] }
-        var cells: [String: NuxieNativeViewModelValue] = [:]
-        for value in snapshot.values where value.ownerInstanceID == state { cells[value.name] = value.value }
-        return cells
-    }
-
-    /// The Screen drawn now with Metal, read back as BGRA, and kept as a PNG
-    /// attachment named `stillwater-paywall-<name>`.
-    func frame(_ name: String) async throws -> Data {
-        frames += 1
-        let screen = await edge.screen()
-        let runtime = try XCTUnwrap(screen, "the edge has a Screen")
-        let pixels = try await Pixels.render(runtime, width: 390, height: 844)
-        try await Pixels.attach(pixels, width: 390, height: 844, name: "stillwater-paywall-\(frames)-\(name)")
-        return pixels
+    /// The top presentation drawn now with its semantic snapshot, and kept
+    /// as a PNG attachment named `stillwater-<n>-<name>`.
+    func look(_ name: String) async throws -> Look {
+        looked += 1
+        let runtime = try await top()
+        let width = Look.scale * Int(Look.size.width)
+        let height = Look.scale * Int(Look.size.height)
+        let (pixels, semantics) = try await Pixels.render(runtime, width: width, height: height,
+                                                          scale: Float(Look.scale), capturesSemantics: true)
+        try await Pixels.attach(pixels, width: width, height: height, name: "stillwater-\(looked)-\(name)")
+        let capture = try XCTUnwrap(semantics, "the frame has no semantic snapshot")
+        return Look(pixels: pixels, nodes: capture.tree.visibleReadingOrder)
     }
 
     func close() async throws {
         try await edge.close()
+    }
+
+    private func top() async throws -> NuxieNativeRuntime {
+        let screen = await edge.screen()
+        return try XCTUnwrap(screen, "nothing is presented")
     }
 }
 
@@ -1328,48 +1279,44 @@ private final class Owner: @unchecked Sendable {
 
 // MARK: - The fixture
 
-/// `Fixtures/stillwater-paywall`: the published Screen, Stillwater's four
-/// `.nux` files, and the System fonts the publisher's report names. The
-/// presenter's checks open the same Screen.
-struct Fixture {
-    let plan: NuxieMachinePlanSource
-    let screen: NuxieMachineScreenSource
+/// `Fixtures/stillwater`: Stillwater's four `.nux` files and the plan's
+/// header, copied from the parent repository's compiler fixtures. The
+/// host app bundles the same files.
+enum Fixture {
+    private final class Anchor {}
 
-    static func load() throws -> Fixture {
-        func url(_ name: String) throws -> URL {
+    private struct Provenance: Decodable {
+        struct Plan: Decodable {
+            let root: String
+            let app: String
+            let experience: String
+            let version: UInt32
+        }
+        let plan: Plan
+    }
+
+    static func load() throws -> NuxieMachinePlanSource {
+        func data(_ name: String) throws -> Data {
             let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
-            return try XCTUnwrap(Bundle(for: Run.self).url(
-                forResource: parts[0], withExtension: parts[1], subdirectory: "stillwater-paywall"),
-                "the test bundle carries stillwater-paywall/\(name)")
+            let url = try XCTUnwrap(Bundle(for: Anchor.self).url(
+                forResource: parts[0], withExtension: parts[1], subdirectory: "stillwater"),
+                "the test bundle carries stillwater/\(name)")
+            return try Data(contentsOf: url)
         }
-        struct Provenance: Decodable {
-            struct Font: Decodable {
-                let authoredAssetId: UInt32
-                let assetUniqueName: String
-                let weight: String
-                let style: String
-            }
-            let fonts: [Font]
-        }
-        let provenance = try JSONDecoder().decode(Provenance.self, from: Data(contentsOf: url("provenance.json")))
+        let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
         let files = try ["main.nux", "paywall.nux", "screens.nux", "done.nux"].map {
-            NuxieMachineSourceFile(path: $0, text: try String(contentsOf: url($0), encoding: .utf8))
+            NuxieMachineSourceFile(path: $0, text: String(decoding: try data($0), as: UTF8.self))
         }
-        return Fixture(
-            plan: NuxieMachinePlanSource(files: files, root: "main", app: "app", experience: "stillwater", version: 1),
-            screen: NuxieMachineScreenSource(
-                bytes: try Data(contentsOf: url("screen.riv")), artboard: "paywall", route: "paywall",
-                pixelWidth: 390, pixelHeight: 844,
-                systemFonts: provenance.fonts.map {
-                    NuxieMachineSystemFont(authoredAssetID: $0.authoredAssetId, assetUniqueName: $0.assetUniqueName,
-                                           weight: $0.weight, style: $0.style)
-                }))
+        return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
+                                      experience: provenance.plan.experience, version: provenance.plan.version)
     }
 
     /// Stillwater's plan with the evening's `show_offer` starting a purchase
-    /// of the offer in place of presenting it, which this Screen has no
-    /// artwork for. Its own tests, which expect the offer, are left out.
-    func purchasingInTheEvening() throws -> NuxieMachinePlanSource {
+    /// of the offer in place of presenting it, so the wake moves the record
+    /// on with nothing presented. Its own tests, which expect the offer, are
+    /// left out.
+    static func purchasingInTheEvening() throws -> NuxieMachinePlanSource {
+        let plan = try load()
         let presents = "  action show_offer\n    offer_due = false\n    go(offer)\n"
         let purchases = "  action show_offer\n    offer_due = false\n"
             + "    purchase(catalog[annual_offer], completed=go(done, replace), failed=mark_failed)\n"
@@ -1388,9 +1335,11 @@ struct Fixture {
 // MARK: - Reading frames back
 
 enum Pixels {
-    /// One frame of the engine's Screen into a drawable, read back as BGRA
-    /// rows, as the SDK's native runtime tests read theirs.
-    static func render(_ runtime: NuxieNativeRuntime, width: Int, height: Int) async throws -> Data {
+    /// One frame of the engine's Screen into a drawable at `scale` pixels a
+    /// point, read back as BGRA rows, as the SDK's native runtime tests read
+    /// theirs; with `capturesSemantics`, also its semantic snapshot.
+    static func render(_ runtime: NuxieNativeRuntime, width: Int, height: Int, scale: Float,
+                       capturesSemantics: Bool) async throws -> (Data, NuxieNativeSemanticCapture?) {
         let device = try await runtime.metalDevice().value
         let layer = CAMetalLayer()
         layer.device = device
@@ -1404,19 +1353,19 @@ enum Pixels {
         }
         let bytesPerRow = (width * 4 + 255) & ~255
         let buffer = try XCTUnwrap(device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared))
-        let readback = NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: bytesPerRow)
         let drawn = Signal()
-        let outcome = try await runtime.render(layoutScaleFactor: 1,
+        let frame = try await runtime.renderFrame(layoutScaleFactor: scale,
             drawable: .available(NuxieNativeDrawable(drawable)), clearColor: 0xFF00_0000,
-            readback: readback, completion: { drawn.fire() })
+            readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: bytesPerRow),
+            capturesSemantics: capturesSemantics, completion: { drawn.fire() })
         try await drawn.wait(seconds: 2)
-        XCTAssertEqual(outcome.disposition, .presented)
+        XCTAssertEqual(frame.outcome.disposition, .presented)
         let source = buffer.contents().assumingMemoryBound(to: UInt8.self)
         var pixels = Data(capacity: width * height * 4)
         for row in 0..<height {
             pixels.append(source + row * bytesPerRow, count: width * 4)
         }
-        return pixels
+        return (pixels, frame.semantics)
     }
 
     /// The BGRA frame as a PNG attachment kept with the test's results.

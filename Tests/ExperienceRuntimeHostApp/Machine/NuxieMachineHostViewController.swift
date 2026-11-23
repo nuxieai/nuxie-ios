@@ -7,9 +7,10 @@ import UIKit
 
 /// A plain app screen at the end of onboarding. "Finish onboarding" starts a
 /// record with the event `onboarding_completed`, standing in for the SDK
-/// seeing the app's own event, and the machine's `present` row opens
-/// Stillwater's paywall as a sheet. Two lines say what the record holds:
-/// the selected plan, read from the session's root slot, and the record's
+/// seeing the app's own event, and the machine opens Stillwater's paywall
+/// as a sheet. The paywall is drawn from `paywall.nux` alone, compiled on
+/// this phone, and the machine writes it from inside the engine's step. Two lines say what the record holds: the
+/// selected plan, read from the session's root slot, and the record's
 /// state.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
@@ -80,9 +81,8 @@ public final class NuxieMachineHostViewController: UIViewController {
         self.presenter = presenter
         Task { @MainActor [weak self] in
             do {
-                let fixture = try NuxieMachineHostFixture.load(from: .main)
-                await presenter.start(plan: fixture.plan, screen: fixture.screen, store: NuxieMachineStandInStore(),
-                                      event: "onboarding_completed")
+                let plan = try NuxieMachineStillwaterFixture.load(from: .main)
+                await presenter.start(plan: plan, store: NuxieMachineSlowStore(), event: "onboarding_completed")
             } catch {
                 self?.recordLabel.text = "Record: the fixture did not load (\(error))"
             }
@@ -95,14 +95,22 @@ public final class NuxieMachineHostViewController: UIViewController {
     }
 }
 
-/// Stillwater's paywall as the staged host app bundles it under
-/// `stillwater-paywall/`: the published Screen, the four `.nux` files, and
-/// the System fonts the publisher's report names. The same files the
-/// machine's simulator suite uses.
-struct NuxieMachineHostFixture {
-    let plan: NuxieMachinePlanSource
-    let screen: NuxieMachineScreenSource
+/// A purchase that takes a moment, as a store's own sheet does: the
+/// stand-in store's answer (`failed`), given a second and a half after the
+/// call, so a person sees the paywall while it buys.
+struct NuxieMachineSlowStore: NuxieMachineStore {
+    private let answering = NuxieMachineStandInStore()
 
+    func perform(_ call: NuxieMachineCall) async throws -> String {
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        return try await answering.perform(call)
+    }
+}
+
+/// Stillwater as the staged host app bundles it under `stillwater/`: its
+/// four `.nux` files and the plan's header. The same files the machine's
+/// simulator suite uses.
+enum NuxieMachineStillwaterFixture {
     private struct Provenance: Decodable {
         struct Plan: Decodable {
             let root: String
@@ -110,44 +118,27 @@ struct NuxieMachineHostFixture {
             let experience: String
             let version: UInt32
         }
-        struct Font: Decodable {
-            let authoredAssetId: UInt32
-            let assetUniqueName: String
-            let weight: String
-            let style: String
-        }
         let plan: Plan
-        let fonts: [Font]
     }
 
     struct Missing: Error, CustomStringConvertible {
         let name: String
-        var description: String { "stillwater-paywall/\(name) is not in the app bundle" }
+        var description: String { "stillwater/\(name) is not in the app bundle" }
     }
 
-    static func load(from bundle: Bundle) throws -> NuxieMachineHostFixture {
+    static func load(from bundle: Bundle) throws -> NuxieMachinePlanSource {
         func data(_ name: String) throws -> Data {
             let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
             guard let url = bundle.url(forResource: parts[0], withExtension: parts[1],
-                                       subdirectory: "stillwater-paywall") else { throw Missing(name: name) }
+                                       subdirectory: "stillwater") else { throw Missing(name: name) }
             return try Data(contentsOf: url)
         }
         let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
         let files = try ["main.nux", "paywall.nux", "screens.nux", "done.nux"].map {
             NuxieMachineSourceFile(path: $0, text: String(decoding: try data($0), as: UTF8.self))
         }
-        return NuxieMachineHostFixture(
-            plan: NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
-                                         experience: provenance.plan.experience, version: provenance.plan.version),
-            // The Screen opens at its artboard's own size; the view
-            // controller lays it out again at the sheet's size.
-            screen: NuxieMachineScreenSource(
-                bytes: try data("screen.riv"), artboard: "paywall", route: "paywall",
-                pixelWidth: 390, pixelHeight: 844,
-                systemFonts: provenance.fonts.map {
-                    NuxieMachineSystemFont(authoredAssetID: $0.authoredAssetId, assetUniqueName: $0.assetUniqueName,
-                                           weight: $0.weight, style: $0.style)
-                }))
+        return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
+                                      experience: provenance.plan.experience, version: provenance.plan.version)
     }
 }
 

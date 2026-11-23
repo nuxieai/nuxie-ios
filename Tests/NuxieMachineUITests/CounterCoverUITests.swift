@@ -3,9 +3,9 @@ import XCTest
 /// A counter drawn from its Nux alone, as a full screen cover in the runtime
 /// host app, with no person. The host launches with
 /// `--nuxie-machine-counter`; "Open the counter" starts a record with
-/// `opened`, and the machine's `present` row opens the counter. No artwork is
-/// handed over: the Screen is the plan's compiled view, and the machine
-/// writes it from inside the engine's step.
+/// `opened`, and the machine's `present` row opens the counter. The Screen is
+/// the plan's compiled view, and the machine writes it from inside the
+/// engine's step.
 ///
 /// The counter is found the way a screen reader finds it: each line is a
 /// static text and each button a button, made from the engine's semantic

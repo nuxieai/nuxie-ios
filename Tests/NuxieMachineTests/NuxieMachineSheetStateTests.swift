@@ -19,7 +19,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     private let sheet = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 3), route: "second",
                                               presentation: .sheet)
     private let evening: Int64 = 18 * 3_600_000
-    private let noArtwork = NuxieMachineEdgeFault(code: "edge.no-artwork", detail: "present offer")
+    private let noView = NuxieMachineEdgeFault(code: "edge.no-view", detail: "present offer")
 
     private func shows(_ shown: [NuxieMachinePresented], _ rows: [NuxieMachineHostRow] = []) -> State.Event {
         .report(.delivered(shown: shown, rows: rows))
@@ -90,16 +90,16 @@ final class NuxieMachineSheetStateTests: XCTestCase {
 
     // MARK: A fault the log never shows
 
-    /// The evening wake presents a route with no artwork: the edge reports
-    /// only the fault. The record is faulted, the timer is cancelled, and
+    /// The evening wake presents a route whose component has no view: the
+    /// edge reports only the fault. The record is faulted, the timer is cancelled, and
     /// everything stops, with nothing to dismiss.
     func testAFaultReportedWithNoRowsFaultsTheRecord() {
         var state = waitingForEvening()
         XCTAssertEqual(state.dueWake(at: evening), evening)
         XCTAssertEqual(state.handle(.wakeTaken(evening)), [.schedule(nil)])
         XCTAssertEqual(state.record, .open(wakeAt: nil))
-        XCTAssertEqual(state.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork), .release])
-        XCTAssertEqual(state.record, .faulted(noArtwork))
+        XCTAssertEqual(state.handle(.report(.fault(noView))), [.schedule(nil), .stop(noView), .release])
+        XCTAssertEqual(state.record, .faulted(noView))
         XCTAssertEqual(state.natives, [])
         XCTAssertNil(state.dueWake(at: .max))
     }
@@ -226,7 +226,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.handle(shows([paywall], [.wakeAt(evening)])), [])
         XCTAssertEqual(state.handle(.presented(paywall.shown)), [])
         XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [])
-        XCTAssertEqual(state.handle(.hostFault(noArtwork)), [])
+        XCTAssertEqual(state.handle(.hostFault(noView)), [])
         XCTAssertEqual(state.handle(.started), [])
         XCTAssertEqual(state.record, .faulted(noHost))
     }
@@ -346,7 +346,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
 
         var faulted = sheetUp()
         _ = faulted.handle(shows([offer], [.dismiss(reason: "swapped")]))
-        XCTAssertEqual(faulted.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork)])
+        XCTAssertEqual(faulted.handle(.report(.fault(noView))), [.schedule(nil), .stop(noView)])
         XCTAssertEqual(faulted.handle(.dismissed(paywall.shown)), [.release])
         XCTAssertEqual(faulted.natives, [])
     }
@@ -364,7 +364,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertNil(state.dueWake(at: .max))
         XCTAssertEqual(state.handle(shows([], [.end(.exited)])), [.schedule(nil), .stop(nil), .release])
         XCTAssertEqual(state.record, .ended)
-        XCTAssertEqual(state.handle(.report(.fault(noArtwork))), [], "an ended record stays ended")
+        XCTAssertEqual(state.handle(.report(.fault(noView))), [], "an ended record stays ended")
         XCTAssertEqual(state.record, .ended)
     }
 
@@ -387,8 +387,8 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         [.dismissed(paywall.shown), .presented(paywall.shown), .swipeBegan(paywall.shown),
          .swipeEnded(paywall.shown, completed: true), .swipeEnded(paywall.shown, completed: false),
          shows([paywall], [.dismiss(reason: nil), .wakeAt(evening), .end(.finished)]),
-         .report(.fault(noArtwork)), .hostFault(noArtwork), .wakeTaken(evening), .started,
-         .presentFailed(paywall.shown, noArtwork)]
+         .report(.fault(noView)), .hostFault(noView), .wakeTaken(evening), .started,
+         .presentFailed(paywall.shown, noView)]
     }
 
     private func assertReleasedForGood(_ state: State, file: StaticString = #filePath, line: UInt = #line) {
@@ -442,7 +442,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = State()
         _ = state.handle(.started)
         _ = state.handle(shows([paywall]))
-        XCTAssertEqual(state.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork)])
+        XCTAssertEqual(state.handle(.report(.fault(noView))), [.schedule(nil), .stop(noView)])
         XCTAssertFalse(state.released)
         XCTAssertEqual(state.handle(.presented(paywall.shown)), [.dismiss(paywall.shown)])
         XCTAssertFalse(state.released)
@@ -470,12 +470,12 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         assertReleasedForGood(kept)
     }
 
-    /// A fault with nothing shown (the evening wake's route has no artwork),
+    /// A fault with nothing shown (the evening wake's route has no view),
     /// a presentation that failed, and an edge that never opened: the
     /// presenter lets go with the fault.
     func testAFaultWithNoSheetReleasesWithTheFault() {
         var waiting = waitingForEvening()
-        XCTAssertEqual(waiting.handle(.report(.fault(noArtwork))), [.schedule(nil), .stop(noArtwork), .release])
+        XCTAssertEqual(waiting.handle(.report(.fault(noView))), [.schedule(nil), .stop(noView), .release])
         assertReleasedForGood(waiting)
 
         var failed = State()

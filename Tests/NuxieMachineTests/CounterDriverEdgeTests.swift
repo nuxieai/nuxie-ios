@@ -1,8 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import CoreGraphics
 import Foundation
-import Metal
-import QuartzCore
 import Vision
 import XCTest
 import NuxieMachine
@@ -24,8 +22,7 @@ final class CounterDriverEdgeTests: XCTestCase {
 
     /// 1. The writes the presenting step made reach the engine in the
     ///    player's first step: the first frame drawn shows the starting
-    ///    count, and the line under `if` is hidden. No write and no tap
-    ///    crosses Swift.
+    ///    count, and the line under `if` is hidden.
     func testTheFirstFramesWritesLandInTheFirstStep() async throws {
         let run = try Counter(plan: Counter.counterPlan())
         do {
@@ -42,7 +39,6 @@ final class CounterDriverEdgeTests: XCTestCase {
             XCTAssertTrue(first.text.contains("Tapped 0 times"), "Recognized: \(first.text)")
             XCTAssertFalse(first.text.contains("You have counted"), "the line under if shows: \(first.text)")
             XCTAssertTrue(first.text.contains("This line sits below the note."), "Recognized: \(first.text)")
-            try await run.expectNothingCrossedSwift()
             try await run.close()
         } catch {
             try? await run.close()
@@ -86,7 +82,6 @@ final class CounterDriverEdgeTests: XCTestCase {
             XCTAssertFalse(hidden.text.contains("You have counted"), "Recognized: \(hidden.text)")
             let back = try hidden.box(of: "This line sits below the note.")
             XCTAssertEqual(back.minY, below.minY, accuracy: 1, "the line below came back")
-            try await run.expectNothingCrossedSwift()
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             try await run.close()
@@ -319,18 +314,6 @@ final class Counter {
         XCTAssertNil(fault, "the frame faulted")
         drawn += 1
         return try await DrawnFrame.read(presented(), reported: stepped.reported, name: "counter-\(drawn)-\(name)")
-    }
-
-    /// No write landed in a cell and no event was handed to the session by
-    /// Swift: the engine and the session met only inside the step.
-    func expectNothingCrossedSwift() async throws {
-        let log = await edge.log
-        let crossed = log.filter { entry in
-            if case .write = entry { return true }
-            if case .reported = entry { return true }
-            return false
-        }
-        XCTAssertEqual(crossed, [], "Swift carried \(crossed)")
     }
 
     func close() async throws {
@@ -694,8 +677,8 @@ struct DrawnFrame {
         let scale = 2
         let width = Int(size.width) * scale
         let height = Int(size.height) * scale
-        let (pixels, semantics) = try await render(runtime, width: width, height: height, scale: Float(scale),
-                                                   capturesSemantics: capturesSemantics)
+        let (pixels, semantics) = try await Pixels.render(runtime, width: width, height: height, scale: Float(scale),
+                                                          capturesSemantics: capturesSemantics)
         try await Pixels.attach(pixels, width: width, height: height, name: name)
         let image = try XCTUnwrap(image(pixels, width: width, height: height))
         let request = VNRecognizeTextRequest()
@@ -710,37 +693,6 @@ struct DrawnFrame {
                                  width: box.width * size.width, height: box.height * size.height))
         }
         return DrawnFrame(reported: reported, lines: lines, semantics: semantics)
-    }
-
-    private static func render(_ runtime: NuxieNativeRuntime, width: Int, height: Int, scale: Float,
-                               capturesSemantics: Bool) async throws -> (Data, NuxieNativeSemanticCapture?)
-    {
-        let device = try await runtime.metalDevice().value
-        let layer = CAMetalLayer()
-        layer.device = device
-        layer.pixelFormat = .bgra8Unorm
-        layer.framebufferOnly = false
-        layer.drawableSize = CGSize(width: width, height: height)
-        layer.maximumDrawableCount = 2
-        layer.allowsNextDrawableTimeout = true
-        guard let drawable = layer.nextDrawable() else {
-            throw XCTSkip("This host cannot vend a CAMetalDrawable")
-        }
-        let bytesPerRow = (width * 4 + 255) & ~255
-        let buffer = try XCTUnwrap(device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared))
-        let drawn = Signal()
-        let frame = try await runtime.renderFrame(layoutScaleFactor: scale,
-            drawable: .available(NuxieNativeDrawable(drawable)), clearColor: 0xFF00_0000,
-            readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: bytesPerRow),
-            capturesSemantics: capturesSemantics, completion: { drawn.fire() })
-        try await drawn.wait(seconds: 2)
-        XCTAssertEqual(frame.outcome.disposition, .presented)
-        let source = buffer.contents().assumingMemoryBound(to: UInt8.self)
-        var pixels = Data(capacity: width * height * 4)
-        for row in 0..<height {
-            pixels.append(source + row * bytesPerRow, count: width * 4)
-        }
-        return (pixels, frame.semantics)
     }
 
     private static func image(_ pixels: Data, width: Int, height: Int) -> CGImage? {

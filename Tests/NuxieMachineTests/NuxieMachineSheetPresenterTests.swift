@@ -4,15 +4,16 @@ import XCTest
 import NuxieMachine
 
 /// What a sheet presenter owns really goes, on a simulator with no window:
-/// a real presenter over Stillwater's Screen and the engine. The host is a
+/// a real presenter over Stillwater's plan and the engine. The host is a
 /// view controller in no window, so a sheet can never be presented, which
 /// is enough for the two ends a presenter has with no sheet: a record that
 /// faulted (let go of), and a record waiting for its wake (kept, until the
 /// presenter itself is freed).
 ///
 /// The store is an object the checks hold weakly: the edge holds it, the
-/// Screen's view controller holds the edge, and the edge holds the session,
-/// so the store freed means the edge, the session and the Screen are gone.
+/// Screen's view controller holds the edge, and the edge holds the session
+/// and each presentation's player, so the store freed means the edge, the
+/// session and the Screen are gone.
 final class NuxieMachineSheetPresenterTests: XCTestCase {
     /// A plan whose start asks for a wake at the next 18:00 and presents
     /// nothing, as Stillwater's record does after "Not now".
@@ -34,13 +35,13 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
         """
 
-    /// Stillwater's start presents the paywall, and the host cannot present
-    /// it: the record faults with no sheet, and the presenter lets go of
-    /// the Screen, its edge and session once the lane drains. The host's two
-    /// lines still say what happened.
+    /// Stillwater's start presents the paywall, opened from the session's
+    /// records, and the host cannot present it: the record faults with no
+    /// sheet, and the presenter lets go of the Screen, its edge and session
+    /// once the lane drains. The host's two lines still say what happened.
     @MainActor
     func testAFaultWithNoSheetLetsGoOfTheScreenItsEdgeAndSession() async throws {
-        let fixture = try Fixture.load()
+        let plan = try Fixture.load()
         let host = UIViewController()
         let lines = HostLines()
         let presenter = NuxieMachineSheetPresenter(host: host) { lines.status = $0 }
@@ -48,8 +49,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         do {
             let store = ProbeStore()
             edgeStore = store
-            await presenter.start(plan: fixture.plan, screen: fixture.screen, store: store,
-                                  event: "onboarding_completed")
+            await presenter.start(plan: plan, store: store, event: "onboarding_completed")
         }
 
         XCTAssertEqual(presenter.status.record, .fault("edge.no-host"))
@@ -66,7 +66,6 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     /// edge and session go.
     @MainActor
     func testAPresenterFreedWhileItsRecordWaitsLeavesNothingScheduled() async throws {
-        let fixture = try Fixture.load()
         let plan = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: Self.waitsForTheEvening)],
             root: "main", app: "app", experience: "evening", version: 1)
@@ -77,7 +76,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         do {
             let store = ProbeStore()
             edgeStore = store
-            await presenter?.start(plan: plan, screen: fixture.screen, store: store, event: "go")
+            await presenter?.start(plan: plan, store: store, event: "go")
         }
 
         let status = try XCTUnwrap(presenter?.status)

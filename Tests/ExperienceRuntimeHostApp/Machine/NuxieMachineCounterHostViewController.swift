@@ -8,10 +8,9 @@ import UIKit
 
 /// A plain app screen that opens a small counter drawn from its Nux alone.
 /// "Open the counter" starts a record with the event `opened`, and the
-/// machine's `present` row opens the counter as a cover. No artwork is
-/// handed over: the edge draws the plan's own compiled view, and the
-/// machine writes it from inside the engine's step. One line says what the
-/// record holds.
+/// machine's `present` row opens the counter as a cover. The edge draws
+/// the plan's own compiled view, and the machine writes it from inside the
+/// engine's step. One line says what the record holds.
 @MainActor
 public final class NuxieMachineCounterHostViewController: UIViewController {
     private let titleLabel = UILabel()

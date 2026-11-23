@@ -120,38 +120,16 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         super.init()
     }
 
-    /// Compile the plan, open its hand-written artwork, and start a record
-    /// on `event`. What the machine shows is presented natively. A
-    /// presenter starts once.
-    package func start(
-        plan: NuxieMachinePlanSource,
-        screen: NuxieMachineScreenSource,
-        store: any NuxieMachineStore,
-        event: String
-    ) async {
-        await start(event: event) { inbox in
-            try await NuxieMachineEdge(plan: plan, screen: screen, store: store, onReport: { inbox.post($0) })
-        }
-    }
-
     /// Compile the plan and start a record on `event`; each presentation
-    /// the machine shows is drawn from the plan's own views. A presenter
-    /// starts once.
+    /// the machine shows is drawn from the plan's own views and presented
+    /// natively. A presenter starts once.
     package func start(plan: NuxieMachinePlanSource, store: any NuxieMachineStore, event: String) async {
-        await start(event: event) { inbox in
-            try NuxieMachineEdge(plan: plan, store: store, onReport: { inbox.post($0) })
-        }
-    }
-
-    private func start(
-        event: String,
-        opening: (NuxieMachineReportInbox) async throws -> NuxieMachineEdge
-    ) async {
         guard !started else { return }
         started = true
         let edge: NuxieMachineEdge
         do {
-            edge = try await opening(reports)
+            let inbox = reports
+            edge = try NuxieMachineEdge(plan: plan, store: store, onReport: { inbox.post($0) })
         } catch {
             send(.hostFault(error as? NuxieMachineEdgeFault
                 ?? NuxieMachineEdgeFault(code: "edge.open", detail: "\(error)")))
