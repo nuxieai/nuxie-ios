@@ -224,7 +224,7 @@ final class DriverStepOwedEdgeTests: XCTestCase {
             await run.edge.wake(now: moment)
             try await run.afterDelivery()
 
-            let failed = try await run.edge.slot("failed")
+            let failed = try await run.edge.slot("purchase_failed")
             XCTAssertEqual(failed, .bool(true), "the store's answer never reached the record")
             let shown = try await run.look(name: "2-settled-after-the-answer")
             XCTAssertTrue(shown.text.contains("The purchase did not go through."), "Recognized: \(shown.text)")
@@ -253,7 +253,7 @@ final class DriverStepOwedEdgeTests: XCTestCase {
             await run.edge.wake(now: moment)
             try await run.afterDelivery()
 
-            let failed = try await run.edge.slot("failed")
+            let failed = try await run.edge.slot("purchase_failed")
             XCTAssertEqual(failed, .bool(true), "the store's answer never reached the record")
             let route = try await run.edge.topRoute()
             XCTAssertEqual(route?.route, "clock", "the answer presented the view")
@@ -389,7 +389,7 @@ final class Counter {
     /// and the failure shows a line under `if`.
     static func answeredPlan() -> NuxieMachinePlanSource {
         let main = """
-        use products, purchase, store from "nuxie/store"
+        use products, purchase, store, Purchase, PurchaseStatus from "nuxie/store"
         use Paywall from "paywall"
 
         enum Plan annual
@@ -400,24 +400,31 @@ final class Counter {
           derive catalog = products(Plan,
             annual = store(ios="app.pro.yearly", android="pro:yearly"))
 
-          state failed = false
+          state purchase_failed = false
+
+          mutation bought: Purchase  then purchased
 
           entry
             on event "opened"
             do start
 
           routes
-            paywall  Paywall(failed=failed, buy=buy, close=close)  cover
+            paywall  Paywall(failed=purchase_failed, buy=buy, close=close)  cover
 
           action start
             go(paywall)
 
           action buy
-            failed = false
-            purchase(catalog[annual], completed=close, failed=mark_failed)
+            purchase_failed = false
+            send bought = purchase(catalog[annual])
 
-          action mark_failed
-            failed = true
+          action purchased
+            if bought != none
+              if bought.status == completed
+                dismiss("closed")
+                exit
+              else if bought.status == failed
+                purchase_failed = true
 
           action close
             dismiss("closed")
@@ -510,7 +517,7 @@ final class Counter {
     /// waits with nothing presented and the failure presents it.
     static func wakePurchasePlan(presentsFirst: Bool) -> NuxieMachinePlanSource {
         let main = """
-        use products, purchase, store from "nuxie/store"
+        use products, purchase, store, Purchase, PurchaseStatus from "nuxie/store"
         use Clock from "clock"
 
         enum Plan annual
@@ -522,8 +529,10 @@ final class Counter {
             annual = store(ios="app.pro.yearly", android="pro:yearly"))
 
           state armed = false
-          state failed = false
+          state purchase_failed = false
           state line = "Not evening yet."
+
+          mutation bought: Purchase  then purchased
 
           entry
             on event "opened"
@@ -543,12 +552,17 @@ final class Counter {
 
           action ring
             armed = false
-            purchase(catalog[annual], completed=close, failed=mark_failed)
+            send bought = purchase(catalog[annual])
 
-          action mark_failed
-            failed = true
-            line = "The purchase did not go through."
-        \(presentsFirst ? "" : "    go(clock)\n")
+          action purchased
+            if bought != none
+              if bought.status == completed
+                dismiss("closed")
+                exit
+              else if bought.status == failed
+                purchase_failed = true
+                line = "The purchase did not go through."
+        \(presentsFirst ? "" : "        go(clock)\n")
           action give_up
             armed = false
             exit
