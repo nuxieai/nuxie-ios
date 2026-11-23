@@ -82,6 +82,37 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
         XCTAssertEqual((view.accessibilityElements?.first as? UIAccessibilityElement)?.accessibilityLabel, "4")
     }
 
+    /// Elements that appear, go or move are announced once, as a layout
+    /// change that moves no focus; a new label on an element already shown
+    /// is read where it is, and announces nothing. An update that moves the
+    /// focus has told the reader already.
+    func testElementsThatAppearGoOrMoveAreAnnouncedAndANewLabelIsNot() throws {
+        let view = UIView()
+        var focused: AnyObject?
+        var moves = 0
+        var layouts = 0
+        let container = ExperienceSemanticAccessibilityContainer(view: view,
+            focusedElement: { focused }, moveFocus: { moves += 1; focused = $0 }, layoutChanged: { layouts += 1 })
+        container.setActive(true)
+        func publish(_ nodes: [NuxieNativeSemanticNode]) throws {
+            container.update(capture: try capture(nodes), nativeControls: [:], project: projection) { _, _, _ in true }
+        }
+        try publish([node(1), node(2, order: 1)])
+        XCTAssertEqual(moves, 1, "the first presentation moves the focus to its first element")
+        XCTAssertEqual(layouts, 0, "the focus move told the reader")
+        try publish([node(1), node(2, order: 1)])
+        XCTAssertEqual(layouts, 0, "nothing changed")
+        try publish([node(1, label: "Tapped 1 times"), node(2, order: 1)])
+        XCTAssertEqual(layouts, 0, "a new label is read where it is")
+        try publish([node(1), node(3, order: 1), node(2, order: 2)])
+        XCTAssertEqual(layouts, 1, "an element appeared")
+        try publish([node(1), node(2, order: 1)])
+        XCTAssertEqual(layouts, 2, "an element went")
+        try publish([node(2), node(1, order: 1)])
+        XCTAssertEqual(layouts, 3, "the elements moved")
+        XCTAssertEqual(moves, 1, "no change moved the focus")
+    }
+
     func testFocusWaitsForPresentationRestoresLogicalTargetAndDoesNotRepeat() throws {
         let view = UIView()
         var focused: AnyObject?
@@ -307,10 +338,10 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
     }
 
     private func node(_ id: UInt32, parent: UInt32? = nil, order: UInt32 = 0,
-        role: NuxieNativeSemanticRole = .button, flags: UInt32 = 0) -> NuxieNativeSemanticNode {
+        role: NuxieNativeSemanticRole = .button, flags: UInt32 = 0, label: String? = nil) -> NuxieNativeSemanticNode {
         NuxieNativeSemanticNode(id: id, parentID: parent, siblingIndex: order, role: role.rawValue,
             stateFlags: flags, traitFlags: 0, headingLevel: 0, actions: 1,
-            bounds: CGRect(x: 0, y: 0, width: 10, height: 10), label: String(id), value: "", hint: "")
+            bounds: CGRect(x: 0, y: 0, width: 10, height: 10), label: label ?? String(id), value: "", hint: "")
     }
 }
 #endif

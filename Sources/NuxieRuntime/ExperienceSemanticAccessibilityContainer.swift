@@ -50,6 +50,7 @@ package final class ExperienceSemanticAccessibilityContainer {
 
     private let focusedElement: () -> AnyObject?
     private let moveFocus: (AnyObject) -> Void
+    private let layoutChanged: () -> Void
     private var objects: [UInt32: AnyObject] = [:]
     private var order: [UInt32] = []
     private var preferredFocusID: UInt32?
@@ -60,10 +61,12 @@ package final class ExperienceSemanticAccessibilityContainer {
 
     package init(view: UIView,
          focusedElement: @escaping () -> AnyObject? = { UIAccessibility.focusedElement(using: nil) as AnyObject? },
-         moveFocus: @escaping (AnyObject) -> Void = { UIAccessibility.post(notification: .layoutChanged, argument: $0) }) {
+         moveFocus: @escaping (AnyObject) -> Void = { UIAccessibility.post(notification: .layoutChanged, argument: $0) },
+         layoutChanged: @escaping () -> Void = { UIAccessibility.post(notification: .layoutChanged, argument: nil) }) {
         self.view = view
         self.focusedElement = focusedElement
         self.moveFocus = moveFocus
+        self.layoutChanged = layoutChanged
     }
 
     package func setActive(_ active: Bool) {
@@ -134,7 +137,12 @@ package final class ExperienceSemanticAccessibilityContainer {
         view.isAccessibilityElement = false
         view.accessibilityElements = ordered
         objects = nextObjects
+        // Elements that appeared, went or moved are a layout change, told
+        // once below unless a focus move tells it. A new label on an element
+        // still shown is read where it is, as a moved one is.
+        var rearranged = nextOrder != order
         order = nextOrder
+        defer { if rearranged { layoutChanged() } }
         if let focusedID, objects[focusedID] !== focusedObject {
             focusIntent = .restore
             withdrawnFocus = focusedObject
@@ -155,6 +163,7 @@ package final class ExperienceSemanticAccessibilityContainer {
         focusIntent = .none
         withdrawnFocus = nil
         preferredFocusID = targetID
+        rearranged = false
         moveFocus(target)
     }
 
