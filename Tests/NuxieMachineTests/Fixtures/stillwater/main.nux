@@ -1,4 +1,4 @@
-use products, purchase, restore, store, owns from "nuxie/store"
+use products, purchase, restore, store, owns, Purchase, PurchaseStatus from "nuxie/store"
 use customer, access, count, event from "nuxie/person"
 use assigned, exposed from "nuxie/experiments"
 use Paywall, Plan from "paywall"
@@ -17,7 +17,9 @@ component Stillwater
 
   state plan = annual
   state offer_due = false
-  state failed = false
+  state purchase_failed = false
+
+  mutation bought: Purchase  then purchased
 
   derive headline = assigned("headline", Headline, fallback=calm)
   derive headline_text =
@@ -37,13 +39,13 @@ component Stillwater
       headline=headline_text
       plans=[catalog[annual], catalog[monthly]]
       selected=plan
-      busy=pending(purchase)
-      failed=failed
+      busy=pending(bought)
+      failed=purchase_failed
       select=choose
       buy=buy
       restore=restore_purchases
       close=close
-    offer    Offer(product=catalog[annual_offer], busy=pending(purchase), buy=buy_offer, close=decline)  sheet
+    offer    Offer(product=catalog[annual_offer], busy=pending(bought), buy=buy_offer, close=decline)  sheet
     thanks   Thanks(close=finish)  sheet
     done     Done(close=finish)
 
@@ -58,17 +60,21 @@ component Stillwater
     plan = picked
 
   action buy
-    failed = false
-    purchase(catalog[plan], completed=go(done, replace), failed=mark_failed)
-
-  action mark_failed
-    failed = true
+    purchase_failed = false
+    send bought = purchase(catalog[plan])
 
   action buy_offer
-    purchase(catalog[annual_offer], completed=go(done, replace), failed=mark_failed)
+    send bought = purchase(catalog[annual_offer])
 
   action restore_purchases
-    restore(completed=go(done, replace))
+    send bought = restore()
+
+  action purchased
+    if bought != none
+      if bought.status == completed
+        go(done, replace)
+      else if bought.status == failed
+        purchase_failed = true
 
   action close
     offer_due = true
@@ -139,7 +145,7 @@ component Stillwater
     expect state plan == monthly
     tap "buy"
     expect called purchase product=catalog[monthly]
-    purchase completed
+    purchase answers status=completed
     expect route done
     expect missing "buy"
     expect not called restore
@@ -149,8 +155,8 @@ component Stillwater
     event "onboarding_completed"
     expect missing "error"
     tap "buy"
-    purchase failed
-    expect state failed == true
+    purchase answers status=failed
+    expect state purchase_failed == true
     expect has "error"
     expect route paywall
 

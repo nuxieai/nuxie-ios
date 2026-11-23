@@ -91,12 +91,26 @@ package final class NuxieMachineSession {
         try delivered(nux_machine_closed(handle, instance, now))
     }
 
-    /// The answer to the unanswered call `call`: its extern's outcome named
-    /// `outcome`, which carries no fields.
-    package func answer(_ call: NuxieMachineCallID, outcome: String, now: Int64) throws -> [NuxieMachineRow] {
+    /// The reply to the send `call` into a mutation: the fields of its
+    /// declaration's answer type, or the failure that kept it from one.
+    package func reply(_ call: NuxieMachineCallID, _ reply: NuxieMachineReply, now: Int64) throws
+        -> [NuxieMachineRow]
+    {
         let id = NuxMachineCallId(record: call.record, generation: call.generation, counter: call.counter)
-        let status = NuxieMachineStrings.lend([outcome]) { views in
-            nux_machine_answer(handle, id, views[0], now)
+        let status: UInt32
+        switch reply {
+        case .answer(let fields):
+            status = NuxieMachineStrings.lend(fields.map(\.lentText)) { views in
+                let values = zip(fields, views).map { field, text in field.carried(text) }
+                return values.withUnsafeBufferPointer { values in
+                    nux_machine_reply(handle, id, values.baseAddress, values.count, nil, now)
+                }
+            }
+        case .failure(let failure):
+            status = NuxieMachineStrings.lend([failure.reason, failure.message]) { views in
+                var carried = NuxMachineFailure(code: failure.code.carried, reason: views[0], message: views[1])
+                return nux_machine_reply(handle, id, nil, 0, &carried, now)
+            }
         }
         return try delivered(status)
     }
@@ -326,7 +340,7 @@ package enum NuxieMachineRow: Equatable, Sendable {
 }
 
 /// An extern call's id: the record's number, its generation, and a number
-/// from its counter. An answer names its call by it.
+/// from its counter. A reply names its call by it.
 package struct NuxieMachineCallID: Hashable, Sendable {
     package let record: UInt64
     package let generation: UInt32
@@ -340,7 +354,7 @@ package struct NuxieMachineCallID: Hashable, Sendable {
 }
 
 /// A `call` row: perform the extern named `externName` under `id`, where it
-/// runs; an awaited call waits for its answer. Its arguments are not carried
+/// runs; an awaited call waits for its reply. Its arguments are not carried
 /// yet.
 package struct NuxieMachineCall: Equatable, Sendable {
     package let id: NuxieMachineCallID
@@ -371,6 +385,77 @@ package enum NuxieMachineValue: Equatable, Sendable {
         case NuxieMachineStatus.valueText: self = .text(NuxieMachineStrings.copy(value.text) ?? "")
         case NuxieMachineStatus.valueEnum: self = .enumeration(NuxieMachineStrings.copy(value.text) ?? "")
         default: throw NuxieMachineError.valueNotCarried
+        }
+    }
+
+    /// The text a reply lends the interface for this value: its own for a
+    /// text or an enum value, none otherwise.
+    fileprivate var lentText: String {
+        switch self {
+        case .text(let text), .enumeration(let text): text
+        case .bool, .number: ""
+        }
+    }
+
+    /// This value as a reply's field, with `text` the string lent for it.
+    fileprivate func carried(_ text: NuxMachineStr) -> NuxMachineValue {
+        let none = NuxMachineStr(ptr: nil, len: 0)
+        return switch self {
+        case .bool(let value):
+            NuxMachineValue(kind: NuxieMachineStatus.valueBoolean, boolean: value, number: 0, text: none)
+        case .number(let value):
+            NuxMachineValue(kind: NuxieMachineStatus.valueNumber, boolean: false, number: value, text: none)
+        case .text:
+            NuxMachineValue(kind: NuxieMachineStatus.valueText, boolean: false, number: 0, text: text)
+        case .enumeration:
+            NuxMachineValue(kind: NuxieMachineStatus.valueEnum, boolean: false, number: 0, text: text)
+        }
+    }
+}
+
+/// The reply to a send into a mutation, as a store gives it.
+package enum NuxieMachineReply: Equatable, Sendable {
+    /// The answer: the fields of the declaration's answer type, in its
+    /// order, each as a slot is read out (an enum's by its value's name).
+    case answer([NuxieMachineValue])
+    /// No answer, and why: what the store met before it could answer.
+    case failure(NuxieMachineFailure)
+}
+
+/// Why a send into a mutation got no answer: a code, a short reason for the
+/// program and a message for the person.
+package struct NuxieMachineFailure: Equatable, Sendable {
+    package let code: NuxieMachineFailureCode
+    package let reason: String
+    package let message: String
+
+    package init(code: NuxieMachineFailureCode, reason: String, message: String) {
+        self.code = code
+        self.reason = reason
+        self.message = message
+    }
+}
+
+/// The failure codes of `nux_machine.h`, by the names a program reads.
+package enum NuxieMachineFailureCode: String, Sendable {
+    /// The store could not be reached.
+    case offline
+    /// The store did not answer in time.
+    case timeout
+    /// The store turned the call away.
+    case refused
+    /// The store's answer did not have the declared shape.
+    case shape
+    /// Any other error.
+    case error
+
+    fileprivate var carried: UInt32 {
+        switch self {
+        case .offline: UInt32(NUX_MACHINE_FAILURE_OFFLINE)
+        case .timeout: UInt32(NUX_MACHINE_FAILURE_TIMEOUT)
+        case .refused: UInt32(NUX_MACHINE_FAILURE_REFUSED)
+        case .shape: UInt32(NUX_MACHINE_FAILURE_SHAPE)
+        case .error: UInt32(NUX_MACHINE_FAILURE_ERROR)
         }
     }
 }
@@ -423,12 +508,8 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case unknownEvent
     /// No presentation the record shows has this identity.
     case unknownInstance
-    /// No unanswered call has this id.
+    /// No send into a mutation that is still out has this id.
     case unknownCall
-    /// The called extern has no outcome of this name.
-    case unknownOutcome
-    /// The outcome carries fields, which the interface does not take yet.
-    case outcomeHasFields
     /// The plan has no root slot of this name.
     case unknownSlot
     /// The slot holds a value of a kind the interface does not carry.
@@ -439,6 +520,9 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case wrongKind
     /// The instance's component has no view, so no artboard.
     case noArtboard
+    /// The reply's fields are not the fields of the declaration's answer
+    /// type, or its failure's code is not one the header knows.
+    case replyDoesNotFit
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
 
@@ -458,13 +542,12 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .unknownEvent: "unknown_event"
         case .unknownInstance: "unknown_instance"
         case .unknownCall: "unknown_call"
-        case .unknownOutcome: "unknown_outcome"
-        case .outcomeHasFields: "outcome_has_fields"
         case .unknownSlot: "unknown_slot"
         case .valueNotCarried: "value_not_carried"
         case .outOfRange: "out_of_range"
         case .wrongKind: "wrong_kind"
         case .noArtboard: "no_artboard"
+        case .replyDoesNotFit: "reply_does_not_fit"
         case .unknownStatus(let status): "status_\(status)"
         }
     }
@@ -490,13 +573,12 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_UNKNOWN_EVENT): .unknownEvent,
         UInt32(NUX_MACHINE_UNKNOWN_INSTANCE): .unknownInstance,
         UInt32(NUX_MACHINE_UNKNOWN_CALL): .unknownCall,
-        UInt32(NUX_MACHINE_UNKNOWN_OUTCOME): .unknownOutcome,
-        UInt32(NUX_MACHINE_OUTCOME_HAS_FIELDS): .outcomeHasFields,
         UInt32(NUX_MACHINE_UNKNOWN_SLOT): .unknownSlot,
         UInt32(NUX_MACHINE_VALUE_NOT_CARRIED): .valueNotCarried,
         UInt32(NUX_MACHINE_OUT_OF_RANGE): .outOfRange,
         UInt32(NUX_MACHINE_WRONG_KIND): .wrongKind,
         UInt32(NUX_MACHINE_NO_ARTBOARD): .noArtboard,
+        UInt32(NUX_MACHINE_REPLY_DOES_NOT_FIT): .replyDoesNotFit,
     ]
 }
 
