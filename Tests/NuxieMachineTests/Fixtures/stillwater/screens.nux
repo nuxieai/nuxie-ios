@@ -1,0 +1,27 @@
+use Product from "nuxie/store"
+
+component Offer
+  props
+    product: Product
+    busy: boolean
+    buy: action
+    close: action
+
+  view
+    column
+      text "A year of quiet minutes, for less."
+      text product.price id="price"
+      button id="buy" disabled=busy press=buy
+        text "Claim the offer"
+      button id="close" press=close
+        text "No thanks"
+
+component Thanks
+  props
+    close: action
+
+  view
+    column
+      text "Stillwater Pro is already yours."
+      button id="close" press=close
+        text "Done"

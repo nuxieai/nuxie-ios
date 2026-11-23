@@ -1,0 +1,32 @@
+{
+  "note": "Stillwater for the Nux machine suite and the runtime host app: the paywall and its record, drawn from its .nux source alone. The four .nux files are copied from the stillwater fixture folder of the parent's .nux compiler crate, each named here by its git blob id at parentCommit. The plan's views are compiled on the device; nothing else is published.",
+  "plan": {
+    "root": "main",
+    "app": "app",
+    "experience": "stillwater",
+    "version": 1
+  },
+  "parentCommit": "a895b4df0ee3ffbb5adfe39b4d4d1196793b278c",
+  "files": {
+    "main.nux": {
+      "sha256": "f1846a5cd7659e540ed0902d0558c4ab7ae34d7b0813d9c1e4e675ae1bf25b49",
+      "sizeBytes": 4382,
+      "parentBlob": "da9b7999ac1598060f95ef21ad7dc9b6da31472c"
+    },
+    "paywall.nux": {
+      "sha256": "3c0f07f571003fa9a611c425364d61e4eb4f3fd37840e7c8455f044c098c5596",
+      "sizeBytes": 3670,
+      "parentBlob": "2f02cf7511063e03affb0e88cd0ed8580e040724"
+    },
+    "screens.nux": {
+      "sha256": "5fa52140886709dcef3b239cf5cffa6bf323629090069e81e6c1d6ee2205136c",
+      "sizeBytes": 535,
+      "parentBlob": "1b0bd772f5a0366a74a1b0e814c05e2757a2799d"
+    },
+    "done.nux": {
+      "sha256": "c230d3dc279f84e71cf47e064a418d8655542c00f50f0e1da9ed720c7b35d17a",
+      "sizeBytes": 167,
+      "parentBlob": "92ed4db27ec2043ca7c22afa46aa9113f5b95c7e"
+    }
+  }
+}

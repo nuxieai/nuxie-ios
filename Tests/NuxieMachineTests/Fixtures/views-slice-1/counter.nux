@@ -28,15 +28,15 @@ component Counter
         text "Hide the note" color=#eef3f1 font-size=16
       button padding=12 press=close id="close"
         text "Close" color=#8a9794 font-size=16
-      text `Total: ${1}` id="total"
-      text `Doubled: ${twice(21)}` id="doubled"
-      text `${40 + 2}` id="sum"
+      text `Total: ${1}` id="total" color=#8a9794
+      text `Doubled: ${twice(21)}` id="doubled" color=#8a9794
+      text `${40 + 2}` id="sum" color=#8a9794
       box padding=(8 + 4) id="padded"
-        text "Padded" id="inside"
+        text "Padded" id="inside" color=#8a9794
       box padding=twice(5) id="twice"
-        text "Twice" id="within"
+        text "Twice" id="within" color=#8a9794
       box padding=12 id="literal"
-        text "Literal" id="beside"
+        text "Literal" id="beside" color=#8a9794
       box background-color=#11223380 id="painted"
       box background-color=shade id="shaded"
       column flex-direction="row" id="across"
