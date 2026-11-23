@@ -1018,10 +1018,11 @@ struct Look {
     let pixels: Data
     let nodes: [NuxieNativeSemanticNode]
 
-    struct Missing: Error, CustomStringConvertible {
+    struct Missing: LocalizedError, CustomStringConvertible {
         let words: String
         let reading: [String]
         var description: String { "nothing reads \"\(words)\" among \(reading)" }
+        var errorDescription: String? { description }
     }
 
     /// The nodes an element stands for, as the Screen's accessibility
