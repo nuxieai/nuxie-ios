@@ -653,14 +653,21 @@ struct DrawnFrame {
 
     var text: String { lines.map(\.text).joined(separator: " ") }
 
-    struct Missing: Error, CustomStringConvertible {
+    struct Missing: LocalizedError, CustomStringConvertible {
         let line: String
         let found: [String]
         var description: String { "no line \"\(line)\" among \(found)" }
+        var errorDescription: String? { description }
     }
 
+    /// Where text recognition found `line`. A word that is a lone letter O
+    /// is read as the digit zero, which recognition cannot tell from it.
     func box(of line: String) throws -> CGRect {
-        guard let found = lines.first(where: { $0.text == line }) else {
+        func asDigits(_ text: String) -> String {
+            text.split(separator: " ", omittingEmptySubsequences: false)
+                .map { $0 == "O" ? "0" : String($0) }.joined(separator: " ")
+        }
+        guard let found = lines.first(where: { $0.text == line || asDigits($0.text) == line }) else {
             throw Missing(line: line, found: lines.map(\.text))
         }
         return found.box
