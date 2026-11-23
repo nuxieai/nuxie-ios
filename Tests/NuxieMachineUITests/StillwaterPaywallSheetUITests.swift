@@ -218,7 +218,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     /// The elements on the sheet a screen reader reads, in its order: each
     /// line of text and each button, with its words and whether it is
-    /// enabled. The Screen's own element, which carries the record for
+    /// selected and enabled. The Screen's own element, which carries the record for
     /// these checks, is left out.
     private func reading(_ app: XCUIApplication, on sheet: CGRect) -> [String] {
         guard let root = try? app.snapshot() else { return ["(no snapshot of the app)"] }
@@ -233,7 +233,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             }
             if let kind, sheet.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)),
                !element.identifier.hasPrefix("nuxie-machine-") {
-                lines.append("\(kind) \"\(element.label)\"\(element.isEnabled ? "" : ", not enabled")")
+                lines.append("\(kind) \"\(element.label)\"\(element.isSelected ? ", selected" : "")"
+                    + (element.isEnabled ? "" : ", not enabled"))
             }
             for child in element.children { walk(child) }
         }
