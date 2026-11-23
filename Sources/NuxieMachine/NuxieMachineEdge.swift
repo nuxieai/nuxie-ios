@@ -365,6 +365,11 @@ package actor NuxieMachineEdge {
     private let session: NuxieMachineSession
     /// What draws the presented routes, chosen once.
     private let drawing: Drawing
+    /// Whether each presentation's player carries the engine's semantic
+    /// tree, so a Screen can be read from each frame it draws: on the
+    /// driver path, whose compiled records hold a semantic record for each
+    /// line and button.
+    package nonisolated let readsAloud: Bool
     private let store: any NuxieMachineStore
     /// The owner, told only by [`deliver`].
     private let owner: @Sendable (NuxieMachineEdgeReport) -> Void
@@ -579,6 +584,7 @@ package actor NuxieMachineEdge {
         try session.driveScene()
         self.session = session
         self.drawing = .compiled
+        self.readsAloud = true
         self.store = store
         self.owner = onReport
     }
@@ -596,6 +602,7 @@ package actor NuxieMachineEdge {
         let session = try NuxieMachineSession(
             files: plan.files.map { ($0.path, $0.text) }, root: plan.root,
             app: plan.app, experience: plan.experience, version: plan.version)
+        self.readsAloud = false
         let runtime = try await Self.openScreen(screen)
         do {
             let root = try await runtime.rootViewModelReference()
@@ -1451,6 +1458,15 @@ package actor NuxieMachineEdge {
         } catch {
             try? await player.close()
             fail(Self.openFault(error, doing: "drive \(route)"), &delivery)
+            return nil
+        }
+        do {
+            // Before the first step, as the engine asks: the tree follows
+            // every step from the first.
+            try await player.enableSemantics()
+        } catch {
+            try? await player.close()
+            fail(Self.openFault(error, doing: "read \(route) aloud"), &delivery)
             return nil
         }
         return player

@@ -60,6 +60,34 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         return state
     }
 
+    // MARK: Who a screen reader reaches
+
+    /// A screen reader reaches the top presentation that is not leaving: a
+    /// cover is out of reach from the moment a sheet starts to arrive over
+    /// it, and in reach again from the moment the sheet starts to leave. A
+    /// sheet being swiped is still in reach.
+    func testAScreenReaderReachesOnlyTheTopPresentation() {
+        var state = State()
+        XCTAssertNil(state.reachable)
+        _ = state.handle(.started)
+        XCTAssertEqual(state.handle(shows([cover])), [.present(cover, over: nil)])
+        XCTAssertEqual(state.reachable, cover.shown, "a cover is in reach as it arrives")
+        _ = state.handle(.presented(cover.shown))
+        XCTAssertEqual(state.handle(shows([cover, sheet])), [.present(sheet, over: cover.shown)])
+        XCTAssertEqual(state.reachable, sheet.shown, "the cover is out of reach as the sheet arrives")
+        _ = state.handle(.presented(sheet.shown))
+        XCTAssertEqual(state.reachable, sheet.shown)
+        _ = state.handle(.swipeBegan(sheet.shown))
+        XCTAssertEqual(state.reachable, sheet.shown, "a sheet being swiped is still in reach")
+        _ = state.handle(.swipeEnded(sheet.shown, completed: false))
+        XCTAssertEqual(state.handle(shows([cover])), [.dismiss(sheet.shown)])
+        XCTAssertEqual(state.reachable, cover.shown, "the cover is in reach again as the sheet leaves")
+        _ = state.handle(.dismissed(sheet.shown))
+        XCTAssertEqual(state.reachable, cover.shown)
+        XCTAssertEqual(state.handle(shows([])), [.dismiss(cover.shown)])
+        XCTAssertNil(state.reachable, "nothing is in reach as the last presentation leaves")
+    }
+
     // MARK: A fault the log never shows
 
     /// The evening wake presents a route with no artwork: the edge reports

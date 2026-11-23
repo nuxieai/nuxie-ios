@@ -124,6 +124,13 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     /// Whether [`Effect.release`] has been said.
     package private(set) var released = false
 
+    /// The native presentation a screen reader reaches: the top one that is
+    /// not leaving. Every one under it is covered, from the moment the one
+    /// over it starts to arrive until it starts to leave.
+    package var reachable: NuxieMachineShown? {
+        natives.last { $0.phase != .leaving }?.shown
+    }
+
     package init() {}
 
     /// The wake the record asks for, if its moment is at or before `now`.

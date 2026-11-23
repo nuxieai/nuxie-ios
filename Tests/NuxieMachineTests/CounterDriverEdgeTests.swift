@@ -274,7 +274,7 @@ final class DriverStepOwedEdgeTests: XCTestCase {
 // MARK: - One run
 
 /// A fresh session on the driver path, its clock, and what its owner heard.
-private final class Counter {
+final class Counter {
     let edge: NuxieMachineEdge
     let owner = CounterOwner()
     private(set) var now: Int64 = 9 * 3_600_000
@@ -297,12 +297,11 @@ private final class Counter {
     /// Lay the presented Screen out at a phone's size in points and size
     /// its renderer for a frame drawn at twice that, as a Screen's view
     /// does before its first step.
-    func layOut() async throws {
+    func layOut(at size: CGSize = CGSize(width: CounterDriverEdgeTests.width,
+                                         height: CounterDriverEdgeTests.height)) async throws {
         let screen = try await presented()
-        try await screen.setLayoutSize(width: Float(CounterDriverEdgeTests.width),
-                                       height: Float(CounterDriverEdgeTests.height))
-        _ = try await screen.resize(pixelWidth: UInt32(2 * CounterDriverEdgeTests.width),
-                                    pixelHeight: UInt32(2 * CounterDriverEdgeTests.height))
+        try await screen.setLayoutSize(width: Float(size.width), height: Float(size.height))
+        _ = try await screen.resize(pixelWidth: UInt32(2 * size.width), pixelHeight: UInt32(2 * size.height))
     }
 
     /// A press and release at `point`, in one step.
@@ -638,7 +637,7 @@ private final class Counter {
 
 /// The edge's owner: the reports it was told, one per delivery that did
 /// something for it.
-private final class CounterOwner: @unchecked Sendable {
+final class CounterOwner: @unchecked Sendable {
     private let lock = NSLock()
     private var heardReports: [NuxieMachineEdgeReport] = []
 
@@ -663,6 +662,8 @@ private final class CounterOwner: @unchecked Sendable {
 struct DrawnFrame {
     let reported: [String]
     let lines: [(text: String, box: CGRect)]
+    /// The frame's semantic snapshot, when it was read with it.
+    var semantics: NuxieNativeSemanticCapture?
 
     var text: String { lines.map(\.text).joined(separator: " ") }
 
@@ -684,11 +685,17 @@ struct DrawnFrame {
         return CGPoint(x: found.midX, y: found.midY)
     }
 
-    static func read(_ runtime: NuxieNativeRuntime, reported: [String], name: String) async throws -> DrawnFrame {
+    /// The Screen drawn at twice `size`, its layout size, read back and
+    /// read with text recognition; with `capturesSemantics`, also read for
+    /// its semantic snapshot.
+    static func read(_ runtime: NuxieNativeRuntime, reported: [String], name: String,
+                     size: CGSize = CGSize(width: CounterDriverEdgeTests.width, height: CounterDriverEdgeTests.height),
+                     capturesSemantics: Bool = false) async throws -> DrawnFrame {
         let scale = 2
-        let width = CounterDriverEdgeTests.width * scale
-        let height = CounterDriverEdgeTests.height * scale
-        let pixels = try await render(runtime, width: width, height: height, scale: Float(scale))
+        let width = Int(size.width) * scale
+        let height = Int(size.height) * scale
+        let (pixels, semantics) = try await render(runtime, width: width, height: height, scale: Float(scale),
+                                                   capturesSemantics: capturesSemantics)
         try await Pixels.attach(pixels, width: width, height: height, name: name)
         let image = try XCTUnwrap(image(pixels, width: width, height: height))
         let request = VNRecognizeTextRequest()
@@ -699,16 +706,14 @@ struct DrawnFrame {
             guard let text = observation.topCandidates(1).first?.string else { return nil }
             // Vision's box is normalized with its origin at the bottom left.
             let box = observation.boundingBox
-            return (text, CGRect(x: box.minX * CGFloat(CounterDriverEdgeTests.width),
-                                 y: (1 - box.maxY) * CGFloat(CounterDriverEdgeTests.height),
-                                 width: box.width * CGFloat(CounterDriverEdgeTests.width),
-                                 height: box.height * CGFloat(CounterDriverEdgeTests.height)))
+            return (text, CGRect(x: box.minX * size.width, y: (1 - box.maxY) * size.height,
+                                 width: box.width * size.width, height: box.height * size.height))
         }
-        return DrawnFrame(reported: reported, lines: lines)
+        return DrawnFrame(reported: reported, lines: lines, semantics: semantics)
     }
 
-    private static func render(_ runtime: NuxieNativeRuntime, width: Int, height: Int, scale: Float) async throws
-        -> Data
+    private static func render(_ runtime: NuxieNativeRuntime, width: Int, height: Int, scale: Float,
+                               capturesSemantics: Bool) async throws -> (Data, NuxieNativeSemanticCapture?)
     {
         let device = try await runtime.metalDevice().value
         let layer = CAMetalLayer()
@@ -724,18 +729,18 @@ struct DrawnFrame {
         let bytesPerRow = (width * 4 + 255) & ~255
         let buffer = try XCTUnwrap(device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared))
         let drawn = Signal()
-        let outcome = try await runtime.render(layoutScaleFactor: scale,
+        let frame = try await runtime.renderFrame(layoutScaleFactor: scale,
             drawable: .available(NuxieNativeDrawable(drawable)), clearColor: 0xFF00_0000,
             readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: bytesPerRow),
-            completion: { drawn.fire() })
+            capturesSemantics: capturesSemantics, completion: { drawn.fire() })
         try await drawn.wait(seconds: 2)
-        XCTAssertEqual(outcome.disposition, .presented)
+        XCTAssertEqual(frame.outcome.disposition, .presented)
         let source = buffer.contents().assumingMemoryBound(to: UInt8.self)
         var pixels = Data(capacity: width * height * 4)
         for row in 0..<height {
             pixels.append(source + row * bytesPerRow, count: width * 4)
         }
-        return pixels
+        return (pixels, frame.semantics)
     }
 
     private static func image(_ pixels: Data, width: Int, height: Int) -> CGImage? {
