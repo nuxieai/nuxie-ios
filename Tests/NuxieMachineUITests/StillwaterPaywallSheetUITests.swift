@@ -11,7 +11,9 @@ import XCTest
 /// The paywall is found the way a screen reader finds it: each line is a
 /// static text and each button a button named by the words beneath it,
 /// made from the engine's semantic snapshot, with the words the Screen
-/// draws and where it draws them. Every tap is a real tap where a button
+/// draws and where it draws them. The plans are a radio group read by its
+/// label, "Plan", before its two cards; each card is a radio, read as a
+/// button that is selected while its plan is the chosen one. Every tap is a real tap where a button
 /// says it is. At each of the story's five frames a screenshot is kept,
 /// and what a screen reader reads on the sheet, top to bottom, is kept
 /// beside it and printed to the log.
@@ -48,6 +50,12 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         }
         XCTAssertTrue(yearly.label.contains("$59.99"), yearly.label)
         XCTAssertTrue(monthly.label.contains("$9.99"), monthly.label)
+        XCTAssertTrue(yearly.isSelected, "the chosen plan, yearly, is not read as selected")
+        XCTAssertFalse(monthly.isSelected, "monthly is read as selected while yearly is chosen")
+        let opened = reading(app, on: screen.frame)
+        let group = try XCTUnwrap(opened.firstIndex(of: "group \"Plan\""), "the plans' group is not read: \(opened)")
+        let first = try XCTUnwrap(opened.firstIndex { $0.hasPrefix("button \"Yearly") }, "\(opened)")
+        XCTAssertLessThan(group, first, "the group's label is read before its cards: \(opened)")
         XCTAssertFalse(app.staticTexts[Self.errorLine].exists, "the error line is read")
         XCTAssertFalse(app.staticTexts[Self.termsLine].exists, "the terms line is read")
         XCTAssertFalse(app.staticTexts["Continue"].exists, "a button's words are read twice")
@@ -57,9 +65,12 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertLessThan(buy.frame.minY, notNow.frame.minY)
         keep("1-open", app, screen)
 
-        // 2. Monthly chosen: the record's plan is monthly.
+        // 2. Monthly chosen: the record's plan is monthly, and the selected
+        // card moves from yearly to monthly.
         monthly.tap()
         waitFor(screen, valueContaining: "Selected plan: monthly.")
+        waitFor(monthly, "selected == true", "monthly is not read as selected after its tap")
+        XCTAssertFalse(yearly.isSelected, "yearly is still read as selected after monthly was tapped")
         keep("2-monthly-chosen", app, screen)
 
         // 3. Buying: one purchase is under way, and the buy button is read
@@ -73,6 +84,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[Self.errorLine].waitForExistence(timeout: 10), app.debugDescription)
         waitFor(buy, "enabled == true", "the buy button stayed disabled after the answer")
         XCTAssertLessThan(buy.frame.minY, app.staticTexts[Self.errorLine].frame.minY)
+        XCTAssertTrue(monthly.isSelected, "monthly is no longer read as selected after the purchase failed")
+        XCTAssertFalse(yearly.isSelected)
         keep("4-failed", app, screen)
 
         // 5. Details open: "About the trial" shows the terms line.
@@ -217,9 +230,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     }
 
     /// The elements on the sheet a screen reader reads, in its order: each
-    /// line of text and each button, with its words and whether it is
-    /// selected and enabled. The Screen's own element, which carries the record for
-    /// these checks, is left out.
+    /// line of text, each button, and each group read by its label (an
+    /// element with no trait of its own and no children), with its words
+    /// and whether it is selected and enabled. The Screen's own element,
+    /// which carries the record for these checks, is left out.
     private func reading(_ app: XCUIApplication, on sheet: CGRect) -> [String] {
         guard let root = try? app.snapshot() else { return ["(no snapshot of the app)"] }
         var lines: [String] = []
@@ -229,6 +243,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             case .staticText: "text"
             case .image: "image"
             case .link: "link"
+            case .other where element.children.isEmpty && !element.label.isEmpty: "group"
             default: nil
             }
             if let kind, sheet.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)),
