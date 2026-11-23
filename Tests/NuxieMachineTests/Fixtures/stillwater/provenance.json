@@ -6,7 +6,7 @@
     "experience": "stillwater",
     "version": 1
   },
-  "parentCommit": "8b8caef8ac9ddae3fcc1a62b5e614b31127663b7",
+  "parentCommit": "ce006524efceb99d49781c0a7d0f03c7ae556733",
   "files": {
     "main.nux": {
       "sha256": "b3bc8fb461ed71da96744630cc26ef0accca76218d23cf656f789dc16a9e4680",
