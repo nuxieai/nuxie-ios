@@ -1,38 +1,36 @@
 #if canImport(UIKit)
-import NuxieRuntime
 import UIKit
 
 /// A drawn control forwards exact semantic actions to its owning presentation.
 /// The callback reports queue admission; native execution can still reject a stale frame.
+///
+/// What the element says beyond the node's own words, and which actions an
+/// activation may ask for, are the screen's: they arrive in its projection
+/// ([`ExperienceSemanticAccessibilityContainer.Projection`]).
 @MainActor
-final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
-    typealias Submit = (UUID, UInt32, NuxieNativeSemanticAction) -> Bool
+package final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
+    package typealias Submit = (UUID, UInt32, NuxieNativeSemanticAction) -> Bool
 
-    private(set) var captureID: UUID?
+    package private(set) var captureID: UUID?
     private var node: NuxieNativeSemanticNode?
+    private var actions: UInt32 = 0
     private var submit: Submit?
 
-    func update(
+    package func update(
         captureID: UUID,
         node: NuxieNativeSemanticNode,
-        frameInContainer: CGRect,
-        traits: UIAccessibilityTraits,
+        projection: ExperienceSemanticAccessibilityContainer.Projection,
         submit: @escaping Submit
     ) {
         self.captureID = captureID
         self.node = node
+        self.actions = projection.actions
         self.submit = submit
         accessibilityLabel = node.label
-        let supportsExpandedStatus: Bool
-        if #available(iOS 18.0, *) { supportsExpandedStatus = true } else { supportsExpandedStatus = false }
-        accessibilityValue = ExperienceAccessibilityStateDescription.value(
-            for: node, supportsExpandedStatus: supportsExpandedStatus)
+        accessibilityValue = projection.value
         accessibilityHint = node.hint.isEmpty ? nil : node.hint
-        accessibilityFrameInContainerSpace = frameInContainer
-        accessibilityTraits = traits
-        if ExperienceAccessibilityStateDescription.isToggle(node) {
-            if #available(iOS 17.0, *) { accessibilityTraits.insert(.toggleButton) }
-        }
+        accessibilityFrameInContainerSpace = projection.frame
+        accessibilityTraits = projection.traits
         if node.stateFlags & NuxieNativeSemanticNode.selected != 0 {
             accessibilityTraits.insert(.selected)
         }
@@ -46,9 +44,10 @@ final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
         isAccessibilityElement = node.stateFlags & NuxieNativeSemanticNode.hidden == 0
     }
 
-    func retire() {
+    package func retire() {
         captureID = nil
         node = nil
+        actions = 0
         submit = nil
         isAccessibilityElement = false
         accessibilityLabel = nil
@@ -58,11 +57,11 @@ final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
         if #available(iOS 18.0, *) { accessibilityExpandedStatus = .unsupported }
     }
 
-    override func accessibilityActivate() -> Bool { perform(.tap) }
-    override func accessibilityIncrement() { _ = perform(.increase) }
-    override func accessibilityDecrement() { _ = perform(.decrease) }
+    override package func accessibilityActivate() -> Bool { perform(.tap) }
+    override package func accessibilityIncrement() { _ = perform(.increase) }
+    override package func accessibilityDecrement() { _ = perform(.decrease) }
 
-    static func allowsInteraction(in view: UIView) -> Bool {
+    package static func allowsInteraction(in view: UIView) -> Bool {
         var current: UIView? = view
         while let ancestor = current {
             guard ancestor.isUserInteractionEnabled, !ancestor.isHidden, ancestor.alpha > 0.01 else { return false }
@@ -77,7 +76,7 @@ final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
               Self.allowsInteraction(in: container),
               let captureID, let node, let submit,
               node.stateFlags & NuxieNativeSemanticNode.disabled == 0,
-              node.actions & (1 << action.rawValue) != 0 else { return false }
+              actions & (1 << action.rawValue) != 0 else { return false }
         return submit(captureID, node.id, action)
     }
 }

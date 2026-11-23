@@ -1,14 +1,48 @@
 #if canImport(UIKit)
-import NuxieRuntime
 import UIKit
 
 /// Owns stable drawn elements and interleaves actual editors in authored order.
 /// The screen supplies committed geometry and role projection for each node.
+///
+/// Every Screen the engine draws shows its semantic snapshot through this
+/// one container: a published Screen and a machine Screen alike.
 @MainActor
-final class ExperienceSemanticAccessibilityContainer {
-    struct Projection {
-        let frame: CGRect
-        let traits: UIAccessibilityTraits
+package final class ExperienceSemanticAccessibilityContainer {
+    /// How a screen shows one node: where it is in the container's space,
+    /// what UIKit calls it, the value read after its label, and the actions
+    /// an activation may ask for (one bit per [`NuxieNativeSemanticAction`]).
+    package struct Projection {
+        package let frame: CGRect
+        package let traits: UIAccessibilityTraits
+        package let value: String?
+        package let actions: UInt32
+
+        package init(frame: CGRect, traits: UIAccessibilityTraits, value: String?, actions: UInt32) {
+            self.frame = frame
+            self.traits = traits
+            self.value = value
+            self.actions = actions
+        }
+    }
+
+    /// What UIKit calls a node of `node`'s role, or none for a node no
+    /// element stands for: no role, or a grouping role with no label. An
+    /// editable field has no traits here: its real control stands for it.
+    package static func traits(for node: NuxieNativeSemanticNode) -> UIAccessibilityTraits? {
+        guard let role = NuxieNativeSemanticRole(rawValue: node.role), role != .none else { return nil }
+        var traits: UIAccessibilityTraits = []
+        switch role {
+        case .button, .checkbox, .switchControl, .radioButton, .tab: traits.insert(.button)
+        case .link: traits.insert(.link)
+        case .slider: traits.insert(.adjustable)
+        case .text: traits.insert(.staticText)
+        case .image: traits.insert(.image)
+        case .group, .list, .listItem, .tabList, .dialog, .alertDialog, .radioGroup:
+            guard !node.label.isEmpty else { return nil }
+        case .none, .textField: break
+        }
+        if node.headingLevel > 0 { traits.insert(.header) }
+        return traits
     }
 
     private weak var view: UIView?
@@ -24,7 +58,7 @@ final class ExperienceSemanticAccessibilityContainer {
     private var focusIntent: FocusIntent = .initial
     private weak var withdrawnFocus: AnyObject?
 
-    init(view: UIView,
+    package init(view: UIView,
          focusedElement: @escaping () -> AnyObject? = { UIAccessibility.focusedElement(using: nil) as AnyObject? },
          moveFocus: @escaping (AnyObject) -> Void = { UIAccessibility.post(notification: .layoutChanged, argument: $0) }) {
         self.view = view
@@ -32,7 +66,7 @@ final class ExperienceSemanticAccessibilityContainer {
         self.moveFocus = moveFocus
     }
 
-    func setActive(_ active: Bool) {
+    package func setActive(_ active: Bool) {
         guard active != isActive else { return }
         if !active {
             // Activation may be withdrawn before a new frame exposes targets.
@@ -49,7 +83,7 @@ final class ExperienceSemanticAccessibilityContainer {
 
     /// Navigation is an intentional handoff; temporary visibility changes only
     /// restore focus that this container actually owned.
-    func requestFocusOnNextPresentation() {
+    package func requestFocusOnNextPresentation() {
         focusIntent = .navigation
     }
 
@@ -61,7 +95,7 @@ final class ExperienceSemanticAccessibilityContainer {
         return id
     }
 
-    func update(
+    package func update(
         capture: NuxieNativeSemanticCapture,
         nativeControls: [UInt32: UIView],
         project: (NuxieNativeSemanticNode) -> Projection?,
@@ -89,8 +123,7 @@ final class ExperienceSemanticAccessibilityContainer {
             }
             let element = elements[node.id]
                 ?? ExperienceSemanticAccessibilityElement(accessibilityContainer: view)
-            element.update(captureID: capture.id, node: node,
-                frameInContainer: projection.frame, traits: projection.traits, submit: submit)
+            element.update(captureID: capture.id, node: node, projection: projection, submit: submit)
             next[node.id] = element
             ordered.append(element)
             nextObjects[node.id] = element
@@ -125,7 +158,7 @@ final class ExperienceSemanticAccessibilityContainer {
         moveFocus(target)
     }
 
-    func clear() {
+    package func clear() {
         isActive = false
         focusIntent = .initial
         withdrawnFocus = nil

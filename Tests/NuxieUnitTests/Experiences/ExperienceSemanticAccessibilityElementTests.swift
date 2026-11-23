@@ -11,7 +11,7 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
         var requests: [(UUID, UInt32, NuxieNativeSemanticAction)] = []
         let first = UUID()
-        element.update(captureID: first, node: node(actions: 1), frameInContainer: .zero,
+        update(element, captureID: first, node: node(actions: 1), frame: .zero,
             traits: .button) { requests.append(($0, $1, $2)); return true }
         XCTAssertTrue(element.accessibilityActivate())
         element.accessibilityIncrement()
@@ -19,7 +19,7 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         XCTAssertEqual(requests.first?.0, first)
         XCTAssertEqual(requests.first?.1, UInt32.max)
         let second = UUID()
-        element.update(captureID: second, node: node(actions: 6), frameInContainer: .zero,
+        update(element, captureID: second, node: node(actions: 6), frame: .zero,
             traits: .adjustable) { requests.append(($0, $1, $2)); return true }
         XCTAssertFalse(element.accessibilityActivate())
         element.accessibilityIncrement()
@@ -41,8 +41,8 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
         var calls = 0
         let submit: ExperienceSemanticAccessibilityElement.Submit = { _, _, _ in calls += 1; return false }
-        element.update(captureID: UUID(), node: node(actions: 7, flags: NuxieNativeSemanticNode.disabled),
-            frameInContainer: CGRect(x: 2, y: 3, width: 4, height: 5), traits: .button, submit: submit)
+        update(element, captureID: UUID(), node: node(actions: 7, flags: NuxieNativeSemanticNode.disabled),
+            frame: CGRect(x: 2, y: 3, width: 4, height: 5), traits: .button, submit: submit)
         XCTAssertTrue(element.accessibilityTraits.contains(.notEnabled))
         XCTAssertEqual(element.accessibilityLabel, "Prénom 👋")
         XCTAssertEqual(element.accessibilityFrameInContainerSpace, CGRect(x: 2, y: 3, width: 4, height: 5))
@@ -50,7 +50,7 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         element.accessibilityIncrement()
         element.accessibilityDecrement()
         XCTAssertEqual(calls, 0)
-        element.update(captureID: UUID(), node: node(actions: 1), frameInContainer: .zero,
+        update(element, captureID: UUID(), node: node(actions: 1), frame: .zero,
             traits: .button, submit: submit)
         XCTAssertFalse(element.accessibilityTraits.contains(.notEnabled))
         XCTAssertFalse(element.accessibilityActivate(), "Forward queue rejection to UIKit")
@@ -63,7 +63,7 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         parent.addSubview(surface)
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: surface)
         var count = 0
-        element.update(captureID: UUID(), node: node(actions: 1), frameInContainer: .zero,
+        update(element, captureID: UUID(), node: node(actions: 1), frame: .zero,
             traits: .button) { _, _, _ in count += 1; return true }
         XCTAssertTrue(element.accessibilityActivate())
         parent.isUserInteractionEnabled = false
@@ -82,8 +82,8 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
     func testHiddenControlCannotActivate() {
         let container = UIView()
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
-        element.update(captureID: UUID(), node: node(actions: 7, flags: NuxieNativeSemanticNode.hidden),
-            frameInContainer: .zero, traits: .button) { _, _, _ in
+        update(element, captureID: UUID(), node: node(actions: 7, flags: NuxieNativeSemanticNode.hidden),
+            frame: .zero, traits: .button) { _, _, _ in
                 XCTFail("Hidden controls cannot submit actions")
                 return true
             }
@@ -98,23 +98,23 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
         for role in [NuxieNativeSemanticRole.checkbox, .switchControl, .radioButton] {
             for state in [NuxieNativeSemanticNode.checked, NuxieNativeSemanticNode.toggled] {
-                element.update(captureID: UUID(), node: node(actions: 0, flags: state, role: role.rawValue, value: "Valeur publiée"),
-                    frameInContainer: .zero, traits: .button) { _, _, _ in XCTFail("No authored action"); return true }
+                update(element, captureID: UUID(), node: node(actions: 0, flags: state, role: role.rawValue, value: "Valeur publiée"),
+                    frame: .zero, traits: .button) { _, _, _ in XCTFail("No authored action"); return true }
                 if #available(iOS 17.0, *) { XCTAssertTrue(element.accessibilityTraits.contains(.toggleButton)) }
                 XCTAssertFalse(element.accessibilityTraits.contains(.selected), "On/off is not selection")
                 XCTAssertEqual(element.accessibilityValue, "Valeur publiée")
                 XCTAssertFalse(element.accessibilityActivate())
-                element.update(captureID: UUID(), node: node(actions: 0, role: role.rawValue),
-                    frameInContainer: .zero, traits: .button) { _, _, _ in false }
+                update(element, captureID: UUID(), node: node(actions: 0, role: role.rawValue),
+                    frame: .zero, traits: .button) { _, _, _ in false }
                 XCTAssertFalse(element.accessibilityTraits.contains(.selected))
                 XCTAssertEqual(element.accessibilityValue, "0")
             }
         }
-        element.update(captureID: UUID(), node: node(actions: 0, flags: NuxieNativeSemanticNode.toggled,
-            semanticTraits: NuxieNativeSemanticTrait.toggleable), frameInContainer: .zero,
+        update(element, captureID: UUID(), node: node(actions: 0, flags: NuxieNativeSemanticNode.toggled,
+            semanticTraits: NuxieNativeSemanticTrait.toggleable), frame: .zero,
             traits: .button) { _, _, _ in false }
         XCTAssertEqual(element.accessibilityValue, "1", "Authored toggle capability also applies to button roles")
-        element.update(captureID: UUID(), node: node(actions: 0), frameInContainer: .zero,
+        update(element, captureID: UUID(), node: node(actions: 0), frame: .zero,
             traits: .button) { _, _, _ in false }
         if #available(iOS 17.0, *) { XCTAssertFalse(element.accessibilityTraits.contains(.toggleButton)) }
         XCTAssertFalse(element.accessibilityTraits.contains(.selected))
@@ -124,13 +124,13 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         let container = UIView()
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
         for flag in [NuxieNativeSemanticNode.mixed, NuxieNativeSemanticNode.obscured] {
-            element.update(captureID: UUID(), node: node(actions: 1,
+            update(element, captureID: UUID(), node: node(actions: 1,
                 flags: flag | NuxieNativeSemanticNode.toggled, role: NuxieNativeSemanticRole.switchControl.rawValue),
-                frameInContainer: .zero, traits: .button) { _, _, _ in false }
+                frame: .zero, traits: .button) { _, _, _ in false }
             XCTAssertEqual(element.accessibilityValue, flag == NuxieNativeSemanticNode.mixed ? "Mixed" : nil)
         }
-        element.update(captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.selected),
-            frameInContainer: .zero, traits: .button) { _, _, _ in false }
+        update(element, captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.selected),
+            frame: .zero, traits: .button) { _, _, _ in false }
         XCTAssertTrue(element.accessibilityTraits.contains(.selected))
     }
 
@@ -139,14 +139,14 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         let container = UIView()
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
         let submit: ExperienceSemanticAccessibilityElement.Submit = { _, _, _ in false }
-        element.update(captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.expanded,
-            semanticTraits: NuxieNativeSemanticTrait.expandable), frameInContainer: .zero, traits: .button, submit: submit)
+        update(element, captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.expanded,
+            semanticTraits: NuxieNativeSemanticTrait.expandable), frame: .zero, traits: .button, submit: submit)
         XCTAssertEqual(element.accessibilityExpandedStatus, .expanded)
-        element.update(captureID: UUID(), node: node(actions: 1,
-            semanticTraits: NuxieNativeSemanticTrait.expandable), frameInContainer: .zero, traits: .button, submit: submit)
+        update(element, captureID: UUID(), node: node(actions: 1,
+            semanticTraits: NuxieNativeSemanticTrait.expandable), frame: .zero, traits: .button, submit: submit)
         XCTAssertEqual(element.accessibilityExpandedStatus, .collapsed)
-        element.update(captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.expanded),
-            frameInContainer: .zero, traits: .button, submit: submit)
+        update(element, captureID: UUID(), node: node(actions: 1, flags: NuxieNativeSemanticNode.expanded),
+            frame: .zero, traits: .button, submit: submit)
         XCTAssertEqual(element.accessibilityExpandedStatus, .unsupported, "A state bit cannot invent capability")
         element.retire()
         XCTAssertEqual(element.accessibilityExpandedStatus, .unsupported)
@@ -175,9 +175,9 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
         let container = UIView()
         let element = ExperienceSemanticAccessibilityElement(accessibilityContainer: container)
         for vector in suite.cases {
-            element.update(captureID: UUID(), node: node(actions: 1, flags: vector.state,
+            update(element, captureID: UUID(), node: node(actions: 1, flags: vector.state,
                 role: vector.role, semanticTraits: vector.traits, value: vector.value),
-                frameInContainer: .zero, traits: .button) { _, _, _ in false }
+                frame: .zero, traits: .button) { _, _, _ in false }
             let expectedValue: String?
             if #available(iOS 18.0, *) { expectedValue = vector.iosValue } else { expectedValue = vector.iosValueBefore18 }
             XCTAssertEqual(element.accessibilityValue, expectedValue, vector.id)
@@ -203,6 +203,15 @@ final class ExperienceSemanticAccessibilityElementTests: XCTestCase {
                       semanticTraits: NuxieNativeSemanticTrait.checkable),
             supportsExpandedStatus: false, bundle: bundle)
         XCTAssertEqual(value, "Mixte, Obligatoire")
+    }
+
+    /// The element as an Experience Screen shows `node`.
+    private func update(
+        _ element: ExperienceSemanticAccessibilityElement, captureID: UUID, node: NuxieNativeSemanticNode,
+        frame: CGRect, traits: UIAccessibilityTraits, submit: @escaping ExperienceSemanticAccessibilityElement.Submit
+    ) {
+        element.update(captureID: captureID, node: node, projection: ExperienceAccessibilityStateDescription.projection(
+            for: node, frame: frame, traits: traits), submit: submit)
     }
 
     private func node(actions: UInt32, flags: UInt32 = 0, role: UInt32 = 1,
