@@ -1,5 +1,8 @@
 import Foundation
 import NuxieRuntime
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Platform-owned state words supplement authored values without changing runtime meaning.
 enum ExperienceAccessibilityStateDescription {
@@ -29,6 +32,25 @@ enum ExperienceAccessibilityStateDescription {
         return role == .checkbox || role == .switchControl || role == .radioButton
             || node.traitFlags & (NuxieNativeSemanticTrait.checkable | NuxieNativeSemanticTrait.toggleable) != 0
     }
+
+    #if canImport(UIKit)
+    /// How an Experience Screen shows `node` at `frame` with its role's
+    /// `traits`: a toggle's own trait added, the state words this SDK
+    /// localizes after its value, and the actions the engine offers for it.
+    @MainActor
+    static func projection(
+        for node: NuxieNativeSemanticNode,
+        frame: CGRect,
+        traits: UIAccessibilityTraits
+    ) -> ExperienceSemanticAccessibilityContainer.Projection {
+        var traits = traits
+        if isToggle(node), #available(iOS 17.0, *) { traits.insert(.toggleButton) }
+        let supportsExpandedStatus: Bool
+        if #available(iOS 18.0, *) { supportsExpandedStatus = true } else { supportsExpandedStatus = false }
+        return .init(frame: frame, traits: traits,
+                     value: value(for: node, supportsExpandedStatus: supportsExpandedStatus), actions: node.actions)
+    }
+    #endif
 
     static func value(
         for node: NuxieNativeSemanticNode,

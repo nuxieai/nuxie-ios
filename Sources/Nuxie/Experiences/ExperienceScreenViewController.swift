@@ -1456,22 +1456,10 @@ final class ExperienceScreenViewController: UIViewController {
         onSemanticCapture?(capture)
         let nativeControls = textInputOverlayBridge.applySemantics(capture)
         semanticContainer.update(capture: capture, nativeControls: nativeControls, project: { [weak self] node in
-            guard let self, let role = NuxieNativeSemanticRole(rawValue: node.role), role != .none else { return nil }
+            guard let self, let traits = ExperienceSemanticAccessibilityContainer.traits(for: node) else { return nil }
             let frame = transform.viewportRect(fromArtboard: node.bounds).intersection(self.surfaceView.bounds)
             guard !frame.isNull, !frame.isInfinite, !frame.isEmpty else { return nil }
-            var traits: UIAccessibilityTraits = []
-            switch role {
-            case .button, .checkbox, .switchControl, .radioButton, .tab: traits.insert(.button)
-            case .link: traits.insert(.link)
-            case .slider: traits.insert(.adjustable)
-            case .text: traits.insert(.staticText)
-            case .image: traits.insert(.image)
-            case .group, .list, .listItem, .tabList, .dialog, .alertDialog, .radioGroup:
-                guard !node.label.isEmpty else { return nil }
-            case .none, .textField: break
-            }
-            if node.headingLevel > 0 { traits.insert(.header) }
-            return .init(frame: frame, traits: traits)
+            return ExperienceAccessibilityStateDescription.projection(for: node, frame: frame, traits: traits)
         }, submit: { [weak self] captureID, nodeID, action in
             guard let self else { return false }
             return presentationLoop.enqueueInteraction(ExperienceRuntimePresentationQueuedWork {

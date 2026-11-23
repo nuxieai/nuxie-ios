@@ -298,7 +298,7 @@ final class ExperienceSemanticAccessibilityContainerTests: XCTestCase {
     }
 
     private func projection(_ node: NuxieNativeSemanticNode) -> ExperienceSemanticAccessibilityContainer.Projection? {
-        .init(frame: node.bounds, traits: .button)
+        .init(frame: node.bounds, traits: .button, value: nil, actions: node.actions)
     }
 
     private func capture(_ nodes: [NuxieNativeSemanticNode]) throws -> NuxieNativeSemanticCapture {
