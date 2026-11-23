@@ -23,9 +23,8 @@ style Title
 style Card
   height=72 padding="0 20" gap=14 flex-direction=row align-items=center
   background-color=panel border-radius=18 border-width=1 border-color=edge
-
-style CardOn from Card
-  border-width=2 border-color=mint
+  :checked
+    border-width=2 border-color=mint
 
 style Radio
   width=22 height=22 border-radius=11 border-width=1.5 border-color=#5d6a67
@@ -75,14 +74,14 @@ component Paywall
         box class=Mark
           box width=12 height=12 border-radius=6 background-color=mint
         text headline class=Title id="title"
-        column gap=12 margin-top=40
-          button class=(if selected == annual then CardOn else Card) press=select(annual) id="annual"
+        column role=radiogroup label="Plan" gap=12 margin-top=40
+          button role=radio checked=(selected == annual) class=Card press=select(annual) id="annual"
             box class=Radio
               if selected == annual
                 box width=12 height=12 border-radius=6 background-color=mint
             text "Yearly" class=CardText flex=1
             text (plans[0]?.price ?? "") class=CardText text-align=right id="annual_price"
-          button class=(if selected == monthly then CardOn else Card) press=select(monthly) id="monthly"
+          button role=radio checked=(selected == monthly) class=Card press=select(monthly) id="monthly"
             box class=Radio
               if selected == monthly
                 box width=12 height=12 border-radius=6 background-color=mint
