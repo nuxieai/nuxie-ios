@@ -13,6 +13,10 @@ import UIKit
 /// from inside the engine's step. Two lines say what the record holds: the
 /// selected plan, read from the session's root slot, and the record's
 /// state.
+///
+/// `--nuxie-machine-appearance dark` (or `light`) starts the app in that
+/// appearance: it is set on the app's window, standing in for the phone's
+/// own setting, and the paywall, which follows the phone, draws in it.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
     private let titleLabel = UILabel()
@@ -73,6 +77,25 @@ public final class NuxieMachineHostViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: margins.trailingAnchor),
             stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
         ])
+    }
+
+    override public func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        if let appearance = Self.launchAppearance {
+            view.window?.overrideUserInterfaceStyle = appearance
+        }
+    }
+
+    /// The appearance `--nuxie-machine-appearance` names, if any.
+    private static var launchAppearance: UIUserInterfaceStyle? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let at = arguments.firstIndex(of: "--nuxie-machine-appearance"), at + 1 < arguments.count
+        else { return nil }
+        switch arguments[at + 1] {
+        case "dark": return .dark
+        case "light": return .light
+        default: return nil
+        }
     }
 
     private func finishOnboarding() {
