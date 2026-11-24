@@ -56,6 +56,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The size the engine lays this presentation's Screen out at and draws,
     /// once applied.
     fileprivate var sized: Size?
+    /// The size the last frame that reached the screen was drawn at.
+    private var drawnAt: Size?
 
     private weak var loop: NuxieMachineScreenLoop?
     private let surface = NuxieMachineSurfaceView()
@@ -164,6 +166,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
             height: Double(size.pixelHeight) / Double(size.scale))
     }
 
+    /// What the surface is and what it last drew, read now, for checks.
+    package var surfaceFacts: NuxieMachineSurfaceFacts {
+        let layer = surface.metalLayer
+        return NuxieMachineSurfaceFacts(
+            bounds: surface.bounds.size, drawableSize: layer.drawableSize, contentsScale: layer.contentsScale,
+            drawn: drawnAt.map { CGSize(width: Int($0.pixelWidth), height: Int($0.pixelHeight)) })
+    }
+
     /// Whether this Screen's view is in a window, with a size: what the
     /// engine lays it out at.
     fileprivate var hasSize: Bool {
@@ -232,6 +242,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         try Self.requireHealthy(frame.outcome, doing: "render")
         guard frame.outcome.disposition == .presented else { return false }
         framesDrawn += 1
+        drawnAt = size
         updateAccessibility()
         if let semantics = frame.semantics { show(semantics) }
         return true
@@ -317,6 +328,18 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let value = ceil(Double(points * scale))
         return value < Double(UInt32.max) ? UInt32(value) : UInt32.max
     }
+}
+
+/// A Screen's surface as it is and as it last drew, for checks: its bounds
+/// in points, its Metal layer's drawable size in pixels and its scale, and
+/// the pixel size of the last frame that reached the screen (none before
+/// the first). After a change of size, the drawable is the bounds times the
+/// scale, rounded up, and the next frame drawn is that size.
+package struct NuxieMachineSurfaceFacts: Equatable, Sendable {
+    package let bounds: CGSize
+    package let drawableSize: CGSize
+    package let contentsScale: CGFloat
+    package let drawn: CGSize?
 }
 
 /// The display loop that runs one edge's frames and draws every native
