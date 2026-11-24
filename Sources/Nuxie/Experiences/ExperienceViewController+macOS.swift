@@ -1,5 +1,6 @@
 #if canImport(AppKit)
 import AppKit
+import NuxieRuntime
 
 extension ExperienceViewController {
     func platformApplyDefaultBackgroundColor() {

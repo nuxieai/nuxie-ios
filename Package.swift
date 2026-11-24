@@ -122,6 +122,7 @@ let package = Package(
             name: "NuxieTestSupport",
             dependencies: [
                 "Nuxie",
+                "NuxieRuntime",
                 "Quick",
                 "Nimble",
             ],

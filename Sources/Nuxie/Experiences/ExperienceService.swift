@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 /// One show's hold on its prepared release, and how ready that release was.
 struct ExperiencePreparedReleaseReservation: Sendable {

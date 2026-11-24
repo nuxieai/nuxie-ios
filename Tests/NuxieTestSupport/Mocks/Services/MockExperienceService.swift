@@ -1,5 +1,6 @@
 import Foundation
 @testable import Nuxie
+import NuxieRuntime
 
 final class MockExperienceService: ExperienceServiceProtocol, @unchecked Sendable {
     /// One call into the prepared-release surface, in call order.
