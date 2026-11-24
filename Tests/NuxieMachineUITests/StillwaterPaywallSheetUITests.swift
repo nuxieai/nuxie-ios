@@ -234,6 +234,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertGreaterThan(upright.top, 0, "UIKit gives the upright screen no top inset")
         XCTAssertGreaterThan(upright.bottom, 0, "UIKit gives the upright screen no bottom inset")
         XCTAssertGreaterThan(title.frame.minY, upright.top, "the headline is under the status bar")
+        expectSides(app, button(app, beginningWith: "Yearly"), inside: upright, "upright")
         // Below the links: the terms' box (8 and 40) and the page's own
         // bottom padding (34), then the home indicator's inset.
         XCTAssertEqual(app.frame.maxY - upright.bottom - restore.frame.maxY, 82, accuracy: 1,
@@ -279,6 +280,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(title.frame.minY, turned.top, "the turned headline is under the status bar")
         XCTAssertEqual(uprightTitle - title.frame.minY, upright.top - turned.top, accuracy: 1,
                        "the headline did not move by what the top inset lost")
+        XCTAssertGreaterThan(turned.left + turned.right, 0, "UIKit gives the turned screen no side inset")
+        expectSides(app, button(app, beginningWith: "Yearly"), inside: turned, "turned")
         // The raw buffer is the device's, upright for the phone held upright:
         // the turned screen's size with width and height swapped.
         let pixels = CGSize(width: app.frame.width * facts.scale, height: app.frame.height * facts.scale)
@@ -571,11 +574,25 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         }
     }
 
+    /// The page's content inside the side insets by the inset plus the
+    /// page's own 24: the Yearly card, a box as wide as the content, starts
+    /// there on the left and ends there on the right.
+    private func expectSides(_ app: XCUIApplication, _ card: XCUIElement, inside insets: UIEdgeInsets,
+                             _ what: String) {
+        XCTAssertEqual(card.frame.minX, insets.left + 24, accuracy: 1,
+                       "\(what): the Yearly card is not the left inset \(insets.left) plus 24 from the left")
+        XCTAssertEqual(app.frame.maxX - card.frame.maxX, insets.right + 24, accuracy: 1,
+                       "\(what): the Yearly card is not the right inset \(insets.right) plus 24 from the right")
+    }
+
     /// Down both sides in the page's side padding, from just below the top
-    /// inset to the bottom edge, and across the top padding.
+    /// inset to the bottom edge, and across the top padding; and in the side
+    /// padding inside each side inset, which the page's content keeps clear.
     private static func groundPoints(across size: CGSize, below insets: UIEdgeInsets) -> [CGPoint] {
         let top = insets.top + 30
         return [
+            CGPoint(x: insets.left + 12, y: size.height / 2),
+            CGPoint(x: size.width - insets.right - 12, y: size.height / 2),
             CGPoint(x: 12, y: top), CGPoint(x: size.width / 4, y: top), CGPoint(x: size.width / 2, y: top),
             CGPoint(x: size.width * 3 / 4, y: top), CGPoint(x: size.width - 12, y: top),
             CGPoint(x: 12, y: size.height / 2), CGPoint(x: size.width - 12, y: size.height / 2),
