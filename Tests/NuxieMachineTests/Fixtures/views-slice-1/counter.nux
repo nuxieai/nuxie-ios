@@ -17,7 +17,7 @@ component Counter
     noted = false
 
   view
-    column padding=24 gap=12 background-color=#0d1214
+    column padding="calc(env(safe-area-inset-top) + 24) 24 24" gap=12 background-color=#0d1214
       text `Tapped ${count} times` color=#eef3f1 font-size=24 id="count"
       if noted
         text "You have counted at least once." color=#9fcdb9 font-size=16 id="note"
