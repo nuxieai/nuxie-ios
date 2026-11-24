@@ -388,24 +388,33 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// presents a sheet at the large detent; the test host alone turns this
     /// one to medium once it is up (`--nuxie-machine-sheet-detent medium`).
     ///
+    /// On iOS 27 a medium sheet floats: it stands off the screen's sides and
+    /// bottom and is drawn smaller than its view (a transform), so its frame
+    /// on screen is not its view's size. It settles when its frame stops
+    /// changing.
+    ///
     /// Checked, as the rule holds for any sheet: the surface fills the
-    /// sheet's view, it is told the insets UIKit gives that view, and each
-    /// place is told once. Kept, not checked, as the note
-    /// `place-sheet-medium-record`: the screen's and the sheet's frames,
-    /// whether the sheet reaches the screen's bottom edge or floats above
-    /// it, the screen's insets, how far they reach into the sheet's frame
-    /// and whether the view's insets are that, the place told, and the
+    /// sheet's view (the surface's bounds are the view's), it is told the
+    /// insets UIKit gives that view, and each place is told once. Kept, not
+    /// checked, as the note `place-sheet-medium-record`: the screen's frame,
+    /// the sheet's frame on screen and its view's size, the scale it is
+    /// drawn at, how far it stands off each edge of the screen, the
+    /// screen's insets, the view's, how far the screen's safe area reaches
+    /// into the sheet's frame and whether the view's insets are that, how
+    /// the bottom inset compares with the stand-off, the place told, and the
     /// colors at the sheet's bottom edge and below it. The still is
     /// `place-sheet-medium-light`. The page is taller than a medium sheet,
     /// so its content runs past the sheet's bottom edge.
     func testAMediumSheetIsRecordedAsUIKitGivesIt() throws {
         let app = launch(.light, mediumSheet: true)
         let screen = try openPaywall(app, large: false)
-        let sheet = try settled(app, screen, "the medium sheet") { screen.frame.minY > app.frame.height / 3 }
+        let sheet = try settled(app, screen, "the medium sheet", fillingFrame: false) {
+            screen.frame.minY > app.frame.height / 3
+        }
         let shot = app.screenshot()
         keep("place-sheet-medium-light", app, screen, shot: shot)
         let facts = try surface(app, kept: "place-sheet-medium-light-surface")
-        let place = try expectPlace(facts, of: sheet, in: app, reaching: false, "the medium sheet")
+        let place = try expectPlace(facts, of: sheet, in: app, reaching: false, filling: false, "the medium sheet")
         let told = try expectToldOnce(app, endingWith: facts, kept: "place-sheet-medium-light")
 
         let picture = upright(shot.image)
@@ -418,10 +427,21 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         }
         let gap = app.frame.maxY - sheet.maxY
         let reaches = abs(gap) < 0.5
+        let view = facts.viewSize
+        let drawnAt = view.width > 0 ? sheet.width / view.width : 0
+        let bottom = place.view.bottom
+        let comparison = abs(bottom - gap) < 0.5 ? "the same as" : bottom > gap ? "larger than" : "smaller than"
         var lines = [
             "screen \(app.frame)",
-            "sheet \(sheet)",
+            "sheet on screen \(sheet)",
+            "sheet's view \(view.width) x \(view.height)",
+            "drawn at \(drawnAt) of its view's width and \(view.height > 0 ? sheet.height / view.height : 0) of its height",
             reaches ? "the sheet reaches the screen's bottom edge" : "the sheet floats \(gap) above the screen's bottom edge",
+            "it stands off the screen's left by \(sheet.minX - app.frame.minX), the right by \(app.frame.maxX - sheet.maxX), "
+                + "the bottom by \(gap)",
+            "UIKit gives the sheet's view a bottom inset of \(bottom); the sheet stands \(gap) off the screen's "
+                + "bottom edge; the bottom inset is \(comparison) the stand-off (on screen, at the sheet's scale, "
+                + "the inset is \(bottom * drawnAt))",
             "screen insets: \(edges(place.screen))",
             "view insets: \(edges(place.view))",
             "told insets: \(edges(place.told))",
@@ -452,12 +472,17 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15), app.debugDescription)
 
         // A swipe down has no action behind it: the machine hears `closed`,
-        // and the record ends.
-        let start = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: screen.frame.midX, dy: screen.frame.minY + 12))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
-        start.press(forDuration: 0.1, thenDragTo: end)
-        waitUntilGone(screen)
+        // and the record ends. It runs down most of the sheet and stops
+        // short of the screen's bottom inset.
+        let sheet = screen.frame
+        let screenInsets = try insets(app)
+        let from = try swipeStart(app, sheet)
+        let to = CGPoint(x: from.x, y: min(app.frame.maxY - screenInsets.bottom - 8, from.y + sheet.height * 0.8))
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: from.x, dy: from.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)))
+        waitUntilGone(screen, "the swipe from \(from) to \(to) on the sheet \(sheet), with the screen's insets "
+                          + "\(screenInsets), did not take the sheet; the Screen is \(screen.exists ? "\(screen.frame)" : "gone")")
         waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: ended")
         keep("1-after-swipe", app, nil)
     }
@@ -470,8 +495,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
         // A short, slow pull that the person lets go of: UIKit cancels the
         // dismissal and the sheet settles back. The machine hears nothing.
-        let start = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: resting.midX, dy: resting.minY + 12))
+        let from = try swipeStart(app, resting)
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: from.x, dy: from.y))
         let short = start.withOffset(CGVector(dx: 0, dy: 90))
         start.press(forDuration: 0.1, thenDragTo: short, withVelocity: .slow, thenHoldForDuration: 0.4)
         let deadline = Date().addingTimeInterval(10)
@@ -691,7 +716,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     }
 
     /// A Screen's surface as the app reads it, in points and pixels; the
-    /// insets UIKit gives the Screen's view; and the place the session is
+    /// insets UIKit gives the Screen's view and its size; and the place the session is
     /// told, its insets and size (none before it has one).
     private struct SurfaceFacts {
         let bounds: CGSize
@@ -699,27 +724,29 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         let scale: CGFloat
         let drawn: CGSize
         let viewInsets: UIEdgeInsets
+        let viewSize: CGSize
         let placeInsets: UIEdgeInsets?
         let placeSize: CGSize?
         /// The place as the host writes it, `T R B L W H`.
         let placeNumbers: [Double]?
 
         init?(_ numbers: [Double]) {
-            guard numbers.count == 11 || numbers.count == 17 else { return nil }
+            guard numbers.count == 13 || numbers.count == 19 else { return nil }
             bounds = CGSize(width: numbers[0], height: numbers[1])
             drawable = CGSize(width: numbers[2], height: numbers[3])
             scale = numbers[4]
             drawn = CGSize(width: numbers[5], height: numbers[6])
             viewInsets = UIEdgeInsets(top: numbers[7], left: numbers[10], bottom: numbers[9], right: numbers[8])
-            guard numbers.count == 17 else {
+            viewSize = CGSize(width: numbers[11], height: numbers[12])
+            guard numbers.count == 19 else {
                 placeInsets = nil
                 placeSize = nil
                 placeNumbers = nil
                 return
             }
-            placeInsets = UIEdgeInsets(top: numbers[11], left: numbers[14], bottom: numbers[13], right: numbers[12])
-            placeSize = CGSize(width: numbers[15], height: numbers[16])
-            placeNumbers = Array(numbers[11...])
+            placeInsets = UIEdgeInsets(top: numbers[13], left: numbers[16], bottom: numbers[15], right: numbers[14])
+            placeSize = CGSize(width: numbers[17], height: numbers[18])
+            placeNumbers = Array(numbers[13...])
         }
     }
 
@@ -747,15 +774,16 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     /// The place of the Screen presented in `frame`, checked against what
     /// UIKit gives, never a number of the test's own: its surface fills
-    /// `frame` (bounds that size, the drawable that size at its scale, the
-    /// last frame drawn at it); the place's size is the surface's; the told
-    /// insets are the ones UIKit gives the Screen's view; and, with
-    /// `reaching`, they are how far the screen's safe area (the host's
-    /// `nuxie-machine-safe-area`) reaches into `frame`.
+    /// `frame`, or with `filling` false its view, for a sheet drawn smaller
+    /// than its view (bounds that size, the drawable that size at its
+    /// scale, the last frame drawn at it); the place's size is the
+    /// surface's; the told insets are the ones UIKit gives the Screen's
+    /// view; and, with `reaching`, they are how far the screen's safe area
+    /// (the host's `nuxie-machine-safe-area`) reaches into `frame`.
     @discardableResult
     private func expectPlace(_ facts: SurfaceFacts, of frame: CGRect, in app: XCUIApplication,
-                             reaching: Bool = true, _ what: String) throws -> Place {
-        expect(facts, coversA: frame.size, what)
+                             reaching: Bool = true, filling: Bool = true, _ what: String) throws -> Place {
+        expect(facts, coversA: filling ? frame.size : facts.viewSize, what)
         let told = try XCTUnwrap(facts.placeInsets, "\(what): the Screen has no place")
         let size = try XCTUnwrap(facts.placeSize)
         XCTAssertEqual(size.width, facts.bounds.width, accuracy: 0.5, "\(what): the place is \(size) wide")
@@ -889,9 +917,11 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     private struct NotRead: Error {}
 
     /// The sheet once it has settled: its Screen's frame the same twice
-    /// running and `until` holding, and the surface that frame's size, with
-    /// a place, its last frame drawn at its drawable. Its frame.
-    private func settled(_ app: XCUIApplication, _ screen: XCUIElement, _ what: String,
+    /// running and `until` holding, and the surface that frame's size (with
+    /// `fillingFrame` false, its view's: a sheet drawn smaller than its view
+    /// never has a frame its view's size), with a place, its last frame
+    /// drawn at its drawable. Its frame.
+    private func settled(_ app: XCUIApplication, _ screen: XCUIElement, _ what: String, fillingFrame: Bool = true,
                          until done: () -> Bool = { true }) throws -> CGRect {
         let deadline = Date().addingTimeInterval(20)
         var last = CGRect.null
@@ -901,7 +931,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             if let read = surfaceNow(app) {
                 let (facts, text) = read
                 seen = text
-                if done(), frame == last, facts.bounds == frame.size, facts.drawn == facts.drawable,
+                if done(), frame == last, facts.bounds == (fillingFrame ? frame.size : facts.viewSize),
+                   facts.drawn == facts.drawable,
                    facts.placeInsets != nil {
                     return frame
                 }
@@ -1014,7 +1045,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// its scale (rounded up, as the Screen sizes it), and whose last frame
     /// was drawn at the drawable's size.
     private func expect(_ facts: SurfaceFacts, coversA size: CGSize, _ what: String) {
-        XCTAssertEqual(facts.bounds, size, "\(what): the surface is \(facts.bounds), not the screen's \(size)")
+        XCTAssertEqual(facts.bounds, size, "\(what): the surface is \(facts.bounds), not the \(size) it fills")
         XCTAssertGreaterThan(facts.scale, 0, "\(what): the surface has no scale")
         let pixels = CGSize(width: (facts.bounds.width * facts.scale).rounded(.up),
                             height: (facts.bounds.height * facts.scale).rounded(.up))
@@ -1161,9 +1192,19 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         return rgba[0..<3].map(Int.init)
     }
 
-    private func waitUntilGone(_ element: XCUIElement) {
+    private func waitUntilGone(_ element: XCUIElement, _ message: @autoclosure () -> String = "the sheet is still up") {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 20), .completed, "the sheet is still up")
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 20), .completed, message())
+    }
+
+    /// Where a swipe down the sheet starts: in the middle, 24 into the
+    /// page's top padding, below both the sheet's top and the screen's top
+    /// inset. A drag that starts in the status bar's band pulls down the
+    /// system's own panel instead, and on a phone with a home button the
+    /// large sheet's top sits close to that band.
+    private func swipeStart(_ app: XCUIApplication, _ sheet: CGRect) throws -> CGPoint {
+        let top = try insets(app).top
+        return CGPoint(x: sheet.midX, y: max(sheet.minY, top) + 24)
     }
 
     // MARK: Keeping each frame
