@@ -97,8 +97,8 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
     // MARK: Each presentation laid out as its own style
 
-    /// A sheet and a cover are each a controller of their own, laid out and
-    /// set up as their style.
+    /// A sheet and a cover are each a controller of their own, set up as
+    /// their style and laid out alike: the Screen fills its view.
     @MainActor
     func testASheetAndACoverAreEachLaidOutAsTheirOwnStyle() throws {
         let loop = try Self.loop()
@@ -277,11 +277,11 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
     private struct NotLaidOut: Error {}
 
-    /// Lay out `controller`, made for `presentation`, and check it:
-    /// a cover draws across the whole screen over no ground, full screen,
-    /// with no swipe; a sheet draws inside its safe area over the platform's
-    /// sheet background, as a page sheet at the large detent with no
-    /// grabber, which the person can swipe down.
+    /// Lay out `controller`, made for `presentation`, and check it: either
+    /// one's Screen fills its view to every edge over no ground, so the
+    /// surface has the view's insets; a cover is full screen with no swipe,
+    /// a sheet a page sheet at the large detent with no grabber, which the
+    /// person can swipe down.
     @MainActor
     private static func expect(_ controller: NuxieMachineScreenViewController,
                                laidOutAs presentation: NuxieMachinePresentation) throws {
@@ -293,15 +293,14 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         XCTAssertGreaterThan(insets.top, 0, "the window's safe area reached the view")
         XCTAssertGreaterThan(insets.bottom, 0, "the window's safe area reached the view")
         let surface = try XCTUnwrap(view.subviews.first, "the Screen's surface")
+        XCTAssertEqual(surface.frame, view.bounds, "a \(presentation) does not fill its view")
+        XCTAssertEqual(surface.safeAreaInsets, insets, "a \(presentation)'s surface does not have its view's insets")
+        XCTAssertEqual(view.backgroundColor, .clear, "a \(presentation) shows a ground of its own")
         switch presentation {
         case .cover:
-            XCTAssertEqual(surface.frame, view.bounds, "a cover draws across the whole screen")
-            XCTAssertEqual(view.backgroundColor, .clear)
             XCTAssertEqual(controller.modalPresentationStyle, .fullScreen)
             XCTAssertTrue(controller.isModalInPresentation, "a cover has no swipe")
         default:
-            XCTAssertEqual(surface.frame, view.bounds.inset(by: insets), "a sheet draws inside its safe area")
-            XCTAssertEqual(view.backgroundColor, .systemBackground)
             XCTAssertEqual(controller.modalPresentationStyle, .pageSheet)
             XCTAssertFalse(controller.isModalInPresentation, "the person can swipe a sheet down")
             let sheet = try XCTUnwrap(controller.sheetPresentationController)

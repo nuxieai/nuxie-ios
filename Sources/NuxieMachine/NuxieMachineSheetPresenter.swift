@@ -62,11 +62,12 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   changes. One environment holds for the session: sheets and covers
 ///   over one another share it.
 /// - Each native presentation is told where it is shown, its place
-///   ([`NuxieMachineScreenViewController.place`]): a cover the screen's
-///   insets, a sheet none. Its place is told before its first frame is
-///   drawn, and again before the next frame after a rotation, a change of
-///   size or of the safe area; the same place is told once, and it goes
-///   when its presentation does ([`NuxieMachineToldPlaces`]).
+///   ([`NuxieMachineScreenViewController.place`]): the insets of what it
+///   is presented in, which its Screen fills to every edge, a cover's the
+///   screen's and a sheet's its own. Its place is told before its first
+///   frame is drawn, and again before the next frame after a rotation, a
+///   change of size or of the safe area; the same place is told once, and
+///   it goes when its presentation does ([`NuxieMachineToldPlaces`]).
 ///
 /// What the presenter owns has one end of life. The edge with its session,
 /// the loop that runs its frames, the Screens, and the wake timer are let
