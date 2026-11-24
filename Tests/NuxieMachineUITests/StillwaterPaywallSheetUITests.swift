@@ -32,7 +32,9 @@ import XCTest
 /// A sheet is told no insets: the paywall is laid out inside the sheet's
 /// safe area, and the band below it shows the platform's sheet background.
 /// Each story keeps one still of that, `place-sheet-light` or
-/// `place-sheet-dark`.
+/// `place-sheet-dark`. With `--nuxie-machine-paywall-cover` the host
+/// presents the same paywall as a cover, which is told the screen's insets
+/// and fills the screen.
 final class StillwaterPaywallSheetUITests: XCTestCase {
     private static let errorLine = "The purchase did not go through. Try again in a moment."
     private static let termsLine = "Billed through the store after the trial. Cancel any time."
@@ -203,6 +205,56 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         keep("6-after-not-now", app, nil)
     }
 
+    /// The paywall as a cover fills the screen, under the status bar and the
+    /// home indicator, and its page keeps its content clear of them by the
+    /// insets UIKit gives the screen: read from the host's
+    /// `nuxie-machine-safe-area`, never from the place the SDK told.
+    ///
+    /// Upright: the Screen's frame is the screen's; the headline is below
+    /// the top inset; the footer's links end the page's own spacing (the
+    /// terms' box and the bottom padding) above the bottom inset. Turned on its side: the
+    /// frame is the turned screen's, and the headline moved up by exactly
+    /// what the top inset lost. Kept as `place-cover-portrait-light`,
+    /// `place-cover-portrait-dark` (the phone turned dark while the cover is
+    /// open) and `place-cover-landscape-light`.
+    func testThePaywallAsACoverFillsTheScreen() throws {
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        XCUIDevice.shared.orientation = .portrait
+        let app = launch(.light, asCover: true)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        let restore = app.buttons["Restore purchases"]
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+
+        let upright = try settledInsets(app, screen, title)
+        XCTAssertEqual(screen.frame, app.frame, "the cover's Screen is not the screen's frame")
+        XCTAssertGreaterThan(upright.top, 0, "UIKit gives the upright screen no top inset")
+        XCTAssertGreaterThan(upright.bottom, 0, "UIKit gives the upright screen no bottom inset")
+        XCTAssertGreaterThan(title.frame.minY, upright.top, "the headline is under the status bar")
+        // Below the links: the terms' box (8 and 40) and the page's own
+        // bottom padding (34), then the home indicator's inset.
+        XCTAssertEqual(app.frame.maxY - upright.bottom - restore.frame.maxY, 82, accuracy: 1,
+                       "the footer does not end the page's padding above the home indicator")
+        XCTAssertEqual(coverGround(app, below: upright), .light, "the cover does not open light")
+        let uprightTitle = title.frame.minY
+        keep("place-cover-portrait-light", app, screen, expecting: "1-open")
+
+        turnThePhone(.dark)
+        waitFor(ground: .dark, app, below: upright, "the open cover did not turn dark with the phone")
+        keep("place-cover-portrait-dark", app, screen, expecting: "1-open")
+        turnThePhone(.light)
+        waitFor(ground: .light, app, below: upright, "the open cover did not turn light again")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let turned = try settledInsets(app, screen, title, until: { $0.left > 0 || $0.right > 0 })
+        XCTAssertGreaterThan(app.frame.width, app.frame.height, "the app did not turn")
+        XCTAssertEqual(screen.frame, app.frame, "the turned cover's Screen is not the turned screen's frame")
+        XCTAssertGreaterThanOrEqual(title.frame.minY, turned.top, "the turned headline is under the status bar")
+        XCTAssertEqual(uprightTitle - title.frame.minY, upright.top - turned.top, accuracy: 1,
+                       "the headline did not move by what the top inset lost")
+        keep("place-cover-landscape-light", app, screen)
+    }
+
     func testASwipeDownEndsTheRecord() throws {
         let app = launch()
         let screen = try openPaywall(app)
@@ -249,10 +301,14 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     // MARK: Driving the host
 
-    /// The host, on the phone as it is, or started in `appearance`.
-    private func launch(_ appearance: Ground? = nil) -> XCUIApplication {
+    /// The host, on the phone as it is, or started in `appearance`; with
+    /// `asCover`, presenting the paywall as a cover.
+    private func launch(_ appearance: Ground? = nil, asCover: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--nuxie-machine-paywall"]
+        if asCover {
+            app.launchArguments += ["--nuxie-machine-paywall-cover"]
+        }
         if let appearance {
             app.launchArguments += ["--nuxie-machine-appearance", appearance.rawValue]
         }
@@ -337,6 +393,49 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// Neither when it is neither (the sheet is not drawn there yet).
     private func ground(_ app: XCUIApplication, _ screen: XCUIElement) -> Ground? {
         ground(in: app.screenshot(), at: CGPoint(x: screen.frame.minX + 12, y: screen.frame.minY + 30))
+    }
+
+    /// UIKit's safe-area insets for the screen, as the host shows them,
+    /// once they satisfy `until` and the cover has settled: its Screen at
+    /// the screen's frame and the headline in the same place twice running.
+    private func settledInsets(_ app: XCUIApplication, _ screen: XCUIElement, _ title: XCUIElement,
+                               until done: (UIEdgeInsets) -> Bool = { _ in true }) throws -> UIEdgeInsets {
+        let shown = app.descendants(matching: .any)["nuxie-machine-safe-area"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 10),
+                      "the host does not show the safe area: \(app.debugDescription)")
+        let deadline = Date().addingTimeInterval(15)
+        var insets = UIEdgeInsets.zero
+        var last = CGRect.null
+        while Date() < deadline {
+            let words = shown.label.split(separator: " ").compactMap { Double($0) }
+            if words.count == 4 {
+                insets = UIEdgeInsets(top: words[0], left: words[3], bottom: words[2], right: words[1])
+                let now = title.frame
+                if done(insets), screen.frame == app.frame, now == last { return insets }
+                last = now
+            }
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        XCTFail("the cover did not settle: insets \(shown.label), Screen \(screen.frame), app \(app.frame)")
+        return insets
+    }
+
+    /// Light or dark, as the cover's ground reads in a screenshot: a point
+    /// in the page's top padding, just below the top inset and clear of the
+    /// status bar.
+    private func coverGround(_ app: XCUIApplication, below insets: UIEdgeInsets) -> Ground? {
+        ground(in: app.screenshot(), at: CGPoint(x: insets.left + 12, y: insets.top + 30))
+    }
+
+    private func waitFor(ground expected: Ground, _ app: XCUIApplication, below insets: UIEdgeInsets,
+                         _ message: String) {
+        let deadline = Date().addingTimeInterval(10)
+        var seen = coverGround(app, below: insets)
+        while seen != expected, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            seen = coverGround(app, below: insets)
+        }
+        XCTAssertEqual(seen, expected, message)
     }
 
     /// Light or dark at `point` of `shot`: light when every channel is at

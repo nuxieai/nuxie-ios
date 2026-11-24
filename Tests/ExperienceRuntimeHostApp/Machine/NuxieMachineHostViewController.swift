@@ -22,6 +22,14 @@ import UIKit
 /// that appearance the same way, so a UI test can turn the phone while the
 /// paywall is open: the simulator's own appearance setting does not reach a
 /// running app on every simulator.
+///
+/// `--nuxie-machine-paywall-cover` presents the same paywall as a cover:
+/// Stillwater's files as bundled, with the one word of the paywall's route
+/// that says how it is presented swapped in memory ([`asCover`]). The app
+/// then also shows UIKit's own safe-area insets for the screen, in a
+/// window above the cover that takes no touches, as the element
+/// `nuxie-machine-safe-area` ([`NuxieMachineSafeAreaWindow`]), so a UI test
+/// can check the cover's place against them.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
     /// The Darwin notifications that turn the window, with the appearance
@@ -39,6 +47,12 @@ public final class NuxieMachineHostViewController: UIViewController {
     private let planLabel = UILabel()
     private let recordLabel = UILabel()
     private var presenter: NuxieMachineSheetPresenter?
+    private var safeArea: NuxieMachineSafeAreaWindow?
+
+    /// Whether the paywall is presented as a cover.
+    private static var presentsACover: Bool {
+        ProcessInfo.processInfo.arguments.contains("--nuxie-machine-paywall-cover")
+    }
 
     public init() {
         super.init(nibName: nil, bundle: nil)
@@ -99,6 +113,9 @@ public final class NuxieMachineHostViewController: UIViewController {
             view.window?.overrideUserInterfaceStyle = appearance
         }
         Self.listenForAppearance(turning: self)
+        if Self.presentsACover, safeArea == nil, let scene = view.window?.windowScene {
+            safeArea = NuxieMachineSafeAreaWindow(windowScene: scene)
+        }
     }
 
     /// Turn the window `shown` is in when a test posts one of
@@ -140,7 +157,7 @@ public final class NuxieMachineHostViewController: UIViewController {
         self.presenter = presenter
         Task { @MainActor [weak self] in
             do {
-                let plan = try NuxieMachineStillwaterFixture.load(from: .main)
+                let plan = try NuxieMachineStillwaterFixture.load(from: .main, asCover: Self.presentsACover)
                 await presenter.start(plan: plan, store: NuxieMachineSlowStore(), event: "onboarding_completed")
             } catch {
                 self?.recordLabel.text = "Record: the fixture did not load (\(error))"
@@ -186,7 +203,18 @@ enum NuxieMachineStillwaterFixture {
         var description: String { "stillwater/\(name) is not in the app bundle" }
     }
 
-    static func load(from bundle: Bundle) throws -> NuxieMachinePlanSource {
+    /// The paywall's route as bundled, and as a cover.
+    static let sheetRoute = "    paywall  Paywall sheet\n"
+    static let coverRoute = "    paywall  Paywall cover\n"
+
+    struct NoSheetRoute: Error, CustomStringConvertible {
+        var description: String { "stillwater/main.nux does not have the paywall's route exactly once" }
+    }
+
+    /// Stillwater's files, or with `asCover` the same files with the
+    /// paywall's route presenting a cover: only that one word of `main.nux`
+    /// changes, in memory. The bundled files are not touched.
+    static func load(from bundle: Bundle, asCover: Bool = false) throws -> NuxieMachinePlanSource {
         func data(_ name: String) throws -> Data {
             let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
             guard let url = bundle.url(forResource: parts[0], withExtension: parts[1],
@@ -194,11 +222,82 @@ enum NuxieMachineStillwaterFixture {
             return try Data(contentsOf: url)
         }
         let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
-        let files = try ["main.nux", "paywall.nux", "plan-card.nux", "screens.nux", "done.nux"].map {
-            NuxieMachineSourceFile(path: $0, text: String(decoding: try data($0), as: UTF8.self))
+        let files = try ["main.nux", "paywall.nux", "plan-card.nux", "screens.nux", "done.nux"].map { name in
+            let text = String(decoding: try data(name), as: UTF8.self)
+            let swapped = asCover && name == "main.nux" ? try Self.asCover(text) : text
+            return NuxieMachineSourceFile(path: name, text: swapped)
         }
         return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
                                       experience: provenance.plan.experience, version: provenance.plan.version)
+    }
+}
+
+extension NuxieMachineStillwaterFixture {
+    /// `main` with the paywall's route presenting a cover.
+    static func asCover(_ main: String) throws -> String {
+        guard main.components(separatedBy: sheetRoute).count == 2 else { throw NoSheetRoute() }
+        return main.replacingOccurrences(of: sheetRoute, with: coverRoute)
+    }
+}
+
+/// UIKit's safe-area insets for the whole screen, shown to a UI test: a
+/// window over the scene, above the app's own and its cover, that takes no
+/// touches and draws nothing. Its one element, `nuxie-machine-safe-area`,
+/// is labeled with the window's `safeAreaInsets` as `top right bottom left`
+/// in points, read again whenever they change (a rotation, the status bar).
+@MainActor
+final class NuxieMachineSafeAreaWindow: UIWindow {
+    override init(windowScene: UIWindowScene) {
+        super.init(windowScene: windowScene)
+        windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        rootViewController = Reader()
+        isHidden = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Every touch goes through to the app's own window.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        nil
+    }
+
+    /// The view controller whose view's label reads the window's insets. It
+    /// leaves the status bar and the orientations to the app's own.
+    private final class Reader: UIViewController {
+        private let label = UILabel()
+
+        override func loadView() {
+            let view = UIView()
+            view.backgroundColor = .clear
+            view.isUserInteractionEnabled = false
+            label.textColor = .clear
+            label.font = .systemFont(ofSize: 1)
+            label.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+            label.isAccessibilityElement = true
+            label.accessibilityIdentifier = "nuxie-machine-safe-area"
+            view.addSubview(label)
+            self.view = view
+        }
+
+        override func viewSafeAreaInsetsDidChange() {
+            super.viewSafeAreaInsetsDidChange()
+            read()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            read()
+        }
+
+        private func read() {
+            let insets = view.window?.safeAreaInsets ?? .zero
+            let words = [insets.top, insets.right, insets.bottom, insets.left].map { "\(Double($0))" }
+            label.accessibilityLabel = words.joined(separator: " ")
+        }
     }
 }
 
