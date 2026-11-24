@@ -83,24 +83,34 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// The paywall follows the phone while it is open: the phone turns dark
     /// and the open sheet is drawn again in dark, then light again, with
     /// the same reading throughout.
+    ///
+    /// The phone is turned the way the story's dark start stands in for it,
+    /// on the host's window, by a Darwin notification the host listens for.
+    /// `XCUIDevice.shared.appearance` was tried first: on the iOS 27.0
+    /// simulator it did not reach the running app at all (twelve seconds
+    /// after it, UIKit's own status bar and the host behind the sheet were
+    /// still light).
     func testTheOpenPaywallFollowsThePhone() throws {
-        guard #available(iOS 17.0, *) else { throw XCTSkip("the device's appearance is set from iOS 17") }
-        let device = XCUIDevice.shared
-        device.appearance = .light
-        addTeardownBlock { XCUIDevice.shared.appearance = .light }
-        let app = launch()
+        let app = launch(.light)
         let screen = try openPaywall(app)
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15), app.debugDescription)
         waitFor(app, screen, ground: .light, "the paywall opened on a light phone is not light")
         keep("switch-1-light", app, screen, expecting: "1-open")
 
-        device.appearance = .dark
+        turnThePhone(.dark)
         waitFor(app, screen, ground: .dark, "the open paywall did not turn dark with the phone")
         keep("switch-2-dark", app, screen, expecting: "1-open")
 
-        device.appearance = .light
+        turnThePhone(.light)
         waitFor(app, screen, ground: .light, "the open paywall did not turn light again with the phone")
         keep("switch-3-light-again", app, screen, expecting: "1-open")
+    }
+
+    /// Post the Darwin notification the host turns its window with.
+    private func turnThePhone(_ appearance: Ground) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("dev.nuxie.machine.appearance.\(appearance.rawValue)" as CFString), nil, nil, true)
     }
 
     private func playTheStory(in appearance: Ground) throws {
@@ -293,16 +303,32 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.25)
             seen = ground(app, screen)
         }
-        XCTAssertEqual(seen, expected, message)
+        guard seen != expected else { return }
+        // What UIKit drew above the sheet says whether the app heard the
+        // phone at all: the host behind the sheet follows it on its own.
+        let shot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: shot)
+        attachment.name = "not-\(expected.rawValue)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let above = ground(in: shot, at: CGPoint(x: screen.frame.midX, y: max(2, screen.frame.minY / 2)),
+                           lightAtLeast: 150)
+        XCTAssertEqual(seen, expected,
+                       "\(message); above the sheet UIKit drew \(above.map(\.rawValue) ?? "neither")")
     }
 
     /// Light or dark, as the sheet's ground reads in a screenshot: a point
     /// in the paywall's top padding, inside the sheet's rounded corner.
     /// Neither when it is neither (the sheet is not drawn there yet).
     private func ground(_ app: XCUIApplication, _ screen: XCUIElement) -> Ground? {
-        let image = app.screenshot().image
+        ground(in: app.screenshot(), at: CGPoint(x: screen.frame.minX + 12, y: screen.frame.minY + 30))
+    }
+
+    /// Light or dark at `point` of `shot`: light when every channel is at
+    /// least `lightAtLeast`, dark when every channel is at most 48.
+    private func ground(in shot: XCUIScreenshot, at point: CGPoint, lightAtLeast: Int = 200) -> Ground? {
+        let image = shot.image
         guard let picture = image.cgImage else { return nil }
-        let point = CGPoint(x: screen.frame.minX + 12, y: screen.frame.minY + 30)
         let x = Int(point.x * image.scale)
         let y = Int(point.y * image.scale)
         guard x >= 0, y >= 0, x < picture.width, y < picture.height else { return nil }
@@ -320,7 +346,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         }
         guard drawn else { return nil }
         let channels = pixel[0..<3].map(Int.init)
-        if channels.allSatisfy({ $0 >= 200 }) { return .light }
+        if channels.allSatisfy({ $0 >= lightAtLeast }) { return .light }
         if channels.allSatisfy({ $0 <= 48 }) { return .dark }
         return nil
     }
