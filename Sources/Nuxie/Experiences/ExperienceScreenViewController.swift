@@ -590,11 +590,7 @@ final class ExperienceScreenViewController: UIViewController {
     /// The screen's own appearance while its view is in a window or one is forced on
     /// it, else the host's.
     private var colorScheme: ExperienceColorScheme {
-        if let detachedHostStyle, overrideUserInterfaceStyle == .unspecified,
-           viewIfLoaded?.window == nil {
-            return ExperienceColorScheme(detachedHostStyle)
-        }
-        return ExperienceColorScheme(traitCollection.userInterfaceStyle)
+        ExperienceColorScheme(drawnBy: self, host: detachedHostStyle)
     }
 
     @objc private func contentSizeCategoryDidChange() {
