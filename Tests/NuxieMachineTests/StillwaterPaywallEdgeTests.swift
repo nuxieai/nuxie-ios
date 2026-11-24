@@ -9,12 +9,12 @@ import NuxieMachine
 import NuxieRuntime
 
 /// Stillwater's paywall on a simulator, with no window: the machine compiled
-/// from Stillwater's four `.nux` files, and the paywall drawn from
-/// `paywall.nux` alone, as the session's records open it. Real pointers go
-/// in, inside the engine's step the session's driver carries the machine,
-/// and each frame is drawn with Metal and read back with its semantic
-/// snapshot. Where a control is comes from that snapshot: the place a
-/// screen reader would name.
+/// from Stillwater's five `.nux` files, and the paywall drawn from
+/// `paywall.nux` and its `plan-card.nux` alone, as the session's records
+/// open it. Real pointers go in, inside the engine's step the session's
+/// driver carries the machine, and each frame is drawn with Metal and read
+/// back with its semantic snapshot. Where a control is comes from that
+/// snapshot: the place a screen reader would name.
 ///
 /// The script is the parent repository's headless story of the same
 /// paywall, in five frames: open, Monthly chosen, buying, failed, and the
@@ -1476,7 +1476,7 @@ enum Fixture {
             return try Data(contentsOf: url)
         }
         let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
-        let files = try ["main.nux", "paywall.nux", "screens.nux", "done.nux"].map {
+        let files = try ["main.nux", "paywall.nux", "plan-card.nux", "screens.nux", "done.nux"].map {
             NuxieMachineSourceFile(path: $0, text: String(decoding: try data($0), as: UTF8.self))
         }
         return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
