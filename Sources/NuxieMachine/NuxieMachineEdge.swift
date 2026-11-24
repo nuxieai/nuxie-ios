@@ -164,7 +164,7 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     case environment(NuxieMachineEnvironment)
     /// The session took where the presentation is shown ([`place`]),
     /// delivered to the record.
-    case place(NuxieMachineShown, NuxieMachinePlace)
+    case place(NuxieMachineShown, NuxieMachineScreenPlace)
     /// A place for a presentation the edge no longer holds. It belongs to
     /// that presentation, so it goes to no one.
     case droppedPlace(NuxieMachineShown)
@@ -629,7 +629,7 @@ package actor NuxieMachineEdge {
     /// A presentation the edge no longer holds takes no place: the place
     /// leaves with its presentation, and a late one is recorded as dropped.
     /// `now` follows the same rule as a wake's.
-    package func place(_ place: NuxieMachinePlace, for shown: NuxieMachineShown, now: Int64) async {
+    package func place(_ place: NuxieMachineScreenPlace, for shown: NuxieMachineShown, now: Int64) async {
         await inTurn { turn in
             await deliver(turn, stopped: ()) { delivery in
                 guard holds(shown) else {

@@ -139,7 +139,7 @@ package final class NuxieMachineSession {
     /// nothing on another presentation. A presentation told none has no
     /// insets and no size. The place leaves with its presentation: one told
     /// for an instance the record no longer presents is `unknownInstance`.
-    package func place(_ place: NuxieMachinePlace, for instance: UInt64, now: Int64) throws -> [NuxieMachineRow] {
+    package func place(_ place: NuxieMachineScreenPlace, for instance: UInt64, now: Int64) throws -> [NuxieMachineRow] {
         var carried = place.carried
         return try delivered(nux_machine_place(handle, instance, &carried, now))
     }
@@ -508,7 +508,7 @@ package enum NuxieMachineNote: UInt32, Sendable {
 /// every presentation of the session. Only the scheme is read from the
 /// client for now; the text size takes the machine's default, in
 /// [`carried`]. Where each presentation is shown is its own
-/// ([`NuxieMachinePlace`]).
+/// ([`NuxieMachineScreenPlace`]).
 package struct NuxieMachineEnvironment: Equatable, Sendable {
     /// Whether the client shows in the dark scheme.
     package var dark: Bool
@@ -532,7 +532,7 @@ package struct NuxieMachineEnvironment: Equatable, Sendable {
 /// area's four insets, and the size available to it, all in points. A
 /// presentation's page reads its own (`env(safe-area-inset-top)` and the
 /// rest), so a cover and a sheet over it can read different ones.
-package struct NuxieMachinePlace: Equatable, Sendable {
+package struct NuxieMachineScreenPlace: Equatable, Sendable {
     package var top: Double
     package var right: Double
     package var bottom: Double

@@ -146,7 +146,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     private var toldPlaces = NuxieMachineToldPlaces()
 
     /// The place each presented Screen was last told, for checks.
-    package var places: [NuxieMachineShown: NuxieMachinePlace] { toldPlaces.places }
+    package var places: [NuxieMachineShown: NuxieMachineScreenPlace] { toldPlaces.places }
 
     /// The edge while the presenter holds it, for checks.
     package var edge: NuxieMachineEdge? { loop?.edge }
@@ -517,7 +517,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
 /// (a new presentation) is told its own.
 package struct NuxieMachineToldPlaces: Equatable, Sendable {
     /// The place last told for each presentation.
-    package private(set) var places: [NuxieMachineShown: NuxieMachinePlace] = [:]
+    package private(set) var places: [NuxieMachineShown: NuxieMachineScreenPlace] = [:]
 
     package init() {}
 
@@ -525,9 +525,9 @@ package struct NuxieMachineToldPlaces: Equatable, Sendable {
     /// presentation's whose place is known and is not the one last told.
     /// Each is taken as told.
     package mutating func changes(
-        _ screens: [(shown: NuxieMachineShown, place: NuxieMachinePlace?)]
-    ) -> [(shown: NuxieMachineShown, place: NuxieMachinePlace)] {
-        var changed: [(shown: NuxieMachineShown, place: NuxieMachinePlace)] = []
+        _ screens: [(shown: NuxieMachineShown, place: NuxieMachineScreenPlace?)]
+    ) -> [(shown: NuxieMachineShown, place: NuxieMachineScreenPlace)] {
+        var changed: [(shown: NuxieMachineShown, place: NuxieMachineScreenPlace)] = []
         for (shown, place) in screens {
             guard let place, places[shown] != place else { continue }
             places[shown] = place

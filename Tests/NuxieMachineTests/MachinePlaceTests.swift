@@ -24,9 +24,11 @@ final class MachinePlaceTests: XCTestCase {
 
     /// A cover on a phone held upright: the status bar's inset above, the
     /// home indicator's below, the whole screen's size.
-    private static let upright = NuxieMachinePlace(top: 59, right: 0, bottom: 34, left: 0, width: 390, height: 844)
+    private static let upright = NuxieMachineScreenPlace(
+        top: 59, right: 0, bottom: 34, left: 0, width: 390, height: 844)
     /// The same cover with the status bar hidden: only the bottom inset.
-    private static let barHidden = NuxieMachinePlace(top: 0, right: 0, bottom: 34, left: 0, width: 390, height: 844)
+    private static let barHidden = NuxieMachineScreenPlace(
+        top: 0, right: 0, bottom: 34, left: 0, width: 390, height: 844)
 
     // MARK: The edge, told directly
 
@@ -74,7 +76,7 @@ final class MachinePlaceTests: XCTestCase {
         try Self.expect(hidden, at: Self.barHidden, against: untold, "the frame after the status bar hid")
         XCTAssertEqual(hidden.reading, upright.reading, "what a screen reader reads changed with the place")
 
-        let places = await Array(edge.log.dropFirst(written)).compactMap { entry -> NuxieMachinePlace? in
+        let places = await Array(edge.log.dropFirst(written)).compactMap { entry -> NuxieMachineScreenPlace? in
             if case .place(let to, let place) = entry, to == shown { return place }
             return nil
         }
@@ -206,8 +208,8 @@ final class MachinePlaceTests: XCTestCase {
     func testEachPlaceIsToldOnceAndEachChangeAgain() {
         let cover = NuxieMachineShown(journey: 1, instance: 1)
         let sheet = NuxieMachineShown(journey: 1, instance: 2)
-        let inside = NuxieMachinePlace(top: 0, right: 0, bottom: 0, left: 0, width: 390, height: 751)
-        let turned = NuxieMachinePlace(top: 0, right: 59, bottom: 21, left: 59, width: 844, height: 390)
+        let inside = NuxieMachineScreenPlace(top: 0, right: 0, bottom: 0, left: 0, width: 390, height: 751)
+        let turned = NuxieMachineScreenPlace(top: 0, right: 59, bottom: 21, left: 59, width: 844, height: 390)
         var told = NuxieMachineToldPlaces()
 
         var changes = told.changes([(shown: cover, place: Self.upright), (shown: sheet, place: nil)])
@@ -234,7 +236,7 @@ final class MachinePlaceTests: XCTestCase {
         let first = NuxieMachineShown(journey: 1, instance: 1)
         let sheet = NuxieMachineShown(journey: 1, instance: 2)
         let again = NuxieMachineShown(journey: 1, instance: 3)
-        let inside = NuxieMachinePlace(top: 0, right: 0, bottom: 0, left: 0, width: 390, height: 751)
+        let inside = NuxieMachineScreenPlace(top: 0, right: 0, bottom: 0, left: 0, width: 390, height: 751)
         var told = NuxieMachineToldPlaces()
         _ = told.changes([(shown: first, place: Self.upright), (shown: sheet, place: inside)])
 
@@ -256,7 +258,7 @@ final class MachinePlaceTests: XCTestCase {
 
     /// Stillwater's first frame, told `told` after the start and before the
     /// frame, or no place at all.
-    private static func firstFrame(told: NuxieMachinePlace?) async throws -> Look {
+    private static func firstFrame(told: NuxieMachineScreenPlace?) async throws -> Look {
         let edge = try edge()
         await edge.start(event: "onboarding_completed", now: nine)
         if let told {
@@ -277,7 +279,7 @@ final class MachinePlaceTests: XCTestCase {
 
     /// The headline lower by the top inset and "Not now" higher by the
     /// bottom inset than in `untold`, drawn with no place.
-    private static func expect(_ look: Look, at place: NuxieMachinePlace, against untold: Look,
+    private static func expect(_ look: Look, at place: NuxieMachineScreenPlace, against untold: Look,
                                _ what: String) throws {
         let title = try look.region(of: "Ten quiet minutes,").minY - untold.region(of: "Ten quiet minutes,").minY
         let footer = try untold.region(of: "Not now").maxY - look.region(of: "Not now").maxY
@@ -379,8 +381,8 @@ final class MachinePlaceTests: XCTestCase {
         }
     }
 
-    private static func place(_ insets: UIEdgeInsets, _ size: CGSize) -> NuxieMachinePlace {
-        NuxieMachinePlace(top: Double(insets.top), right: Double(insets.right), bottom: Double(insets.bottom),
+    private static func place(_ insets: UIEdgeInsets, _ size: CGSize) -> NuxieMachineScreenPlace {
+        NuxieMachineScreenPlace(top: Double(insets.top), right: Double(insets.right), bottom: Double(insets.bottom),
                           left: Double(insets.left), width: Double(size.width), height: Double(size.height))
     }
 }
