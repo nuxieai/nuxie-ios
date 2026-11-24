@@ -155,10 +155,10 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// surface reaches the screen's edges, so its insets are the screen's;
     /// a sheet's is laid out inside the sheet's safe area, so it has none.
     /// None until the surface is in a window with a size.
-    package var place: NuxieMachinePlace? {
+    package var place: NuxieMachineScreenPlace? {
         guard let size = measured else { return nil }
         let insets = surface.safeAreaInsets
-        return NuxieMachinePlace(
+        return NuxieMachineScreenPlace(
             top: Double(insets.top), right: Double(insets.right), bottom: Double(insets.bottom),
             left: Double(insets.left), width: Double(size.pixelWidth) / Double(size.scale),
             height: Double(size.pixelHeight) / Double(size.scale))
