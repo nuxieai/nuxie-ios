@@ -162,6 +162,12 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// a start, kept for its first frame; with a record open, delivered to
     /// it.
     case environment(NuxieMachineEnvironment)
+    /// The session took where the presentation is shown ([`place`]),
+    /// delivered to the record.
+    case place(NuxieMachineShown, NuxieMachinePlace)
+    /// A place for a presentation the edge no longer holds. It belongs to
+    /// that presentation, so it goes to no one.
+    case droppedPlace(NuxieMachineShown)
     /// The record asks for a `wake` at this moment, or at none. The host's
     /// timer delivers it ([`wake`]).
     case wakeAt(Int64?)
@@ -606,6 +612,38 @@ package actor NuxieMachineEdge {
                     return
                 }
                 log.append(.environment(environment))
+                await apply(rows, now: now, &delivery)
+            }
+        }
+    }
+
+    /// The presentation `shown` is now shown in `place`, at `now`: a
+    /// delivery like a close. Each presentation is told its own, before its
+    /// first frame is drawn and again whenever its insets or its size
+    /// change; what follows it is written in that presentation's next round,
+    /// and the edge asks for the frame that draws it ([`waitsForFrame`]). The
+    /// same place again writes nothing, and a place writes nothing on
+    /// another presentation. The edge holds no rule about which insets a
+    /// presentation gets: its owner says.
+    ///
+    /// A presentation the edge no longer holds takes no place: the place
+    /// leaves with its presentation, and a late one is recorded as dropped.
+    /// `now` follows the same rule as a wake's.
+    package func place(_ place: NuxieMachinePlace, for shown: NuxieMachineShown, now: Int64) async {
+        await inTurn { turn in
+            await deliver(turn, stopped: ()) { delivery in
+                guard holds(shown) else {
+                    log.append(.droppedPlace(shown))
+                    return
+                }
+                let rows: [NuxieMachineRow]
+                do {
+                    rows = try session.place(place, for: shown.instance, now: now)
+                } catch {
+                    await refused(error, doing: "the place of \(shown.instance)", now: now, &delivery)
+                    return
+                }
+                log.append(.place(shown, place))
                 await apply(rows, now: now, &delivery)
             }
         }

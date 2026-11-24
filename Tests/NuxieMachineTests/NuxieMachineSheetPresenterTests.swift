@@ -278,10 +278,10 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     private struct NotLaidOut: Error {}
 
     /// Lay out `controller`, made for `presentation`, and check it:
-    /// a cover draws inside the safe area over a black ground, full screen,
-    /// with no swipe; a sheet draws across its whole view over no ground, as
-    /// a page sheet at the large detent with no grabber, which the person
-    /// can swipe down.
+    /// a cover draws across the whole screen over no ground, full screen,
+    /// with no swipe; a sheet draws inside its safe area over the platform's
+    /// sheet background, as a page sheet at the large detent with no
+    /// grabber, which the person can swipe down.
     @MainActor
     private static func expect(_ controller: NuxieMachineScreenViewController,
                                laidOutAs presentation: NuxieMachinePresentation) throws {
@@ -295,13 +295,13 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         let surface = try XCTUnwrap(view.subviews.first, "the Screen's surface")
         switch presentation {
         case .cover:
-            XCTAssertEqual(surface.frame, view.bounds.inset(by: insets), "a cover draws inside the safe area")
-            XCTAssertEqual(view.backgroundColor, .black)
+            XCTAssertEqual(surface.frame, view.bounds, "a cover draws across the whole screen")
+            XCTAssertEqual(view.backgroundColor, .clear)
             XCTAssertEqual(controller.modalPresentationStyle, .fullScreen)
             XCTAssertTrue(controller.isModalInPresentation, "a cover has no swipe")
         default:
-            XCTAssertEqual(surface.frame, view.bounds, "a sheet draws across its whole view")
-            XCTAssertEqual(view.backgroundColor, .clear)
+            XCTAssertEqual(surface.frame, view.bounds.inset(by: insets), "a sheet draws inside its safe area")
+            XCTAssertEqual(view.backgroundColor, .systemBackground)
             XCTAssertEqual(controller.modalPresentationStyle, .pageSheet)
             XCTAssertFalse(controller.isModalInPresentation, "the person can swipe a sheet down")
             let sheet = try XCTUnwrap(controller.sheetPresentationController)

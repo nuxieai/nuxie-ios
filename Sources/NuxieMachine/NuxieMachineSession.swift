@@ -131,6 +131,19 @@ package final class NuxieMachineSession {
         return try delivered(nux_machine_environment(handle, &carried, now))
     }
 
+    /// The presented instance `instance` is now shown in `place`: told for
+    /// each presentation before its first frame, and again whenever its
+    /// insets or its size change. It is delivered to the record, as a close
+    /// is, and what follows it is written in that presentation's next
+    /// round; the same place again writes nothing, and a place writes
+    /// nothing on another presentation. A presentation told none has no
+    /// insets and no size. The place leaves with its presentation: one told
+    /// for an instance the record no longer presents is `unknownInstance`.
+    package func place(_ place: NuxieMachinePlace, for instance: UInt64, now: Int64) throws -> [NuxieMachineRow] {
+        var carried = place.carried
+        return try delivered(nux_machine_place(handle, instance, &carried, now))
+    }
+
     // MARK: Reads
 
     /// The rows the last call that delivered something left.
@@ -491,9 +504,11 @@ package enum NuxieMachineNote: UInt32, Sendable {
     case unknown = 0xFFFF_FFFF
 }
 
-/// The client's environment, as a session is told it: where the Experience
-/// is shown. Only the scheme is read from the client for now; the rest of
-/// what the machine is told takes the machine's defaults, in [`carried`].
+/// The client's environment, as a session is told it: what is the same for
+/// every presentation of the session. Only the scheme is read from the
+/// client for now; the text size takes the machine's default, in
+/// [`carried`]. Where each presentation is shown is its own
+/// ([`NuxieMachinePlace`]).
 package struct NuxieMachineEnvironment: Equatable, Sendable {
     /// Whether the client shows in the dark scheme.
     package var dark: Bool
@@ -503,20 +518,48 @@ package struct NuxieMachineEnvironment: Equatable, Sendable {
     }
 
     /// The environment as the header lays it out: the one place the struct
-    /// is made. The text size is 17 points (one `rem` at an iPhone's
-    /// default size), and the safe area's insets and the size available
-    /// are zero, which the machine reads as none known.
+    /// is made. The text size is 17 points, one `rem` at an iPhone's
+    /// default size.
     fileprivate var carried: NuxMachineEnvironment {
         NuxMachineEnvironment(
             struct_size: UInt32(MemoryLayout<NuxMachineEnvironment>.size),
             dark: dark,
-            text_size: 17,
-            inset_top: 0,
-            inset_right: 0,
-            inset_bottom: 0,
-            inset_left: 0,
-            width: 0,
-            height: 0)
+            text_size: 17)
+    }
+}
+
+/// Where one presentation is shown, as a session is told it: its safe
+/// area's four insets, and the size available to it, all in points. A
+/// presentation's page reads its own (`env(safe-area-inset-top)` and the
+/// rest), so a cover and a sheet over it can read different ones.
+package struct NuxieMachinePlace: Equatable, Sendable {
+    package var top: Double
+    package var right: Double
+    package var bottom: Double
+    package var left: Double
+    package var width: Double
+    package var height: Double
+
+    package init(top: Double, right: Double, bottom: Double, left: Double, width: Double, height: Double) {
+        self.top = top
+        self.right = right
+        self.bottom = bottom
+        self.left = left
+        self.width = width
+        self.height = height
+    }
+
+    /// The place as the header lays it out: the one place the struct is
+    /// made.
+    fileprivate var carried: NuxMachinePlace {
+        NuxMachinePlace(
+            struct_size: UInt32(MemoryLayout<NuxMachinePlace>.size),
+            inset_top: top,
+            inset_right: right,
+            inset_bottom: bottom,
+            inset_left: left,
+            width: width,
+            height: height)
     }
 }
 
@@ -566,6 +609,9 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     /// The environment could not be read: its size is smaller than the
     /// header's, or a number in it is not finite.
     case environmentDoesNotFit
+    /// The place could not be read: its size is smaller than the header's,
+    /// or a number in it is not finite.
+    case placeDoesNotFit
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
 
@@ -592,6 +638,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .noArtboard: "no_artboard"
         case .replyDoesNotFit: "reply_does_not_fit"
         case .environmentDoesNotFit: "environment_does_not_fit"
+        case .placeDoesNotFit: "place_does_not_fit"
         case .unknownStatus(let status): "status_\(status)"
         }
     }
@@ -624,6 +671,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_NO_ARTBOARD): .noArtboard,
         UInt32(NUX_MACHINE_REPLY_DOES_NOT_FIT): .replyDoesNotFit,
         UInt32(NUX_MACHINE_ENVIRONMENT_DOES_NOT_FIT): .environmentDoesNotFit,
+        UInt32(NUX_MACHINE_PLACE_DOES_NOT_FIT): .placeDoesNotFit,
     ]
 }
 

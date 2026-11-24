@@ -15,8 +15,10 @@ import UIKit
 /// to ([`NuxieMachineScreenLoop`]). Once the edge no longer shows that
 /// presentation it draws nothing more, so a Screen leaving the screen keeps
 /// its last frame and never shows the presentation that replaced it. The
-/// Screen is laid out by the engine at the view's size, as the SDK's Screens
-/// are, and drawn at the display's scale.
+/// Screen is laid out by the engine at its surface's size, as the SDK's
+/// Screens are, and drawn at the display's scale. Where it is shown (its
+/// surface's safe-area insets and size) is its place ([`place`]), which the
+/// presenter tells the session.
 @MainActor
 package final class NuxieMachineScreenViewController: UIViewController {
     /// The presentation this controller shows.
@@ -77,12 +79,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// A controller for `presented`, whose frames `loop` runs. How it is
     /// presented is set here, once:
     ///
-    /// - A cover: full screen, which has no swipe; the Screen in the safe
-    ///   area over a black ground, since a view's safe areas do not reach
-    ///   the engine yet.
+    /// - A cover: full screen, which has no swipe; the Screen across the
+    ///   whole screen, under the status bar and the home indicator, told the
+    ///   screen's insets so its page keeps its content clear of them.
     /// - A sheet: a page sheet at the large detent with no grabber, which
-    ///   the person can swipe down (the native close); the Screen across
-    ///   the whole sheet over no ground.
+    ///   the person can swipe down (the native close); the Screen inside the
+    ///   sheet's safe area, told none, over the platform's sheet background,
+    ///   which shows in the band below it (the home indicator's).
     ///
     /// Any presentation other than a cover is laid out as a sheet; the
     /// presenter refuses the others before they get here.
@@ -118,9 +121,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
         surface.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(surface)
         view = container
+        // A cover's surface reaches every edge of the screen; a sheet's
+        // stays inside the sheet's safe area. Each one's place follows from
+        // that: the safe-area insets its surface has.
         let covers = presented.presentation == .cover
-        container.backgroundColor = covers ? .black : .clear
-        let bounds = covers ? container.safeAreaLayoutGuide : nil
+        container.backgroundColor = covers ? .clear : .systemBackground
+        let bounds = covers ? nil : container.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: bounds?.leadingAnchor ?? container.leadingAnchor),
             surface.trailingAnchor.constraint(equalTo: bounds?.trailingAnchor ?? container.trailingAnchor),
@@ -134,6 +140,28 @@ package final class NuxieMachineScreenViewController: UIViewController {
         super.traitCollectionDidChange(previousTraitCollection)
         guard traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) else { return }
         onColorAppearanceChange?()
+    }
+
+    /// The safe area changed with no change of size (the status bar came or
+    /// went): the place is read again before the next frame, as a change of
+    /// size or rotation reads it through the surface's geometry.
+    override package func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        loop?.requestFrame()
+    }
+
+    /// Where this Screen is shown, as the session is told it: its surface's
+    /// safe-area insets and the size the engine lays it out at. A cover's
+    /// surface reaches the screen's edges, so its insets are the screen's;
+    /// a sheet's is laid out inside the sheet's safe area, so it has none.
+    /// None until the surface is in a window with a size.
+    package var place: NuxieMachinePlace? {
+        guard let size = measured else { return nil }
+        let insets = surface.safeAreaInsets
+        return NuxieMachinePlace(
+            top: Double(insets.top), right: Double(insets.right), bottom: Double(insets.bottom),
+            left: Double(insets.left), width: Double(size.pixelWidth) / Double(size.scale),
+            height: Double(size.pixelHeight) / Double(size.scale))
     }
 
     /// Whether this Screen's view is in a window, with a size: what the
@@ -152,16 +180,22 @@ package final class NuxieMachineScreenViewController: UIViewController {
         return true
     }
 
-    /// Lay the Screen out at the view's size and size the renderer to its
-    /// pixels, before the step that lays it out: at its first frame, and
-    /// again whenever the view's size changes. The sizes follow the SDK's
-    /// Screen: pixels are the points times the scale, rounded up, and the
-    /// layout size is the pixels over the scale.
-    fileprivate func applySize(_ runtime: NuxieNativeRuntime) async throws {
+    /// The surface's size in pixels and the scale it is drawn at, while it
+    /// has a size ([`hasSize`]). The sizes follow the SDK's Screen: pixels
+    /// are the points times the scale, rounded up, and the layout size is
+    /// the pixels over the scale.
+    private var measured: Size? {
+        guard hasSize else { return nil }
         let scale = surface.displayScale
-        let size = Size(pixelWidth: Self.pixels(surface.bounds.width, scale),
-                        pixelHeight: Self.pixels(surface.bounds.height, scale), scale: Float(scale))
-        guard sized != size else { return }
+        return Size(pixelWidth: Self.pixels(surface.bounds.width, scale),
+                    pixelHeight: Self.pixels(surface.bounds.height, scale), scale: Float(scale))
+    }
+
+    /// Lay the Screen out at its surface's size and size the renderer to
+    /// its pixels ([`measured`]), before the step that lays it out: at its
+    /// first frame, and again whenever the surface's size changes.
+    fileprivate func applySize(_ runtime: NuxieNativeRuntime) async throws {
+        guard let size = measured, sized != size else { return }
         if !deviceConfigured {
             let device = try await runtime.metalDevice().value
             let layer = surface.metalLayer
