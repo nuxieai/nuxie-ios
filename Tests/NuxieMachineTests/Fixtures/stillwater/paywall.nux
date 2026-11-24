@@ -4,18 +4,21 @@ use PlanCard from "plan-card"
 enum Plan annual monthly annual_offer
 
 theme
-  night = #0d1214
-  panel = #151c1f
-  edge = #232c30
-  mint = #9fcdb9
-  ink = #eef3f1
-  soft = #c9d3d0
-  quiet = #8a9794
-  faint = #6c7875
-  alarm = #f0a28e
+  night = light-dark(#f6f8f7, #0d1214)
+  panel = light-dark(#ffffff, #151c1f)
+  edge = light-dark(#dde4e1, #232c30)
+  mint = light-dark(#2f7d63, #9fcdb9)
+  mint_off = light-dark(#a9c4b9, #4f665e)
+  ring = light-dark(#a9c6ba, #4f6b61)
+  radio = light-dark(#9aa7a3, #5d6a67)
+  ink = light-dark(#16211d, #eef3f1)
+  soft = light-dark(#3c4a46, #c9d3d0)
+  quiet = light-dark(#5f6c68, #8a9794)
+  faint = light-dark(#7d8986, #6c7875)
+  alarm = light-dark(#b4472e, #f0a28e)
 
 style Mark
-  width=40 height=40 border-radius=20 border-width=1.5 border-color=#4f6b61
+  width=40 height=40 border-radius=20 border-width=1.5 border-color=ring
   align-items=center justify-content=center
 
 style Title
@@ -25,7 +28,7 @@ style Buy
   height=56 margin-top=28 border-radius=28 background-color=mint
   align-items=center justify-content=center
   :disabled
-    background-color=#4f665e
+    background-color=mint_off
 
 style BuyLabel
   color=night font-size=17 font-weight=700 line-height=24
