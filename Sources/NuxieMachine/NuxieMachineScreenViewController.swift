@@ -5,10 +5,11 @@ import QuartzCore
 import UIKit
 
 /// One native presentation of what an edge shows: the Metal surface the
-/// engine draws one presentation's Screen into, laid out as a sheet or a
-/// cover. It is made for one presentation and lives as long as that
-/// presentation does, so nothing of one presentation reaches another: a
-/// route shown again is a new presentation and gets a new controller.
+/// engine draws one presentation's Screen into, presented as a sheet or a
+/// cover and filling it to every edge. It is made for one presentation and
+/// lives as long as that presentation does, so nothing of one presentation
+/// reaches another: a route shown again is a new presentation and gets a
+/// new controller.
 ///
 /// What it draws is the edge's Screen for its presentation
 /// ([`NuxieMachineEdge.screen(for:)`]), at each frame of the loop it belongs
@@ -81,15 +82,17 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// A controller for `presented`, whose frames `loop` runs. How it is
     /// presented is set here, once:
     ///
-    /// - A cover: full screen, which has no swipe; the Screen across the
-    ///   whole screen, under the status bar and the home indicator, told the
-    ///   screen's insets so its page keeps its content clear of them.
+    /// - A cover: full screen, which has no swipe.
     /// - A sheet: a page sheet at the large detent with no grabber, which
-    ///   the person can swipe down (the native close); the Screen inside the
-    ///   sheet's safe area, told none, over the platform's sheet background,
-    ///   which shows in the band below it (the home indicator's).
+    ///   the person can swipe down (the native close).
     ///
-    /// Any presentation other than a cover is laid out as a sheet; the
+    /// Either way the Screen fills what it is presented in, to every edge,
+    /// under the status bar and the home indicator where they reach it, and
+    /// is told that presentation's insets so its page keeps its content
+    /// clear of them ([`place`]). A sheet's top inset is 0, as the sheet
+    /// starts below the status bar; its bottom is the home indicator's.
+    ///
+    /// Any presentation other than a cover is presented as a sheet; the
     /// presenter refuses the others before they get here.
     package init(presenting presented: NuxieMachinePresented, loop: NuxieMachineScreenLoop) {
         self.presented = presented
@@ -123,17 +126,15 @@ package final class NuxieMachineScreenViewController: UIViewController {
         surface.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(surface)
         view = container
-        // A cover's surface reaches every edge of the screen; a sheet's
-        // stays inside the sheet's safe area. Each one's place follows from
-        // that: the safe-area insets its surface has.
-        let covers = presented.presentation == .cover
-        container.backgroundColor = covers ? .clear : .systemBackground
-        let bounds = covers ? nil : container.safeAreaLayoutGuide
+        // The surface reaches every edge of what the Screen is presented
+        // in, a cover's screen or a sheet; its place is the safe-area insets
+        // that gives it.
+        container.backgroundColor = .clear
         NSLayoutConstraint.activate([
-            surface.leadingAnchor.constraint(equalTo: bounds?.leadingAnchor ?? container.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: bounds?.trailingAnchor ?? container.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: bounds?.topAnchor ?? container.topAnchor),
-            surface.bottomAnchor.constraint(equalTo: bounds?.bottomAnchor ?? container.bottomAnchor),
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         updateAccessibility()
     }
@@ -153,10 +154,10 @@ package final class NuxieMachineScreenViewController: UIViewController {
     }
 
     /// Where this Screen is shown, as the session is told it: its surface's
-    /// safe-area insets and the size the engine lays it out at. A cover's
-    /// surface reaches the screen's edges, so its insets are the screen's;
-    /// a sheet's is laid out inside the sheet's safe area, so it has none.
-    /// None until the surface is in a window with a size.
+    /// safe-area insets and the size the engine lays it out at. The surface
+    /// fills what it is presented in, so its insets are that presentation's:
+    /// a cover's the screen's, a sheet's the sheet's own as UIKit gives
+    /// them. None until the surface is in a window with a size.
     package var place: NuxieMachineScreenPlace? {
         guard let size = measured else { return nil }
         let insets = surface.safeAreaInsets
@@ -170,7 +171,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package var surfaceFacts: NuxieMachineSurfaceFacts {
         let layer = surface.metalLayer
         return NuxieMachineSurfaceFacts(
-            bounds: surface.bounds.size, drawableSize: layer.drawableSize, contentsScale: layer.contentsScale,
+            bounds: surface.bounds.size, place: place, drawableSize: layer.drawableSize,
+            contentsScale: layer.contentsScale,
             drawn: drawnAt.map { CGSize(width: Int($0.pixelWidth), height: Int($0.pixelHeight)) })
     }
 
@@ -331,12 +333,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
 }
 
 /// A Screen's surface as it is and as it last drew, for checks: its bounds
-/// in points, its Metal layer's drawable size in pixels and its scale, and
-/// the pixel size of the last frame that reached the screen (none before
-/// the first). After a change of size, the drawable is the bounds times the
-/// scale, rounded up, and the next frame drawn is that size.
+/// in points, its place as the session is told it ([`place`], none before
+/// it has a size), its Metal layer's drawable size in pixels and its scale,
+/// and the pixel size of the last frame that reached the screen (none
+/// before the first). After a change of size, the drawable is the bounds
+/// times the scale, rounded up, and the next frame drawn is that size.
 package struct NuxieMachineSurfaceFacts: Equatable, Sendable {
     package let bounds: CGSize
+    package let place: NuxieMachineScreenPlace?
     package let drawableSize: CGSize
     package let contentsScale: CGFloat
     package let drawn: CGSize?

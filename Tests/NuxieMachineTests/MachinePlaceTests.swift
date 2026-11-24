@@ -45,7 +45,7 @@ final class MachinePlaceTests: XCTestCase {
     /// Stillwater presents its paywall as a sheet, and this tells it a
     /// cover's insets on purpose: the edge and the session hold no rule
     /// about which insets a presentation gets, so the page must draw in
-    /// whatever place it is told. The presenter tells a sheet zero; that is
+    /// whatever place it is told. What the presenter tells each one is
     /// checked on a Screen's own place, below.
     func testAPlaceToldBeforeTheFirstFrameIsDrawnInIt() async throws {
         let untold = try await Self.firstFrame(told: nil)
@@ -165,12 +165,11 @@ final class MachinePlaceTests: XCTestCase {
 
     // MARK: A Screen's place
 
-    /// A cover reaches every edge of the screen, so its place is the
-    /// screen's insets and the whole screen's size. A sheet is laid out
-    /// inside its safe area, so its place has no insets and the size inside
-    /// them.
+    /// A Screen fills what it is presented in, a cover or a sheet alike, so
+    /// its place is its view's insets as UIKit gives them and its view's
+    /// whole size.
     @MainActor
-    func testACoverIsToldTheScreensInsetsAndASheetNone() throws {
+    func testACoverAndASheetAreEachToldTheirViewsInsets() throws {
         let loop = try Self.loop()
         for presentation in [NuxieMachinePresentation.cover, .sheet] {
             let (controller, window) = Self.screen(presenting: presentation, loop: loop)
@@ -178,14 +177,8 @@ final class MachinePlaceTests: XCTestCase {
             XCTAssertGreaterThan(insets.top, 0, "the window's safe area reached the view")
             XCTAssertGreaterThan(insets.bottom, 0, "the window's safe area reached the view")
             let place = try XCTUnwrap(controller.place, "a \(presentation) in a window has a place")
-            switch presentation {
-            case .cover:
-                XCTAssertEqual(place, Self.place(insets, controller.view.bounds.size),
-                               "a cover is told the screen's insets and size")
-            default:
-                let inside = controller.view.bounds.inset(by: insets).size
-                XCTAssertEqual(place, Self.place(.zero, inside), "a sheet is told no insets and the size inside them")
-            }
+            XCTAssertEqual(place, Self.place(insets, controller.view.bounds.size),
+                           "a \(presentation) is told its view's insets and its whole size")
             withExtendedLifetime(window) {}
         }
         loop.stop()
@@ -228,7 +221,7 @@ final class MachinePlaceTests: XCTestCase {
     func testEachPlaceIsToldOnceAndEachChangeAgain() {
         let cover = NuxieMachineShown(journey: 1, instance: 1)
         let sheet = NuxieMachineShown(journey: 1, instance: 2)
-        let inside = NuxieMachineScreenPlace(top: 0, right: 0, bottom: 0, left: 0, width: 390, height: 751)
+        let largeSheet = NuxieMachineScreenPlace(top: 0, right: 0, bottom: 34, left: 0, width: 390, height: 785)
         let turned = NuxieMachineScreenPlace(top: 0, right: 59, bottom: 21, left: 59, width: 844, height: 390)
         var told = NuxieMachineToldPlaces()
 
@@ -236,17 +229,17 @@ final class MachinePlaceTests: XCTestCase {
         XCTAssertEqual(changes.map { $0.shown }, [cover], "a presentation with no place yet was told one")
         XCTAssertEqual(changes.map { $0.place }, [Self.upright])
 
-        changes = told.changes([(shown: cover, place: Self.upright), (shown: sheet, place: inside)])
+        changes = told.changes([(shown: cover, place: Self.upright), (shown: sheet, place: largeSheet)])
         XCTAssertEqual(changes.map { $0.shown }, [sheet], "the cover's same place was told again")
-        XCTAssertEqual(changes.map { $0.place }, [inside])
+        XCTAssertEqual(changes.map { $0.place }, [largeSheet])
 
-        changes = told.changes([(shown: cover, place: Self.upright), (shown: sheet, place: inside)])
+        changes = told.changes([(shown: cover, place: Self.upright), (shown: sheet, place: largeSheet)])
         XCTAssertTrue(changes.isEmpty, "the same places were told again")
 
-        changes = told.changes([(shown: cover, place: turned), (shown: sheet, place: inside)])
+        changes = told.changes([(shown: cover, place: turned), (shown: sheet, place: largeSheet)])
         XCTAssertEqual(changes.map { $0.shown }, [cover], "only the place that changed is told")
         XCTAssertEqual(changes.map { $0.place }, [turned])
-        XCTAssertEqual(told.places, [cover: turned, sheet: inside])
+        XCTAssertEqual(told.places, [cover: turned, sheet: largeSheet])
     }
 
     /// A closed presentation's place goes with it; a presentation shown
@@ -256,14 +249,14 @@ final class MachinePlaceTests: XCTestCase {
         let first = NuxieMachineShown(journey: 1, instance: 1)
         let sheet = NuxieMachineShown(journey: 1, instance: 2)
         let again = NuxieMachineShown(journey: 1, instance: 3)
-        let inside = NuxieMachineScreenPlace(top: 0, right: 0, bottom: 0, left: 0, width: 390, height: 751)
+        let largeSheet = NuxieMachineScreenPlace(top: 0, right: 0, bottom: 34, left: 0, width: 390, height: 785)
         var told = NuxieMachineToldPlaces()
-        _ = told.changes([(shown: first, place: Self.upright), (shown: sheet, place: inside)])
+        _ = told.changes([(shown: first, place: Self.upright), (shown: sheet, place: largeSheet)])
 
         told.keep([sheet])
-        XCTAssertEqual(told.places, [sheet: inside], "the closed presentation's place stayed")
+        XCTAssertEqual(told.places, [sheet: largeSheet], "the closed presentation's place stayed")
 
-        let changes = told.changes([(shown: sheet, place: inside), (shown: again, place: Self.upright)])
+        let changes = told.changes([(shown: sheet, place: largeSheet), (shown: again, place: Self.upright)])
         XCTAssertEqual(changes.map { $0.shown }, [again], "a new presentation was not told its place")
         XCTAssertEqual(changes.map { $0.place }, [Self.upright])
         told.keep([])
