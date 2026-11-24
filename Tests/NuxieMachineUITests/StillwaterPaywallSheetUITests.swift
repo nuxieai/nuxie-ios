@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Stillwater's paywall as a native sheet in the runtime host app, driven by
@@ -21,9 +22,50 @@ import XCTest
 /// What the record holds is read from the Screen's accessibility value while
 /// the sheet is up (the host's two lines are behind it), and from the host's
 /// two lines once the sheet is gone.
+///
+/// The story is played in light and in dark: the host starts in dark with
+/// `--nuxie-machine-appearance dark`, standing in for a phone set to dark,
+/// and the paywall follows the phone. What a screen reader reads is the
+/// same in both, word for word; only the colors differ, read from the
+/// sheet's ground in each screenshot.
 final class StillwaterPaywallSheetUITests: XCTestCase {
     private static let errorLine = "The purchase did not go through. Try again in a moment."
     private static let termsLine = "Billed through the store after the trial. Cancel any time."
+
+    /// What a screen reader reads on the sheet at each of the story's five
+    /// frames, in light and in dark alike.
+    private static let readings: [String: [String]] = {
+        let open = [
+            "text \"Ten quiet minutes,\nevery day.\"",
+            "group \"Plan\"",
+            "button \"Yearly $59.99\", selected",
+            "button \"Monthly $9.99\"",
+            "button \"Continue\"",
+            "button \"Not now\"",
+            "button \"Restore purchases\"",
+            "button \"About the trial\"",
+        ]
+        var monthly = open
+        monthly[2] = "button \"Yearly $59.99\""
+        monthly[3] = "button \"Monthly $9.99\", selected"
+        var buying = monthly
+        buying[4] = "button \"Continue\", not enabled"
+        var failed = monthly
+        failed.insert("text \"\(StillwaterPaywallSheetUITests.errorLine)\"", at: 5)
+        return [
+            "1-open": open,
+            "2-monthly-chosen": monthly,
+            "3-buying": buying,
+            "4-failed": failed,
+            "5-details-open": failed + ["text \"\(StillwaterPaywallSheetUITests.termsLine)\""],
+        ]
+    }()
+
+    /// The sheet's ground, Stillwater's `night`: #f6f8f7 in light and
+    /// #0d1214 in dark.
+    private enum Ground: String {
+        case light, dark
+    }
 
     override func setUp() {
         super.setUp()
@@ -31,7 +73,38 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     }
 
     func testThePaywallStoryInFiveFrames() throws {
+        try playTheStory(in: .light)
+    }
+
+    func testThePaywallStoryInFiveFramesInDark() throws {
+        try playTheStory(in: .dark)
+    }
+
+    /// The paywall follows the phone while it is open: the phone turns dark
+    /// and the open sheet is drawn again in dark, then light again, with
+    /// the same reading throughout.
+    func testTheOpenPaywallFollowsThePhone() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the device's appearance is set from iOS 17") }
+        let device = XCUIDevice.shared
+        device.appearance = .light
+        addTeardownBlock { XCUIDevice.shared.appearance = .light }
         let app = launch()
+        let screen = try openPaywall(app)
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15), app.debugDescription)
+        waitFor(app, screen, ground: .light, "the paywall opened on a light phone is not light")
+        keep("switch-1-light", app, screen, expecting: "1-open")
+
+        device.appearance = .dark
+        waitFor(app, screen, ground: .dark, "the open paywall did not turn dark with the phone")
+        keep("switch-2-dark", app, screen, expecting: "1-open")
+
+        device.appearance = .light
+        waitFor(app, screen, ground: .light, "the open paywall did not turn light again with the phone")
+        keep("switch-3-light-again", app, screen, expecting: "1-open")
+    }
+
+    private func playTheStory(in appearance: Ground) throws {
+        let app = launch(appearance)
         let screen = try openPaywall(app)
 
         // 1. Open: the headline, both plans with their prices, and the
@@ -63,7 +136,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertLessThan(yearly.frame.minY, monthly.frame.minY)
         XCTAssertLessThan(monthly.frame.minY, buy.frame.minY)
         XCTAssertLessThan(buy.frame.minY, notNow.frame.minY)
-        keep("1-open", app, screen)
+        waitFor(app, screen, ground: appearance, "the paywall does not open in \(appearance)")
+        keep("1-open", app, screen, expecting: "1-open")
 
         // 2. Monthly chosen: the record's plan is monthly, and the selected
         // card moves from yearly to monthly.
@@ -71,13 +145,14 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         waitFor(screen, valueContaining: "Selected plan: monthly.")
         waitFor(monthly, "selected == true", "monthly is not read as selected after its tap")
         XCTAssertFalse(yearly.isSelected, "yearly is still read as selected after monthly was tapped")
-        keep("2-monthly-chosen", app, screen)
+        XCTAssertEqual(ground(app, screen), appearance, "the paywall left \(appearance) when monthly was chosen")
+        keep("2-monthly-chosen", app, screen, expecting: "2-monthly-chosen")
 
         // 3. Buying: one purchase is under way, and the buy button is read
         // as not enabled until the store answers.
         buy.tap()
         waitFor(buy, "enabled == false", "the buy button stayed enabled while it bought")
-        keep("3-buying", app, screen)
+        keep("3-buying", app, screen, expecting: "3-buying")
 
         // 4. Failed: the purchase's status is `failed`; the error line is read
         // under the button, which is enabled again.
@@ -86,12 +161,12 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertLessThan(buy.frame.minY, app.staticTexts[Self.errorLine].frame.minY)
         XCTAssertTrue(monthly.isSelected, "monthly is no longer read as selected after the purchase failed")
         XCTAssertFalse(yearly.isSelected)
-        keep("4-failed", app, screen)
+        keep("4-failed", app, screen, expecting: "4-failed")
 
         // 5. Details open: "About the trial" shows the terms line.
         details.tap()
         XCTAssertTrue(app.staticTexts[Self.termsLine].waitForExistence(timeout: 10), app.debugDescription)
-        keep("5-details-open", app, screen)
+        keep("5-details-open", app, screen, expecting: "5-details-open")
 
         // "Not now": Stillwater's `close` marks the evening offer due and
         // dismisses. The sheet goes, nothing is presented, and the record
@@ -149,9 +224,13 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     // MARK: Driving the host
 
-    private func launch() -> XCUIApplication {
+    /// The host, on the phone as it is, or started in `appearance`.
+    private func launch(_ appearance: Ground? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--nuxie-machine-paywall"]
+        if let appearance {
+            app.launchArguments += ["--nuxie-machine-appearance", appearance.rawValue]
+        }
         app.launch()
         return app
     }
@@ -204,6 +283,48 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
                        "expected \(text) in \(element.label)")
     }
 
+    /// Wait until the sheet's ground is `expected`: the Screen draws the
+    /// frame the new colors land in after the trait change reaches it.
+    private func waitFor(_ app: XCUIApplication, _ screen: XCUIElement, ground expected: Ground,
+                         _ message: String) {
+        let deadline = Date().addingTimeInterval(10)
+        var seen = ground(app, screen)
+        while seen != expected, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            seen = ground(app, screen)
+        }
+        XCTAssertEqual(seen, expected, message)
+    }
+
+    /// Light or dark, as the sheet's ground reads in a screenshot: a point
+    /// in the paywall's top padding, inside the sheet's rounded corner.
+    /// Neither when it is neither (the sheet is not drawn there yet).
+    private func ground(_ app: XCUIApplication, _ screen: XCUIElement) -> Ground? {
+        let image = app.screenshot().image
+        guard let picture = image.cgImage else { return nil }
+        let point = CGPoint(x: screen.frame.minX + 12, y: screen.frame.minY + 30)
+        let x = Int(point.x * image.scale)
+        let y = Int(point.y * image.scale)
+        guard x >= 0, y >= 0, x < picture.width, y < picture.height else { return nil }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let drawn = pixel.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(
+                data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            // The one pixel at (x, y) from the top lands on the context's
+            // only pixel.
+            context.draw(picture, in: CGRect(x: -x, y: y - picture.height + 1,
+                                             width: picture.width, height: picture.height))
+            return true
+        }
+        guard drawn else { return nil }
+        let channels = pixel[0..<3].map(Int.init)
+        if channels.allSatisfy({ $0 >= 200 }) { return .light }
+        if channels.allSatisfy({ $0 <= 48 }) { return .dark }
+        return nil
+    }
+
     private func waitUntilGone(_ element: XCUIElement) {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 20), .completed, "the sheet is still up")
@@ -213,8 +334,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     /// A screenshot of the app, kept as `name`, and, while the sheet is up,
     /// what a screen reader reads on it, kept as `name-reading` and printed
-    /// to the log one element a line.
-    private func keep(_ name: String, _ app: XCUIApplication, _ screen: XCUIElement?) {
+    /// to the log one element a line. With `expecting`, the reading is the
+    /// story's at that frame, word for word.
+    private func keep(_ name: String, _ app: XCUIApplication, _ screen: XCUIElement?,
+                      expecting frame: String? = nil) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
@@ -227,6 +350,9 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         kept.lifetime = .keepAlways
         add(kept)
         for line in reading { print("READING \(name): \(line)") }
+        if let frame {
+            XCTAssertEqual(reading, Self.readings[frame], "what a screen reader reads at \(name) changed")
+        }
     }
 
     /// The elements on the sheet a screen reader reads, in its order: each
