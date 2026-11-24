@@ -249,6 +249,11 @@ extension NuxieMachineStillwaterFixture {
 /// touches and draws nothing. Its one element, `nuxie-machine-safe-area`,
 /// is labeled with the window's `safeAreaInsets` as `top right bottom left`
 /// in points, read again whenever they change (a rotation, the status bar).
+/// Beside it, `nuxie-machine-surface` is labeled with the presented
+/// Screen's surface as the app sees it ([`NuxieMachineSurfaceFacts`]):
+/// `bounds W H drawable W H scale S drawn W H`, read four times a second,
+/// so a UI test can tell a frame the app drew wrong from a screenshot taken
+/// wrong.
 @MainActor
 final class NuxieMachineSafeAreaWindow: UIWindow {
     override init(windowScene: UIWindowScene) {
@@ -273,6 +278,9 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
     /// leaves the status bar and the orientations to the app's own.
     private final class Reader: UIViewController {
         private let label = UILabel()
+        private let surfaceLabel = UILabel()
+        /// Kept for the app's run, as the window is; it holds this weakly.
+        private var timer: Timer?
 
         override func loadView() {
             let view = UIView()
@@ -284,7 +292,47 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             label.isAccessibilityElement = true
             label.accessibilityIdentifier = "nuxie-machine-safe-area"
             view.addSubview(label)
+            surfaceLabel.textColor = .clear
+            surfaceLabel.font = .systemFont(ofSize: 1)
+            surfaceLabel.frame = CGRect(x: 1, y: 0, width: 1, height: 1)
+            surfaceLabel.isAccessibilityElement = true
+            surfaceLabel.accessibilityIdentifier = "nuxie-machine-surface"
+            surfaceLabel.accessibilityLabel = "no Screen"
+            view.addSubview(surfaceLabel)
             self.view = view
+        }
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.readSurface() }
+            }
+        }
+
+        /// The presented Screen's surface, from the first Screen presented
+        /// in any of the scene's other windows.
+        private func readSurface() {
+            guard let facts = Self.presentedScreen(in: view.window?.windowScene)?.surfaceFacts else {
+                surfaceLabel.accessibilityLabel = "no Screen"
+                return
+            }
+            let drawn = facts.drawn ?? .zero
+            let numbers = [facts.bounds.width, facts.bounds.height, facts.drawableSize.width,
+                           facts.drawableSize.height, facts.contentsScale, drawn.width, drawn.height]
+                .map { "\(Double($0))" }
+            surfaceLabel.accessibilityLabel = "bounds \(numbers[0]) \(numbers[1]) drawable \(numbers[2]) \(numbers[3]) "
+                + "scale \(numbers[4]) drawn \(numbers[5]) \(numbers[6])"
+        }
+
+        private static func presentedScreen(in scene: UIWindowScene?) -> NuxieMachineScreenViewController? {
+            for window in scene?.windows ?? [] where !(window is NuxieMachineSafeAreaWindow) {
+                var controller = window.rootViewController
+                while let next = controller?.presentedViewController {
+                    if let screen = next as? NuxieMachineScreenViewController { return screen }
+                    controller = next
+                }
+            }
+            return nil
         }
 
         override func viewSafeAreaInsetsDidChange() {

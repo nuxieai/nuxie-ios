@@ -216,7 +216,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// frame is the turned screen's, and the headline moved up by exactly
     /// what the top inset lost. Kept as `place-cover-portrait-light`,
     /// `place-cover-portrait-dark` (the phone turned dark while the cover is
-    /// open) and `place-cover-landscape-light`.
+    /// open) and `place-cover-landscape-light`, beside the Screen's own
+    /// screenshot (`-screen`) and what the app says its surface is and last
+    /// drew (`place-cover-*-surface`), so a wrong picture says whether the
+    /// app drew it wrong or the screenshot took it wrong.
     func testThePaywallAsACoverFillsTheScreen() throws {
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
         XCUIDevice.shared.orientation = .portrait
@@ -240,6 +243,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         expectPageGround(.light, in: uprightShot, across: app.frame.size, below: upright, "the upright cover")
         let uprightTitle = title.frame.minY
         keep("place-cover-portrait-light", app, screen, expecting: "1-open", shot: uprightShot)
+        expect(try surface(app, kept: "place-cover-portrait-surface"), coversA: app.frame.size, "the upright cover")
 
         turnThePhone(.dark)
         waitFor(ground: .dark, app, below: upright, "the open cover did not turn dark with the phone")
@@ -251,13 +255,27 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         let turned = try settledInsets(app, screen, title, until: { $0.left > 0 || $0.right > 0 })
         XCTAssertGreaterThan(app.frame.width, app.frame.height, "the app did not turn")
-        let turnedShot = try settledShot(app, screen, drawnSince: drawnUpright)
+        try waitUntilResting(screen, drawnSince: drawnUpright)
+
+        // Everything is kept before anything is checked: what the app says
+        // its surface is and drew, the app's screenshot, and the Screen's.
+        let appShot = app.screenshot()
+        let screenShot = screen.screenshot()
+        let facts = try surface(app, kept: "place-cover-landscape-surface")
+        keep("place-cover-landscape-light", app, screen, shot: appShot)
+        keep("place-cover-landscape-light-screen", app, nil, shot: screenShot)
+
+        // The app's own account first: a surface the turned screen's size,
+        // a drawable that size at the screen's scale, and the last frame
+        // drawn at it. Wrong here is the app; right here and wrong below is
+        // the screenshot.
+        expect(facts, coversA: app.frame.size, "the turned cover")
         XCTAssertEqual(screen.frame, app.frame, "the turned cover's Screen is not the turned screen's frame")
         XCTAssertGreaterThanOrEqual(title.frame.minY, turned.top, "the turned headline is under the status bar")
         XCTAssertEqual(uprightTitle - title.frame.minY, upright.top - turned.top, accuracy: 1,
                        "the headline did not move by what the top inset lost")
-        expectPageGround(.light, in: turnedShot, across: app.frame.size, below: turned, "the turned cover")
-        keep("place-cover-landscape-light", app, screen, shot: turnedShot)
+        expectPageGround(.light, in: appShot, across: app.frame.size, below: turned, "the app's turned still")
+        expectPageGround(.light, in: screenShot, across: app.frame.size, below: turned, "the Screen's turned still")
     }
 
     func testASwipeDownEndsTheRecord() throws {
@@ -452,36 +470,65 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         return try XCTUnwrap(Int(digits), "no frame count in \(value)")
     }
 
-    /// A screenshot of the turned cover, taken once the turn is over: the
-    /// Screen has drawn since `drawnSince` and then drawn nothing more for
-    /// a moment, and the screenshot, read upright, is the size of the
-    /// turned screen. A screenshot that is not (one taken mid-turn, or one
-    /// whose pixels do not follow the interface's orientation) is not used:
-    /// the last one is kept as `not-turned` and the check fails.
-    private func settledShot(_ app: XCUIApplication, _ screen: XCUIElement,
-                             drawnSince before: Int) throws -> XCUIScreenshot {
+    /// Wait until the Screen has drawn since `before` and then drawn
+    /// nothing more for a moment: the turn is over and its frame is up.
+    private func waitUntilResting(_ screen: XCUIElement, drawnSince before: Int) throws {
         let deadline = Date().addingTimeInterval(15)
         var last = -1
-        var shot = app.screenshot()
         while Date() < deadline {
             let drawn = try framesDrawn(screen)
-            if drawn > before, drawn == last {
-                shot = app.screenshot()
-                let size = shot.image.size
-                if abs(size.width - app.frame.width) < 1, abs(size.height - app.frame.height) < 1 {
-                    return shot
-                }
-            }
+            if drawn > before, drawn == last { return }
             last = drawn
             Thread.sleep(forTimeInterval: 0.4)
         }
-        let attachment = XCTAttachment(screenshot: shot)
-        attachment.name = "not-turned"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        XCTFail("no screenshot of the turned screen: read upright it is \(shot.image.size) "
-            + "(orientation \(shot.image.imageOrientation.rawValue)), the app is \(app.frame.size)")
-        return shot
+        XCTFail("the Screen did not draw and rest after the turn: \(String(describing: screen.value))")
+    }
+
+    /// The presented Screen's surface as the app reads it, from the host's
+    /// `nuxie-machine-surface`, kept as the text attachment `name`.
+    private func surface(_ app: XCUIApplication, kept name: String) throws -> SurfaceFacts {
+        let shown = app.descendants(matching: .any)["nuxie-machine-surface"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 10), "the host does not show the surface")
+        // Read twice, a moment apart, so the label is the latest frame's.
+        Thread.sleep(forTimeInterval: 0.6)
+        let text = shown.label
+        let kept = XCTAttachment(string: text)
+        kept.name = name
+        kept.lifetime = .keepAlways
+        add(kept)
+        let numbers = text.split(separator: " ").compactMap { Double($0) }
+        let facts = try XCTUnwrap(SurfaceFacts(numbers), "the surface reads \(text)")
+        return facts
+    }
+
+    /// A Screen's surface as the app reads it, in points and pixels.
+    private struct SurfaceFacts {
+        let bounds: CGSize
+        let drawable: CGSize
+        let scale: CGFloat
+        let drawn: CGSize
+
+        init?(_ numbers: [Double]) {
+            guard numbers.count == 7 else { return nil }
+            bounds = CGSize(width: numbers[0], height: numbers[1])
+            drawable = CGSize(width: numbers[2], height: numbers[3])
+            scale = numbers[4]
+            drawn = CGSize(width: numbers[5], height: numbers[6])
+        }
+    }
+
+    /// A cover's surface `size` points big, whose drawable is that size at
+    /// its scale (rounded up, as the Screen sizes it), and whose last frame
+    /// was drawn at the drawable's size.
+    private func expect(_ facts: SurfaceFacts, coversA size: CGSize, _ what: String) {
+        XCTAssertEqual(facts.bounds, size, "\(what): the surface is \(facts.bounds), not the screen's \(size)")
+        XCTAssertGreaterThan(facts.scale, 0, "\(what): the surface has no scale")
+        let pixels = CGSize(width: (facts.bounds.width * facts.scale).rounded(.up),
+                            height: (facts.bounds.height * facts.scale).rounded(.up))
+        XCTAssertEqual(facts.drawable, pixels,
+                       "\(what): the drawable is \(facts.drawable), not the surface's \(pixels) pixels")
+        XCTAssertEqual(facts.drawn, facts.drawable,
+                       "\(what): the last frame was drawn at \(facts.drawn), not the drawable's \(facts.drawable)")
     }
 
     /// The page's ground, `expected`, all across a cover `size` points
