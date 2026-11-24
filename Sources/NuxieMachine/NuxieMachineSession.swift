@@ -120,6 +120,17 @@ package final class NuxieMachineSession {
         try delivered(nux_machine_wake(handle, now))
     }
 
+    /// The client's environment is now `environment`. Told once before the
+    /// first start, so the first frame is drawn in it, and again whenever it
+    /// changes. With a record open it is delivered to the record, as a wake
+    /// is, and what follows it is written in each presentation's next
+    /// round; the same environment again writes nothing. With none open the
+    /// session keeps it and leaves no rows.
+    package func environment(_ environment: NuxieMachineEnvironment, now: Int64) throws -> [NuxieMachineRow] {
+        var carried = environment.carried
+        return try delivered(nux_machine_environment(handle, &carried, now))
+    }
+
     // MARK: Reads
 
     /// The rows the last call that delivered something left.
@@ -480,6 +491,35 @@ package enum NuxieMachineNote: UInt32, Sendable {
     case unknown = 0xFFFF_FFFF
 }
 
+/// The client's environment, as a session is told it: where the Experience
+/// is shown. Only the scheme is read from the client for now; the rest of
+/// what the machine is told takes the machine's defaults, in [`carried`].
+package struct NuxieMachineEnvironment: Equatable, Sendable {
+    /// Whether the client shows in the dark scheme.
+    package var dark: Bool
+
+    package init(dark: Bool) {
+        self.dark = dark
+    }
+
+    /// The environment as the header lays it out: the one place the struct
+    /// is made. The text size is 17 points (one `rem` at an iPhone's
+    /// default size), and the safe area's insets and the size available
+    /// are zero, which the machine reads as none known.
+    fileprivate var carried: NuxMachineEnvironment {
+        NuxMachineEnvironment(
+            struct_size: UInt32(MemoryLayout<NuxMachineEnvironment>.size),
+            dark: dark,
+            text_size: 17,
+            inset_top: 0,
+            inset_right: 0,
+            inset_bottom: 0,
+            inset_left: 0,
+            width: 0,
+            height: 0)
+    }
+}
+
 /// Every status but `NUX_MACHINE_OK`, with the header's meaning.
 package enum NuxieMachineError: Error, Equatable, Sendable {
     /// A pointer the interface needed was NULL.
@@ -523,6 +563,9 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     /// The reply's fields are not the fields of the declaration's answer
     /// type, or its failure's code is not one the header knows.
     case replyDoesNotFit
+    /// The environment could not be read: its size is smaller than the
+    /// header's, or a number in it is not finite.
+    case environmentDoesNotFit
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
 
@@ -548,6 +591,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .wrongKind: "wrong_kind"
         case .noArtboard: "no_artboard"
         case .replyDoesNotFit: "reply_does_not_fit"
+        case .environmentDoesNotFit: "environment_does_not_fit"
         case .unknownStatus(let status): "status_\(status)"
         }
     }
@@ -579,6 +623,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_WRONG_KIND): .wrongKind,
         UInt32(NUX_MACHINE_NO_ARTBOARD): .noArtboard,
         UInt32(NUX_MACHINE_REPLY_DOES_NOT_FIT): .replyDoesNotFit,
+        UInt32(NUX_MACHINE_ENVIRONMENT_DOES_NOT_FIT): .environmentDoesNotFit,
     ]
 }
 

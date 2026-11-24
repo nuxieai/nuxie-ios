@@ -158,6 +158,10 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// belong to the Screen the person touched, so they go to no one; the
     /// frame still runs.
     case droppedTouches(NuxieMachineShown?)
+    /// The session took the client's environment ([`environment`]): before
+    /// a start, kept for its first frame; with a record open, delivered to
+    /// it.
+    case environment(NuxieMachineEnvironment)
     /// The record asks for a `wake` at this moment, or at none. The host's
     /// timer delivers it ([`wake`]).
     case wakeAt(Int64?)
@@ -576,6 +580,32 @@ package actor NuxieMachineEdge {
                     await refused(error, doing: "wake", now: now, &delivery)
                     return
                 }
+                await apply(rows, now: now, &delivery)
+            }
+        }
+    }
+
+    /// The client's environment is now `environment`, at `now`: a delivery
+    /// like a wake. Before the first start the session keeps it and the
+    /// start's first frame is drawn in it; with a record open, what follows
+    /// it is written in each presentation's next round, and the edge asks
+    /// for the frame that draws it ([`waitsForFrame`]). The same environment
+    /// again writes nothing. One environment holds for the whole session:
+    /// every presentation of it, sheets and covers alike, is drawn in it.
+    ///
+    /// `now` follows the same rule as a wake's: no earlier than the last
+    /// call that handed in a moment.
+    package func environment(_ environment: NuxieMachineEnvironment, now: Int64) async {
+        await inTurn { turn in
+            await deliver(turn, stopped: ()) { delivery in
+                let rows: [NuxieMachineRow]
+                do {
+                    rows = try session.environment(environment, now: now)
+                } catch {
+                    await refused(error, doing: "the environment", now: now, &delivery)
+                    return
+                }
+                log.append(.environment(environment))
                 await apply(rows, now: now, &delivery)
             }
         }

@@ -1,5 +1,6 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
+import NuxieRuntime
 import os
 import UIKit
 
@@ -52,6 +53,14 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 /// - `end` stops the loop, cancels the timer and closes the edge.
 /// - Every fault takes one path: every native presentation is dismissed,
 ///   the code is logged, and everything stops.
+/// - The session is drawn in light or dark as the SDK's experiences are:
+///   the app's fixed scheme ([`colorSchemeMode`]) is forced on each native
+///   presentation, `system` following the phone, and the scheme is read
+///   from what UIKit then says ([`ExperienceColorScheme.init(drawnBy:host:)`]).
+///   The session is told it before its start, so the first frame is drawn
+///   in it, and again before the first frame (or close, or wake) after it
+///   changes. One environment holds for the session: sheets and covers
+///   over one another share it.
 ///
 /// What the presenter owns has one end of life. The edge with its session,
 /// the loop that runs its frames, the Screens, and the wake timer are let
@@ -112,6 +121,24 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// The wake timer while one is set, for checks.
     package var scheduledWake: (any DispatchSourceTimer)? { scheduled.wake }
 
+    /// The scheme the app fixes for its experiences: `system` (the default)
+    /// follows the phone, `light` or `dark` overrides it, on every native
+    /// presentation, as the SDK's experience controller applies it.
+    package var colorSchemeMode: ExperienceColorSchemeMode = .system {
+        didSet {
+            guard oldValue != colorSchemeMode else { return }
+            for controller in controllers.values { applyColorSchemeMode(to: controller) }
+            loop?.requestFrame()
+        }
+    }
+
+    /// The environment the session was last told, for checks. None before
+    /// the start.
+    package private(set) var environment: NuxieMachineEnvironment?
+
+    /// The edge while the presenter holds it, for checks.
+    package var edge: NuxieMachineEdge? { loop?.edge }
+
     /// A presenter that presents from `host` and tells `onStatus` what the
     /// host can show.
     package init(host: UIViewController, onStatus: @escaping @MainActor (NuxieMachineSheetStatus) -> Void) {
@@ -149,7 +176,11 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         logger.info("machine.start \(event, privacy: .public)")
         send(.started)
         await loop.inLane {
-            await edge.start(event: event, now: nuxieMachineNow())
+            // The environment goes first, so the start's first frame is
+            // drawn in it.
+            let now = nuxieMachineNow()
+            await tellEnvironment(at: now)
+            await edge.start(event: event, now: now)
             takeReports()
             await readPlan()
         }
@@ -255,6 +286,8 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         logger.info("machine.present \(presented.route, privacy: .public) \(shown.journey).\(shown.instance)")
         let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop)
         controller.statusText = Self.describe(status)
+        applyColorSchemeMode(to: controller)
+        controller.onColorAppearanceChange = { [weak self] in self?.colorAppearanceChanged() }
         controller.presentationController?.delegate = self
         controllers[shown] = controller
         below.present(controller, animated: true) { [weak self] in self?.send(.presented(shown)) }
@@ -334,7 +367,9 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     }
 
     /// Deliver every wake the record asks for at or before `now`, each at
-    /// its own moment, oldest first. Runs inside the loop's lane.
+    /// its own moment, oldest first, then the client's environment at `now`
+    /// if it changed. Runs inside the loop's lane, before each frame, close
+    /// and timer's wake.
     private func catchUp(to now: Int64) async {
         while let moment = state.dueWake(at: now), let edge = loop?.edge {
             logger.info("machine.wake \(moment)")
@@ -342,6 +377,61 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             await edge.wake(now: moment)
             takeReports()
         }
+        await tellEnvironment(at: now)
+    }
+
+    // MARK: Light and dark
+
+    /// The colors the session's Screens draw in may have changed: the phone
+    /// turned dark or light. Each Screen calls this when UIKit says so; the
+    /// scheme is read again, and told if it changed, before the next frame.
+    package func colorAppearanceChanged() {
+        loop?.requestFrame()
+    }
+
+    /// Tell the session the client's environment at `now`, when it is not
+    /// the one it was last told. Runs inside the loop's lane, so it reaches
+    /// the edge between frames, never inside a step.
+    ///
+    /// The same environment is told once. It is read before every frame,
+    /// and UIKit says a Screen's traits changed for each Screen of the
+    /// session (a sheet over a sheet hears the change twice); the machine
+    /// would write nothing for a repeat, but each would still take a turn of
+    /// the edge and a call into the session. A change and its return (iOS
+    /// draws both schemes for the app switcher as the app goes to the
+    /// background) are two environments, and each is told.
+    private func tellEnvironment(at now: Int64) async {
+        guard let edge = loop?.edge else { return }
+        let current = NuxieMachineEnvironment(dark: colorScheme == .dark)
+        guard current != environment else { return }
+        environment = current
+        logger.info("machine.environment \(current.dark ? "dark" : "light", privacy: .public)")
+        await edge.environment(current, now: now)
+        takeReports()
+    }
+
+    /// The scheme the session draws in, read from one place: the bottom
+    /// native presentation, as the SDK's experience screens read their own
+    /// ([`ExperienceColorScheme.init(drawnBy:host:)`]); every one above it
+    /// is presented over it and has the same. With none presented, the
+    /// scheme one presented now would draw in: the app's fixed scheme, or
+    /// with `system` the host's.
+    private var colorScheme: ExperienceColorScheme {
+        let hostStyle = self.host?.traitCollection.userInterfaceStyle
+        if let bottom = loop?.screens.first {
+            return ExperienceColorScheme(drawnBy: bottom, host: hostStyle)
+        }
+        let forced = colorSchemeMode.userInterfaceStyle
+        return ExperienceColorScheme(own: forced, forced: forced, inWindow: false, host: hostStyle)
+    }
+
+    /// Force the app's fixed scheme on a native presentation, as the SDK's
+    /// experience controller forces it on itself: `system` forces nothing.
+    /// Its traits take the style at once, so a frame before it reaches its
+    /// window already reads it.
+    private func applyColorSchemeMode(to controller: NuxieMachineScreenViewController) {
+        controller.overrideUserInterfaceStyle = colorSchemeMode.userInterfaceStyle
+        if #available(iOS 17.0, *) { controller.updateTraitsIfNeeded() }
     }
 
     // MARK: Words

@@ -44,6 +44,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Frames drawn to the screen.
     package private(set) var framesDrawn = 0
 
+    /// Told when this Screen's colors would change with its traits: the
+    /// phone turned dark or light, or a style was forced on it or lifted.
+    /// The presenter reads the session's scheme again then.
+    package var onColorAppearanceChange: (@MainActor () -> Void)?
+
     /// Pointers that arrived and wait for the next frame.
     fileprivate var pointers: [NuxieNativePointerEvent] = []
     /// The size the engine lays this presentation's Screen out at and draws,
@@ -123,6 +128,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
             surface.bottomAnchor.constraint(equalTo: bounds?.bottomAnchor ?? container.bottomAnchor),
         ])
         updateAccessibility()
+    }
+
+    override package func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) else { return }
+        onColorAppearanceChange?()
     }
 
     /// Whether this Screen's view is in a window, with a size: what the
