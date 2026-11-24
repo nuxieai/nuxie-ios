@@ -11,6 +11,11 @@ import UIKit
 /// machine's `present` row opens the counter as a cover. The edge draws
 /// the plan's own compiled view, and the machine writes it from inside the
 /// engine's step. One line says what the record holds.
+///
+/// UIKit's safe-area insets for the screen are shown to a UI test as
+/// `nuxie-machine-safe-area`, from a window above the cover that takes no
+/// touches ([`NuxieMachineSafeAreaWindow`]), so the counter's place can be
+/// checked against them.
 @MainActor
 public final class NuxieMachineCounterHostViewController: UIViewController {
     private let titleLabel = UILabel()
@@ -18,6 +23,7 @@ public final class NuxieMachineCounterHostViewController: UIViewController {
     private let openButton = UIButton(configuration: .filled())
     private let recordLabel = UILabel()
     private var presenter: NuxieMachineSheetPresenter?
+    private var safeArea: NuxieMachineSafeAreaWindow?
 
     public init() {
         super.init(nibName: nil, bundle: nil)
@@ -65,6 +71,13 @@ public final class NuxieMachineCounterHostViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: margins.trailingAnchor),
             stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
         ])
+    }
+
+    override public func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        if safeArea == nil, let scene = view.window?.windowScene {
+            safeArea = NuxieMachineSafeAreaWindow(windowScene: scene)
+        }
     }
 
     private func openCounter() {

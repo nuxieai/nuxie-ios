@@ -15,6 +15,11 @@ import XCTest
 /// Screen's accessibility value carries the record and the number of frames
 /// its view has drawn, which is how the test sees that the Screen goes
 /// quiet.
+///
+/// The cover fills the screen and is told the screen's insets; the counter
+/// pads its top by the top inset plus 24, so its first line sits that far
+/// down, by UIKit's own inset as the host shows it
+/// (`nuxie-machine-safe-area`). Kept as `place-counter-cover`.
 final class CounterCoverUITests: XCTestCase {
     private static let note = "You have counted at least once."
     private static let below = "This line sits below the note."
@@ -50,7 +55,13 @@ final class CounterCoverUITests: XCTestCase {
         let resting = below.frame
         XCTAssertLessThan(app.staticTexts["Tapped 0 times"].frame.minY, resting.minY)
         XCTAssertLessThan(resting.minY, count.frame.minY)
+        let top = try safeAreaTop(app)
+        XCTAssertGreaterThan(top, 0, "UIKit gives the screen no top inset")
+        XCTAssertEqual(screen.frame, app.frame, "the counter's cover is not the screen's frame")
+        XCTAssertEqual(app.staticTexts["Tapped 0 times"].frame.minY, top + 24, accuracy: 1,
+                       "the first line is not the top inset plus 24 below the top")
         keep("1-open", app)
+        keep("place-counter-cover", app)
         try expectQuiet(screen, name: "the opened counter")
 
         // A tap on "Count": the count line changes, the note is read below
@@ -80,6 +91,15 @@ final class CounterCoverUITests: XCTestCase {
     }
 
     // MARK: Driving the host
+
+    /// UIKit's top safe-area inset for the screen, as the host shows it.
+    private func safeAreaTop(_ app: XCUIApplication) throws -> CGFloat {
+        let shown = app.descendants(matching: .any)["nuxie-machine-safe-area"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 10), "the host does not show the safe area")
+        let words = shown.label.split(separator: " ").compactMap { Double($0) }
+        XCTAssertEqual(words.count, 4, "the safe area reads \(shown.label)")
+        return CGFloat(try XCTUnwrap(words.first))
+    }
 
     private func waitFor(_ element: XCUIElement, valueContaining text: String) {
         let expectation = XCTNSPredicateExpectation(

@@ -29,6 +29,11 @@ final class MachinePlaceTests: XCTestCase {
     /// The same cover with the status bar hidden: only the bottom inset.
     private static let barHidden = NuxieMachineScreenPlace(
         top: 0, right: 0, bottom: 34, left: 0, width: 390, height: 844)
+    /// Side insets, as a phone on its side has (the sensor's on one side and
+    /// the same on the other), told at the upright size so only the insets
+    /// differ from a run told none.
+    private static let sides = NuxieMachineScreenPlace(
+        top: 0, right: 59, bottom: 21, left: 59, width: 390, height: 844)
 
     // MARK: The edge, told directly
 
@@ -46,6 +51,15 @@ final class MachinePlaceTests: XCTestCase {
         let untold = try await Self.firstFrame(told: nil)
         let told = try await Self.firstFrame(told: Self.upright)
         try Self.expect(told, at: Self.upright, against: untold, "the first frame")
+    }
+
+    /// Side insets are drawn too: the page pads all four sides by its
+    /// safe area, so the Yearly card, as wide as the content, starts the
+    /// left inset further in and ends the right inset further in.
+    func testAPlacesSideInsetsAreDrawnInsideThePage() async throws {
+        let untold = try await Self.firstFrame(told: nil)
+        let told = try await Self.firstFrame(told: Self.sides)
+        try Self.expect(told, at: Self.sides, against: untold, "the first frame told side insets")
     }
 
     /// Told the same place again, the edge writes nothing and asks for no
@@ -303,6 +317,14 @@ final class MachinePlaceTests: XCTestCase {
                        "\(what): the headline moved \(title), not the top inset \(place.top)")
         XCTAssertEqual(footer, CGFloat(place.bottom), accuracy: tolerance,
                        "\(what): \"Not now\" moved up \(footer), not the bottom inset \(place.bottom)")
+        // The Yearly card is as wide as the page's content: its left edge
+        // moves in by the left inset and its right edge by the right one.
+        let left = try look.region(of: "Yearly").minX - untold.region(of: "Yearly").minX
+        let right = try untold.region(of: "Yearly").maxX - look.region(of: "Yearly").maxX
+        XCTAssertEqual(left, CGFloat(place.left), accuracy: tolerance,
+                       "\(what): the Yearly card moved in \(left) on the left, not the left inset \(place.left)")
+        XCTAssertEqual(right, CGFloat(place.right), accuracy: tolerance,
+                       "\(what): the Yearly card moved in \(right) on the right, not the right inset \(place.right)")
     }
 
     /// The presentation on top: Stillwater's start presents the paywall.
