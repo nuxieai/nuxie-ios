@@ -289,8 +289,9 @@ extension NuxieMachineStillwaterFixture {
 /// in points, read again whenever they change (a rotation, the status bar).
 /// Beside it, `nuxie-machine-surface` is labeled with the presented
 /// Screen's surface as the app sees it ([`NuxieMachineSurfaceFacts`]):
-/// `bounds W H drawable W H scale S drawn W H`, then `view T R B L` (the
-/// safe-area insets UIKit gives the Screen's view), then `place T R B L W H`
+/// `bounds W H drawable W H scale S drawn W H`, then `view T R B L W H`
+/// (the safe-area insets UIKit gives the Screen's view, and the view's
+/// size, which a sheet drawn smaller keeps), then `place T R B L W H`
 /// once it has a place (the insets and size the session is told). And
 /// `nuxie-machine-places` is labeled with every place the session took, in
 /// order, from the edge's log (`edge`): `T R B L W H` each, `; ` between, or
@@ -382,10 +383,11 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             let facts = screen.surfaceFacts
             let drawn = facts.drawn ?? .zero
             let insets = screen.viewIfLoaded?.safeAreaInsets ?? .zero
+            let size = screen.viewIfLoaded?.bounds.size ?? .zero
             let numbers = [facts.bounds.width, facts.bounds.height, facts.drawableSize.width,
                            facts.drawableSize.height, facts.contentsScale, drawn.width, drawn.height]
                 .map { "\(Double($0))" }
-            let viewInsets = " view " + [insets.top, insets.right, insets.bottom, insets.left]
+            let viewInsets = " view " + [insets.top, insets.right, insets.bottom, insets.left, size.width, size.height]
                 .map { "\(Double($0))" }.joined(separator: " ")
             let place = facts.place.map {
                 " place " + [$0.top, $0.right, $0.bottom, $0.left, $0.width, $0.height].map { "\($0)" }
