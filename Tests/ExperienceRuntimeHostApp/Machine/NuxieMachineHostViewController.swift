@@ -17,8 +17,22 @@ import UIKit
 /// `--nuxie-machine-appearance dark` (or `light`) starts the app in that
 /// appearance: it is set on the app's window, standing in for the phone's
 /// own setting, and the paywall, which follows the phone, draws in it.
+/// While the app runs, the Darwin notification
+/// `dev.nuxie.machine.appearance.dark` (or `.light`) turns the window to
+/// that appearance the same way, so a UI test can turn the phone while the
+/// paywall is open: the simulator's own appearance setting does not reach a
+/// running app on every simulator.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
+    /// The Darwin notifications that turn the window, with the appearance
+    /// each one turns it to.
+    public static let appearanceNotifications: [String: UIUserInterfaceStyle] = [
+        "dev.nuxie.machine.appearance.dark": .dark,
+        "dev.nuxie.machine.appearance.light": .light,
+    ]
+    /// The host the notifications turn: the one on screen.
+    private static weak var shown: NuxieMachineHostViewController?
+
     private let titleLabel = UILabel()
     private let bodyLabel = UILabel()
     private let finishButton = UIButton(configuration: .filled())
@@ -83,6 +97,27 @@ public final class NuxieMachineHostViewController: UIViewController {
         super.viewIsAppearing(animated)
         if let appearance = Self.launchAppearance {
             view.window?.overrideUserInterfaceStyle = appearance
+        }
+        Self.listenForAppearance(turning: self)
+    }
+
+    /// Turn the window `shown` is in when a test posts one of
+    /// [`appearanceNotifications`]. Listens once per app run.
+    private static var listening = false
+    private static func listenForAppearance(turning host: NuxieMachineHostViewController) {
+        shown = host
+        guard !listening else { return }
+        listening = true
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        for name in appearanceNotifications.keys {
+            CFNotificationCenterAddObserver(center, nil, { _, _, name, _, _ in
+                guard let name else { return }
+                let raw = name.rawValue as String
+                Task { @MainActor in
+                    guard let style = NuxieMachineHostViewController.appearanceNotifications[raw] else { return }
+                    NuxieMachineHostViewController.shown?.view.window?.overrideUserInterfaceStyle = style
+                }
+            }, name as CFString, nil, .deliverImmediately)
         }
     }
 
