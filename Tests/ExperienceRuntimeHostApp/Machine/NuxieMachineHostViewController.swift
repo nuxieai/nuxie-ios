@@ -8,8 +8,9 @@ import UIKit
 /// A plain app screen at the end of onboarding. "Finish onboarding" starts a
 /// record with the event `onboarding_completed`, standing in for the SDK
 /// seeing the app's own event, and the machine opens Stillwater's paywall
-/// as a sheet. The paywall is drawn from `paywall.nux` alone, compiled on
-/// this phone, and the machine writes it from inside the engine's step. Two lines say what the record holds: the
+/// as a sheet. The paywall is drawn from `paywall.nux` and its
+/// `plan-card.nux` alone, compiled on this phone, and the machine writes it
+/// from inside the engine's step. Two lines say what the record holds: the
 /// selected plan, read from the session's root slot, and the record's
 /// state.
 @MainActor
@@ -109,7 +110,7 @@ struct NuxieMachineSlowStore: NuxieMachineStore {
 }
 
 /// Stillwater as the staged host app bundles it under `stillwater/`: its
-/// four `.nux` files and the plan's header. The same files the machine's
+/// five `.nux` files and the plan's header. The same files the machine's
 /// simulator suite uses.
 enum NuxieMachineStillwaterFixture {
     private struct Provenance: Decodable {
@@ -135,7 +136,7 @@ enum NuxieMachineStillwaterFixture {
             return try Data(contentsOf: url)
         }
         let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
-        let files = try ["main.nux", "paywall.nux", "screens.nux", "done.nux"].map {
+        let files = try ["main.nux", "paywall.nux", "plan-card.nux", "screens.nux", "done.nux"].map {
             NuxieMachineSourceFile(path: $0, text: String(decoding: try data($0), as: UTF8.self))
         }
         return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,

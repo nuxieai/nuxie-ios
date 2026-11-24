@@ -1,4 +1,5 @@
 use Product from "nuxie/store"
+use PlanCard from "plan-card"
 
 enum Plan annual monthly annual_offer
 
@@ -19,19 +20,6 @@ style Mark
 
 style Title
   margin-top=28 color=ink font-size=32 font-weight=700 line-height=38 letter-spacing=-0.4
-
-style Card
-  height=72 padding="0 20" gap=14 flex-direction=row align-items=center
-  background-color=panel border-radius=18 border-width=1 border-color=edge
-  :checked
-    border-width=2 border-color=mint
-
-style Radio
-  width=22 height=22 border-radius=11 border-width=1.5 border-color=#5d6a67
-  align-items=center justify-content=center
-
-style CardText
-  color=ink font-size=17 font-weight=600 line-height=22
 
 style Buy
   height=56 margin-top=28 border-radius=28 background-color=mint
@@ -75,18 +63,8 @@ component Paywall
           box width=12 height=12 border-radius=6 background-color=mint
         text headline class=Title id="title"
         column role=radiogroup label="Plan" gap=12 margin-top=40
-          button role=radio checked=(selected == annual) class=Card press=select(annual) id="annual"
-            box class=Radio
-              if selected == annual
-                box width=12 height=12 border-radius=6 background-color=mint
-            text "Yearly" class=CardText flex=1
-            text (plans[0]?.price ?? "") class=CardText text-align=right id="annual_price"
-          button role=radio checked=(selected == monthly) class=Card press=select(monthly) id="monthly"
-            box class=Radio
-              if selected == monthly
-                box width=12 height=12 border-radius=6 background-color=mint
-            text "Monthly" class=CardText flex=1
-            text (plans[1]?.price ?? "") class=CardText text-align=right id="monthly_price"
+          PlanCard(name="Yearly", price=(plans[0]?.price ?? ""), on=(selected == annual), press=select(annual)) id="annual"
+          PlanCard(name="Monthly", price=(plans[1]?.price ?? ""), on=(selected == monthly), press=select(monthly)) id="monthly"
         button class=Buy disabled=busy press=buy id="buy"
           text (if selected == annual_offer then "Claim the offer" else "Continue") class=BuyLabel
         box height=52 padding-top=12

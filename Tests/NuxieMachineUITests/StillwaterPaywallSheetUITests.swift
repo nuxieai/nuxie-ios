@@ -4,9 +4,9 @@ import XCTest
 /// the Nux machine, with no person. The host launches with
 /// `--nuxie-machine-paywall`; "Finish onboarding" starts a record with
 /// `onboarding_completed`, and the machine's `present` row opens the
-/// paywall as a sheet, drawn from `paywall.nux` alone. The host's store
-/// answers a purchase with status `failed` after a second and a half, so the
-/// paywall is seen while it buys.
+/// paywall as a sheet, drawn from `paywall.nux` and its `plan-card.nux`
+/// alone. The host's store answers a purchase with status `failed` after a
+/// second and a half, so the paywall is seen while it buys.
 ///
 /// The paywall is found the way a screen reader finds it: each line is a
 /// static text and each button a button named by the words beneath it,
