@@ -236,8 +236,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertEqual(app.frame.maxY - upright.bottom - restore.frame.maxY, 82, accuracy: 1,
                        "the footer does not end the page's padding above the home indicator")
         XCTAssertEqual(coverGround(app, below: upright), .light, "the cover does not open light")
+        let uprightShot = app.screenshot()
+        expectPageGround(.light, in: uprightShot, across: app.frame.size, below: upright, "the upright cover")
         let uprightTitle = title.frame.minY
-        keep("place-cover-portrait-light", app, screen, expecting: "1-open")
+        keep("place-cover-portrait-light", app, screen, expecting: "1-open", shot: uprightShot)
 
         turnThePhone(.dark)
         waitFor(ground: .dark, app, below: upright, "the open cover did not turn dark with the phone")
@@ -245,14 +247,17 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         turnThePhone(.light)
         waitFor(ground: .light, app, below: upright, "the open cover did not turn light again")
 
+        let drawnUpright = try framesDrawn(screen)
         XCUIDevice.shared.orientation = .landscapeLeft
         let turned = try settledInsets(app, screen, title, until: { $0.left > 0 || $0.right > 0 })
         XCTAssertGreaterThan(app.frame.width, app.frame.height, "the app did not turn")
+        let turnedShot = try settledShot(app, screen, drawnSince: drawnUpright)
         XCTAssertEqual(screen.frame, app.frame, "the turned cover's Screen is not the turned screen's frame")
         XCTAssertGreaterThanOrEqual(title.frame.minY, turned.top, "the turned headline is under the status bar")
         XCTAssertEqual(uprightTitle - title.frame.minY, upright.top - turned.top, accuracy: 1,
                        "the headline did not move by what the top inset lost")
-        keep("place-cover-landscape-light", app, screen)
+        expectPageGround(.light, in: turnedShot, across: app.frame.size, below: turned, "the turned cover")
+        keep("place-cover-landscape-light", app, screen, shot: turnedShot)
     }
 
     func testASwipeDownEndsTheRecord() throws {
@@ -438,11 +443,86 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertEqual(seen, expected, message)
     }
 
+    /// The Screen's count of frames drawn, from its accessibility value.
+    private func framesDrawn(_ screen: XCUIElement) throws -> Int {
+        let value = String(describing: screen.value ?? "")
+        let marker = "Frames drawn: "
+        let start = try XCTUnwrap(value.range(of: marker), "no frame count in \(value)").upperBound
+        let digits = value[start...].prefix { $0.isNumber }
+        return try XCTUnwrap(Int(digits), "no frame count in \(value)")
+    }
+
+    /// A screenshot of the turned cover, taken once the turn is over: the
+    /// Screen has drawn since `drawnSince` and then drawn nothing more for
+    /// a moment, and the screenshot, read upright, is the size of the
+    /// turned screen. A screenshot that is not (one taken mid-turn, or one
+    /// whose pixels do not follow the interface's orientation) is not used:
+    /// the last one is kept as `not-turned` and the check fails.
+    private func settledShot(_ app: XCUIApplication, _ screen: XCUIElement,
+                             drawnSince before: Int) throws -> XCUIScreenshot {
+        let deadline = Date().addingTimeInterval(15)
+        var last = -1
+        var shot = app.screenshot()
+        while Date() < deadline {
+            let drawn = try framesDrawn(screen)
+            if drawn > before, drawn == last {
+                shot = app.screenshot()
+                let size = shot.image.size
+                if abs(size.width - app.frame.width) < 1, abs(size.height - app.frame.height) < 1 {
+                    return shot
+                }
+            }
+            last = drawn
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        let attachment = XCTAttachment(screenshot: shot)
+        attachment.name = "not-turned"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTFail("no screenshot of the turned screen: read upright it is \(shot.image.size) "
+            + "(orientation \(shot.image.imageOrientation.rawValue)), the app is \(app.frame.size)")
+        return shot
+    }
+
+    /// The page's ground, `expected`, all across a cover `size` points
+    /// big: down both sides in the page's side padding, from just below the
+    /// top inset to the bottom edge, and across the top padding. A frame
+    /// drawn small, turned or cut off reads black or the wrong scheme
+    /// somewhere on the grid.
+    private func expectPageGround(_ expected: Ground, in shot: XCUIScreenshot, across size: CGSize,
+                                  below insets: UIEdgeInsets, _ what: String) {
+        let top = insets.top + 30
+        let points = [
+            CGPoint(x: 12, y: top), CGPoint(x: size.width / 4, y: top), CGPoint(x: size.width / 2, y: top),
+            CGPoint(x: size.width * 3 / 4, y: top), CGPoint(x: size.width - 12, y: top),
+            CGPoint(x: 12, y: size.height / 2), CGPoint(x: size.width - 12, y: size.height / 2),
+            CGPoint(x: 12, y: size.height - 12), CGPoint(x: size.width - 12, y: size.height - 12),
+        ]
+        let taken = shot.image.size
+        XCTAssertEqual(taken.width, size.width, accuracy: 1, "\(what): read upright, the screenshot is \(taken)")
+        XCTAssertEqual(taken.height, size.height, accuracy: 1, "\(what): read upright, the screenshot is \(taken)")
+        for point in points {
+            XCTAssertEqual(ground(in: shot, at: point), expected,
+                           "\(what): the page's ground at \(point) is not \(expected) in a \(taken) screenshot")
+        }
+    }
+
+    /// `image`'s pixels the right way up: drawn through its orientation
+    /// when it has one, so a point in the app is the same point in them.
+    private func upright(_ image: UIImage) -> CGImage? {
+        guard image.imageOrientation != .up else { return image.cgImage }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(at: .zero)
+        }.cgImage
+    }
+
     /// Light or dark at `point` of `shot`: light when every channel is at
     /// least `lightAtLeast`, dark when every channel is at most 48.
     private func ground(in shot: XCUIScreenshot, at point: CGPoint, lightAtLeast: Int = 200) -> Ground? {
         let image = shot.image
-        guard let picture = image.cgImage else { return nil }
+        guard let picture = upright(image) else { return nil }
         let x = Int(point.x * image.scale)
         let y = Int(point.y * image.scale)
         guard x >= 0, y >= 0, x < picture.width, y < picture.height else { return nil }
@@ -477,8 +557,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// to the log one element a line. With `expecting`, the reading is the
     /// story's at that frame, word for word.
     private func keep(_ name: String, _ app: XCUIApplication, _ screen: XCUIElement?,
-                      expecting frame: String? = nil) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+                      expecting frame: String? = nil, shot: XCUIScreenshot? = nil) {
+        let attachment = XCTAttachment(screenshot: shot ?? app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
