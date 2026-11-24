@@ -29,12 +29,14 @@ import XCTest
 /// same in both, word for word; only the colors differ, read from the
 /// sheet's ground in each screenshot.
 ///
-/// A sheet is told no insets: the paywall is laid out inside the sheet's
-/// safe area, and the band below it shows the platform's sheet background.
+/// A sheet is filled by its Screen to every edge and told the sheet's own
+/// insets, as UIKit gives them: the paywall's ground runs under the home
+/// indicator to the sheet's bottom edge, and its content stays clear of it.
 /// Each story keeps one still of that, `place-sheet-light` or
-/// `place-sheet-dark`. With `--nuxie-machine-paywall-cover` the host
-/// presents the same paywall as a cover, which is told the screen's insets
-/// and fills the screen.
+/// `place-sheet-dark`, beside what the app says its surface is
+/// (`place-sheet-<scheme>-surface`). With `--nuxie-machine-paywall-cover`
+/// the host presents the same paywall as a cover, which is told the
+/// screen's insets and fills the screen.
 final class StillwaterPaywallSheetUITests: XCTestCase {
     private static let errorLine = "The purchase did not go through. Try again in a moment."
     private static let termsLine = "Billed through the store after the trial. Cancel any time."
@@ -156,15 +158,13 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         waitFor(app, screen, ground: appearance, "the paywall does not open in \(appearance)")
         keep("1-open", app, screen, expecting: "1-open")
 
-        // The sheet's place: the paywall stays inside the sheet's safe area,
-        // and the band below it, the home indicator's, is the platform's
-        // sheet background in the same scheme. Kept whole as
-        // `place-sheet-<scheme>`.
-        let band = CGPoint(x: screen.frame.midX, y: screen.frame.maxY - 8)
-        XCTAssertLessThan(notNow.frame.maxY, band.y, "the paywall's footer reaches into the home indicator's band")
-        XCTAssertEqual(ground(in: app.screenshot(), at: band), appearance,
-                       "the band below the paywall is not the \(appearance) sheet background")
-        keep("place-sheet-\(appearance.rawValue)", app, screen, expecting: "1-open")
+        // The sheet's place. Everything is kept before anything is
+        // checked: the still, `place-sheet-<scheme>`, and what the app says
+        // its surface is.
+        let shot = app.screenshot()
+        keep("place-sheet-\(appearance.rawValue)", app, screen, expecting: "1-open", shot: shot)
+        let facts = try surface(app, kept: "place-sheet-\(appearance.rawValue)-surface")
+        try expectSheetPlace(app, screen, facts, restore: restore, shot: shot, appearance)
 
         // 2. Monthly chosen: the record's plan is monthly, and the selected
         // card moves from yearly to monthly.
@@ -517,21 +517,98 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         return facts
     }
 
-    /// A Screen's surface as the app reads it, in points and pixels.
+    /// A Screen's surface as the app reads it, in points and pixels, and
+    /// the insets of the place the session is told (none before it has one).
     private struct SurfaceFacts {
         let bounds: CGSize
         let drawable: CGSize
         let scale: CGFloat
         let drawn: CGSize
+        let placeInsets: UIEdgeInsets?
 
         init?(_ numbers: [Double]) {
-            guard numbers.count == 7 else { return nil }
+            guard numbers.count == 7 || numbers.count == 13 else { return nil }
             bounds = CGSize(width: numbers[0], height: numbers[1])
             drawable = CGSize(width: numbers[2], height: numbers[3])
             scale = numbers[4]
             drawn = CGSize(width: numbers[5], height: numbers[6])
+            placeInsets = numbers.count == 13
+                ? UIEdgeInsets(top: numbers[7], left: numbers[10], bottom: numbers[9], right: numbers[8])
+                : nil
         }
     }
+
+    /// A large sheet's place, checked against what UIKit gives: the
+    /// screen's insets from the host's `nuxie-machine-safe-area` and the
+    /// sheet's frame, never a number of the test's own.
+    ///
+    /// - The surface fills the sheet: its bounds are the sheet's size, its
+    ///   drawable that size at its scale, its last frame drawn at it.
+    /// - The large sheet reaches the screen's bottom edge, and its told
+    ///   insets are where the screen's safe area reaches into it, as UIKit
+    ///   works out a view's: on each edge, the screen's inset less the
+    ///   distance from that edge of the screen to the sheet's, and none
+    ///   below 0. Its top is below the status bar, so it is told no top
+    ///   inset; its bottom is the home indicator's.
+    /// - The content keeps clear of the home indicator: below the links,
+    ///   the terms' box (8 and 40) and the page's own bottom padding (34),
+    ///   then the told bottom inset, as on the cover.
+    /// - The page's ground runs to the sheet's bottom edge: points in the
+    ///   home indicator's band and just above the bottom edge, either side
+    ///   of the indicator, are the color of the page's ground mid-page in the
+    ///   same screenshot, within 3 a channel. The platform's own sheet
+    ///   background (white, or black) is within neither scheme's 3 of
+    ///   Stillwater's `night`, though both read as the same light or dark.
+    private func expectSheetPlace(_ app: XCUIApplication, _ screen: XCUIElement, _ facts: SurfaceFacts,
+                                  restore: XCUIElement, shot: XCUIScreenshot, _ appearance: Ground) throws {
+        let sheet = screen.frame
+        expect(facts, coversA: sheet.size, "the sheet")
+        let told = try XCTUnwrap(facts.placeInsets, "the sheet's Screen has no place")
+        let screenInsets = try insets(app)
+        XCTAssertEqual(sheet.maxY, app.frame.maxY, accuracy: 0.5, "the large sheet does not reach the screen's bottom")
+        let reached = UIEdgeInsets(
+            top: max(0, screenInsets.top - (sheet.minY - app.frame.minY)),
+            left: max(0, screenInsets.left - (sheet.minX - app.frame.minX)),
+            bottom: max(0, screenInsets.bottom - (app.frame.maxY - sheet.maxY)),
+            right: max(0, screenInsets.right - (app.frame.maxX - sheet.maxX)))
+        for (edge, got, want) in [("top", told.top, reached.top), ("right", told.right, reached.right),
+                                  ("bottom", told.bottom, reached.bottom), ("left", told.left, reached.left)] {
+            XCTAssertEqual(got, want, accuracy: 0.5,
+                           "the sheet is told a \(edge) inset of \(got), not the \(want) the screen's "
+                               + "\(screenInsets) reaches into its frame \(sheet)")
+        }
+        XCTAssertEqual(sheet.maxY - told.bottom - restore.frame.maxY, 82, accuracy: 1,
+                       "the footer does not end the page's padding above the home indicator")
+
+        let picture = try XCTUnwrap(upright(shot.image), "the screenshot has no bitmap")
+        let scale = shot.image.scale
+        let middle = CGPoint(x: sheet.minX + told.left + 12, y: sheet.midY)
+        let page = try XCTUnwrap(pixel(in: picture, scale: scale, at: middle), "no pixel at \(middle)")
+        XCTAssertEqual(ground(in: picture, scale: scale, at: middle), appearance,
+                       "the page's ground mid-page is not \(appearance)")
+        let band = sheet.maxY - max(told.bottom, 8) / 2
+        let bottom = [sheet.minX + sheet.width / 4, sheet.minX + sheet.width * 3 / 4].flatMap { x in
+            [CGPoint(x: x, y: band), CGPoint(x: x, y: sheet.maxY - 3)]
+        }
+        for point in bottom {
+            let seen = try XCTUnwrap(pixel(in: picture, scale: scale, at: point), "no pixel at \(point)")
+            XCTAssertTrue(zip(seen, page).allSatisfy { abs($0 - $1) <= 3 },
+                          "at \(point) the sheet shows \(seen), not the page's ground \(page) from \(middle)")
+        }
+    }
+
+    /// UIKit's safe-area insets for the screen, as the host shows them now.
+    private func insets(_ app: XCUIApplication) throws -> UIEdgeInsets {
+        let shown = app.descendants(matching: .any)["nuxie-machine-safe-area"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 10),
+                      "the host does not show the safe area: \(app.debugDescription)")
+        let words = shown.label.split(separator: " ").compactMap { Double($0) }
+        XCTAssertEqual(words.count, 4, "the safe area reads \(shown.label)")
+        guard words.count == 4 else { throw NotRead() }
+        return UIEdgeInsets(top: words[0], left: words[3], bottom: words[2], right: words[1])
+    }
+
+    private struct NotRead: Error {}
 
     /// A cover's surface `size` points big, whose drawable is that size at
     /// its scale (rounded up, as the Screen sizes it), and whose last frame
@@ -655,11 +732,20 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// point.
     private func ground(in picture: CGImage, scale: CGFloat, at point: CGPoint,
                         lightAtLeast: Int = 200) -> Ground? {
+        guard let channels = pixel(in: picture, scale: scale, at: point) else { return nil }
+        if channels.allSatisfy({ $0 >= lightAtLeast }) { return .light }
+        if channels.allSatisfy({ $0 <= 48 }) { return .dark }
+        return nil
+    }
+
+    /// The red, green and blue of the pixel at `point` of `picture`, a
+    /// bitmap at `scale` pixels a point, or none outside it.
+    private func pixel(in picture: CGImage, scale: CGFloat, at point: CGPoint) -> [Int]? {
         let x = Int(point.x * scale)
         let y = Int(point.y * scale)
         guard x >= 0, y >= 0, x < picture.width, y < picture.height else { return nil }
-        var pixel = [UInt8](repeating: 0, count: 4)
-        let drawn = pixel.withUnsafeMutableBytes { bytes -> Bool in
+        var rgba = [UInt8](repeating: 0, count: 4)
+        let drawn = rgba.withUnsafeMutableBytes { bytes -> Bool in
             guard let context = CGContext(
                 data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
@@ -671,10 +757,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             return true
         }
         guard drawn else { return nil }
-        let channels = pixel[0..<3].map(Int.init)
-        if channels.allSatisfy({ $0 >= lightAtLeast }) { return .light }
-        if channels.allSatisfy({ $0 <= 48 }) { return .dark }
-        return nil
+        return rgba[0..<3].map(Int.init)
     }
 
     private func waitUntilGone(_ element: XCUIElement) {
