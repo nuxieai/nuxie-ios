@@ -36,6 +36,12 @@ final class MachinePlaceTests: XCTestCase {
     /// frame: the headline is lower by the top inset and "Not now" higher by
     /// the bottom inset than in the same frame told none. The place is
     /// logged once, for the presentation it was told for.
+    ///
+    /// Stillwater presents its paywall as a sheet, and this tells it a
+    /// cover's insets on purpose: the edge and the session hold no rule
+    /// about which insets a presentation gets, so the page must draw in
+    /// whatever place it is told. The presenter tells a sheet zero; that is
+    /// checked on a Screen's own place, below.
     func testAPlaceToldBeforeTheFirstFrameIsDrawnInIt() async throws {
         let untold = try await Self.firstFrame(told: nil)
         let told = try await Self.firstFrame(told: Self.upright)
@@ -264,8 +270,18 @@ final class MachinePlaceTests: XCTestCase {
         if let told {
             let shown = try await top(edge)
             await edge.place(told, for: shown, now: nine)
+            // The start opened the paywall's player and no frame has run, so
+            // nothing has stepped it: the place is taken before its first
+            // step. Each delivery ends with the record's wake, so the place
+            // is not the last entry.
             let log = await edge.log
-            XCTAssertEqual(log.last, .place(shown, told), "the place was not taken before the first frame: \(log)")
+            let opened = log.firstIndex(of: .opened(shown))
+            let placed = log.firstIndex(of: .place(shown, told))
+            XCTAssertNotNil(placed, "the place was not taken: \(log)")
+            XCTAssertLessThan(try XCTUnwrap(opened), try XCTUnwrap(placed),
+                              "the place was taken before the player opened: \(log)")
+            XCTAssertEqual(log.filter { if case .place = $0 { true } else { false } }.count, 1,
+                           "the place was taken more than once: \(log)")
         }
         try await layOut(edge)
         await edge.frame(elapsedSeconds: StillwaterPaywallEdgeTests.tick, now: nine)

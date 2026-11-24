@@ -40,6 +40,9 @@ public final class NuxieMachineHostViewController: UIViewController {
     ]
     /// The host the notifications turn: the one on screen.
     private static weak var shown: NuxieMachineHostViewController?
+    /// The window this host appeared in. Held here, since a cover takes the
+    /// host's view out of its window while it is up.
+    private weak var appearedIn: UIWindow?
 
     private let titleLabel = UILabel()
     private let bodyLabel = UILabel()
@@ -118,11 +121,12 @@ public final class NuxieMachineHostViewController: UIViewController {
         }
     }
 
-    /// Turn the window `shown` is in when a test posts one of
+    /// Turn the window `shown` appeared in when a test posts one of
     /// [`appearanceNotifications`]. Listens once per app run.
     private static var listening = false
     private static func listenForAppearance(turning host: NuxieMachineHostViewController) {
         shown = host
+        host.appearedIn = host.view.window
         guard !listening else { return }
         listening = true
         let center = CFNotificationCenterGetDarwinNotifyCenter()
@@ -132,7 +136,7 @@ public final class NuxieMachineHostViewController: UIViewController {
                 let raw = name.rawValue as String
                 Task { @MainActor in
                     guard let style = NuxieMachineHostViewController.appearanceNotifications[raw] else { return }
-                    NuxieMachineHostViewController.shown?.view.window?.overrideUserInterfaceStyle = style
+                    NuxieMachineHostViewController.shown?.appearedIn?.overrideUserInterfaceStyle = style
                 }
             }, name as CFString, nil, .deliverImmediately)
         }
