@@ -61,6 +61,12 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   in it, and again before the first frame (or close, or wake) after it
 ///   changes. One environment holds for the session: sheets and covers
 ///   over one another share it.
+/// - Each native presentation is told where it is shown, its place
+///   ([`NuxieMachineScreenViewController.place`]): a cover the screen's
+///   insets, a sheet none. Its place is told before its first frame is
+///   drawn, and again before the next frame after a rotation, a change of
+///   size or of the safe area; the same place is told once, and it goes
+///   when its presentation does ([`NuxieMachineToldPlaces`]).
 ///
 /// What the presenter owns has one end of life. The edge with its session,
 /// the loop that runs its frames, the Screens, and the wake timer are let
@@ -136,6 +142,12 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// the start.
     package private(set) var environment: NuxieMachineEnvironment?
 
+    /// The place each presented Screen was last told: the one copy.
+    private var toldPlaces = NuxieMachineToldPlaces()
+
+    /// The place each presented Screen was last told, for checks.
+    package var places: [NuxieMachineShown: NuxieMachinePlace] { toldPlaces.places }
+
     /// The edge while the presenter holds it, for checks.
     package var edge: NuxieMachineEdge? { loop?.edge }
 
@@ -209,6 +221,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         sending = false
         let held = state.natives.map(\.shown)
         controllers = controllers.filter { held.contains($0.key) }
+        toldPlaces.keep(held)
         loop?.screens = held.compactMap { controllers[$0] }
         let reached = state.reachable
         for (shown, controller) in controllers { controller.reachable = shown == reached }
@@ -241,6 +254,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             scheduled.loop = nil
             loop = nil
             controllers = [:]
+            toldPlaces = NuxieMachineToldPlaces()
         }
     }
 
@@ -368,8 +382,8 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
 
     /// Deliver every wake the record asks for at or before `now`, each at
     /// its own moment, oldest first, then the client's environment at `now`
-    /// if it changed. Runs inside the loop's lane, before each frame, close
-    /// and timer's wake.
+    /// if it changed, then each presented Screen's place that changed. Runs
+    /// inside the loop's lane, before each frame, close and timer's wake.
     private func catchUp(to now: Int64) async {
         while let moment = state.dueWake(at: now), let edge = loop?.edge {
             logger.info("machine.wake \(moment)")
@@ -378,6 +392,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             takeReports()
         }
         await tellEnvironment(at: now)
+        await tellPlaces(at: now)
     }
 
     // MARK: Light and dark
@@ -434,6 +449,28 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         if #available(iOS 17.0, *) { controller.updateTraitsIfNeeded() }
     }
 
+    // MARK: Places
+
+    /// Tell the session where each presented Screen is shown, at `now`,
+    /// bottom first, when it is not where it was last told. Runs inside the
+    /// loop's lane, after the environment, so it reaches the edge between
+    /// frames, never inside a step. The frame that draws a Screen first runs
+    /// this, so its first frame is drawn in its place; a Screen with no size
+    /// yet has no place, and is told once it has one. A rotation, a change
+    /// of size or of the safe area asks for a frame, and that frame's run of
+    /// this tells the new place.
+    private func tellPlaces(at now: Int64) async {
+        guard let loop else { return }
+        let edge = loop.edge
+        let changed = toldPlaces.changes(loop.screens.map { (shown: $0.shown, place: $0.place) })
+        for (shown, place) in changed {
+            let at = "\(place.top) \(place.right) \(place.bottom) \(place.left) \(place.width)x\(place.height)"
+            logger.info("machine.place \(shown.journey).\(shown.instance) \(at, privacy: .public)")
+            await edge.place(place, for: shown, now: now)
+            takeReports()
+        }
+    }
+
     // MARK: Words
 
     private static func record(_ record: NuxieMachineSheetState.Record) -> NuxieMachineSheetStatus.Record {
@@ -469,6 +506,40 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         case .ended: "ended"
         case .fault(let code): "fault \(code)"
         }
+    }
+}
+
+/// The place each presented Screen was last told: one entry for each
+/// presentation, and the only copy of its insets the presenter keeps. A
+/// place is told when it differs from the one last told for the same
+/// presentation, so the same place is told once however many frames read
+/// it; it goes when its presentation does, so a presentation shown again
+/// (a new presentation) is told its own.
+package struct NuxieMachineToldPlaces: Equatable, Sendable {
+    /// The place last told for each presentation.
+    package private(set) var places: [NuxieMachineShown: NuxieMachinePlace] = [:]
+
+    package init() {}
+
+    /// The places to tell now, in the order given (bottom first): each
+    /// presentation's whose place is known and is not the one last told.
+    /// Each is taken as told.
+    package mutating func changes(
+        _ screens: [(shown: NuxieMachineShown, place: NuxieMachinePlace?)]
+    ) -> [(shown: NuxieMachineShown, place: NuxieMachinePlace)] {
+        var changed: [(shown: NuxieMachineShown, place: NuxieMachinePlace)] = []
+        for (shown, place) in screens {
+            guard let place, places[shown] != place else { continue }
+            places[shown] = place
+            changed.append((shown, place))
+        }
+        return changed
+    }
+
+    /// Keep only the places of the presentations `held`: the others have
+    /// gone, and their places with them.
+    package mutating func keep(_ held: [NuxieMachineShown]) {
+        places = places.filter { held.contains($0.key) }
     }
 }
 
