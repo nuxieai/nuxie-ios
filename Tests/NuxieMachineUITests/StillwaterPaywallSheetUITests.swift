@@ -28,6 +28,11 @@ import XCTest
 /// and the paywall follows the phone. What a screen reader reads is the
 /// same in both, word for word; only the colors differ, read from the
 /// sheet's ground in each screenshot.
+///
+/// A sheet is told no insets: the paywall is laid out inside the sheet's
+/// safe area, and the band below it shows the platform's sheet background.
+/// Each story keeps one still of that, `place-sheet-light` or
+/// `place-sheet-dark`.
 final class StillwaterPaywallSheetUITests: XCTestCase {
     private static let errorLine = "The purchase did not go through. Try again in a moment."
     private static let termsLine = "Billed through the store after the trial. Cancel any time."
@@ -148,6 +153,16 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertLessThan(buy.frame.minY, notNow.frame.minY)
         waitFor(app, screen, ground: appearance, "the paywall does not open in \(appearance)")
         keep("1-open", app, screen, expecting: "1-open")
+
+        // The sheet's place: the paywall stays inside the sheet's safe area,
+        // and the band below it, the home indicator's, is the platform's
+        // sheet background in the same scheme. Kept whole as
+        // `place-sheet-<scheme>`.
+        let band = CGPoint(x: screen.frame.midX, y: screen.frame.maxY - 8)
+        XCTAssertLessThan(notNow.frame.maxY, band.y, "the paywall's footer reaches into the home indicator's band")
+        XCTAssertEqual(ground(in: app.screenshot(), at: band), appearance,
+                       "the band below the paywall is not the \(appearance) sheet background")
+        keep("place-sheet-\(appearance.rawValue)", app, screen, expecting: "1-open")
 
         // 2. Monthly chosen: the record's plan is monthly, and the selected
         // card moves from yearly to monthly.
