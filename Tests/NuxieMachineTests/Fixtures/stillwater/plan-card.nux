@@ -5,7 +5,7 @@ style Card
     border-width=2 border-color=mint
 
 style Radio
-  width=22 height=22 border-radius=11 border-width=1.5 border-color=#5d6a67
+  width=22 height=22 border-radius=11 border-width=1.5 border-color=radio
   align-items=center justify-content=center
 
 style CardText
