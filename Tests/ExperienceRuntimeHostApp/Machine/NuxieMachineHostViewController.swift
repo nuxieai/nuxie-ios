@@ -25,11 +25,11 @@ import UIKit
 ///
 /// `--nuxie-machine-paywall-cover` presents the same paywall as a cover:
 /// Stillwater's files as bundled, with the one word of the paywall's route
-/// that says how it is presented swapped in memory ([`asCover`]). The app
-/// then also shows UIKit's own safe-area insets for the screen, in a
-/// window above the cover that takes no touches, as the element
-/// `nuxie-machine-safe-area` ([`NuxieMachineSafeAreaWindow`]), so a UI test
-/// can check the cover's place against them.
+/// that says how it is presented swapped in memory ([`asCover`]). As a
+/// sheet or a cover, the app also shows UIKit's own safe-area insets for
+/// the screen, in a window above the paywall that takes no touches, as the
+/// element `nuxie-machine-safe-area` ([`NuxieMachineSafeAreaWindow`]), so a
+/// UI test can check the paywall's place against them.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
     /// The Darwin notifications that turn the window, with the appearance
@@ -116,7 +116,7 @@ public final class NuxieMachineHostViewController: UIViewController {
             view.window?.overrideUserInterfaceStyle = appearance
         }
         Self.listenForAppearance(turning: self)
-        if Self.presentsACover, safeArea == nil, let scene = view.window?.windowScene {
+        if safeArea == nil, let scene = view.window?.windowScene {
             safeArea = NuxieMachineSafeAreaWindow(windowScene: scene)
         }
     }
@@ -251,9 +251,10 @@ extension NuxieMachineStillwaterFixture {
 /// in points, read again whenever they change (a rotation, the status bar).
 /// Beside it, `nuxie-machine-surface` is labeled with the presented
 /// Screen's surface as the app sees it ([`NuxieMachineSurfaceFacts`]):
-/// `bounds W H drawable W H scale S drawn W H`, read four times a second,
-/// so a UI test can tell a frame the app drew wrong from a screenshot taken
-/// wrong.
+/// `bounds W H drawable W H scale S drawn W H`, then
+/// `place T R B L W H` once it has a place (the insets and size the session
+/// is told), read four times a second, so a UI test can tell a frame the
+/// app drew wrong from a screenshot taken wrong.
 @MainActor
 final class NuxieMachineSafeAreaWindow: UIWindow {
     override init(windowScene: UIWindowScene) {
@@ -320,8 +321,12 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             let numbers = [facts.bounds.width, facts.bounds.height, facts.drawableSize.width,
                            facts.drawableSize.height, facts.contentsScale, drawn.width, drawn.height]
                 .map { "\(Double($0))" }
+            let place = facts.place.map {
+                " place " + [$0.top, $0.right, $0.bottom, $0.left, $0.width, $0.height].map { "\($0)" }
+                    .joined(separator: " ")
+            } ?? ""
             surfaceLabel.accessibilityLabel = "bounds \(numbers[0]) \(numbers[1]) drawable \(numbers[2]) \(numbers[3]) "
-                + "scale \(numbers[4]) drawn \(numbers[5]) \(numbers[6])"
+                + "scale \(numbers[4]) drawn \(numbers[5]) \(numbers[6])" + place
         }
 
         private static func presentedScreen(in scene: UIWindowScene?) -> NuxieMachineScreenViewController? {
