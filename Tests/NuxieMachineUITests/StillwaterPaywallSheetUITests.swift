@@ -261,12 +261,14 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         // its surface is and drew, and the Screen's own screenshot. On the
         // simulator the whole screen's and the app's captures do not follow
         // the turn (read upright they are portrait, the page cut to a square
-        // beside black); the Screen element's raw bitmap is the turned page
-        // the right way up, with an orientation tag that would turn it back.
-        // So its raw bitmap is read and kept, untagged.
+        // beside black). The Screen element's raw bitmap is the device's
+        // own portrait buffer, holding the whole turned page a quarter turn
+        // clockwise. It is turned back from the orientation this test set,
+        // never from the image's orientation tag, and kept untagged.
         let raw = try XCTUnwrap(screen.screenshot().image.cgImage, "the Screen's screenshot has no bitmap")
+        let still = try XCTUnwrap(uprightLandscape(raw), "the Screen's bitmap could not be turned")
         let facts = try surface(app, kept: "place-cover-landscape-surface")
-        keep("place-cover-landscape-light", raw, app, screen)
+        keep("place-cover-landscape-light", still, app, screen)
 
         // The app's own account first: a surface the turned screen's size,
         // a drawable that size at the screen's scale, and the last frame
@@ -277,11 +279,15 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(title.frame.minY, turned.top, "the turned headline is under the status bar")
         XCTAssertEqual(uprightTitle - title.frame.minY, upright.top - turned.top, accuracy: 1,
                        "the headline did not move by what the top inset lost")
+        // The raw buffer is the device's, upright for the phone held upright:
+        // the turned screen's size with width and height swapped.
         let pixels = CGSize(width: app.frame.width * facts.scale, height: app.frame.height * facts.scale)
-        XCTAssertEqual(CGFloat(raw.width), pixels.width, accuracy: 1, "the turned still's bitmap is \(raw.width) wide")
-        XCTAssertEqual(CGFloat(raw.height), pixels.height, accuracy: 1,
-                       "the turned still's bitmap is \(raw.height) tall")
-        expectPageGround(.light, in: raw, scale: facts.scale, across: app.frame.size, below: turned,
+        XCTAssertEqual(CGFloat(raw.width), pixels.height, accuracy: 1, "the raw bitmap is \(raw.width) wide")
+        XCTAssertEqual(CGFloat(raw.height), pixels.width, accuracy: 1, "the raw bitmap is \(raw.height) tall")
+        XCTAssertEqual(CGFloat(still.width), pixels.width, accuracy: 1, "the turned still is \(still.width) wide")
+        XCTAssertEqual(CGFloat(still.height), pixels.height, accuracy: 1,
+                       "the turned still is \(still.height) tall")
+        expectPageGround(.light, in: still, scale: facts.scale, across: app.frame.size, below: turned,
                          "the turned still")
     }
 
@@ -575,6 +581,38 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             CGPoint(x: 12, y: size.height / 2), CGPoint(x: size.width - 12, y: size.height / 2),
             CGPoint(x: 12, y: size.height - 12), CGPoint(x: size.width - 12, y: size.height - 12),
         ]
+    }
+
+    /// `raw`, the device's portrait buffer with the phone turned to
+    /// `.landscapeLeft` (the turn this test makes), turned a quarter
+    /// counter-clockwise into the interface's landscape, the right way up:
+    /// the pixel at (x, y) of the landscape still is the buffer's pixel at
+    /// (raw width - 1 - y, x). Its rows run top first, as the page's points.
+    private func uprightLandscape(_ raw: CGImage) -> CGImage? {
+        let width = raw.width
+        let height = raw.height
+        var source = [UInt32](repeating: 0, count: width * height)
+        let read = source.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = Self.bitmap(bytes.baseAddress, width: width, height: height) else { return false }
+            context.draw(raw, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard read else { return nil }
+        // Turned: as wide as the buffer is tall, as tall as it is wide.
+        var turned = [UInt32](repeating: 0, count: width * height)
+        for y in 0..<width {
+            for x in 0..<height {
+                turned[y * height + x] = source[x * width + (width - 1 - y)]
+            }
+        }
+        return turned.withUnsafeMutableBytes { bytes in
+            Self.bitmap(bytes.baseAddress, width: height, height: width)?.makeImage()
+        }
+    }
+
+    private static func bitmap(_ data: UnsafeMutableRawPointer?, width: Int, height: Int) -> CGContext? {
+        CGContext(data: data, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
     }
 
     /// `image`'s pixels the right way up: drawn through its orientation
