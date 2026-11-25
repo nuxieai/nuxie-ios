@@ -1,0 +1,25 @@
+style Card
+  height=64 padding="0 20" gap=14 flex-direction=row align-items=center
+  background-color=panel border-radius=18 border-width=1 border-color=edge
+  :checked
+    border-width=2 border-color=mint
+
+style Radio
+  width=22 height=22 border-radius=11 border-width=1.5 border-color=edge
+  align-items=center justify-content=center
+
+style CardTitle
+  color=ink font-size=1rem font-weight=600 line-height=1.29rem
+
+component PlanCard
+  props
+    name: string
+    on: boolean
+    press: action
+
+  view
+    button role=radio checked=on class=Card press=press id="card"
+      box class=Radio
+        if on
+          box width=10 height=10 border-radius=5 background-color=mint
+      text name class=CardTitle id="name"

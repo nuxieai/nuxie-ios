@@ -1,0 +1,75 @@
+use PlanCard from "plan-card"
+
+theme
+  night = light-dark(#f6f8f7, #0d1214)
+  panel = light-dark(#ffffff, #151c1f)
+  edge = light-dark(#dde4e1, #232c30)
+  mint = light-dark(#2f7d63, #9fcdb9)
+  ink = light-dark(#16211d, #eef3f1)
+  soft = light-dark(#3c4a46, #c9d3d0)
+  quiet = light-dark(#5f6c68, #8a9794)
+
+style Art
+  height=220 border-radius=28 background-color=panel border-width=1 border-color=edge
+
+style Title
+  margin-top=28 color=ink font-size=1.88rem font-weight=700 line-height=2.24rem letter-spacing=-0.4
+
+style Choice
+  margin-top=12 color=quiet font-size=0.88rem line-height=1.24rem
+
+style Body
+  margin-top=24 color=soft font-size=0.94rem line-height=1.41rem
+
+style Note
+  margin-top=12 color=mint font-size=0.82rem line-height=1.18rem
+
+style Remind
+  height=52 margin-top=24 border-radius=26 border-width=1 border-color=edge
+  align-items=center justify-content=center
+
+style RemindLabel
+  color=ink font-size=0.94rem font-weight=600 line-height=1.29rem
+
+style Link
+  flex=1 height=44 align-items=center justify-content=center
+
+style LinkLabel
+  color=quiet font-size=0.82rem font-weight=500 line-height=1.18rem
+
+component Paywall
+  props
+    plans: string[]
+    selected: string
+    note: string
+    select: action(string)
+    remind: action
+    restore: action
+    close: action
+
+  view
+    scroll width=100% height=100% background-color=night id="page"
+      column min-height=100% padding="calc(env(safe-area-inset-top) + 64) 24 calc(env(safe-area-inset-bottom) + 34) 24" justify-content=space-between
+        column
+          box class=Art id="art"
+          text "Sleep better, a little every night." class=Title id="title"
+          text `${selected}, free for the first week` class=Choice id="choice"
+          column role=radiogroup label="Plan" gap=12 margin-top=32 id="plans"
+            for plan in plans key=plan
+              PlanCard(name=plan, on=(selected == plan), press=select(plan))
+          Reminder(remind=remind) id="reminder"
+          text note class=Note id="note"
+          text "Every plan opens the whole library: guided sessions for the morning, sleep stories for the night, and short breaks for the middle of a long day. Download any of them to listen offline. Your first week is free, and you can cancel any time before it ends from your account settings." class=Body id="body"
+        row gap=12 margin-top=32 id="footer"
+          button class=Link press=restore id="restore"
+            text "Restore purchases" class=LinkLabel
+          button class=Link press=close id="close"
+            text "Not now" class=LinkLabel
+
+component Reminder
+  props
+    remind: action
+
+  view
+    button class=Remind press=remind id="remind"
+      text "Remind me before the trial ends" class=RemindLabel
