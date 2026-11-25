@@ -122,22 +122,6 @@ final class NuxieMachineSurfaceView: UIView {
         if !events.isEmpty { onPointers?(events) }
     }
 
-    /// A tap at `point` with no finger: a press and a release there, sent
-    /// as a touch's pointers are, with the lowest pointer id no touch holds
-    /// and the clock a touch's timestamp reads. False when every id is held.
-    func tap(at point: CGPoint) -> Bool {
-        guard let pointerID = (Int32(1)...Int32(Self.maximumActivePointers))
-                .first(where: { !pointerIDs.values.contains($0) }) else { return false }
-        let x = Float(point.x)
-        let y = Float(point.y)
-        let timestamp = Float(ProcessInfo.processInfo.systemUptime)
-        guard x.isFinite, y.isFinite, timestamp.isFinite else { return false }
-        onPointers?([.down, .up].map {
-            NuxieNativePointerEvent(kind: $0, x: x, y: y, pointerID: pointerID, timestamp: timestamp)
-        })
-        return true
-    }
-
     private func allocate(_ source: ObjectIdentifier) -> Int32? {
         guard pointerIDs.count < Self.maximumActivePointers else { return nil }
         let used = Set(pointerIDs.values)

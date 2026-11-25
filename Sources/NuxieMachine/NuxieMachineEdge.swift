@@ -153,11 +153,16 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// The person closed a presentation the edge no longer holds. The close
     /// belongs to it, so it goes to no one.
     case droppedClose(NuxieMachineShown)
-    /// Pointers that touched the presentation named (none when nothing was
-    /// shown) arrived in a frame where the edge does not hold it. They
-    /// belong to the Screen the person touched, so they go to no one; the
-    /// frame still runs.
+    /// Pointers or a screen reader's taps that touched the presentation
+    /// named (none when nothing was shown) arrived in a frame where the edge
+    /// does not hold it. They belong to the Screen the person touched, so
+    /// they go to no one; the frame still runs.
     case droppedTouches(NuxieMachineShown?)
+    /// The engine refused a screen reader's tap on node `node` of the
+    /// presentation named: the snapshot it was asked of is no longer the
+    /// player's, or the node is gone or no longer offers a tap. The tap is
+    /// dropped and never sent again as a touch; the frame still runs.
+    case refusedSemanticTap(NuxieMachineShown, node: UInt32)
     /// The session took the client's environment ([`environment`]): before
     /// a start, kept for its first frame; with a record open, delivered to
     /// it.
@@ -173,6 +178,20 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     case wakeAt(Int64?)
     case end(reason: NuxieMachineEnding, fault: String?)
     case note(NuxieMachineNote)
+}
+
+/// A screen reader's tap on one node of a presentation's semantic snapshot:
+/// the snapshot it was asked of and the node. A frame queues it on that
+/// presentation's player before the step ([`NuxieMachineEdge.frame`]), so
+/// the node's own listener hears it, never what is drawn at its place.
+package struct NuxieMachineSemanticTap: Equatable, Sendable {
+    package let captureID: UUID
+    package let nodeID: UInt32
+
+    package init(captureID: UUID, nodeID: UInt32) {
+        self.captureID = captureID
+        self.nodeID = nodeID
+    }
 }
 
 /// What one frame did.
@@ -538,9 +557,19 @@ package actor NuxieMachineEdge {
     /// leaves them going to no one, recorded as dropped, and the frame runs
     /// without them. Pointers that touched no presentation go to no one
     /// either.
+    ///
+    /// `semanticTaps` are a screen reader's taps on that same presentation,
+    /// each on one node of the snapshot it was asked of, and go where its
+    /// pointers go. Each is queued on the presentation's player before the
+    /// step that carries the pointers, so the node's own listener hears it
+    /// in that step. One the engine refuses (the snapshot is no longer the
+    /// player's, or the node is gone or offers no tap) is recorded as
+    /// [`refusedSemanticTap`](NuxieMachineEdgeEntry.refusedSemanticTap) and
+    /// dropped, never sent as a touch.
     @discardableResult
     package func frame(
         pointers: [NuxieNativePointerEvent] = [],
+        semanticTaps: [NuxieMachineSemanticTap] = [],
         on touched: NuxieMachineShown? = nil,
         elapsedSeconds: Float,
         now: Int64
@@ -550,13 +579,12 @@ package actor NuxieMachineEdge {
             let answers = mailbox
             mailbox = []
             let stepped = await deliver(turn, stopped: (reported: [String](), keepGoing: false)) { delivery in
-                var forwarded = pointers
-                if !pointers.isEmpty, touched == nil || !holds(touched) {
+                var forwarded = Input(pointers: pointers, semanticTaps: semanticTaps)
+                if !forwarded.isEmpty, touched == nil || !holds(touched) {
                     log.append(.droppedTouches(touched))
-                    forwarded = []
+                    forwarded = Input()
                 }
-                return await step(pointers: forwarded, on: touched, elapsedSeconds: elapsedSeconds, now: now,
-                                  &delivery)
+                return await step(forwarded, on: touched, elapsedSeconds: elapsedSeconds, now: now, &delivery)
             }
             for arrived in answers {
                 await deliver(turn, stopped: ()) { delivery in
@@ -847,18 +875,26 @@ package actor NuxieMachineEdge {
 
     // MARK: Frames
 
+    /// What a frame carries to the presentation it touched: the pointers
+    /// and the screen reader's taps that arrived for it.
+    private struct Input {
+        var pointers: [NuxieNativePointerEvent] = []
+        var semanticTaps: [NuxieMachineSemanticTap] = []
+
+        var isEmpty: Bool { pointers.isEmpty && semanticTaps.isEmpty }
+    }
+
     /// A frame's delivery: step the players of the presentations the edge
     /// holds. With nothing presented, nothing is drawn and nothing reports.
     private func step(
-        pointers: [NuxieNativePointerEvent],
+        _ input: Input,
         on touched: NuxieMachineShown?,
         elapsedSeconds: Float,
         now: Int64,
         _ delivery: inout Delivery
     ) async -> (reported: [String], keepGoing: Bool) {
         guard !screens.isEmpty else { return ([], false) }
-        return await stepPlayers(pointers: pointers, on: touched, elapsedSeconds: elapsedSeconds, now: now,
-                                 &delivery)
+        return await stepPlayers(input, on: touched, elapsedSeconds: elapsedSeconds, now: now, &delivery)
     }
 
     /// The most settling passes one frame runs ([`stepPlayers`]). The
@@ -874,8 +910,9 @@ package actor NuxieMachineEdge {
     /// writes land in the same step, before it returns. Then the rows the
     /// step left are applied. A player whose presentation the session no
     /// longer shows (an earlier step of this frame ended it) is not stepped:
-    /// its rounds would do nothing, and the sync closes it. The pointers go
-    /// to the step of the presentation they touched.
+    /// its rounds would do nothing, and the sync closes it. The pointers and
+    /// the screen reader's taps go to the step of the presentation they
+    /// touched.
     ///
     /// A round of one presentation can hold writes for another, one already
     /// stepped in this frame among them (a tap on a sheet that changes what
@@ -889,7 +926,7 @@ package actor NuxieMachineEdge {
     /// its one fault path, and its rows end in that fault; they are applied,
     /// which stops the edge, and the sync then frees every player.
     private func stepPlayers(
-        pointers: [NuxieNativePointerEvent],
+        _ input: Input,
         on touched: NuxieMachineShown?,
         elapsedSeconds: Float,
         now: Int64,
@@ -903,16 +940,16 @@ package actor NuxieMachineEdge {
         }
         var reported: [String] = []
         var keepGoing = false
-        var waiting = pointers
+        var waiting = input
         let players = screens.map { (shown: $0.presented.shown, player: $0.player) }
         for (shown, player) in players {
             guard fault == nil else { break }
-            var forwarded: [NuxieNativePointerEvent] = []
+            var forwarded = Input()
             if shown == touched {
                 forwarded = waiting
-                waiting = []
+                waiting = Input()
             }
-            guard let step = await stepPlayer(player, of: shown, pointers: forwarded, elapsedSeconds: elapsedSeconds,
+            guard let step = await stepPlayer(player, of: shown, forwarded, elapsedSeconds: elapsedSeconds,
                                               now: now, &delivery) else { continue }
             reported += step.events.map(\.name)
             keepGoing = keepGoing || step.keepGoing
@@ -933,7 +970,7 @@ package actor NuxieMachineEdge {
             guard !owing.isEmpty else { break }
             for (shown, player) in owing {
                 guard fault == nil else { break }
-                guard let step = await stepPlayer(player, of: shown, pointers: [], elapsedSeconds: 0, now: now,
+                guard let step = await stepPlayer(player, of: shown, Input(), elapsedSeconds: 0, now: now,
                                                   &delivery) else { continue }
                 reported += step.events.map(\.name)
                 keepGoing = keepGoing || step.keepGoing
@@ -945,18 +982,29 @@ package actor NuxieMachineEdge {
     /// One step of the player of the presentation `shown`, then the rows it
     /// left applied. None when the session no longer shows the
     /// presentation (it is not stepped) or the step faulted.
+    ///
+    /// The screen reader's taps in `input` are queued on the player first,
+    /// so the step hears them with its pointers. A tap the engine refuses is
+    /// recorded and dropped; the step runs without it.
     private func stepPlayer(
         _ player: NuxieNativeRuntime,
         of shown: NuxieMachineShown,
-        pointers: [NuxieNativePointerEvent],
+        _ input: Input,
         elapsedSeconds: Float,
         now: Int64,
         _ delivery: inout Delivery
     ) async -> NuxieNativePlayerStepResult? {
         guard showing().contains(where: { $0.shown == shown }) else { return nil }
+        for tap in input.semanticTaps {
+            do {
+                try await player.queueSemanticAction(captureID: tap.captureID, nodeID: tap.nodeID, action: .tap)
+            } catch {
+                log.append(.refusedSemanticTap(shown, node: tap.nodeID))
+            }
+        }
         let step: NuxieNativePlayerStepResult
         do {
-            step = try await player.step(pointers: pointers, elapsedSeconds: elapsedSeconds)
+            step = try await player.step(pointers: input.pointers, elapsedSeconds: elapsedSeconds)
         } catch {
             let failed = NuxieMachineEdgeFault(code: "engine.step", detail: "\(error)")
             if let rows = try? session.rows(), case .end(.fault, _)? = rows.last {

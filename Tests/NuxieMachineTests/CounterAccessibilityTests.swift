@@ -10,8 +10,8 @@ import NuxieRuntime
 /// frame the engine draws is read for its semantic snapshot, and the
 /// controller shows that snapshot as its surface's accessibility elements,
 /// as the display loop does after every frame it draws. An activation
-/// leaves its pointers for the next frame, which the test hands to the edge
-/// as the loop would.
+/// leaves the node's semantic tap for the next frame, which the test hands
+/// to the edge as the loop would; no pointer goes out for it.
 ///
 /// Where each line is drawn is read from the frame itself, with text
 /// recognition, as the check on where each element says it is.
@@ -47,31 +47,32 @@ final class CounterAccessibilityTests: XCTestCase {
         }
     }
 
-    /// 2. Activating a button is a tap: a press and release at its center,
-    ///    through the pointer path a touch takes, so the engine reports the
-    ///    same `tap` and the machine counts. The count line is the same
-    ///    element read anew, the note appears below it, and "Hide the note"
-    ///    takes it away again.
+    /// 2. Activating a button is its node's semantic tap: no pointer goes
+    ///    out, one tap waits for the next frame, and that frame's step hears
+    ///    it once, so the engine reports one `tap` and the machine counts. A
+    ///    second activation of the same snapshot before the frame is
+    ///    refused, since the snapshot takes one tap. The count line is the
+    ///    same element read anew, the note appears below it, and "Hide the
+    ///    note" takes it away again.
     @MainActor
-    func testActivatingAButtonIsATapAndTheCountLineFollows() async throws {
+    func testActivatingAButtonIsItsSemanticTapAndTheCountLineFollows() async throws {
         let reader = try await Reader.open(Counter.counterPlan(), name: "counter")
         do {
-            _ = try await reader.frame(name: "1-first")
+            let first = try await reader.frame(name: "1-first")
             let line = try reader.element("Tapped 0 times")
             let count = try reader.element("Count")
             XCTAssertTrue(count.accessibilityActivate(), "Count activates")
-            let pointers = reader.controller.takePointers()
-            XCTAssertEqual(pointers.map(\.kind), [.down, .up])
-            let center = CGPoint(x: reader.onScreen(count).midX - reader.origin.x,
-                                 y: reader.onScreen(count).midY - reader.origin.y)
-            for pointer in pointers {
-                XCTAssertEqual(CGFloat(pointer.x), center.x, accuracy: 0.5)
-                XCTAssertEqual(CGFloat(pointer.y), center.y, accuracy: 0.5)
-            }
-            XCTAssertEqual(Set(pointers.map(\.pointerID)).count, 1, "one pointer presses and lets go")
+            XCTAssertFalse(count.accessibilityActivate(), "the same snapshot takes one tap")
+            XCTAssertEqual(reader.controller.takePointers(), [], "no pointer went out")
+            let taps = reader.controller.takeSemanticTaps()
+            let capture = try XCTUnwrap(first.semantics)
+            let node = try XCTUnwrap(capture.tree.nodes.first { $0.label == "Count" })
+            XCTAssertEqual(taps, [NuxieMachineSemanticTap(captureID: capture.id, nodeID: node.id)])
 
-            let tapped = try await reader.frame(pointers: pointers, name: "2-count-activated")
-            XCTAssertTrue(tapped.reported.contains("tap"), "the engine reported the tap: \(tapped.reported)")
+            let tapped = try await reader.frame(semanticTaps: taps, name: "2-count-activated")
+            XCTAssertEqual(tapped.reported.filter { $0 == "tap" }, ["tap"], "one tap: \(tapped.reported)")
+            let refused = await reader.refusedTaps()
+            XCTAssertEqual(refused, [], "the engine took the tap")
             XCTAssertEqual(Array(reader.read.prefix(4)), [
                 .text("Tapped 1 times"), .text("You have counted at least once."),
                 .text("This line sits below the note."), .button("Count"),
@@ -80,7 +81,8 @@ final class CounterAccessibilityTests: XCTestCase {
             XCTAssertTrue(try reader.element("Count") === count, "the button is the same element")
 
             XCTAssertTrue(try reader.element("Hide the note").accessibilityActivate())
-            _ = try await reader.frame(pointers: reader.controller.takePointers(), name: "3-hide-activated")
+            XCTAssertEqual(reader.controller.takePointers(), [])
+            _ = try await reader.frame(semanticTaps: reader.controller.takeSemanticTaps(), name: "3-hide-activated")
             XCTAssertEqual(Array(reader.read.prefix(3)), [
                 .text("Tapped 1 times"), .text("This line sits below the note."), .button("Count"),
             ])
@@ -91,9 +93,32 @@ final class CounterAccessibilityTests: XCTestCase {
         }
     }
 
+    /// 2b. Stillwater's buttons activate the same way: "About the trial"
+    ///     opens the terms line with one tap and no pointer going out.
+    @MainActor
+    func testAStillwaterButtonActivatesThroughItsSemanticTap() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed", name: "stillwater")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            XCTAssertFalse(reader.labels.contains(StillwaterPaywallEdgeTests.termsLine))
+            XCTAssertTrue(try reader.element("About the trial").accessibilityActivate())
+            XCTAssertEqual(reader.controller.takePointers(), [], "no pointer went out")
+            let taps = reader.controller.takeSemanticTaps()
+            XCTAssertEqual(taps.count, 1)
+            let opened = try await reader.frame(semanticTaps: taps, name: "2-details-activated")
+            XCTAssertEqual(opened.reported.filter { $0 == "tap" }, ["tap"], "one tap: \(opened.reported)")
+            XCTAssertTrue(reader.labels.contains(StillwaterPaywallEdgeTests.termsLine), "\(reader.read)")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
     /// 3. A button the machine disables is read as not enabled in the step
-    ///    that disables it, and activating it does nothing: no pointer goes
-    ///    out. A real press on it is held back by the engine.
+    ///    that disables it, and activating it does nothing: its node offers
+    ///    no tap, so nothing is queued and no pointer goes out. A real press
+    ///    on it is held back by the engine.
     @MainActor
     func testADisabledButtonIsNotEnabledAndItsActivationDoesNothing() async throws {
         let reader = try await Reader.open(Self.holdPlan, name: "hold")
@@ -102,18 +127,17 @@ final class CounterAccessibilityTests: XCTestCase {
             let hold = try reader.element("Hold")
             XCTAssertFalse(hold.accessibilityTraits.contains(.notEnabled))
             XCTAssertTrue(hold.accessibilityActivate())
-            let held = try await reader.frame(pointers: reader.controller.takePointers(), name: "2-held")
-            XCTAssertTrue(held.reported.contains("tap"), "the engine reported the tap: \(held.reported)")
+            let held = try await reader.frame(semanticTaps: reader.controller.takeSemanticTaps(), name: "2-held")
+            XCTAssertEqual(held.reported.filter { $0 == "tap" }, ["tap"], "one tap: \(held.reported)")
             XCTAssertEqual(reader.read, [.text("Held 1 times"), .button("Hold"), .button("Close")])
             XCTAssertTrue(hold.accessibilityTraits.contains(.notEnabled), "disabled in the step that held it")
 
             XCTAssertFalse(hold.accessibilityActivate(), "a disabled button does not activate")
+            XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "nothing was queued")
             XCTAssertEqual(reader.controller.takePointers(), [], "nothing went out")
             let frame = reader.onScreen(hold)
             let center = CGPoint(x: frame.midX - reader.origin.x, y: frame.midY - reader.origin.y)
-            let pressed = try await reader.frame(pointers: [.down, .up].map {
-                NuxieNativePointerEvent(kind: $0, x: Float(center.x), y: Float(center.y), pointerID: 1)
-            }, name: "3-pressed")
+            let pressed = try await reader.frame(pointers: Reader.press(at: center), name: "3-pressed")
             XCTAssertFalse(pressed.reported.contains("tap"), "the engine held the press back: \(pressed.reported)")
             XCTAssertEqual(reader.read.first, .text("Held 1 times"))
             try await reader.close()
@@ -123,11 +147,94 @@ final class CounterAccessibilityTests: XCTestCase {
         }
     }
 
-    /// 4. A Screen under another presentation takes no activation. The
+    /// 4. A button scrolled wholly out of its `scroll`, though still drawn
+    ///    over by something else on the surface, takes no activation. The
+    ///    page is the `views-scroll` paywall shown as a cover, under a
+    ///    header that is a button of its own ([`scrollBelowAHeader`]).
+    ///    Scrolled to its end, the lowest card wholly above the `scroll` is
+    ///    still read, over the header; its element refuses, nothing is
+    ///    queued, and a tap asked of the engine for its node is refused and
+    ///    dropped. Nothing is pressed: the header's action has not run and
+    ///    the plan is unchanged, while a real touch at the card's middle
+    ///    presses the header, which a tap at the card's place would have
+    ///    done. Scrolled back so the card is partly in view, the same card
+    ///    activates and reaches `choose` with its own plan.
+    @MainActor
+    func testAButtonScrolledOutOfItsScrollTakesNoActivationAndPartlyBackInItDoes() async throws {
+        let reader = try await Reader.open(Self.scrollBelowAHeader(), event: "onboarding_completed",
+                                           name: "scroll")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            var picked = try await reader.run.edge.slot("picked")
+            XCTAssertEqual(picked, .text("Yearly"))
+            // Up past the end; the page settles at its end.
+            try await reader.drag(from: CGPoint(x: 195, y: 820), by: -1400)
+            var frame = try await reader.frame(name: "2-at-the-end")
+            let header = try reader.node(Self.headerLabel, in: frame)
+            let top = header.bounds.maxY
+            let out = try XCTUnwrap(
+                reader.nodes(in: frame).filter {
+                    Self.cards.contains($0.label) && $0.bounds.maxY <= top && $0.bounds.minY >= 0
+                }.max { $0.bounds.maxY < $1.bounds.maxY },
+                "no card is wholly above the scroll at its end: \(reader.nodes(in: frame).map { ($0.label, $0.bounds) })")
+            XCTAssertNotEqual(out.label, "Yearly", "the card scrolled out must not be the one already picked: "
+                + "\(reader.nodes(in: frame).filter { Self.cards.contains($0.label) }.map { ($0.label, $0.bounds) }), "
+                + "the scroll's top \(top)")
+            let middle = CGPoint(x: out.bounds.midX, y: out.bounds.midY)
+            XCTAssertTrue(header.bounds.contains(middle), "the header is drawn at \(out.label)'s middle")
+
+            let card = try reader.element(out.label)
+            XCTAssertTrue(card.accessibilityTraits.contains(.button), "\(out.label) is still read as a button")
+            XCTAssertFalse(card.accessibilityActivate(), "a card scrolled wholly out does not activate")
+            XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "nothing was queued")
+            XCTAssertEqual(reader.controller.takePointers(), [], "nothing went out")
+            let capture = try XCTUnwrap(frame.semantics)
+            let asked = try await reader.frame(
+                semanticTaps: [NuxieMachineSemanticTap(captureID: capture.id, nodeID: out.id)], name: "3-refused")
+            var refused = await reader.refusedTaps()
+            XCTAssertEqual(refused, [out.id], "the engine refused the tap on a card scrolled out")
+            XCTAssertFalse(asked.reported.contains("tap"), "nothing was pressed: \(asked.reported)")
+            let reminded = try await reader.run.edge.slot("reminded")
+            XCTAssertEqual(reminded, .bool(false), "the header drawn at the card's place was not pressed")
+            picked = try await reader.run.edge.slot("picked")
+            XCTAssertEqual(picked, .text("Yearly"), "the card's own action did not run")
+
+            let touched = try await reader.frame(pointers: Reader.press(at: middle), name: "4-touched")
+            XCTAssertEqual(touched.reported.filter { $0 == "tap" }, ["tap"], "\(touched.reported)")
+            let pressed = try await reader.run.edge.slot("reminded")
+            XCTAssertEqual(pressed, .bool(true), "a touch at the card's middle presses the header")
+            picked = try await reader.run.edge.slot("picked")
+            XCTAssertEqual(picked, .text("Yearly"), "and not the card")
+
+            // Down until the card's middle is at the top of the scroll.
+            try await reader.drag(from: CGPoint(x: 195, y: 600), by: top - middle.y)
+            frame = try await reader.frame(name: "5-partly-in")
+            let back = try reader.node(out.label, in: frame)
+            XCTAssertTrue(back.bounds.minY < top && back.bounds.maxY > top,
+                          "\(out.label) at \(back.bounds) is partly in the scroll below \(top)")
+            XCTAssertTrue(try reader.element(out.label) === card, "the card is the same element")
+            XCTAssertTrue(card.accessibilityActivate(), "a card partly in view activates")
+            XCTAssertEqual(reader.controller.takePointers(), [], "no pointer went out")
+            let taps = reader.controller.takeSemanticTaps()
+            XCTAssertEqual(taps.map(\.nodeID), [back.id])
+            let chosen = try await reader.frame(semanticTaps: taps, name: "6-partly-in-activated")
+            XCTAssertEqual(chosen.reported.filter { $0 == "tap" }, ["tap"], "one tap: \(chosen.reported)")
+            refused = await reader.refusedTaps()
+            XCTAssertEqual(refused, [out.id], "the engine took the second tap")
+            picked = try await reader.run.edge.slot("picked")
+            XCTAssertEqual(picked, .text(out.label), "the card reached `choose` with its own plan")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// 5. A Screen under another presentation takes no activation. The
     ///    cover's "Count" element, kept from before, is activated once a
     ///    sheet has started to arrive over it and again while the sheet is
-    ///    up: nothing is sent and the count stays. Once the sheet starts to
-    ///    leave, the same element counts again. Reach follows the
+    ///    up: nothing is queued and the count stays. Once the sheet starts
+    ///    to leave, the same element counts again. Reach follows the
     ///    presenter's state, set on the controller as the presenter sets it
     ///    after every event; a sheet cannot be presented in this suite,
     ///    which has no app.
@@ -152,11 +259,12 @@ final class CounterAccessibilityTests: XCTestCase {
                            [.present(sheet, over: cover.shown)])
             reader.reach(state)
             XCTAssertFalse(count.accessibilityActivate(), "a button under an arriving sheet does not activate")
-            XCTAssertEqual(reader.controller.takePointers(), [], "nothing went out as the sheet arrives")
+            XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "nothing was queued as the sheet arrives")
             _ = state.handle(.presented(sheet.shown))
             reader.reach(state)
             XCTAssertFalse(count.accessibilityActivate(), "a button under a sheet does not activate")
-            XCTAssertEqual(reader.controller.takePointers(), [], "nothing went out under the sheet")
+            XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "nothing was queued under the sheet")
+            XCTAssertEqual(reader.controller.takePointers(), [], "nothing went out")
             _ = try await reader.frame(name: "2-covered")
             XCTAssertEqual(reader.read.first, .text("Tapped 0 times"), "the count did not change")
 
@@ -164,9 +272,83 @@ final class CounterAccessibilityTests: XCTestCase {
             reader.reach(state)
             XCTAssertTrue(reader.controller.reachable, "the cover is in reach again as the sheet leaves")
             XCTAssertTrue(count.accessibilityActivate(), "the same button activates again")
-            let tapped = try await reader.frame(pointers: reader.controller.takePointers(), name: "3-uncovered")
-            XCTAssertTrue(tapped.reported.contains("tap"), "the engine reported the tap: \(tapped.reported)")
+            let tapped = try await reader.frame(semanticTaps: reader.controller.takeSemanticTaps(), name: "3-uncovered")
+            XCTAssertEqual(tapped.reported.filter { $0 == "tap" }, ["tap"], "one tap: \(tapped.reported)")
             XCTAssertEqual(reader.read.first, .text("Tapped 1 times"))
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// 6. An activation asked of a snapshot that has since been replaced
+    ///    does nothing. "Count" is activated, and before its tap reaches a
+    ///    frame a touch on "Count" counts once, so the next snapshot reads
+    ///    differently and replaces the one the tap was asked of. (A snapshot
+    ///    whose tree reads the same keeps its id, and a tap asked of it still
+    ///    stands.) The engine refuses the waiting tap, the frame drops it
+    ///    and sends no pointer in its place, and the count stays. The
+    ///    element, read anew from the new snapshot, then counts.
+    @MainActor
+    func testAnActivationOfAReplacedSnapshotDoesNothing() async throws {
+        let reader = try await Reader.open(Counter.counterPlan(), name: "counter")
+        do {
+            let first = try await reader.frame(name: "1-first")
+            let count = try reader.element("Count")
+            XCTAssertTrue(count.accessibilityActivate())
+            let stale = reader.controller.takeSemanticTaps()
+            XCTAssertEqual(stale.map(\.captureID), [try XCTUnwrap(first.semantics).id])
+
+            let frame = reader.onScreen(count)
+            let center = CGPoint(x: frame.midX - reader.origin.x, y: frame.midY - reader.origin.y)
+            let touched = try await reader.frame(pointers: Reader.press(at: center), name: "2-touched")
+            XCTAssertEqual(touched.reported.filter { $0 == "tap" }, ["tap"], "\(touched.reported)")
+            XCTAssertEqual(reader.read.first, .text("Tapped 1 times"))
+            XCTAssertNotEqual(touched.semantics?.id, first.semantics?.id, "a new snapshot")
+
+            let dropped = try await reader.frame(semanticTaps: stale, name: "3-stale-tap")
+            let refused = await reader.refusedTaps()
+            XCTAssertEqual(refused, stale.map(\.nodeID), "the engine refused the old snapshot's tap")
+            XCTAssertFalse(dropped.reported.contains("tap"), "nothing was pressed: \(dropped.reported)")
+            XCTAssertEqual(reader.read.first, .text("Tapped 1 times"), "the count did not change")
+
+            XCTAssertTrue(try reader.element("Count") === count, "the button is the same element")
+            XCTAssertTrue(count.accessibilityActivate())
+            let tapped = try await reader.frame(semanticTaps: reader.controller.takeSemanticTaps(), name: "4-tapped")
+            XCTAssertEqual(tapped.reported.filter { $0 == "tap" }, ["tap"], "one tap: \(tapped.reported)")
+            XCTAssertEqual(reader.read.first, .text("Tapped 2 times"))
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// 7. A button in a `for` row, activated, reaches the parent's action
+    ///    with that row's item. Stillwater's plan cards are rows of
+    ///    `for choice in plans key=choice.plan`: Monthly's card makes the
+    ///    record's plan monthly and is read as selected, then Yearly's makes
+    ///    it annual again.
+    @MainActor
+    func testACardInAForRowActivatesWithItsOwnItem() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed", name: "stillwater")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            var plan = try await reader.run.edge.slot("plan")
+            XCTAssertEqual(plan, .enumeration("annual"))
+            for (card, item) in [("Monthly", "monthly"), ("Yearly", "annual")] {
+                let element = try reader.element(startingWith: card)
+                XCTAssertTrue(element.accessibilityActivate(), "\(card) activates")
+                XCTAssertEqual(reader.controller.takePointers(), [], "no pointer went out")
+                let chosen = try await reader.frame(semanticTaps: reader.controller.takeSemanticTaps(),
+                                                    name: "2-\(card)-activated")
+                XCTAssertEqual(chosen.reported.filter { $0 == "tap" }, ["tap"], "\(card): \(chosen.reported)")
+                plan = try await reader.run.edge.slot("plan")
+                XCTAssertEqual(plan, .enumeration(item), "the tap in \(card)'s row reached `choose` with its plan")
+                XCTAssertTrue(try reader.element(startingWith: card).accessibilityTraits.contains(.selected),
+                              "\(card) is read as selected")
+            }
             try await reader.close()
         } catch {
             try? await reader.close()
@@ -221,6 +403,48 @@ final class CounterAccessibilityTests: XCTestCase {
                 """),
         ],
         root: "main", app: "app", experience: "holding", version: 1)
+
+    /// The plan cards of the `views-scroll` paywall.
+    static let cards = ["Yearly", "Monthly", "Weekly"]
+    static let headerLabel = "Remind me from the header"
+
+    /// The `views-scroll` paywall, copied from the compiler's fixture, with
+    /// its page's `scroll` moved under a header. As copied, the `scroll`
+    /// fills the whole surface, so a card scrolled out of it is off the
+    /// surface too and no element stands for it. Here the page is a
+    /// `column` that holds a header 480 points tall, a button for the
+    /// paywall's `remind`, and the same `scroll` below it, taking the rest
+    /// (`flex=1`). Everything inside the `scroll` is as copied, indented one
+    /// step. A card scrolled up out of the `scroll` is then still on the
+    /// surface, under the header. At the page's end its foot is at the
+    /// surface's foot whatever the header's height, and 480 points puts
+    /// Monthly, not only Yearly, wholly above the `scroll` there.
+    static func scrollBelowAHeader() throws -> NuxieMachinePlanSource {
+        func text(_ name: String) throws -> String {
+            let url = try XCTUnwrap(Bundle(for: Counter.self).url(
+                forResource: name, withExtension: "nux", subdirectory: "views-scroll"),
+                "the test bundle carries views-scroll/\(name).nux")
+            return try String(contentsOf: url, encoding: .utf8)
+        }
+        var lines = try text("paywall").components(separatedBy: "\n")
+        let page = "    scroll width=100% height=100% background-color=night id=\"page\""
+        let at = try XCTUnwrap(lines.firstIndex(of: page), "the paywall's page is a scroll")
+        let end = try XCTUnwrap(lines.firstIndex(of: "component Reminder"), "the paywall's Reminder follows it")
+        for index in (at + 1)..<end where !lines[index].isEmpty {
+            lines[index] = "  " + lines[index]
+        }
+        lines.replaceSubrange(at...at, with: [
+            "    column width=100% height=100% background-color=night id=\"frame\"",
+            "      button height=480 align-items=center justify-content=center press=remind id=\"header\"",
+            "        text \"\(headerLabel)\" class=RemindLabel",
+            "      scroll width=100% flex=1 id=\"page\"",
+        ])
+        return NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: try text("main")),
+                    NuxieMachineSourceFile(path: "paywall.nux", text: lines.joined(separator: "\n")),
+                    NuxieMachineSourceFile(path: "plan-card.nux", text: try text("plan-card"))],
+            root: "main", app: "app", experience: "quietly", version: 1)
+    }
 }
 
 /// What a screen reader reads for one element.
@@ -251,6 +475,8 @@ private final class Reader {
     let origin: CGPoint
     private let name: String
     private var drawn = 0
+    /// The pointer clock a drag's pointers read, in seconds.
+    private var clock: Float = 1
 
     private init(run: Counter, loop: NuxieMachineScreenLoop, controller: NuxieMachineScreenViewController,
                  window: UIWindow, surface: UIView, name: String) {
@@ -263,9 +489,9 @@ private final class Reader {
         self.name = name
     }
 
-    static func open(_ plan: NuxieMachinePlanSource, name: String) async throws -> Reader {
+    static func open(_ plan: NuxieMachinePlanSource, event: String = "opened", name: String) async throws -> Reader {
         let run = try Counter(plan: plan)
-        await run.edge.start(event: "opened", now: run.now)
+        await run.edge.start(event: event, now: run.now)
         let stack = await run.edge.stack
         let presented = try XCTUnwrap(stack.last, "the start presents a Screen")
         let loop = NuxieMachineScreenLoop(edge: run.edge)
@@ -281,21 +507,78 @@ private final class Reader {
         return Reader(run: run, loop: loop, controller: controller, window: window, surface: surface, name: name)
     }
 
-    /// One frame with `pointers` on the top presentation, drawn, and its
-    /// semantic snapshot shown by the controller.
-    func frame(pointers: [NuxieNativePointerEvent] = [], name step: String) async throws -> DrawnFrame {
+    /// One frame with `pointers` and `semanticTaps` on the top
+    /// presentation, drawn, and its semantic snapshot shown by the
+    /// controller.
+    func frame(pointers: [NuxieNativePointerEvent] = [], semanticTaps: [NuxieMachineSemanticTap] = [],
+               name step: String) async throws -> DrawnFrame {
         let touched = await run.edge.shown
-        let stepped = await run.edge.frame(pointers: pointers, on: touched,
+        let stepped = await run.edge.frame(pointers: pointers, semanticTaps: semanticTaps, on: touched,
                                            elapsedSeconds: CounterDriverEdgeTests.tick, now: run.advance())
         let fault = await run.edge.fault
         XCTAssertNil(fault, "the frame faulted")
+        return try await draw(reported: stepped.reported, name: step)
+    }
+
+    private func draw(reported: [String], name step: String) async throws -> DrawnFrame {
         let screen = await run.edge.screen()
         let runtime = try XCTUnwrap(screen, "nothing is presented")
         drawn += 1
-        let frame = try await DrawnFrame.read(runtime, reported: stepped.reported, name: "\(name)-\(drawn)-\(step)",
+        let frame = try await DrawnFrame.read(runtime, reported: reported, name: "\(name)-\(drawn)-\(step)",
                                               size: surface.bounds.size, capturesSemantics: true)
         controller.show(try XCTUnwrap(frame.semantics, "the frame has no semantic snapshot"))
         return frame
+    }
+
+    /// A drag by one pointer from `start`, `by` points down (up when
+    /// negative), in 30 frames, held still for 10 more, then let go and
+    /// left to settle for four seconds of frames. None is drawn. The settle
+    /// is a fixed count, not "until the step stops asking": with the
+    /// semantic tree built, the engine's step keeps asking for another
+    /// frame even once the page is still. Held still before it is let go,
+    /// the drag carries no flick, and four seconds outlast the spring back
+    /// from past the end.
+    func drag(from start: CGPoint, by distance: CGFloat) async throws {
+        let moves = 30
+        func pointer(_ kind: NuxieNativePointerKind, _ y: CGFloat) -> NuxieNativePointerEvent {
+            NuxieNativePointerEvent(kind: kind, x: Float(start.x), y: Float(y), pointerID: 1, timestamp: clock)
+        }
+        await step([pointer(.down, start.y)])
+        for index in 1...moves {
+            clock += CounterDriverEdgeTests.tick
+            await step([pointer(.move, start.y + distance * CGFloat(index) / CGFloat(moves))])
+        }
+        for _ in 0..<10 {
+            clock += CounterDriverEdgeTests.tick
+            await step([pointer(.move, start.y + distance)])
+        }
+        clock += CounterDriverEdgeTests.tick
+        await step([pointer(.up, start.y + distance)])
+        for _ in 0..<240 {
+            clock += CounterDriverEdgeTests.tick
+            await step([])
+        }
+    }
+
+    private func step(_ pointers: [NuxieNativePointerEvent]) async {
+        let touched = await run.edge.shown
+        await run.edge.frame(pointers: pointers, on: touched, elapsedSeconds: CounterDriverEdgeTests.tick,
+                             now: run.advance())
+        let fault = await run.edge.fault
+        XCTAssertNil(fault, "a frame of the drag faulted")
+    }
+
+    /// A press and release at `point` on the surface, in one frame.
+    static func press(at point: CGPoint) -> [NuxieNativePointerEvent] {
+        [.down, .up].map { NuxieNativePointerEvent(kind: $0, x: Float(point.x), y: Float(point.y), pointerID: 1) }
+    }
+
+    /// The nodes whose taps the engine has refused so far, in order.
+    func refusedTaps() async -> [UInt32] {
+        await run.edge.log.compactMap { entry in
+            if case .refusedSemanticTap(_, let node) = entry { return node }
+            return nil
+        }
     }
 
     var elements: [UIAccessibilityElement] {
@@ -311,6 +594,8 @@ private final class Reader {
             return .other(label, element.accessibilityTraits.rawValue)
         }
     }
+
+    var labels: [String] { elements.compactMap(\.accessibilityLabel) }
 
     /// Where `element` is on screen: its frame in the surface, which the
     /// controller sets, taken through the views to the window. The window
@@ -330,6 +615,22 @@ private final class Reader {
 
     func element(_ label: String) throws -> UIAccessibilityElement {
         try XCTUnwrap(elements.first { $0.accessibilityLabel == label }, "no element \"\(label)\" among \(read)")
+    }
+
+    func element(startingWith words: String) throws -> UIAccessibilityElement {
+        try XCTUnwrap(elements.first { $0.accessibilityLabel?.hasPrefix(words) == true },
+                      "no element starting \"\(words)\" among \(read)")
+    }
+
+    /// Every node of `frame`'s snapshot, those a `scroll` clips included,
+    /// with its bounds in the surface's points.
+    func nodes(in frame: DrawnFrame) -> [NuxieNativeSemanticNode] {
+        frame.semantics?.tree.nodes ?? []
+    }
+
+    func node(_ label: String, in frame: DrawnFrame) throws -> NuxieNativeSemanticNode {
+        try XCTUnwrap(nodes(in: frame).first { $0.label == label },
+                      "no node \"\(label)\" among \(nodes(in: frame).map(\.label))")
     }
 
     func close() async throws {
