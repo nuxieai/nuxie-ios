@@ -101,8 +101,9 @@ public final class NuxieMachineCounterHostViewController: UIViewController {
 }
 
 /// The counter as the staged host app bundles it under `views-slice-1/`:
-/// its two `.nux` files and the plan's header. The same files the machine's
-/// simulator suite uses.
+/// its two program files and the plan's header. The same files the machine's
+/// simulator suite uses. The bundled `main.test.nux` is there for
+/// provenance only; `load` names the program files, so it is never loaded.
 enum NuxieMachineCounterFixture {
     private struct Provenance: Decodable {
         struct Plan: Decodable {

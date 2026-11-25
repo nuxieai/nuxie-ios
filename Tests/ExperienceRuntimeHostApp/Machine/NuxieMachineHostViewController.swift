@@ -268,8 +268,9 @@ struct NuxieMachineSlowStore: NuxieMachineStore {
 }
 
 /// Stillwater as the staged host app bundles it under `stillwater/`: its
-/// five `.nux` files and the plan's header. The same files the machine's
-/// simulator suite uses.
+/// five program files and the plan's header. The same files the machine's
+/// simulator suite uses. The bundled `main.test.nux` is there for
+/// provenance only; `load` names the program files, so it is never loaded.
 enum NuxieMachineStillwaterFixture {
     private struct Provenance: Decodable {
         struct Plan: Decodable {

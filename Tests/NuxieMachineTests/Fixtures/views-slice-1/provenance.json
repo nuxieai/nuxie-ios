@@ -1,22 +1,27 @@
 {
-  "note": "The counter for the Nux machine suite: a component drawn from its .nux source alone. The two .nux files are copied from the views-slice-1 fixture folder of the parent's .nux compiler crate, each named here by its git blob id at parentCommit. The plan's views are compiled on the device; nothing else is published.",
+  "note": "The counter for the Nux machine suite: a component drawn from its .nux source alone. The three .nux files are copied from the views-slice-1 fixture folder of the parent's .nux compiler crate, each named here by its git blob id at parentCommit. The plan is the two program files; main.test.nux holds the folder's tests and is copied for provenance only, never handed to the session or compiled on the device. The plan's views are compiled on the device; nothing else is published.",
   "plan": {
     "root": "main",
     "app": "app",
     "experience": "tally",
     "version": 1
   },
-  "parentCommit": "b8bc00a8fd70a738855eaa682131aa4d5cb82632",
+  "parentCommit": "9d12ec24f1b77ae80d18042aa69469033815cad3",
   "files": {
-    "main.nux": {
-      "sha256": "6d6d4c950b399e669a54082acf281b08ec1f92ba08c1d59f30c0a4a64ff71170",
-      "sizeBytes": 557,
-      "parentBlob": "2b62586a37b4414acb2b7f074f294c4a107a567f"
-    },
     "counter.nux": {
       "sha256": "4102769fdc71aaf0a71d9b1bfac55ec79c4281aedfb568320f6f9a1624eafdf4",
       "sizeBytes": 1616,
       "parentBlob": "4cb8fb4cbffa072e63dc2e9c5bd49380cf164f8a"
+    },
+    "main.nux": {
+      "sha256": "13888407b38a61a4d98225d1c67e1c8f34fcd12a255be262bee105bf13636ad8",
+      "sizeBytes": 240,
+      "parentBlob": "76466c4a283a43c3fae40df6b6e86a5d110560f1"
+    },
+    "main.test.nux": {
+      "sha256": "55361f7038c34c95d1c12c3fbef19105655efe287f96a9ac2d70ab7ece19270e",
+      "sizeBytes": 290,
+      "parentBlob": "324194cbf3d8d48f0e4b2f3df6abe7f9903b2ba1"
     }
   }
 }

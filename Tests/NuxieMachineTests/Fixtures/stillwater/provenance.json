@@ -1,22 +1,32 @@
 {
-  "note": "Stillwater for the Nux machine suite and the runtime host app: the paywall and its record, drawn from its .nux source alone. The five .nux files are copied from the stillwater fixture folder of the parent's .nux compiler crate, each named here by its git blob id at parentCommit. The plan's views are compiled on the device; nothing else is published.",
+  "note": "Stillwater for the Nux machine suite and the runtime host app: the paywall and its record, drawn from its .nux source alone. The six .nux files are copied from the stillwater fixture folder of the parent's .nux compiler crate, each named here by its git blob id at parentCommit. The plan is the five program files; main.test.nux holds the folder's tests and is copied for provenance only, never handed to the session or compiled on the device. The plan's views are compiled on the device; nothing else is published.",
   "plan": {
     "root": "main",
     "app": "app",
     "experience": "stillwater",
     "version": 1
   },
-  "parentCommit": "b8bc00a8fd70a738855eaa682131aa4d5cb82632",
+  "parentCommit": "9d12ec24f1b77ae80d18042aa69469033815cad3",
   "files": {
+    "done.nux": {
+      "sha256": "c230d3dc279f84e71cf47e064a418d8655542c00f50f0e1da9ed720c7b35d17a",
+      "sizeBytes": 167,
+      "parentBlob": "92ed4db27ec2043ca7c22afa46aa9113f5b95c7e"
+    },
     "main.nux": {
-      "sha256": "b3bc8fb461ed71da96744630cc26ef0accca76218d23cf656f789dc16a9e4680",
-      "sizeBytes": 4565,
-      "parentBlob": "9c033dbe05acc11a11f1dbaca0b35445941075d6"
+      "sha256": "fdcfac15c9ba70e5f0ce7b15ad3466e2bac851fc889618a96395051f43a93ec8",
+      "sizeBytes": 2668,
+      "parentBlob": "766baf44cefb747472f64484913ad43ee886df0e"
+    },
+    "main.test.nux": {
+      "sha256": "ebb3c203af40b366bd5a21615ae892942942692784b6edc3b01fa6bceffce390",
+      "sizeBytes": 1787,
+      "parentBlob": "32e4315997fbcc04aa3322742b47f84523289dad"
     },
     "paywall.nux": {
-      "sha256": "5cd2ecb645eae88bf635e9cedd90db3f26f8483ed8c4c6a32a276e26b143fd3c",
-      "sizeBytes": 3356,
-      "parentBlob": "c6fd82f65caa7339078ce6d3a73133e2da1cb785"
+      "sha256": "f8a3e00c6f1c2bf5187a5824ba0fc7890e7386a47c9dc161ea984c0fe66cac45",
+      "sizeBytes": 3334,
+      "parentBlob": "43eded7270b48cb4eacb179ac18943e14174407f"
     },
     "plan-card.nux": {
       "sha256": "3349f0db8df51eb223ab8348e28a52789fa6939560cb7ad0845de13ad6a0f01e",
@@ -27,11 +37,6 @@
       "sha256": "5fa52140886709dcef3b239cf5cffa6bf323629090069e81e6c1d6ee2205136c",
       "sizeBytes": 535,
       "parentBlob": "1b0bd772f5a0366a74a1b0e814c05e2757a2799d"
-    },
-    "done.nux": {
-      "sha256": "c230d3dc279f84e71cf47e064a418d8655542c00f50f0e1da9ed720c7b35d17a",
-      "sizeBytes": 167,
-      "parentBlob": "92ed4db27ec2043ca7c22afa46aa9113f5b95c7e"
     }
   },
   "palette": {
