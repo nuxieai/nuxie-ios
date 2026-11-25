@@ -107,6 +107,38 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         try playTheStory(in: .dark)
     }
 
+    /// For a screen reader the plan cards sit inside the "Plan" radio
+    /// group: the group is read by its label, then the two cards, Yearly
+    /// then Monthly, the order of the plans the record hands the page, and
+    /// each card's frame lies inside the group's. The cards are rows of a
+    /// list once Stillwater draws them from one; a row read outside its
+    /// group, or in the order it was mounted, fails here.
+    func testThePlanCardsAreReadInsideThePlanGroupInOrder() throws {
+        let app = launch(.light)
+        let screen = try openPaywall(app)
+        let yearly = button(app, beginningWith: "Yearly")
+        let monthly = button(app, beginningWith: "Monthly")
+        XCTAssertTrue(yearly.waitForExistence(timeout: 15), app.debugDescription)
+        let group = app.otherElements["Plan"]
+        XCTAssertTrue(group.waitForExistence(timeout: 10), "the plans' group is not read: \(app.debugDescription)")
+        keep("plan-group", app, screen)
+
+        let opened = reading(app, on: screen.frame)
+        let at = try XCTUnwrap(opened.firstIndex(of: "group \"Plan\""), "the plans' group is not read: \(opened)")
+        let next = Array(opened.dropFirst(at + 1).prefix(2))
+        XCTAssertEqual(next.count, 2, "nothing is read after the plans' group: \(opened)")
+        XCTAssertTrue(next.first?.hasPrefix("button \"Yearly") ?? false,
+                      "Yearly is not read first in the group: \(opened)")
+        XCTAssertTrue(next.last?.hasPrefix("button \"Monthly") ?? false, "Monthly is not read second: \(opened)")
+
+        let inside = group.frame.insetBy(dx: -0.5, dy: -0.5)
+        for card in [yearly, monthly] {
+            XCTAssertTrue(inside.contains(card.frame),
+                          "\(card.label) at \(card.frame) is outside the group's \(group.frame)")
+        }
+        XCTAssertLessThan(yearly.frame.minY, monthly.frame.minY, "Yearly is not above Monthly")
+    }
+
     /// The paywall follows the phone while it is open: the phone turns dark
     /// and the open sheet is drawn again in dark, then light again, with
     /// the same reading throughout.
