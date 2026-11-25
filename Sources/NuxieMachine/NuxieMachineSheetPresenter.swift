@@ -61,6 +61,12 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   in it, and again before the first frame (or close, or wake) after it
 ///   changes. One environment holds for the session: sheets and covers
 ///   over one another share it.
+/// - The person's body text size is told on the same path, as one more
+///   field of the environment: read from the same traits as the scheme
+///   ([`textSize`]), the way the SDK's experience screens read it
+///   ([`bodyTextSize(in:)`]), and told with it, once per value, before the
+///   start and before the first frame after it changes. One `rem` of the
+///   session's pages is that size.
 /// - Each native presentation is told where it is shown, its place
 ///   ([`NuxieMachineScreenViewController.place`]): the insets of what it
 ///   is presented in, which its Screen fills to every edge, a cover's the
@@ -302,7 +308,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop)
         controller.statusText = Self.describe(status)
         applyColorSchemeMode(to: controller)
-        controller.onColorAppearanceChange = { [weak self] in self?.colorAppearanceChanged() }
+        controller.onEnvironmentChange = { [weak self] in self?.environmentChanged() }
         controller.presentationController?.delegate = self
         controllers[shown] = controller
         below.present(controller, animated: true) { [weak self] in self?.send(.presented(shown)) }
@@ -396,12 +402,13 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         await tellPlaces(at: now)
     }
 
-    // MARK: Light and dark
+    // MARK: The environment: light and dark, and the text size
 
-    /// The colors the session's Screens draw in may have changed: the phone
-    /// turned dark or light. Each Screen calls this when UIKit says so; the
-    /// scheme is read again, and told if it changed, before the next frame.
-    package func colorAppearanceChanged() {
+    /// The session's environment may have changed: the phone turned dark or
+    /// light, or the person changed their text size. Each Screen calls this
+    /// when UIKit says so; the environment is read again, and told if it
+    /// changed, before the next frame.
+    package func environmentChanged() {
         loop?.requestFrame()
     }
 
@@ -418,10 +425,11 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// background) are two environments, and each is told.
     private func tellEnvironment(at now: Int64) async {
         guard let edge = loop?.edge else { return }
-        let current = NuxieMachineEnvironment(dark: colorScheme == .dark)
+        let current = NuxieMachineEnvironment(dark: colorScheme == .dark, textSize: textSize)
         guard current != environment else { return }
         environment = current
-        logger.info("machine.environment \(current.dark ? "dark" : "light", privacy: .public)")
+        let scheme = current.dark ? "dark" : "light"
+        logger.info("machine.environment \(scheme, privacy: .public) \(current.textSize, privacy: .public)")
         await edge.environment(current, now: now)
         takeReports()
     }
@@ -439,6 +447,27 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         }
         let forced = colorSchemeMode.userInterfaceStyle
         return ExperienceColorScheme(own: forced, forced: forced, inWindow: false, host: hostStyle)
+    }
+
+    /// The person's body text size the session draws at, read from the
+    /// traits the scheme is read from ([`colorScheme`]): the bottom native
+    /// presentation's while it is in a window, as every one above it is
+    /// presented over it and has the same; otherwise the host's, which a
+    /// Screen not yet in its window joins. The app forces no text size, so
+    /// unlike the scheme there is no forced value to prefer.
+    private var textSize: Double {
+        let bottom = loop?.screens.first
+        let traits = bottom.flatMap { $0.viewIfLoaded?.window == nil ? nil : $0.traitCollection }
+            ?? host?.traitCollection ?? bottom?.traitCollection
+        return Self.bodyTextSize(in: traits)
+    }
+
+    /// The body text size UIKit gives `traits`, in points, as the SDK's
+    /// experience screens read it (`ExperienceScreenViewController.fontScale(for:)`):
+    /// 17 at the default size, 23 at the largest standard one and 53 at the
+    /// largest accessibility one. With no traits, the app's own.
+    package static func bodyTextSize(in traits: UITraitCollection?) -> Double {
+        Double(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize)
     }
 
     /// Force the app's fixed scheme on a native presentation, as the SDK's

@@ -505,26 +505,29 @@ package enum NuxieMachineNote: UInt32, Sendable {
 }
 
 /// The client's environment, as a session is told it: what is the same for
-/// every presentation of the session. Only the scheme is read from the
-/// client for now; the text size takes the machine's default, in
-/// [`carried`]. Where each presentation is shown is its own
+/// every presentation of the session, the scheme and the person's text
+/// size. Where each presentation is shown is its own
 /// ([`NuxieMachineScreenPlace`]).
 package struct NuxieMachineEnvironment: Equatable, Sendable {
     /// Whether the client shows in the dark scheme.
     package var dark: Bool
+    /// The person's body text size, in points: one `rem` of the session's
+    /// pages. 17 at an iPhone's default size, and larger or smaller as the
+    /// person sets it.
+    package var textSize: Double
 
-    package init(dark: Bool) {
+    package init(dark: Bool, textSize: Double) {
         self.dark = dark
+        self.textSize = textSize
     }
 
     /// The environment as the header lays it out: the one place the struct
-    /// is made. The text size is 17 points, one `rem` at an iPhone's
-    /// default size.
+    /// is made.
     fileprivate var carried: NuxMachineEnvironment {
         NuxMachineEnvironment(
             struct_size: UInt32(MemoryLayout<NuxMachineEnvironment>.size),
             dark: dark,
-            text_size: 17)
+            text_size: textSize)
     }
 }
 
