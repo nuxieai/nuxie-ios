@@ -6,7 +6,7 @@
     "experience": "stillwater",
     "version": 1
   },
-  "parentCommit": "269dd2a4d683ef1a555ddb19335c842bafa244a9",
+  "parentCommit": "8dbf307345bd38b76d399632272533d67080af98",
   "files": {
     "done.nux": {
       "sha256": "c230d3dc279f84e71cf47e064a418d8655542c00f50f0e1da9ed720c7b35d17a",
@@ -24,9 +24,9 @@
       "parentBlob": "a1eda04c723a2f7f0ab62d979342d04f89639d11"
     },
     "paywall.nux": {
-      "sha256": "f8a3e00c6f1c2bf5187a5824ba0fc7890e7386a47c9dc161ea984c0fe66cac45",
-      "sizeBytes": 3334,
-      "parentBlob": "43eded7270b48cb4eacb179ac18943e14174407f"
+      "sha256": "6df165cf945ded1326aa9fdc8fbd3e7066f1daf7bfff66254db876a5d882f3e3",
+      "sizeBytes": 3409,
+      "parentBlob": "64848f03d0d269593439d3ff8a2640331dc242d1"
     },
     "plan-card.nux": {
       "sha256": "3349f0db8df51eb223ab8348e28a52789fa6939560cb7ad0845de13ad6a0f01e",
