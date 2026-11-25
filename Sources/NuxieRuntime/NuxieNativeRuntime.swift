@@ -572,10 +572,11 @@ package struct NuxieNativePlayerDriver: @unchecked Sendable {
     }
 }
 
-/// The addresses of the engine's six scene writer functions
+/// The addresses of the engine's nine scene writer functions
 /// (`nux_scene_writer_set_number`, `_set_unsigned`, `_set_bool`,
-/// `_set_color`, `_set_text` and `_reset`), for a driver that writes
-/// through the writer its round is handed. Each is the C function itself.
+/// `_set_color`, `_set_text`, `_reset`, and the keyed list's `_mount_row`,
+/// `_remove_row` and `_move_row`), for a driver that writes through the
+/// writer its round is handed. Each is the C function itself.
 package struct NuxieNativeSceneWriterFunctions: @unchecked Sendable {
     package let setNumber: UnsafeRawPointer
     package let setUnsigned: UnsafeRawPointer
@@ -583,8 +584,11 @@ package struct NuxieNativeSceneWriterFunctions: @unchecked Sendable {
     package let setColor: UnsafeRawPointer
     package let setText: UnsafeRawPointer
     package let reset: UnsafeRawPointer
+    package let mountRow: UnsafeRawPointer
+    package let removeRow: UnsafeRawPointer
+    package let moveRow: UnsafeRawPointer
 
-    /// The engine's own six.
+    /// The engine's own nine.
     package static let engine: NuxieNativeSceneWriterFunctions = {
         typealias Object = UnsafePointer<NuxSceneObject>?
         typealias Changed = UnsafeMutablePointer<Bool>?
@@ -599,13 +603,22 @@ package struct NuxieNativeSceneWriterFunctions: @unchecked Sendable {
         let setText: @convention(c) (OpaquePointer?, Object, UInt16, NuxStringView, Changed) -> UInt32
             = nux_scene_writer_set_text
         let reset: @convention(c) (OpaquePointer?, Object, Changed) -> UInt32 = nux_scene_writer_reset
+        let mountRow: @convention(c) (OpaquePointer?, Object, NuxByteView, Changed) -> UInt32
+            = nux_scene_writer_mount_row
+        let removeRow: @convention(c) (OpaquePointer?, Object, NuxByteView, Changed) -> UInt32
+            = nux_scene_writer_remove_row
+        let moveRow: @convention(c) (OpaquePointer?, Object, NuxByteView, Int, Changed) -> UInt32
+            = nux_scene_writer_move_row
         return NuxieNativeSceneWriterFunctions(
             setNumber: unsafeBitCast(setNumber, to: UnsafeRawPointer.self),
             setUnsigned: unsafeBitCast(setUnsigned, to: UnsafeRawPointer.self),
             setBool: unsafeBitCast(setBool, to: UnsafeRawPointer.self),
             setColor: unsafeBitCast(setColor, to: UnsafeRawPointer.self),
             setText: unsafeBitCast(setText, to: UnsafeRawPointer.self),
-            reset: unsafeBitCast(reset, to: UnsafeRawPointer.self))
+            reset: unsafeBitCast(reset, to: UnsafeRawPointer.self),
+            mountRow: unsafeBitCast(mountRow, to: UnsafeRawPointer.self),
+            removeRow: unsafeBitCast(removeRow, to: UnsafeRawPointer.self),
+            moveRow: unsafeBitCast(moveRow, to: UnsafeRawPointer.self))
     }()
 }
 
