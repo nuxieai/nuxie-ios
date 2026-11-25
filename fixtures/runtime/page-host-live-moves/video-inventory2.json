@@ -2,7 +2,7 @@
   "videoElements": [
     {
       "artboardId": "A",
-      "componentId": 22,
+      "componentId": 23,
       "optional": false,
       "readinessTimeoutSeconds": 5.0,
       "renderedNodeId": "inlineClip",
