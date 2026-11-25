@@ -153,6 +153,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// `text-size-17-light`, `text-size-change-17-to-23-light` and
     /// `text-size-23-light`, the stills for a film.
     func testThePaywallAtTheLargestStandardTextSize() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
         let app = launch(.light, textSize: Self.defaultSize)
         let screen = try openPaywall(app)
         let title = text(app, beginningWith: "Ten quiet minutes,")
@@ -196,6 +197,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// 23, where its button to start the record is on screen on every
     /// iPhone.
     func testThePaywallAtTheLargestAccessibilityTextSize() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
         let app = launch(.light, textSize: Self.largestStandardSize)
         let screen = try openPaywall(app)
         let title = text(app, beginningWith: "Ten quiet minutes,")
