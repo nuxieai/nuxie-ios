@@ -258,24 +258,37 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             // White glyph coverage above the render helper's dark clear color.
             stride(from: 2, to: pixels.count, by: 4).reduce(0) { $0 + max(0, Int(pixels[$1]) - 0x11) }
         }
-        /// Two renders of 320 by 640 are the same picture; when they are
-        /// not, say how they differ rather than only that they do.
-        func expectSameRender(_ one: Data, _ other: Data, _ what: String,
-                              file: StaticString = #filePath, line: UInt = #line) {
-            guard one != other else { return }
-            guard one.count == other.count else {
-                return XCTFail("\(what): \(one.count) bytes against \(other.count)", file: file, line: line)
-            }
+        /// How far apart two renders of 320 by 640 are: the pixels that
+        /// differ, the rows they span, and the largest step in any channel.
+        func distance(_ one: Data, _ other: Data) -> (pixels: Int, rows: Int, largest: Int) {
+            precondition(one.count == other.count)
             let extent = changedPixelExtent(between: one, and: other, width: 320)
             var largest = 0
-            var rows = Set<Int>()
-            for at in 0..<one.count where one[one.startIndex + at] != other[other.startIndex + at] {
+            for at in 0..<one.count {
                 largest = max(largest, abs(Int(one[one.startIndex + at]) - Int(other[other.startIndex + at])))
-                rows.insert(at / (320 * 4))
             }
-            XCTFail("\(what): \(extent.pixelCount) pixels differ over \(extent.rowSpan) rows "
-                + "(\(rows.min() ?? -1) to \(rows.max() ?? -1)), by at most \(largest) of 255 in a channel; "
-                + "ink \(ink(one)) against \(ink(other))", file: file, line: line)
+            return (extent.pixelCount, extent.rowSpan, largest)
+        }
+        /// Two renders are the same picture when no channel of any pixel is
+        /// more than `rounding` steps of 255 apart. Two routes to the same
+        /// glyphs (a face read from its file and the same face rebuilt from
+        /// its tables, or one scene serialized twice) may round an edge
+        /// pixel's coverage one step apart; a different weight or optical
+        /// size moves edges by far more, which `expectDifferentRender` asks for.
+        let rounding = 2
+        func expectSameRender(_ one: Data, _ other: Data, _ what: String,
+                              file: StaticString = #filePath, line: UInt = #line) {
+            let apart = distance(one, other)
+            XCTAssertLessThanOrEqual(apart.largest, rounding,
+                "\(what): \(apart.pixels) pixels differ over \(apart.rows) rows, by up to \(apart.largest) of 255; "
+                    + "ink \(ink(one)) against \(ink(other))", file: file, line: line)
+        }
+        func expectDifferentRender(_ one: Data, _ other: Data, _ what: String,
+                                   file: StaticString = #filePath, line: UInt = #line) {
+            let apart = distance(one, other)
+            XCTAssertGreaterThan(apart.largest, 16 * rounding,
+                "\(what): \(apart.pixels) pixels differ over \(apart.rows) rows, by up to \(apart.largest) of 255",
+                file: file, line: line)
         }
         var fileRegular: Data?
         for fallback in [false, true] {
@@ -309,8 +322,9 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             expectSameRender(sharedFaceBold, bold,
                 "The authored wght axis must select bold even when both styles share the regular variable face")
             expectSameRender(baseline, regular, "Test serialization must preserve production rendering")
-            XCTAssertNotEqual(opticalControl, baseline,
+            expectDifferentRender(opticalControl, baseline,
                 "Only opsz changes, with authored size and weight held fixed; table fallback: \(fallback)")
+            expectDifferentRender(bold, regular, "Authored bold must change the glyphs; table fallback: \(fallback)")
             if let fileRegular {
                 expectSameRender(regular, fileRegular, "Table fallback must preserve the extracted face's rendering")
             } else {
