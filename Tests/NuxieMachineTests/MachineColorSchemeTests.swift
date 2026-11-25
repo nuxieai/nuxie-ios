@@ -375,7 +375,10 @@ final class MachineColorSchemeTests: XCTestCase {
         // start.
         let (larger, largerWindow) = Self.host(.light)
         largerWindow.traitOverrides.preferredContentSizeCategory = .extraExtraExtraLarge
+        largerWindow.layoutIfNeeded()
         larger.updateTraitsIfNeeded()
+        XCTAssertEqual(larger.traitCollection.preferredContentSizeCategory, .extraExtraExtraLarge,
+                       "the host did not take its window's text size")
         let second = NuxieMachineSheetPresenter(host: larger) { _ in }
         await second.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(), event: "go")
         let secondEdge = try XCTUnwrap(second.edge)
