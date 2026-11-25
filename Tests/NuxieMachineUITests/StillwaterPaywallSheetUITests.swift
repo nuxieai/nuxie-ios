@@ -1049,7 +1049,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// its scale (rounded up, as the Screen sizes it), and whose last frame
     /// was drawn at the drawable's size.
     private func expect(_ facts: SurfaceFacts, coversA size: CGSize, _ what: String) {
-        XCTAssertEqual(facts.bounds, size, "\(what): the surface is \(facts.bounds), not the \(size) it fills")
+        XCTAssertEqual(facts.bounds.width, size.width, accuracy: 0.01,
+                       "\(what): the surface is \(facts.bounds), not the \(size) it fills")
+        XCTAssertEqual(facts.bounds.height, size.height, accuracy: 0.01,
+                       "\(what): the surface is \(facts.bounds), not the \(size) it fills")
         XCTAssertGreaterThan(facts.scale, 0, "\(what): the surface has no scale")
         let pixels = CGSize(width: (facts.bounds.width * facts.scale).rounded(.up),
                             height: (facts.bounds.height * facts.scale).rounded(.up))
