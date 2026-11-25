@@ -17,6 +17,7 @@ component Stillwater
 
   state plan = annual
   state offer_due = false
+  state ready = false
   state offer_ahead = false
   state offer_live = false
   state purchase_failed = false
@@ -92,18 +93,11 @@ component Stillwater
     offer_due = true
     dismiss("paywall_closed")
 
-  // These two waits must stay in this order. When the app opens after
-  // 20:00 with both due, the one written first fires first, so tonight's
-  // offer is skipped instead of starting with tomorrow's 20:00 as its end.
-  wait offer_missed
-    while offer_ahead
-    until next 20:00
-    then skip_offer
+  task offer_missed  when offer_ahead
+    after(next 20:00, skip_offer)
 
-  wait offer_starts
-    while offer_ahead
-    until next 18:00
-    then begin_offer
+  task offer_starts  when offer_ahead
+    after(next 18:00, begin_offer)
 
   action skip_offer
     offer_ahead = false
@@ -114,28 +108,33 @@ component Stillwater
     if plan == annual
       plan = annual_offer
 
-  wait offer_ends
-    while offer_live
-    until next 20:00
-    then end_offer
+  task offer_ends  when offer_live
+    after(next 20:00, end_offer)
 
   action end_offer
     offer_live = false
     if plan == annual_offer
       plan = annual
 
-  wait evening_offer
-    while offer_due
-    until next 18:00
-    then show_offer within 6h
-    else give_up
+  task offer_time  when offer_due
+    after(next 18:00, offer_ready)
+
+  task evening_offer  when ready and here
+    change(show_offer)
+
+  task offer_lapses  when ready and not here
+    after(6h, give_up)
+
+  action offer_ready
+    offer_due = false
+    ready = true
 
   action show_offer
-    offer_due = false
+    ready = false
     go(offer)
 
   action give_up
-    offer_due = false
+    ready = false
     exit
 
   action decline
