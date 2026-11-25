@@ -6,7 +6,7 @@
     "experience": "stack",
     "version": 1
   },
-  "parentCommit": "54cd1ed0ee79a2116b323e0a24bd3174d66c5a4b",
+  "parentCommit": "269dd2a4d683ef1a555ddb19335c842bafa244a9",
   "files": {
     "card.nux": {
       "sha256": "33a53cb3cc11915719fa7e9624d15c9f355407b6542d8eb986b81951f236b49a",

@@ -6,7 +6,7 @@
     "experience": "quietly",
     "version": 1
   },
-  "parentCommit": "e952178db9e8e082f8a35a19df8523d2342fffd4",
+  "parentCommit": "269dd2a4d683ef1a555ddb19335c842bafa244a9",
   "files": {
     "main.nux": {
       "sha256": "436a7ad78ea5f16d6d68dfd69dae680bd93305102ca813c97a7af110120e7427",
