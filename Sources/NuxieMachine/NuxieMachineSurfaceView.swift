@@ -26,10 +26,10 @@ import UIKit
 /// A transparent view whose layer is the Metal layer the engine draws into,
 /// and whose touches become the engine's pointers.
 @MainActor
-final class NuxieMachineSurfaceView: UIView {
+package final class NuxieMachineSurfaceView: UIView {
     static let maximumActivePointers = 64
 
-    override class var layerClass: AnyClass { CAMetalLayer.self }
+    override package class var layerClass: AnyClass { CAMetalLayer.self }
 
     /// Pointers, in artboard points, in the order the touches arrived.
     var onPointers: (([NuxieNativePointerEvent]) -> Void)?
@@ -40,10 +40,14 @@ final class NuxieMachineSurfaceView: UIView {
 
     /// The scroll regions of the last frame shown ([`NuxieMachineScreenViewController.show`]),
     /// in artboard points; none before the first.
-    var scrollRegions: [NuxieNativeScrollRegion]?
-    /// The touch that went down first while none was down, and where, in
-    /// artboard points. Cleared when that touch ends or is cancelled.
-    private var touchDown: (touch: ObjectIdentifier, point: CGPoint)?
+    package var scrollRegions: [NuxieNativeScrollRegion]?
+    /// The touch that went down first while none was down, where, in
+    /// artboard points, and the scroll regions shown then. Cleared when that
+    /// touch ends or is cancelled. The sheet's swipe is answered from these
+    /// regions, not from frames drawn since: a page a few points below its
+    /// top that a slow drag down scrolls to its top before UIKit asks is
+    /// still a page that was scrolled when the finger went down.
+    private var touchDown: (touch: ObjectIdentifier, point: CGPoint, regions: [NuxieNativeScrollRegion]?)?
 
     var metalLayer: CAMetalLayer {
         // The layer class above makes this cast always succeed.
@@ -55,7 +59,7 @@ final class NuxieMachineSurfaceView: UIView {
         window?.traitCollection.displayScale ?? traitCollection.displayScale
     }
 
-    override init(frame: CGRect) {
+    override package init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = false
         backgroundColor = .clear
@@ -64,11 +68,11 @@ final class NuxieMachineSurfaceView: UIView {
         metalLayer.backgroundColor = UIColor.clear.cgColor
     }
 
-    required init?(coder: NSCoder) {
+    package required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layoutSubviews() {
+    override package func layoutSubviews() {
         super.layoutSubviews()
         let scale = displayScale
         if scale.isFinite, scale > 0 {
@@ -78,7 +82,7 @@ final class NuxieMachineSurfaceView: UIView {
         onGeometryChange?()
     }
 
-    override func didMoveToWindow() {
+    override package func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil {
             pointerIDs.removeAll()
@@ -87,26 +91,26 @@ final class NuxieMachineSurfaceView: UIView {
         onGeometryChange?()
     }
 
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if touchDown == nil, let touch = touches.first {
-            touchDown = (ObjectIdentifier(touch), touch.location(in: self))
+    override package func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let touch = touches.first {
+            touchWentDown(ObjectIdentifier(touch), at: touch.location(in: self))
         }
         deliver(touches, as: .down)
         super.touchesBegan(touches, with: event)
     }
 
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+    override package func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         deliver(touches, as: .move)
         super.touchesMoved(touches, with: event)
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+    override package func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         forget(touches)
         deliver(touches, as: .up)
         super.touchesEnded(touches, with: event)
     }
 
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+    override package func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         forget(touches)
         deliver(touches, as: .exit)
         super.touchesCancelled(touches, with: event)
@@ -114,21 +118,42 @@ final class NuxieMachineSurfaceView: UIView {
 
     /// A sheet's swipe is a pan above this view, and UIKit asks this view,
     /// the one under the finger, once the finger has moved about 10 points
-    /// whether it may begin. The answer comes from the last frame's scroll
-    /// regions ([`NuxieMachineSheetPan.mayBegin`]): over a `scroll`, a drag
-    /// stays with the page unless it is downward and the page is at its
-    /// top. Any other recognizer, or a pan before the first frame or with no
-    /// touch down, is answered as UIKit would.
-    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    /// whether it may begin. The answer is [`sheetPanMayBegin`]'s. Any
+    /// other recognizer, or a pan it has no answer for, is answered as
+    /// UIKit would.
+    override package func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.view !== self,
-              let regions = scrollRegions, let start = touchDown?.point
+              let answer = sheetPanMayBegin(moving: pan.translation(in: self))
         else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
-        return NuxieMachineSheetPan.mayBegin(from: start, moving: pan.translation(in: self), over: regions)
+        return answer
+    }
+
+    /// Whether the sheet's swipe may take a drag that has moved by
+    /// `translation`, answered from where the touch went down and the scroll
+    /// regions shown then ([`NuxieMachineSheetPan.mayBegin`]): over a
+    /// `scroll`, a drag stays with the page unless it is downward and the
+    /// page was at its top. None with no touch down, or one that went down
+    /// before the first frame was shown.
+    package func sheetPanMayBegin(moving translation: CGPoint) -> Bool? {
+        guard let down = touchDown, let regions = down.regions else { return nil }
+        return NuxieMachineSheetPan.mayBegin(from: down.point, moving: translation, over: regions)
+    }
+
+    /// A touch went down at `point`: kept, with the regions shown now, when
+    /// no touch is down already.
+    package func touchWentDown(_ touch: ObjectIdentifier, at point: CGPoint) {
+        guard touchDown == nil else { return }
+        touchDown = (touch, point, scrollRegions)
+    }
+
+    /// A touch ended or was cancelled: the one kept goes with it.
+    package func touchLifted(_ touch: ObjectIdentifier) {
+        guard touchDown?.touch == touch else { return }
+        touchDown = nil
     }
 
     private func forget(_ touches: Set<UITouch>) {
-        guard let down = touchDown, touches.contains(where: { ObjectIdentifier($0) == down.touch }) else { return }
-        touchDown = nil
+        for touch in touches { touchLifted(ObjectIdentifier(touch)) }
     }
 
     private func deliver(_ touches: Set<UITouch>, as kind: NuxieNativePointerKind) {
