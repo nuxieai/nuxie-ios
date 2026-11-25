@@ -72,9 +72,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
 
             // 2. A pointer on the Monthly card: the record's plan is
             // monthly, and both cards look different; nothing else does.
+            // The cards are rows of `for choice in plans key=choice.plan`,
+            // and the tap's report names Monthly's row; the machine reads
+            // that row's key itself, so this slot is the row report checked
+            // by its effect: `choose` ran with Monthly's own plan.
             try await run.tap(open.center(of: "Monthly"))
             let plan = try await run.edge.slot("plan")
-            XCTAssertEqual(plan, .enumeration("monthly"))
+            XCTAssertEqual(plan, .enumeration("monthly"), "the tap in Monthly's row did not choose Monthly's plan")
             let monthly = try await run.look("2-monthly-chosen")
             let cards = [try open.region(of: "Yearly"), try open.region(of: "Monthly")]
             XCTAssertTrue(Self.changes(open, monthly, cards[1]), "the Monthly card looks the same")
