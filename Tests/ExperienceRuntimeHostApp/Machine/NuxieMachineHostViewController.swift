@@ -45,6 +45,17 @@ import UIKit
 /// UIKit's medium detent once it is up, here in the test host only: the
 /// SDK presents a sheet at the large detent, and this lets a UI test record
 /// what UIKit gives a sheet of another height.
+///
+/// `--nuxie-machine-clock 17:59,18:00,20:00` gives the session a clock of
+/// its own, for a film of the evening ([`FilmClock`]): the record starts
+/// with the machine's clock at the first time of day, and the Darwin
+/// notification `dev.nuxie.machine.clock.<time>` for each later one moves
+/// it there while the app runs, forward only. The times are of the day the
+/// app was launched, in UTC, the day the machine reads `next 18:00` in.
+/// Between moves the clock runs at the wall clock's pace. A move goes
+/// through the presenter's one seam for it,
+/// [`NuxieMachineSheetPresenter.clockAhead`], so a wake it makes due fires
+/// through the presenter's own timer.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
     /// The Darwin notifications that turn the window, with the appearance
@@ -187,7 +198,8 @@ public final class NuxieMachineHostViewController: UIViewController {
         guard !listening else { return }
         listening = true
         let center = CFNotificationCenterGetDarwinNotifyCenter()
-        for name in Array(appearanceNotifications.keys) + Array(textSizeNotifications.keys) {
+        let clockMoves = Array((FilmClock.launched?.moves ?? [:]).keys)
+        for name in Array(appearanceNotifications.keys) + Array(textSizeNotifications.keys) + clockMoves {
             CFNotificationCenterAddObserver(center, nil, { _, _, name, _, _ in
                 guard let name else { return }
                 let raw = name.rawValue as String
@@ -197,6 +209,9 @@ public final class NuxieMachineHostViewController: UIViewController {
                         window?.overrideUserInterfaceStyle = style
                     } else if let textSize = NuxieMachineHostViewController.textSizeNotifications[raw] {
                         NuxieMachineHostViewController.set(textSize, on: window)
+                    } else if let moment = FilmClock.launched?.moves[raw],
+                              let presenter = NuxieMachineHostViewController.shown?.presenter {
+                        FilmClock.move(presenter, to: moment)
                     }
                 }
             }, name as CFString, nil, .deliverImmediately)
@@ -237,6 +252,10 @@ public final class NuxieMachineHostViewController: UIViewController {
         guard presenter == nil else { return }
         finishButton.isEnabled = false
         let presenter = NuxieMachineSheetPresenter(host: self) { [weak self] status in self?.show(status) }
+        if let clock = FilmClock.launched {
+            // Set before the start, so the record starts at the first time.
+            presenter.clockAhead = clock.start - FilmClock.wallNow()
+        }
         self.presenter = presenter
         Task { @MainActor [weak self] in
             do {
@@ -251,6 +270,52 @@ public final class NuxieMachineHostViewController: UIViewController {
     private func show(_ status: NuxieMachineSheetStatus) {
         planLabel.text = "Selected plan: \(status.plan ?? "none")"
         recordLabel.text = "Record: " + NuxieMachineSheetPresenter.describe(status.record)
+    }
+}
+
+/// The film clock `--nuxie-machine-clock` names: times of day (`HH:MM`,
+/// comma separated) on the day the app was launched, in UTC. The record
+/// starts at the first; each later one is a move a test asks for with the
+/// Darwin notification `dev.nuxie.machine.clock.<HH:MM>`.
+struct FilmClock {
+    private static let day: Int64 = 24 * 3_600_000
+
+    /// The machine's clock when the record starts, in milliseconds since the
+    /// Unix epoch.
+    let start: Int64
+    /// Each later time, by the notification that moves the clock to it.
+    let moves: [String: Int64]
+
+    /// The clock the launch arguments name, if any. Read once, so every
+    /// time is on the same day.
+    static let launched: FilmClock? = {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let at = arguments.firstIndex(of: "--nuxie-machine-clock"), at + 1 < arguments.count else { return nil }
+        let midnight = wallNow() / day * day
+        let times = arguments[at + 1].split(separator: ",").map(String.init)
+        let moments = times.compactMap { time -> Int64? in
+            let parts = time.split(separator: ":").compactMap { Int64($0) }
+            guard parts.count == 2, (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return nil }
+            return midnight + (parts[0] * 60 + parts[1]) * 60_000
+        }
+        guard moments.count == times.count, let start = moments.first else { return nil }
+        let moves = Dictionary(zip(times.dropFirst().map { "dev.nuxie.machine.clock.\($0)" }, moments.dropFirst()),
+                               uniquingKeysWith: { first, _ in first })
+        return FilmClock(start: start, moves: moves)
+    }()
+
+    /// Milliseconds since the Unix epoch on the wall clock.
+    static func wallNow() -> Int64 {
+        Int64((Date().timeIntervalSince1970 * 1000).rounded(.down))
+    }
+
+    /// Move `presenter`'s clock to `moment`, if that is later than it reads
+    /// now: the machine takes nothing earlier than its last step.
+    @MainActor
+    static func move(_ presenter: NuxieMachineSheetPresenter, to moment: Int64) {
+        let ahead = moment - wallNow()
+        guard ahead > presenter.clockAhead else { return }
+        presenter.clockAhead = ahead
     }
 }
 

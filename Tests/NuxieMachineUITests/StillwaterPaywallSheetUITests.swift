@@ -160,6 +160,103 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertLessThan(yearly.frame.minY, monthly.frame.minY, "\(when): Yearly is not above Monthly")
     }
 
+    /// The evening offer as a film, on the host's film clock
+    /// (`--nuxie-machine-clock 17:59,18:00,20:00`). The paywall opens at
+    /// 17:59 with Yearly chosen and "Continue". At 18:00 "Tonight only"
+    /// joins at the top of the plans, chosen, and the buy button reads
+    /// "Claim the offer". A tap on Monthly chooses it, and the button reads
+    /// "Continue" again. At 20:00 the offer leaves, and Monthly stays
+    /// chosen. The cards in the "Plan" group are checked at each stop, and
+    /// each stop is held about two seconds so a recording shows it. Kept as
+    /// `evening-1-1759`, `evening-2-1800`, `evening-3-monthly` and
+    /// `evening-4-2000`, each with its reading.
+    func testTheEveningOfferJoinsAndLeavesThePlans() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the evening film is kept on iOS 17 and later") }
+        let app = launch(.light, clock: "17:59,18:00,20:00")
+        let screen = try openPaywall(app)
+        XCTAssertTrue(button(app, beginningWith: "Yearly").waitForExistence(timeout: 15), app.debugDescription)
+        let group = app.otherElements["Plan"]
+        XCTAssertTrue(group.waitForExistence(timeout: 10), "the plans' group is not read: \(app.debugDescription)")
+
+        // 1. 17:59: the paywall as it opens on any day.
+        waitFor(screen, valueContaining: "Selected plan: annual.")
+        expectPlans(app, screen, group, ["Yearly", "Monthly"], chosen: "Yearly", "at 17:59")
+        XCTAssertTrue(app.buttons["Continue"].exists, "the buy button does not read Continue at 17:59")
+        hold("evening-1-1759", app, screen)
+
+        // 2. 18:00: the offer joins first and is chosen.
+        moveTheClock(to: "18:00")
+        waitFor(screen, valueContaining: "Selected plan: annual_offer.")
+        let offer = button(app, beginningWith: "Tonight only")
+        XCTAssertTrue(offer.waitForExistence(timeout: 10), "the offer did not join at 18:00: \(app.debugDescription)")
+        waitFor(offer, "selected == true", "the offer is not read as chosen at 18:00")
+        XCTAssertTrue(app.buttons["Claim the offer"].waitForExistence(timeout: 10),
+                      "the buy button does not read Claim the offer at 18:00")
+        expectPlans(app, screen, group, ["Tonight only", "Yearly", "Monthly"], chosen: "Tonight only", "at 18:00")
+        hold("evening-2-1800", app, screen)
+
+        // 3. A tap on Monthly chooses it.
+        button(app, beginningWith: "Monthly").tap()
+        waitFor(screen, valueContaining: "Selected plan: monthly.")
+        waitFor(button(app, beginningWith: "Monthly"), "selected == true",
+                "Monthly is not read as chosen after its tap")
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 10),
+                      "the buy button does not read Continue with Monthly chosen")
+        expectPlans(app, screen, group, ["Tonight only", "Yearly", "Monthly"], chosen: "Monthly", "after Monthly's tap")
+        hold("evening-3-monthly", app, screen)
+
+        // 4. 20:00: the offer leaves; Monthly stays chosen.
+        moveTheClock(to: "20:00")
+        waitFor(offer, "exists == false", "the offer did not leave at 20:00")
+        expectPlans(app, screen, group, ["Yearly", "Monthly"], chosen: "Monthly", "at 20:00")
+        waitFor(screen, valueContaining: "Selected plan: monthly.")
+        XCTAssertTrue(app.buttons["Continue"].exists, "the buy button does not read Continue at 20:00")
+        hold("evening-4-2000", app, screen)
+    }
+
+    /// The cards a screen reader reads right after the "Plan" group are
+    /// `names`, in that order and no more, each inside the group's frame,
+    /// and only `chosen` is read as selected.
+    private func expectPlans(_ app: XCUIApplication, _ screen: XCUIElement, _ group: XCUIElement,
+                             _ names: [String], chosen: String, _ when: String) {
+        let read = reading(app, on: screen.frame)
+        guard let at = read.firstIndex(of: "group \"Plan\"") else {
+            return XCTFail("\(when): the plans' group is not read: \(read)")
+        }
+        let after = Array(read.dropFirst(at + 1))
+        let cards = Array(after.prefix { line in names.contains { line.hasPrefix("button \"\($0)") } })
+        XCTAssertEqual(cards.count, names.count, "\(when): the group's cards are not \(names): \(read)")
+        for (line, name) in zip(cards, names) {
+            XCTAssertTrue(line.hasPrefix("button \"\(name)"), "\(when): \(name) is not read in its place: \(read)")
+            XCTAssertEqual(line.hasSuffix(", selected"), name == chosen,
+                           "\(when): \(name) is \(name == chosen ? "not " : "")read as chosen: \(read)")
+        }
+        let inside = group.frame.insetBy(dx: -0.5, dy: -0.5)
+        var above = -CGFloat.infinity
+        for name in names {
+            let card = button(app, beginningWith: name)
+            XCTAssertTrue(inside.contains(card.frame),
+                          "\(when): \(name) at \(card.frame) is outside the group's \(group.frame)")
+            XCTAssertGreaterThan(card.frame.minY, above, "\(when): \(name) is not below the card before it")
+            above = card.frame.minY
+        }
+    }
+
+    /// Post the Darwin notification that moves the host's film clock to
+    /// `time`, one of the times it was launched with.
+    private func moveTheClock(to time: String) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("dev.nuxie.machine.clock.\(time)" as CFString), nil, nil, true)
+    }
+
+    /// Keep the sheet as `name`, then hold it about two seconds, so a film
+    /// of the run shows each stop.
+    private func hold(_ name: String, _ app: XCUIApplication, _ screen: XCUIElement) {
+        keep(name, app, screen)
+        Thread.sleep(forTimeInterval: 2)
+    }
+
     /// The paywall follows the phone while it is open: the phone turns dark
     /// and the open sheet is drawn again in dark, then light again, with
     /// the same reading throughout.
@@ -703,7 +800,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         }
         XCTAssertTrue(screen.exists, "the swipe took the sheet")
         XCTAssertEqual(screen.frame, resting, "the sheet did not settle back")
-        waitFor(screen, valueContaining: "Record: open.")
+        // Open, and waiting for the evening offer's moment since the start.
+        waitFor(screen, valueContaining: "Record: open, wakes at ")
         XCTAssertTrue(app.buttons["Continue"].exists, app.debugDescription)
         keep("1-after-cancelled-swipe", app, screen)
 
@@ -718,11 +816,15 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// The host, on the phone as it is, or started in `appearance`; with
     /// `asCover`, presenting the paywall as a cover; with `mediumSheet`,
     /// turning the presented sheet to the medium detent once it is up; with
-    /// `textSize`, started at that size category, by its raw value.
+    /// `textSize`, started at that size category, by its raw value; with
+    /// `clock`, the session on the host's film clock at those times of day.
     private func launch(_ appearance: Ground? = nil, asCover: Bool = false,
-                        mediumSheet: Bool = false, textSize: String? = nil) -> XCUIApplication {
+                        mediumSheet: Bool = false, textSize: String? = nil, clock: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--nuxie-machine-paywall"]
+        if let clock {
+            app.launchArguments += ["--nuxie-machine-clock", clock]
+        }
         if asCover {
             app.launchArguments += ["--nuxie-machine-paywall-cover"]
         }
