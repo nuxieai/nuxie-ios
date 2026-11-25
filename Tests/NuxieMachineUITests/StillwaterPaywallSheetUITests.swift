@@ -931,7 +931,11 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             if let read = surfaceNow(app) {
                 let (facts, text) = read
                 seen = text
-                if done(), frame == last, facts.bounds == (fillingFrame ? frame.size : facts.viewSize),
+                // The two sizes are read from text, so a third of a point
+                // can differ in its last digit.
+                let fills = fillingFrame ? frame.size : facts.viewSize
+                if done(), frame == last,
+                   abs(facts.bounds.width - fills.width) < 0.01, abs(facts.bounds.height - fills.height) < 0.01,
                    facts.drawn == facts.drawable,
                    facts.placeInsets != nil {
                     return frame
