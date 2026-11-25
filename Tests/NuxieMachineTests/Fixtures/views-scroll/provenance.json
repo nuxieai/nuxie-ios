@@ -1,0 +1,32 @@
+{
+  "note": "A paywall whose page is a `scroll` taller than the phone, for the Nux machine suite: a component shown as a cover, drawn from its .nux source alone. The four .nux files are copied from the views-scroll fixture folder of the parent's .nux compiler crate, each named here by its git blob id at parentCommit. The plan is the three program files; main.test.nux holds the folder's tests and is copied for provenance only, never handed to the session or compiled on the device. The plan's views are compiled on the device; nothing else is published.",
+  "plan": {
+    "root": "main",
+    "app": "app",
+    "experience": "quietly",
+    "version": 1
+  },
+  "parentCommit": "e952178db9e8e082f8a35a19df8523d2342fffd4",
+  "files": {
+    "main.nux": {
+      "sha256": "436a7ad78ea5f16d6d68dfd69dae680bd93305102ca813c97a7af110120e7427",
+      "sizeBytes": 698,
+      "parentBlob": "5aeb968ace62877b940e3f897896100870367dc8"
+    },
+    "main.test.nux": {
+      "sha256": "ac498e60176f7b208ad3043ca6bbac860591b6adb27d87f164716bbcc9d11991",
+      "sizeBytes": 669,
+      "parentBlob": "e4c6cbc71ab78c8734ff17a4b4469cb2b32c23ed"
+    },
+    "paywall.nux": {
+      "sha256": "4016580c7571cde8aa0560c6feaaff78601f5f1fd624dcb1827a64e479ff1e51",
+      "sizeBytes": 2739,
+      "parentBlob": "72bef779ab716de95945b1223126bd6c24cd4757"
+    },
+    "plan-card.nux": {
+      "sha256": "3b983009e2c298affc25b3da21c76ce6f57a97be7e32d1e3914440a54f3c950d",
+      "sizeBytes": 718,
+      "parentBlob": "2a8ca406afbbd01fd68724bd1d73676ebf04ca01"
+    }
+  }
+}

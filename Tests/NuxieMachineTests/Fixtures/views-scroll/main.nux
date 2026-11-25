@@ -1,0 +1,36 @@
+use Paywall from "paywall"
+
+component Quietly
+  platforms ios android
+
+  state picked = "Yearly"
+  state restoring = false
+  state reminded = false
+
+  derive note = (if restoring then "Looking for your purchases." else (if reminded then "We will remind you two days before." else ""))
+
+  entry
+    on event "onboarding_completed"
+    do go(paywall)
+
+  routes
+    paywall  Paywall cover
+      plans=["Yearly", "Monthly", "Weekly"]
+      selected=picked
+      note=note
+      select=choose
+      remind=remind
+      restore=restore
+      close=close
+
+  action choose(plan: string)
+    picked = plan
+
+  action remind
+    reminded = true
+
+  action restore
+    restoring = true
+
+  action close
+    exit

@@ -1,0 +1,19 @@
+test "restore, below the fold, looks for the person's purchases"
+  event "onboarding_completed"
+  expect route paywall
+  expect has "restore"
+  tap "restore"
+  expect state restoring == true
+  expect text "note" == "Looking for your purchases."
+  expect route paywall
+
+test "the page shows its plans, its reminder sets one, and not now ends the Journey"
+  event "onboarding_completed"
+  expect text "title" == "Sleep better, a little every night."
+  expect text "choice" == "Yearly, free for the first week"
+  expect has "plans"
+  tap "reminder"
+  expect state reminded == true
+  expect text "note" == "We will remind you two days before."
+  tap "close"
+  expect ended
