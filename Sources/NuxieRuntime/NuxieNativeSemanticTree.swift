@@ -57,6 +57,7 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
 
 package enum NuxieNativeSemanticTreeError: Error, Equatable {
     case tooManyNodes
+    case tooManyScrollRegions
     case duplicateIdentity(UInt32)
     case missingAncestor(UInt32)
     case cyclicHierarchy
@@ -160,16 +161,51 @@ package struct NuxieNativeSemanticCapture: Sendable {
     package let nativeInputs: [String: [NuxieNativeInputOccurrence]]
     /// Privacy diagnostic captured before SDK redaction, without copying native text.
     package let containsNativeObscuredValue: Bool
+    /// The scroll viewports the frame drew that a drag on this player would
+    /// reach, in tree order, so a region's parent always comes before it.
+    package let scrollRegions: [NuxieNativeScrollRegion]
 
     package init(id: UUID, tree: NuxieNativeSemanticTree,
         fieldsByTextRun: [String: NuxieNativeSemanticNode],
         nativeInputs: [String: [NuxieNativeInputOccurrence]] = [:],
-        containsNativeObscuredValue: Bool = false) {
+        containsNativeObscuredValue: Bool = false,
+        scrollRegions: [NuxieNativeScrollRegion] = []) {
         self.id = id
         self.tree = tree
         self.fieldsByTextRun = fieldsByTextRun
         self.nativeInputs = nativeInputs
         self.containsNativeObscuredValue = containsNativeObscuredValue
+        self.scrollRegions = scrollRegions
+    }
+}
+
+/// One scroll viewport in a capture: its box, the ways it can still move,
+/// and the region it is inside.
+package struct NuxieNativeScrollRegion: Equatable, Sendable {
+    /// It can move toward its top, showing content above: a finger dragged
+    /// down moves it.
+    package static let towardTop: UInt32 = 1 << 0
+    /// It can move toward its bottom, showing content below.
+    package static let towardBottom: UInt32 = 1 << 1
+    /// It can move toward its left.
+    package static let towardLeft: UInt32 = 1 << 2
+    /// It can move toward its right.
+    package static let towardRight: UInt32 = 1 << 3
+
+    /// The viewport's box, in the space node bounds are in. It is not
+    /// clipped by the regions around it.
+    package let bounds: CGRect
+    /// Which ways it can move now ([`towardTop`] and the rest), each the
+    /// scroller's own test for a one point move. Directions are on screen.
+    package let canScroll: UInt32
+    /// The index of the region this one is inside, always an earlier one,
+    /// or none.
+    package let parent: Int?
+
+    package init(bounds: CGRect, canScroll: UInt32, parent: Int?) {
+        self.bounds = bounds
+        self.canScroll = canScroll
+        self.parent = parent
     }
 }
 
