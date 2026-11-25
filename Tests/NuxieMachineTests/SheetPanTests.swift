@@ -125,6 +125,44 @@ final class SheetPanTests: XCTestCase {
                        "inside the page, the scrolled list is under the touch")
     }
 
+    // MARK: The surface
+
+    /// The surface answers from the regions shown when the touch went down,
+    /// not from frames shown since. A page a few points below its top that
+    /// a slow drag down scrolls to its top before UIKit asks keeps the drag:
+    /// the page was scrolled when the finger went down. The next touch is
+    /// answered from what is shown when it goes down.
+    @MainActor
+    func testTheSurfaceAnswersFromTheRegionsShownWhenTheTouchWentDown() {
+        let surface = NuxieMachineSurfaceView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let start = CGPoint(x: 195, y: 400)
+        let first = NSObject()
+        XCTAssertNil(surface.sheetPanMayBegin(moving: Self.down), "no touch is down")
+        surface.touchWentDown(ObjectIdentifier(first), at: start)
+        XCTAssertNil(surface.sheetPanMayBegin(moving: Self.down), "the touch went down before any frame was shown")
+        surface.touchLifted(ObjectIdentifier(first))
+
+        surface.scrollRegions = [Self.page(scrolled: true)]
+        let second = NSObject()
+        surface.touchWentDown(ObjectIdentifier(second), at: start)
+        surface.scrollRegions = [Self.page(scrolled: false)]
+        XCTAssertEqual(surface.sheetPanMayBegin(moving: Self.down), false,
+                       "the page was scrolled when the touch went down")
+        let other = NSObject()
+        surface.touchWentDown(ObjectIdentifier(other), at: CGPoint(x: 195, y: 700))
+        surface.touchLifted(ObjectIdentifier(other))
+        XCTAssertEqual(surface.sheetPanMayBegin(moving: Self.down), false,
+                       "a second finger neither replaces nor clears the first")
+        surface.touchLifted(ObjectIdentifier(second))
+        XCTAssertNil(surface.sheetPanMayBegin(moving: Self.down), "the touch ended")
+
+        let third = NSObject()
+        surface.touchWentDown(ObjectIdentifier(third), at: start)
+        XCTAssertEqual(surface.sheetPanMayBegin(moving: Self.down), true,
+                       "the next touch goes down on a page at its top")
+        withExtendedLifetime([first, second, other, third]) {}
+    }
+
     // MARK: The capture
 
     /// The `views-scroll` paywall's capture lists its page as one region:
