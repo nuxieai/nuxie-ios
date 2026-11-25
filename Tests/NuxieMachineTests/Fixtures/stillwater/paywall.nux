@@ -22,25 +22,25 @@ style Mark
   align-items=center justify-content=center
 
 style Title
-  margin-top=28 color=ink font-size=32 font-weight=700 line-height=38 letter-spacing=-0.4
+  margin-top=28 color=ink font-size=1.88rem font-weight=700 line-height=2.24rem letter-spacing=-0.4
 
 style Buy
-  height=56 margin-top=28 border-radius=28 background-color=mint
+  height=3.29rem margin-top=28 border-radius=1.65rem background-color=mint
   align-items=center justify-content=center
   :disabled
     background-color=mint_off
 
 style BuyLabel
-  color=night font-size=17 font-weight=700 line-height=24
+  color=night font-size=1rem font-weight=700 line-height=1.41rem
 
 style Note
-  font-size=14 line-height=20 text-align=center
+  font-size=0.82rem line-height=1.18rem text-align=center
 
 style Link
-  flex=1 height=44 align-items=center justify-content=center
+  flex=1 height=2.59rem min-height=44 align-items=center justify-content=center
 
 style LinkLabel
-  color=quiet font-size=14 font-weight=500 line-height=20
+  color=quiet font-size=0.82rem font-weight=500 line-height=1.18rem
 
 component Paywall
   props
@@ -70,17 +70,17 @@ component Paywall
           PlanCard(name="Monthly", price=(plans[1]?.price ?? ""), on=(selected == monthly), press=select(monthly)) id="monthly"
         button class=Buy disabled=busy press=buy id="buy"
           text (if selected == annual_offer then "Claim the offer" else "Continue") class=BuyLabel
-        box height=52 padding-top=12
+        box height=calc(2.36rem + 12) padding-top=12
           if failed
             text "The purchase did not go through. Try again in a moment." class=Note color=alarm id="error"
       column id="footer"
-        button height=48 align-items=center justify-content=center press=close id="close"
-          text "Not now" color=soft font-size=16 font-weight=600 line-height=22
+        button height=2.82rem min-height=44 align-items=center justify-content=center press=close id="close"
+          text "Not now" color=soft font-size=0.94rem font-weight=600 line-height=1.29rem
         row gap=12 margin-top=4
           button class=Link press=restore id="restore"
             text "Restore purchases" class=LinkLabel
           button class=Link press=toggle_details id="details"
             text "About the trial" class=LinkLabel
-        box height=40 margin-top=8
+        box height=2.36rem margin-top=8
           if details_open
-            text "Billed through the store after the trial. Cancel any time." class=Note color=faint font-size=13 id="terms"
+            text "Billed through the store after the trial. Cancel any time." class=Note color=faint font-size=0.76rem id="terms"
