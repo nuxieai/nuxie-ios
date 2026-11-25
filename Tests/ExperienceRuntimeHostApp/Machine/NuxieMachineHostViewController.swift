@@ -56,6 +56,11 @@ import UIKit
 /// through the presenter's one seam for it,
 /// [`NuxieMachineSheetPresenter.clockAhead`], so a wake it makes due fires
 /// through the presenter's own timer.
+///
+/// `--nuxie-machine-scroll-sheet` opens a paywall whose page is a `scroll`,
+/// as a sheet, in place of Stillwater's: the `views-scroll` paywall, under a
+/// header and with a floating button over its page ([`NuxieMachineScrollSheetFixture`]).
+/// "Finish onboarding" starts its record the same way.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
     /// The Darwin notifications that turn the window, with the appearance
@@ -87,6 +92,11 @@ public final class NuxieMachineHostViewController: UIViewController {
     /// Whether the paywall is presented as a cover.
     private static var presentsACover: Bool {
         ProcessInfo.processInfo.arguments.contains("--nuxie-machine-paywall-cover")
+    }
+
+    /// Whether the paywall is the `views-scroll` one shown as a sheet.
+    private static var showsScrollSheet: Bool {
+        ProcessInfo.processInfo.arguments.contains("--nuxie-machine-scroll-sheet")
     }
 
     /// Whether a presented sheet is turned to the medium detent once it is
@@ -259,7 +269,9 @@ public final class NuxieMachineHostViewController: UIViewController {
         self.presenter = presenter
         Task { @MainActor [weak self] in
             do {
-                let plan = try NuxieMachineStillwaterFixture.load(from: .main, asCover: Self.presentsACover)
+                let plan = Self.showsScrollSheet
+                    ? try NuxieMachineScrollSheetFixture.load(from: .main)
+                    : try NuxieMachineStillwaterFixture.load(from: .main, asCover: Self.presentsACover)
                 await presenter.start(plan: plan, store: NuxieMachineSlowStore(), event: "onboarding_completed")
             } catch {
                 self?.recordLabel.text = "Record: the fixture did not load (\(error))"
@@ -386,6 +398,70 @@ extension NuxieMachineStillwaterFixture {
     static func asCover(_ main: String) throws -> String {
         guard main.components(separatedBy: sheetRoute).count == 2 else { throw NoSheetRoute() }
         return main.replacingOccurrences(of: sheetRoute, with: coverRoute)
+    }
+}
+
+/// The `views-scroll` paywall as the staged host app bundles it under
+/// `views-scroll/`, changed in memory into a page that scrolls on a sheet.
+/// The bundled files are not touched. As bundled, the paywall is a cover
+/// whose page is a `scroll` filling it. Here:
+///
+/// - its route presents a sheet;
+/// - the page is a `stack` the size of the sheet. Its first layer is a
+///   `column` that holds a header 120 points tall, with the app's name,
+///   and the same `scroll` below it, taking the rest (`flex=1`); everything
+///   inside the `scroll` is as bundled, indented two steps. A drag that
+///   starts on the header starts outside the `scroll`;
+/// - its second layer is a button floating over the page, pinned near its
+///   bottom right, that presses the paywall's `restore`. A drag that starts
+///   on it starts over the `scroll`, though not inside it.
+enum NuxieMachineScrollSheetFixture {
+    struct Missing: Error, CustomStringConvertible {
+        let what: String
+        var description: String { "views-scroll: \(what)" }
+    }
+
+    static let coverRoute = "    paywall  Paywall cover\n"
+    static let sheetRoute = "    paywall  Paywall sheet\n"
+    static let page = "    scroll width=100% height=100% background-color=night id=\"page\""
+
+    static func load(from bundle: Bundle) throws -> NuxieMachinePlanSource {
+        func text(_ name: String) throws -> String {
+            guard let url = bundle.url(forResource: name, withExtension: "nux", subdirectory: "views-scroll")
+            else { throw Missing(what: "\(name).nux is not in the app bundle") }
+            return String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        }
+        let main = try text("main")
+        guard main.components(separatedBy: coverRoute).count == 2 else {
+            throw Missing(what: "main.nux does not have the paywall's route exactly once")
+        }
+        var lines = try text("paywall").components(separatedBy: "\n")
+        guard let at = lines.firstIndex(of: page) else { throw Missing(what: "the paywall's page is not a scroll") }
+        guard let end = lines.firstIndex(of: "component Reminder"),
+              let last = lines[..<end].lastIndex(where: { !$0.isEmpty }), last > at
+        else { throw Missing(what: "the paywall's Reminder does not follow its page") }
+        for index in (at + 1)...last where !lines[index].isEmpty {
+            lines[index] = "    " + lines[index]
+        }
+        lines.insert(contentsOf: [
+            "      button height=52 padding=\"0 24\" right=24 bottom=48 border-radius=26 background-color=panel"
+                + " border-width=1 border-color=edge align-items=center justify-content=center press=restore"
+                + " id=\"floating\"",
+            "        text \"Restore\" class=RemindLabel",
+        ], at: last + 1)
+        lines.replaceSubrange(at...at, with: [
+            "    stack width=100% height=100% background-color=night id=\"layers\"",
+            "      column width=100% height=100% id=\"frame\"",
+            "        column height=120 padding=\"0 24\" justify-content=center id=\"header\"",
+            "          text \"Quietly\" color=ink font-size=1.25rem font-weight=700 id=\"heading\"",
+            "        scroll width=100% flex=1 id=\"page\"",
+        ])
+        return NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: main.replacingOccurrences(of: coverRoute,
+                                                                                            with: sheetRoute)),
+                    NuxieMachineSourceFile(path: "paywall.nux", text: lines.joined(separator: "\n")),
+                    NuxieMachineSourceFile(path: "plan-card.nux", text: try text("plan-card"))],
+            root: "main", app: "app", experience: "quietly", version: 1)
     }
 }
 
