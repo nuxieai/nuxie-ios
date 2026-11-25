@@ -262,6 +262,9 @@ package final class NuxieMachineSession {
         calls.set_color = unsafeBitCast(writers.setColor, to: type(of: calls.set_color))
         calls.set_text = unsafeBitCast(writers.setText, to: type(of: calls.set_text))
         calls.reset = unsafeBitCast(writers.reset, to: type(of: calls.reset))
+        calls.mount_row = unsafeBitCast(writers.mountRow, to: type(of: calls.mount_row))
+        calls.remove_row = unsafeBitCast(writers.removeRow, to: type(of: calls.remove_row))
+        calls.move_row = unsafeBitCast(writers.moveRow, to: type(of: calls.move_row))
         var driver = NuxMachinePlayerDriver()
         try NuxieMachineError.check(nux_machine_scene_driver(handle, shown.journey, shown.instance, &calls, &driver))
         guard let drive = unsafeBitCast(driver.drive, to: UnsafeRawPointer?.self) else {
