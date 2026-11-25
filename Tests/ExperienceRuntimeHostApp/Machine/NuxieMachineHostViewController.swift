@@ -255,14 +255,14 @@ public final class NuxieMachineHostViewController: UIViewController {
 }
 
 /// A purchase that takes a moment, as a store's own sheet does: the
-/// stand-in store's answer (a `Purchase` whose status is `failed`), given a
-/// second and a half after the call, so a person sees the paywall while it
-/// buys.
+/// stand-in store's answer (a `Purchase` whose status is `failed`), given
+/// four seconds after the call, so a person sees the paywall while it buys
+/// and a check has time to keep a still and a reading of it.
 struct NuxieMachineSlowStore: NuxieMachineStore {
     private let answering = NuxieMachineStandInStore()
 
     func perform(_ call: NuxieMachineCall) async throws -> NuxieMachineReply {
-        try await Task.sleep(nanoseconds: 1_500_000_000)
+        try await Task.sleep(nanoseconds: 4_000_000_000)
         return try await answering.perform(call)
     }
 }
