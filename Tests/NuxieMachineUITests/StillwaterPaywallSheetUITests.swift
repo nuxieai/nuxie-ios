@@ -51,10 +51,12 @@ import XCTest
 ///
 /// Every place check reads UIKit's own values (the screen's insets, the
 /// frames, the view's insets), so the tests hold on any iPhone, one with a
-/// home button among them, where the bottom inset is 0. Where Stillwater's
-/// page is taller than what it is presented in, its content runs past the
-/// bottom edge: the footer and the bottom edge's ground are then noted, not
-/// checked ([`expectFooter`]).
+/// home button among them, where the bottom inset is 0. Stillwater's page is
+/// a `scroll`. Where it is taller than what it is presented in, its content
+/// runs past the bottom edge until it is scrolled: the footer and the bottom
+/// edge's ground are then noted, not checked ([`expectFooter`]). At the
+/// largest standard text size a drag up brings the footer into view
+/// ([`testAtTheLargestStandardTextSizeADragUpBringsTheFooterIntoView`]).
 final class StillwaterPaywallSheetUITests: XCTestCase {
     private static let errorLine = "The purchase did not go through. Try again in a moment."
     private static let termsLine = "Billed through the store after the trial. Cancel any time."
@@ -341,9 +343,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// The paywall at the largest accessibility text size, body 53: opened
     /// at 23 and changed to 53 while it is open, its headline is taller
     /// still, and the session is told 53. Kept as `text-size-53-light`.
-    /// Only that is checked: at 53 the page is far taller than the sheet and
-    /// nothing on it scrolls yet, so whether it fits, and what the buy
-    /// button's place is, are left out. The host's own screen is opened at
+    /// Only that is checked: at 53 the page is far taller than the sheet, so
+    /// where the buy button and the footer are with nothing scrolled is left
+    /// out; that the page scrolls to its footer is checked at 23. The host's
+    /// own screen is opened at
     /// 23, where its button to start the record is on screen on every
     /// iPhone.
     func testThePaywallAtTheLargestAccessibilityTextSize() throws {
@@ -360,6 +363,178 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertGreaterThan(at53.height, at23.height * 1.2,
                              "at 53 the headline is \(at53.height) tall, at 23 \(at23.height)")
         expectTold(app, [23, 53], "opened at 23 and changed to 53")
+    }
+
+    /// At the default text size, body 17, Stillwater's page fits the sheet:
+    /// its footer, "Not now" and "Restore purchases", is on screen with
+    /// nothing scrolled, inside the sheet and above the home indicator, and
+    /// can be tapped where it is. A drag up over the page then moves
+    /// nothing, since there is nothing to scroll, and the sheet stays; a
+    /// plan picked after it is the record's. Kept as `footer-17-light`,
+    /// `footer-17-after-drag-up` and `footer-17-monthly-chosen`. The path of
+    /// the film `stillwater-paywall-default`.
+    func testAtTheDefaultTextSizeTheFooterIsOnScreenWithoutScrolling() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
+        let app = launch(.light, textSize: Self.defaultSize)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+        let top = try settledTitle(app, title, told: 17)
+        let sheet = screen.frame
+        let screenInsets = try insets(app)
+        let bottom = sheet.maxY - screenInsets.bottom
+        let restore = app.buttons["Restore purchases"]
+        for element in [app.buttons["Not now"], restore] {
+            XCTAssertTrue(element.exists, "\(element) is not read: \(app.debugDescription)")
+            XCTAssertGreaterThanOrEqual(element.frame.minY, sheet.minY, "\(element) starts above the sheet \(sheet)")
+            XCTAssertLessThanOrEqual(element.frame.maxY, bottom + 0.5,
+                                     "\(element) runs past \(bottom), where the home indicator starts")
+            XCTAssertTrue(element.isHittable, "\(element) cannot be tapped where it is")
+        }
+        keep("footer-17-light", app, screen)
+
+        let footer = restore.frame
+        dragUp(app, over: sheet)
+        let after = try settled(title)
+        keep("footer-17-after-drag-up", app, screen)
+        XCTAssertEqual(screen.frame, sheet, "the drag moved the sheet")
+        XCTAssertEqual(after.minY, top.minY, accuracy: 1, "the page scrolled with nothing to scroll")
+        XCTAssertEqual(restore.frame.minY, footer.minY, accuracy: 1, "the footer moved with nothing to scroll")
+        waitFor(screen, valueContaining: "Record: open")
+
+        let monthly = button(app, beginningWith: "Monthly")
+        monthly.tap()
+        waitFor(screen, valueContaining: "Selected plan: monthly.")
+        waitFor(monthly, "selected == true", "monthly is not read as selected after its tap")
+        keep("footer-17-monthly-chosen", app, screen)
+        XCTAssertEqual(screen.frame, sheet, "the tap moved the sheet")
+    }
+
+    /// At the largest standard text size, body 23 (UIKit's
+    /// extra-extra-extra-large), Stillwater's page is taller than the sheet
+    /// and scrolls. A drag up over the page scrolls it, so "Restore
+    /// purchases" ends inside the sheet and above the home indicator, and
+    /// the sheet stays. A tap on it then starts a restore: the record's
+    /// purchase is pending, read as the buy button not enabled, and the
+    /// sheet still stays. (The host's stand-in store does not answer
+    /// `restore`: its refusal, four seconds later, faults the record and
+    /// closes the sheet, as `testAStoreAskedForAnUnknownExternFaults` pins.
+    /// This test ends before then.) Where the footer is before the drag is kept as the
+    /// note `footer-23-before`, not checked: on a taller phone it may be in
+    /// view already. Kept as `footer-23-before-drag`, `footer-23-after-drag`
+    /// and `footer-23-restoring`.
+    func testAtTheLargestStandardTextSizeADragUpBringsTheFooterIntoView() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
+        let app = launch(.light, textSize: Self.largestStandardSize)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+        _ = try settledTitle(app, title, told: 23)
+        let sheet = screen.frame
+        let screenInsets = try insets(app)
+        let bottom = sheet.maxY - screenInsets.bottom
+        let restore = app.buttons["Restore purchases"]
+        XCTAssertTrue(restore.exists, "the footer's links are not read: \(app.debugDescription)")
+        let before = restore.frame
+        note("Before the drag \"Restore purchases\" is at \(before); the sheet is \(sheet) and the home indicator "
+                 + "starts at \(bottom).", kept: "footer-23-before")
+        keep("footer-23-before-drag", app, screen)
+
+        dragUp(app, over: sheet)
+        let after = try settled(restore)
+        keep("footer-23-after-drag", app, screen)
+        XCTAssertEqual(screen.frame, sheet, "the drag moved the sheet")
+        XCTAssertLessThan(after.minY, before.minY - 20,
+                          "the page did not scroll: \"Restore purchases\" was at \(before), and is at \(after)")
+        XCTAssertGreaterThanOrEqual(after.minY, sheet.minY, "\"Restore purchases\" is above the sheet \(sheet)")
+        XCTAssertLessThanOrEqual(after.maxY, bottom + 0.5,
+                                 "\"Restore purchases\" at \(after) runs past \(bottom), where the home indicator starts")
+        XCTAssertTrue(restore.isHittable, "\"Restore purchases\" cannot be tapped where it is")
+
+        let buy = app.buttons["Continue"]
+        XCTAssertTrue(buy.isEnabled, "the buy button is not enabled before the restore")
+        restore.tap()
+        waitFor(buy, "enabled == false", "the tap on \"Restore purchases\" did not start a restore")
+        keep("footer-23-restoring", app, screen)
+        XCTAssertEqual(screen.frame, sheet, "the tap moved the sheet")
+        waitFor(screen, valueContaining: "Record: open")
+    }
+
+    /// At body 23, the page scrolled and back: a drag up brings the footer
+    /// into view, and a tap on "About the trial" there shows the terms line
+    /// with the sheet in place. A drag down over the page, which went down
+    /// while the page was scrolled, brings the page back to its top and the
+    /// sheet stays; a drag down from the top of the page at its top then
+    /// takes the sheet, and the record stays open. Kept as
+    /// `scrolled-23-details-open`, `scrolled-23-back-at-top` and
+    /// `scrolled-23-after-swipe`. The path of the film
+    /// `stillwater-paywall-text-23`.
+    func testAtTheLargestStandardTextSizeThePageScrollsBackAndASwipeFromItsTopTakesTheSheet() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
+        let app = launch(.light, textSize: Self.largestStandardSize)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+        let top = try settledTitle(app, title, told: 23)
+        let sheet = screen.frame
+        let screenInsets = try insets(app)
+        let bottom = sheet.maxY - screenInsets.bottom
+
+        dragUp(app, over: sheet)
+        let details = app.buttons["About the trial"]
+        let shown = try settled(details)
+        XCTAssertEqual(screen.frame, sheet, "the drag up moved the sheet")
+        XCTAssertLessThanOrEqual(shown.maxY, bottom + 0.5,
+                                 "\"About the trial\" at \(shown) runs past \(bottom), where the home indicator starts")
+        XCTAssertTrue(details.isHittable, "\"About the trial\" cannot be tapped where it is")
+        details.tap()
+        XCTAssertTrue(app.staticTexts[Self.termsLine].waitForExistence(timeout: 10), app.debugDescription)
+        keep("scrolled-23-details-open", app, screen)
+        XCTAssertEqual(screen.frame, sheet, "the tap moved the sheet")
+
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let from = CGPoint(x: sheet.minX + 12, y: sheet.minY + sheet.height * 0.3)
+        origin.withOffset(CGVector(dx: from.x, dy: from.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: from.x, dy: from.y + 250)),
+                   withVelocity: .slow, thenHoldForDuration: 0.3)
+        let back = try settled(title)
+        keep("scrolled-23-back-at-top", app, screen)
+        XCTAssertTrue(screen.exists, "the drag down over the scrolled page took the sheet")
+        XCTAssertEqual(screen.frame, sheet, "the drag down over the scrolled page moved the sheet")
+        XCTAssertEqual(back.minY, top.minY, accuracy: 1, "the page did not come back to its top")
+
+        let swipe = try swipeStart(app, sheet)
+        let end = CGPoint(x: swipe.x, y: min(app.frame.maxY - screenInsets.bottom - 8, swipe.y + sheet.height * 0.8))
+        origin.withOffset(CGVector(dx: swipe.x, dy: swipe.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: end.x, dy: end.y)))
+        waitUntilGone(screen, "the drag down from the top of the page at its top did not take the sheet")
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open")
+        keep("scrolled-23-after-swipe", app, nil)
+    }
+
+    /// A slow drag up most of the way across `sheet`, starting in the page's
+    /// left padding three quarters of the way down, clear of every button.
+    private func dragUp(_ app: XCUIApplication, over sheet: CGRect) {
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let from = CGPoint(x: sheet.minX + 12, y: sheet.minY + sheet.height * 0.75)
+        let to = CGPoint(x: from.x, y: from.y - 250)
+        origin.withOffset(CGVector(dx: from.x, dy: from.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)),
+                   withVelocity: .slow, thenHoldForDuration: 0.3)
+    }
+
+    /// `element`'s frame once it has stood still twice running.
+    private func settled(_ element: XCUIElement) throws -> CGRect {
+        let deadline = Date().addingTimeInterval(10)
+        var last = CGRect.null
+        while Date() < deadline {
+            let now = element.frame
+            if now == last, now.height > 0 { return now }
+            last = now
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        XCTFail("\(element) did not stand still: \(element.frame)")
+        throw NotRead()
     }
 
     /// Post the Darwin notification the host changes its window's text size
