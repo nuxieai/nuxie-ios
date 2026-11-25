@@ -154,7 +154,14 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    func testASwipeDownEndsTheRecord() async throws {
+    /// A swipe down pops the paywall, and the record stays open: the
+    /// evening offer's waits, armed when the paywall opened, are still owed,
+    /// and a swipe down runs no `close`. So the record asks for 18:00, the
+    /// offer's start. Delivered then, the offer goes live with nothing
+    /// presented and asks for 20:00, its end; delivered then, nothing is
+    /// left owed and the record ends normally, which the owner hears as the
+    /// last row, with no dismissal at any point.
+    func testASwipeDownPopsThePaywallAndTheRecordEndsWhenTheOfferHasPassed() async throws {
         let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
@@ -177,12 +184,42 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                 if case .pop = $0 { return true }
                 if case .end = $0 { return true }
                 return false
-            }, [.pop(instance: shown.instance), .end(reason: .finished, fault: nil)])
-            let ended = try await run.edge.recordOpen()
-            XCTAssertFalse(ended, "a swipe down ends the record")
+            }, [.pop(instance: shown.instance)])
+            XCTAssertTrue(closing.contains(.wakeAt(Self.evening)), "the offer's start is not asked for: \(closing)")
+            let waiting = try await run.edge.recordOpen()
+            XCTAssertTrue(waiting, "a swipe down leaves the offer's waits owed")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertTrue(run.owner.dismissals.isEmpty, "a swipe down has already closed the sheet")
+
+            // 18:00: the offer goes live with nothing presented, and its end
+            // is asked for.
+            run.jump(to: Self.evening)
+            let beforeEvening = await run.edge.log.count
+            await run.edge.wake(now: run.now)
+            let evening = await Array(run.edge.log.dropFirst(beforeEvening))
+            XCTAssertTrue(evening.contains(.wakeAt(Self.offerEnds)), "the offer's end is not asked for: \(evening)")
+            XCTAssertFalse(evening.contains { if case .opened = $0 { true } else { false } },
+                           "the offer's start presented something: \(evening)")
+            let stillOpen = try await run.edge.recordOpen()
+            XCTAssertTrue(stillOpen, "the record ended before the offer did")
+
+            // 20:00: the offer ends, nothing is owed, and the record ends.
+            run.jump(to: Self.offerEnds)
+            let beforeEnd = await run.edge.log.count
+            await run.edge.wake(now: run.now)
+            let ending = await Array(run.edge.log.dropFirst(beforeEnd))
+            XCTAssertTrue(ending.contains(.end(reason: .finished, fault: nil)), "the record did not end: \(ending)")
+            let ended = try await run.edge.recordOpen()
+            XCTAssertFalse(ended, "the record is open after the offer passed")
+            guard case .delivered(let shownAtEnd, let rows)? = run.owner.reports.last else {
+                return XCTFail("\(run.owner.reports)")
+            }
+            XCTAssertEqual(shownAtEnd, [], "\(rows)")
+            XCTAssertEqual(rows.last, .end(.finished), "\(rows)")
+            XCTAssertTrue(run.owner.dismissals.isEmpty, "the owner heard a dismissal")
+            let stillNoFault = await run.edge.fault
+            XCTAssertNil(stillNoFault)
             try await run.close()
         } catch {
             try? await run.close()
@@ -227,11 +264,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
 
     /// A swipe down while the store has not answered the purchase is a
     /// normal close, as the machine's rows say: it pops the paywall with no
-    /// `dismiss` row (the gesture has already closed the sheet) and asks for
-    /// no wake, and the record stays open for the purchase. The owner hears
-    /// no dismissal and nothing faults. The store's answer, released after,
-    /// goes to the session, whose rows end the record; it tells nothing.
-    func testASwipeDownWhileThePurchaseWaitsIsANormalClose() async throws {
+    /// `dismiss` row (the gesture has already closed the sheet), and the
+    /// record stays open, asking for 18:00, the evening offer's start, whose
+    /// waits a swipe down leaves owed. The owner hears no dismissal and
+    /// nothing faults. The store's answer, released after, goes to the
+    /// session; the offer's waits keep the record open, and it tells
+    /// nothing.
+    func testASwipeDownWhileThePurchaseWaitsIsANormalCloseAndTheOfferStillWaits() async throws {
         let run = try Run(holdingStore: true)
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
@@ -245,9 +284,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let shown = try XCTUnwrap(current)
             await run.edge.closed(shown, now: run.advance())
             let closing = await Array(run.edge.log.dropFirst(written))
-            XCTAssertEqual(closing, [.pop(instance: shown.instance), .wakeAt(nil), .gone(shown)])
+            XCTAssertEqual(closing, [.pop(instance: shown.instance), .wakeAt(Self.evening), .gone(shown)])
             let waiting = try await run.edge.recordOpen()
-            XCTAssertTrue(waiting, "the record waits for the purchase")
+            XCTAssertTrue(waiting, "the record waits for the purchase and the offer")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertEqual(run.owner.dismissals, [], "the machine's rows hold no dismiss: the sheet is already closed")
@@ -259,10 +298,12 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try await run.settle(frames: 2)
             let late = await Array(run.edge.log.dropFirst(beforeAnswer))
             let call = try XCTUnwrap(run.store.calls.first)
-            XCTAssertEqual(late, [.reply(call.id, .purchase(.failed)), .note(.ended),
-                                  .end(reason: .finished, fault: nil)])
+            XCTAssertEqual(late.filter { if case .wakeAt = $0 { false } else { true } },
+                           [.reply(call.id, .purchase(.failed))], "\(late)")
+            let failed = try await run.edge.slot("purchase_failed")
+            XCTAssertEqual(failed, .bool(true), "the answer did not reach the record")
             let afterAnswer = try await run.edge.recordOpen()
-            XCTAssertFalse(afterAnswer, "the answer ends the record")
+            XCTAssertTrue(afterAnswer, "the answer ended the record while the offer's waits are owed")
             let stillNoFault = await run.edge.fault
             XCTAssertNil(stillNoFault)
             XCTAssertEqual(run.owner.dismissals, [], "the answer tells nothing")
@@ -849,12 +890,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let after = await Array(edge.log.dropFirst(written))
             let noFault = await edge.fault
             XCTAssertNil(noFault, "\(after)")
-            XCTAssertEqual(after.filter(Self.isPresentation),
-                           [.pop(instance: shown.instance), .end(reason: .finished, fault: nil)])
+            // The swipe pops the paywall; the evening offer's waits keep the
+            // record open.
+            XCTAssertEqual(after.filter(Self.isPresentation), [.pop(instance: shown.instance)])
             let plan = try await edge.slot("plan")
             XCTAssertEqual(plan, .enumeration("monthly"), "the Monthly tap landed before the swipe")
-            let ended = try await edge.recordOpen()
-            XCTAssertFalse(ended)
+            let open = try await edge.recordOpen()
+            XCTAssertTrue(open, "the swipe ended the record while the offer's waits are owed")
             XCTAssertEqual(run.owner.dismissals, [])
             try await run.close()
         } catch {
@@ -1080,9 +1122,12 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
-    /// A swipe down's close tells the owner that nothing is shown and the
-    /// record's normal end, with no dismissal.
-    func testASwipeDownReportsThePopAndTheEnd() async throws {
+    /// A swipe down's close tells the owner that nothing is shown, with no
+    /// dismissal and no end: its last row restates the wake for 18:00, the
+    /// evening offer's start, whose waits a swipe down leaves owed. (The end
+    /// it reaches once the offer has passed is in
+    /// `testASwipeDownPopsThePaywallAndTheRecordEndsWhenTheOfferHasPassed`.)
+    func testASwipeDownReportsThatNothingIsShownAndTheOffersWake() async throws {
         let run = try Run()
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
@@ -1095,7 +1140,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                 return XCTFail("\(run.owner.reports)")
             }
             XCTAssertEqual(shownNow, [], "\(rows)")
-            XCTAssertEqual(rows.last, .end(.finished), "\(rows)")
+            XCTAssertEqual(rows.last, .wakeAt(Self.evening), "\(rows)")
+            XCTAssertFalse(rows.contains(.end(.finished)), "a swipe down ended the record: \(rows)")
             XCTAssertEqual(run.owner.dismissals, [], "the person already took the sheet")
             try await run.close()
         } catch {
