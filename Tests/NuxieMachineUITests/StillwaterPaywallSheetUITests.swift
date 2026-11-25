@@ -427,9 +427,13 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             CFNotificationName("dev.nuxie.machine.appearance.\(appearance.rawValue)" as CFString), nil, nil, true)
     }
 
+    /// The story runs at 19:00, after the evening offer's start: the open
+    /// paywall waits for 20:00 today, when tonight's offer is skipped, and
+    /// "Not now" leaves a wake for 18:00 tomorrow, the offer it owes.
     private func playTheStory(in appearance: Ground) throws {
-        let app = launch(appearance)
+        let app = launch(appearance, clock: "19:00")
         let screen = try openPaywall(app)
+        waitFor(screen, valueContaining: "Record: open, " + Self.wake(at: 20))
 
         // 1. Open: the headline, both plans with their prices, and the
         // buttons, read top to bottom; nothing under an `if` is read.
@@ -510,7 +514,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         // stays open with its wake moment.
         notNow.tap()
         waitUntilGone(screen)
-        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, wakes at ")
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + Self.wake(at: 18, days: 1))
         XCTAssertEqual(app.staticTexts["nuxie-machine-plan"].label, "Selected plan: monthly")
         keep("6-after-not-now", app, nil)
     }
@@ -761,13 +765,18 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             .allSatisfy { abs($0) < 0.5 }
     }
 
-    func testASwipeDownEndsTheRecord() throws {
-        let app = launch()
+    /// A swipe down takes the sheet, and the record stays open: the evening
+    /// offer's waits, armed when the paywall opened at 09:00, are still owed
+    /// (a swipe down runs no `close`), so it waits for 18:00. With the clock
+    /// moved to 21:00, both of the offer's moments are delivered, its start
+    /// and its end, and the record ends.
+    func testASwipeDownTakesTheSheetAndTheRecordEndsOnceTheOfferHasPassed() throws {
+        let app = launch(clock: "09:00,21:00")
         let screen = try openPaywall(app)
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15), app.debugDescription)
 
         // A swipe down has no action behind it: the machine hears `closed`,
-        // and the record ends. It runs down most of the sheet and stops
+        // and pops the paywall. It runs down most of the sheet and stops
         // short of the screen's bottom inset.
         let sheet = screen.frame
         let screenInsets = try insets(app)
@@ -778,12 +787,20 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)))
         waitUntilGone(screen, "the swipe from \(from) to \(to) on the sheet \(sheet), with the screen's insets "
                           + "\(screenInsets), did not take the sheet; the Screen is \(screen.exists ? "\(screen.frame)" : "gone")")
-        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: ended")
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + Self.wake(at: 18))
         keep("1-after-swipe", app, nil)
+
+        // 21:00: the offer's start and end are delivered in turn, nothing is
+        // owed, and the record ends.
+        moveTheClock(to: "21:00")
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: ended")
+        keep("2-after-the-offer-passed", app, nil)
     }
 
+    /// At 19:00, so the open paywall's wake (20:00 today, tonight's offer
+    /// skipped) differs from the one "Not now" leaves (18:00 tomorrow).
     func testASwipeThePersonLetsGoOfKeepsTheSheet() throws {
-        let app = launch()
+        let app = launch(clock: "19:00")
         let screen = try openPaywall(app)
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15), app.debugDescription)
         let resting = screen.frame
@@ -800,15 +817,25 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         }
         XCTAssertTrue(screen.exists, "the swipe took the sheet")
         XCTAssertEqual(screen.frame, resting, "the sheet did not settle back")
-        // Open, and waiting for the evening offer's moment since the start.
-        waitFor(screen, valueContaining: "Record: open, wakes at ")
+        // Open, and still waiting for 20:00, when tonight's offer is skipped.
+        waitFor(screen, valueContaining: "Record: open, " + Self.wake(at: 20))
         XCTAssertTrue(app.buttons["Continue"].exists, app.debugDescription)
         keep("1-after-cancelled-swipe", app, screen)
 
         // The machine's own dismissal still takes the sheet.
         app.buttons["Not now"].tap()
         waitUntilGone(screen)
-        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, wakes at ")
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + Self.wake(at: 18, days: 1))
+    }
+
+    /// The host's words for a wake at `hour`:00 UTC, `days` after the day
+    /// the app was launched on, as the record line shows it. The film clock
+    /// reads its times on the launch day, taken here as today in UTC.
+    private static func wake(at hour: Int, days: Int = 0) -> String {
+        let day: TimeInterval = 86_400
+        let midnight = (Date().timeIntervalSince1970 / day).rounded(.down) * day
+        let moment = Date(timeIntervalSince1970: midnight + Double(days) * day + Double(hour) * 3_600)
+        return "wakes at " + moment.ISO8601Format()
     }
 
     // MARK: Driving the host
@@ -816,15 +843,15 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// The host, on the phone as it is, or started in `appearance`; with
     /// `asCover`, presenting the paywall as a cover; with `mediumSheet`,
     /// turning the presented sheet to the medium detent once it is up; with
-    /// `textSize`, started at that size category, by its raw value; with
-    /// `clock`, the session on the host's film clock at those times of day.
+    /// `textSize`, started at that size category, by its raw value. The
+    /// session is always on the host's film clock, at `clock`'s times of day
+    /// (UTC): 09:00 unless a test names others, so the real clock crossing
+    /// the evening offer's 18:00 or 20:00 cannot change a test.
     private func launch(_ appearance: Ground? = nil, asCover: Bool = false,
-                        mediumSheet: Bool = false, textSize: String? = nil, clock: String? = nil) -> XCUIApplication {
+                        mediumSheet: Bool = false, textSize: String? = nil,
+                        clock: String = "09:00") -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["--nuxie-machine-paywall"]
-        if let clock {
-            app.launchArguments += ["--nuxie-machine-clock", clock]
-        }
+        app.launchArguments = ["--nuxie-machine-paywall", "--nuxie-machine-clock", clock]
         if asCover {
             app.launchArguments += ["--nuxie-machine-paywall-cover"]
         }
