@@ -55,6 +55,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// Pointers that arrived and wait for the next frame.
     fileprivate var pointers: [NuxieNativePointerEvent] = []
+    /// A screen reader's tap that waits for the next frame ([`activate`]).
+    /// At most one: a tap is asked of the snapshot shown now, and queuing it
+    /// spends that snapshot, so a second activation of the same snapshot is
+    /// refused and one of a newer snapshot replaces it (the engine would
+    /// refuse the older one anyway).
+    fileprivate var semanticTap: NuxieMachineSemanticTap?
     /// The size the engine lays this presentation's Screen out at and draws,
     /// once applied.
     fileprivate var sized: Size?
@@ -272,9 +278,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// How a machine Screen whose surface has `bounds` shows `node`, or none
     /// for a node no element stands for: one with no role UIKit reads, or
-    /// one drawn nowhere on the surface. A button or a link takes a tap. A
-    /// radio is a button, selected while its check state is checked; one
-    /// not checked, or mixed, is not selected.
+    /// one drawn nowhere on the surface. A button or a link takes a tap when
+    /// its node offers one. The engine offers none for a disabled button or
+    /// one a `scroll` clips wholly away; such a node is still read, and its
+    /// activation answers false. A radio is a button, selected while its
+    /// check state is checked; one not checked, or mixed, is not selected.
     package static func projection(
         for node: NuxieNativeSemanticNode,
         on bounds: CGRect
@@ -289,8 +297,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
             traits.insert(.selected)
         }
         let presses = traits.contains(.button) || traits.contains(.link)
+        let tap: UInt32 = 1 << NuxieNativeSemanticAction.tap.rawValue
         return .init(frame: frame, traits: traits, value: node.value.isEmpty ? nil : node.value,
-                     actions: presses ? 1 << NuxieNativeSemanticAction.tap.rawValue : 0)
+                     actions: presses ? node.actions & tap : 0)
     }
 
     /// The engine's check state: two bits of a node's state, unchecked,
@@ -298,18 +307,21 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// (`NuxieNativeSemanticNode.mixed`).
     private static let checkState = NuxieNativeSemanticNode.checked | NuxieNativeSemanticNode.mixed
 
-    /// Activating an element is a tap: a press and release at its center
-    /// through the surface's pointer path, as a touch arrives, so the same
-    /// listener hears the same event and the engine's own check of a
-    /// disabled button applies. A disabled element never gets here (its
-    /// element refuses), nor does an activation of a snapshot already
-    /// replaced, nor one while this Screen is out of reach.
+    /// Activating an element is the node's own semantic tap, never a touch
+    /// at a point: the tap waits for the next frame, which queues it on the
+    /// player before it steps ([`NuxieMachineEdge.frame`]), so the listener
+    /// that hears a press hears it once, for this node, whatever is drawn at
+    /// its place. An element whose node offers no tap never gets here (it
+    /// refuses), nor does an activation of a snapshot already replaced, nor
+    /// one while this Screen is out of reach or its loop has stopped. A
+    /// snapshot takes one tap ([`semanticTap`]).
     private func activate(_ nodeID: UInt32, in captureID: UUID, _ action: NuxieNativeSemanticAction) -> Bool {
-        guard reachable, action == .tap, let capture = latest, capture.id == captureID,
-              let node = capture.tree.nodes.first(where: { $0.id == nodeID }) else { return false }
-        let frame = node.bounds.intersection(surface.bounds)
-        guard !frame.isNull, !frame.isEmpty else { return false }
-        return surface.tap(at: CGPoint(x: frame.midX, y: frame.midY))
+        guard reachable, action == .tap, let loop, !loop.stopped, let capture = latest, capture.id == captureID,
+              capture.tree.nodes.contains(where: { $0.id == nodeID }),
+              semanticTap?.captureID != captureID else { return false }
+        semanticTap = NuxieMachineSemanticTap(captureID: captureID, nodeID: nodeID)
+        loop.requestFrame()
+        return true
     }
 
     /// The pointers that arrived for this Screen since the last frame took
@@ -318,6 +330,17 @@ package final class NuxieMachineScreenViewController: UIViewController {
         defer { pointers = [] }
         return pointers
     }
+
+    /// The screen reader's tap waiting for this Screen, if any, as the list
+    /// the edge takes; the next frame carries it beside the pointers
+    /// ([`takePointers`]).
+    package func takeSemanticTaps() -> [NuxieMachineSemanticTap] {
+        defer { semanticTap = nil }
+        return semanticTap.map { [$0] } ?? []
+    }
+
+    /// Whether input waits for the next frame: pointers or a tap.
+    fileprivate var hasInput: Bool { !pointers.isEmpty || semanticTap != nil }
 
     private func updateAccessibility() {
         container.accessibilityValue = framesDrawn > 0 ? "\(statusText) Frames drawn: \(framesDrawn)." : "loading"
@@ -353,11 +376,11 @@ package struct NuxieMachineSurfaceFacts: Equatable, Sendable {
 /// The display loop that runs one edge's frames and draws every native
 /// presentation of it ([`screens`]).
 ///
-/// Each display tick is one frame: the pointers that arrived, with the
-/// presentation they touched (the edge drops them when it no longer shows
-/// it), the edge's frame (each presentation's engine step, which carries the
-/// machine, and the store's answers), then a draw of each
-/// Screen the frame stepped. Frames run in the loop's lane ([`inLane`]),
+/// Each display tick is one frame: the pointers and the screen reader's tap
+/// that arrived, with the presentation they touched (the edge drops them
+/// when it no longer shows it), the edge's frame (each presentation's engine
+/// step, which carries the machine, and the store's answers), then a draw of
+/// each Screen the frame stepped. Frames run in the loop's lane ([`inLane`]),
 /// where the owner makes its own calls to the edge, so the edge hears a
 /// frame, a wake and a close in the order they were asked for. One frame is
 /// in flight at a time, and a frame's draws wait for the GPU, so a frame
@@ -474,7 +497,10 @@ package final class NuxieMachineScreenLoop {
         displayLink = nil
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
         notificationTokens = []
-        for screen in screens { screen.pointers = [] }
+        for screen in screens {
+            screen.pointers = []
+            screen.semanticTap = nil
+        }
     }
 
     // MARK: Frames
@@ -483,24 +509,27 @@ package final class NuxieMachineScreenLoop {
         guard !stopped, !frameInFlight else { return }
         frameRequested = false
         frameInFlight = true
-        // The pointers go with the presentation they touched, the top one
-        // that has any; the rest wait for the next frame. The frame's wakes
-        // run first and may end it, and the edge then drops them.
-        let touching = screens.last { !$0.pointers.isEmpty }
+        // The pointers and the screen reader's tap go with the presentation
+        // they touched, the top one that has any; the rest wait for the next
+        // frame. The frame's wakes run first and may end it, and the edge
+        // then drops them.
+        let touching = screens.last { $0.hasInput }
         let touched = touching?.shown
         let pointers = touching?.takePointers() ?? []
+        let semanticTaps = touching?.takeSemanticTaps() ?? []
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.inLane {
-                await self.runFrame(pointers: pointers, touched: touched, elapsedSeconds: elapsed)
+                await self.runFrame(pointers: pointers, semanticTaps: semanticTaps, touched: touched,
+                                    elapsedSeconds: elapsed)
             }
         }
     }
 
-    private func runFrame(pointers: [NuxieNativePointerEvent], touched: NuxieMachineShown?,
-                          elapsedSeconds: Float) async {
+    private func runFrame(pointers: [NuxieNativePointerEvent], semanticTaps: [NuxieMachineSemanticTap],
+                          touched: NuxieMachineShown?, elapsedSeconds: Float) async {
         let frame: NuxieMachineFrame
         var doing = "resize"
         let now = nuxieMachineNow()
@@ -520,7 +549,8 @@ package final class NuxieMachineScreenLoop {
                 try await screen.applySize(runtime)
                 stepped.append((screen, runtime))
             }
-            frame = await edge.frame(pointers: pointers, on: touched, elapsedSeconds: elapsedSeconds, now: now)
+            frame = await edge.frame(pointers: pointers, semanticTaps: semanticTaps, on: touched,
+                                     elapsedSeconds: elapsedSeconds, now: now)
             doing = "render"
             for (screen, runtime) in stepped where screen.isDrawable && !stopped {
                 drawing = true
@@ -548,12 +578,12 @@ package final class NuxieMachineScreenLoop {
     }
 
     /// Rest unless something asks for another frame: an ask since this
-    /// frame began (the edge's or a view's own), a pointer waiting, or on
-    /// screen the engine's step.
+    /// frame began (the edge's or a view's own), a pointer or a screen
+    /// reader's tap waiting, or on screen the engine's step.
     private func rest(after frame: NuxieMachineFrame, drawing: Bool) {
         guard !stopped else { return }
-        let pointers = screens.contains { !$0.pointers.isEmpty }
-        let another = frameRequested || pointers || (drawing && frame.keepGoing)
+        let input = screens.contains { $0.hasInput }
+        let another = frameRequested || input || (drawing && frame.keepGoing)
         displayLink?.isPaused = !another
         if !another { lastTimestamp = nil }
     }
