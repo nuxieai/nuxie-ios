@@ -1,0 +1,44 @@
+test "a sheet opens over the cover, and back returns to the cover"
+  event "opened"
+  expect route first
+  tap "next"
+  expect route second
+  tap "previous"
+  expect route first
+
+test "a tap on the sheet changes what the cover under it shows"
+  event "opened"
+  expect text "taps" == "Taps: 0"
+  tap "next"
+  tap "bump"
+  expect state taps == 1
+  expect text "taps" == "Taps: 1"
+  tap "previous"
+  expect route first
+  expect text "taps" == "Taps: 1"
+
+test "a swap puts the sheet in the cover's place"
+  event "opened"
+  tap "swap"
+  expect route second
+  tap "previous"
+  expect route none
+  expect ended
+
+test "a sheet shown and taken back in one tap leaves the cover"
+  event "opened"
+  tap "blink"
+  expect route first
+
+test "a sheet shown and dismissed in one tap ends the Journey"
+  event "opened"
+  tap "flash"
+  expect route none
+  expect ended
+
+test "close ends the Journey"
+  event "opened"
+  tap "next"
+  tap "close"
+  expect route none
+  expect ended

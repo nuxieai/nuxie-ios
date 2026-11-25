@@ -1451,9 +1451,11 @@ private final class Owner: @unchecked Sendable {
 
 // MARK: - The fixture
 
-/// `Fixtures/stillwater`: Stillwater's four `.nux` files and the plan's
+/// `Fixtures/stillwater`: Stillwater's five program files and the plan's
 /// header, copied from the parent repository's compiler fixtures. The
-/// host app bundles the same files.
+/// host app bundles the same files. The folder's `main.test.nux` is copied
+/// for provenance only: `load()` names the program files, so the session
+/// is never handed the tests.
 enum Fixture {
     private final class Anchor {}
 
@@ -1485,8 +1487,7 @@ enum Fixture {
 
     /// Stillwater's plan with the evening's `show_offer` starting a purchase
     /// of the offer in place of presenting it, so the wake moves the record
-    /// on with nothing presented. Its own tests, which expect the offer, are
-    /// left out.
+    /// on with nothing presented.
     static func purchasingInTheEvening() throws -> NuxieMachinePlanSource {
         let plan = try load()
         let presents = "  action show_offer\n    offer_due = false\n    go(offer)\n"
@@ -1495,9 +1496,8 @@ enum Fixture {
         let files = try plan.files.map { file -> NuxieMachineSourceFile in
             guard file.path == "main.nux" else { return file }
             _ = try XCTUnwrap(file.text.range(of: presents), "main.nux presents the offer in the evening")
-            let text = file.text.replacingOccurrences(of: presents, with: purchases)
-            let tests = try XCTUnwrap(text.range(of: "  test \"")?.lowerBound, "main.nux has its tests")
-            return NuxieMachineSourceFile(path: file.path, text: String(text[..<tests]))
+            return NuxieMachineSourceFile(path: file.path,
+                                          text: file.text.replacingOccurrences(of: presents, with: purchases))
         }
         return NuxieMachinePlanSource(files: files, root: plan.root, app: plan.app,
                                       experience: plan.experience, version: plan.version)

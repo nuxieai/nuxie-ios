@@ -1,0 +1,71 @@
+test "the offer waits for her to come back"
+  given customer.plan = "free"
+  clock to 09:00
+  event "onboarding_completed"
+  expect text "title" == "Ten quiet minutes,\nevery day."
+  tap "close"
+  app closes
+  clock to 18:00
+  expect route none
+  expect held client
+  clock to 20:00
+  app opens
+  expect route offer
+  expect text "buy" == "Claim the offer"
+
+test "an offer nobody came back for is given up"
+  given customer.plan = "free"
+  clock to 09:00
+  event "onboarding_completed"
+  tap "close"
+  app closes
+  clock +2d
+  app opens
+  expect route none
+  expect ended
+
+test "she already paid on her tablet"
+  given customer.plan = "free"
+  given owns[annual] = true
+  event "onboarding_completed"
+  expect route thanks
+  expect text "close" == "Done"
+
+test "she buys the plan chosen when the paywall opens"
+  given customer.plan = "free"
+  event "onboarding_completed"
+  expect sent exposed name="headline"
+  expect state plan == annual
+  tap "buy"
+  expect called purchase product=catalog[annual]
+  purchase answers status=completed
+  expect route done
+  expect missing "buy"
+  expect not called restore
+
+test "a purchase that does not go through says so"
+  given customer.plan = "free"
+  event "onboarding_completed"
+  expect missing "error"
+  tap "buy"
+  purchase answers status=failed
+  expect state purchase_failed == true
+  expect has "error"
+  expect route paywall
+
+test "a busy buy button takes no press"
+  given customer.plan = "free"
+  event "onboarding_completed"
+  tap "buy"
+  expect called purchase product=catalog[annual]
+  tap "buy"
+  expect not called purchase
+
+test "the trial's terms open and close"
+  given customer.plan = "free"
+  event "onboarding_completed"
+  expect missing "terms"
+  tap "details"
+  expect has "terms"
+  tap "details"
+  expect missing "terms"

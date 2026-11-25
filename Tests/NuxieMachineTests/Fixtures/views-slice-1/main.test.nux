@@ -1,0 +1,14 @@
+test "the counter opens and its buttons keep it open"
+  event "opened"
+  expect route counter
+  tap "bump"
+  expect route counter
+  tap "bump"
+  tap "hide"
+  expect route counter
+
+test "closing the counter ends the Journey"
+  event "opened"
+  tap "close"
+  expect route none
+  expect ended

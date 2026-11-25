@@ -3,6 +3,11 @@ use PlanCard from "plan-card"
 
 enum Plan annual monthly annual_offer
 
+shape Choice
+  plan: Plan
+  name: string
+  product: Product
+
 theme
   night = light-dark(#f6f8f7, #0d1214)
   panel = light-dark(#ffffff, #151c1f)
@@ -45,7 +50,7 @@ style LinkLabel
 component Paywall
   props
     headline: string
-    plans: Product[]
+    plans: Choice[]
     selected: Plan
     busy: boolean
     failed: boolean
@@ -66,8 +71,8 @@ component Paywall
           box width=12 height=12 border-radius=6 background-color=mint
         text headline class=Title id="title"
         column role=radiogroup label="Plan" gap=12 margin-top=40
-          PlanCard(name="Yearly", price=(plans[0]?.price ?? ""), on=(selected == annual), press=select(annual)) id="annual"
-          PlanCard(name="Monthly", price=(plans[1]?.price ?? ""), on=(selected == monthly), press=select(monthly)) id="monthly"
+          for choice in plans key=choice.plan
+            PlanCard(name=choice.name, price=choice.product.price, on=(selected == choice.plan), press=select(choice.plan))
         button class=Buy disabled=busy press=buy id="buy"
           text (if selected == annual_offer then "Claim the offer" else "Continue") class=BuyLabel
         box height=calc(2.36rem + 12) padding-top=12

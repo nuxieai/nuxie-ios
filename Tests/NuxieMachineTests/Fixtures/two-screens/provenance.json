@@ -1,22 +1,27 @@
 {
-  "note": "Two routes for the Nux machine suite's stack checks: a cover and a sheet over it, with buttons that present, pop, replace, present and pop or dismiss in one tap, and close. Both show the root's count of taps, and each has a button that adds one to it. The two .nux files are copied from the two-screens fixture folder of the parent's machine C interface crate tests, each named here by its git blob id at parentCommit. The plan's views are compiled on the device; nothing else is published.",
+  "note": "Two routes for the Nux machine suite's stack checks: a cover and a sheet over it, with buttons that present, pop, replace, present and pop or dismiss in one tap, and close. Both show the root's count of taps, and each has a button that adds one to it. The three .nux files are copied from the two-screens fixture folder of the parent's machine C interface crate tests, each named here by its git blob id at parentCommit. The plan is the two program files; main.test.nux holds the folder's tests and is copied for provenance only, never handed to the session or compiled on the device. The plan's views are compiled on the device; nothing else is published.",
   "plan": {
     "root": "main",
     "app": "app",
     "experience": "stack",
     "version": 1
   },
-  "parentCommit": "4e75f0ec2ec4c6cd8aae5a1b9995c90aff5df210",
+  "parentCommit": "9d12ec24f1b77ae80d18042aa69469033815cad3",
   "files": {
-    "main.nux": {
-      "sha256": "6b94a48f2247116b803b638abac03df94e776505e31dd6e20594cb48333e9e91",
-      "sizeBytes": 1757,
-      "parentBlob": "5b820b6c4d984b80aa2fc61eab117a1d3b7000aa"
-    },
     "card.nux": {
       "sha256": "33a53cb3cc11915719fa7e9624d15c9f355407b6542d8eb986b81951f236b49a",
       "sizeBytes": 1178,
       "parentBlob": "fdeb5c900f866ffe63359e5df5278dcc8ec7369e"
+    },
+    "main.nux": {
+      "sha256": "c919a4ccb72cc9d3d5dad01054a2f757ba62927f0473b4b16ec07e0227e1c417",
+      "sizeBytes": 715,
+      "parentBlob": "28db48ff0aa394cfa6a720d6c1a725788d75aac2"
+    },
+    "main.test.nux": {
+      "sha256": "00061261052ba0740c3ea5ca131a89a58db3124256316899f5b25ec3cf1c7f34",
+      "sizeBytes": 963,
+      "parentBlob": "6ec0b315e73d6a99254321d2f2589396e0d8c899"
     }
   }
 }

@@ -371,7 +371,8 @@ final class Counter {
         return try XCTUnwrap(screen, "nothing is presented")
     }
 
-    /// The counter's two files, as the host app bundles them.
+    /// The counter's two program files, as the host app bundles them; the
+    /// folder's `main.test.nux` is not one of them.
     static func counterPlan() throws -> NuxieMachinePlanSource {
         func text(_ name: String) throws -> String {
             let url = try XCTUnwrap(Bundle(for: Counter.self).url(

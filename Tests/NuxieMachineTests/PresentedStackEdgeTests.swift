@@ -425,7 +425,8 @@ private final class Stack {
         try await edge.close()
     }
 
-    /// The two-screens fixture, as the test bundle carries it.
+    /// The two-screens fixture's two program files, as the test bundle
+    /// carries them; the folder's `main.test.nux` is not one of them.
     static func plan() throws -> NuxieMachinePlanSource {
         func text(_ name: String) throws -> String {
             let url = try XCTUnwrap(Bundle(for: Stack.self).url(
