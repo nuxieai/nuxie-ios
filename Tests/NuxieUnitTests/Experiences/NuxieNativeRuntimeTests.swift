@@ -258,6 +258,25 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             // White glyph coverage above the render helper's dark clear color.
             stride(from: 2, to: pixels.count, by: 4).reduce(0) { $0 + max(0, Int(pixels[$1]) - 0x11) }
         }
+        /// Two renders of 320 by 640 are the same picture; when they are
+        /// not, say how they differ rather than only that they do.
+        func expectSameRender(_ one: Data, _ other: Data, _ what: String,
+                              file: StaticString = #filePath, line: UInt = #line) {
+            guard one != other else { return }
+            guard one.count == other.count else {
+                return XCTFail("\(what): \(one.count) bytes against \(other.count)", file: file, line: line)
+            }
+            let extent = changedPixelExtent(between: one, and: other, width: 320)
+            var largest = 0
+            var rows = Set<Int>()
+            for at in 0..<one.count where one[one.startIndex + at] != other[other.startIndex + at] {
+                largest = max(largest, abs(Int(one[one.startIndex + at]) - Int(other[other.startIndex + at])))
+                rows.insert(at / (320 * 4))
+            }
+            XCTFail("\(what): \(extent.pixelCount) pixels differ over \(extent.rowSpan) rows "
+                + "(\(rows.min() ?? -1) to \(rows.max() ?? -1)), by at most \(largest) of 255 in a channel; "
+                + "ink \(ink(one)) against \(ink(other))", file: file, line: line)
+        }
         var fileRegular: Data?
         for fallback in [false, true] {
             let candidate = fallback
@@ -287,13 +306,13 @@ final class NuxieNativeRuntimeTests: XCTestCase {
             let opticalControl = try await pixels("optical-control", weight: "400", fallback: fallback)
             XCTAssertGreaterThan(ink(regular), 10_000, "The scene must contain visible glyphs")
             XCTAssertGreaterThan(ink(bold), ink(regular), "Authored bold must increase glyph coverage")
-            XCTAssertEqual(sharedFaceBold, bold,
+            expectSameRender(sharedFaceBold, bold,
                 "The authored wght axis must select bold even when both styles share the regular variable face")
-            XCTAssertEqual(baseline, regular, "Test serialization must preserve production rendering")
+            expectSameRender(baseline, regular, "Test serialization must preserve production rendering")
             XCTAssertNotEqual(opticalControl, baseline,
                 "Only opsz changes, with authored size and weight held fixed; table fallback: \(fallback)")
             if let fileRegular {
-                XCTAssertEqual(regular, fileRegular, "Table fallback must preserve the extracted face's rendering")
+                expectSameRender(regular, fileRegular, "Table fallback must preserve the extracted face's rendering")
             } else {
                 fileRegular = regular
             }
