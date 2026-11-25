@@ -272,12 +272,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// How a machine Screen whose surface has `bounds` shows `node`, or none
     /// for a node no element stands for: one with no role UIKit reads, or
-    /// one drawn nowhere on the surface. A button or a link takes a tap when
-    /// the engine offers one for it; a node the engine offers no tap (one a
-    /// scroll clips wholly away) is still read, and activating it does
-    /// nothing, since a tap at its point would press whatever is drawn
-    /// there. A radio is a button, selected while its check state is
-    /// checked; one not checked, or mixed, is not selected.
+    /// one drawn nowhere on the surface. A button or a link takes a tap. A
+    /// radio is a button, selected while its check state is checked; one
+    /// not checked, or mixed, is not selected.
     package static func projection(
         for node: NuxieNativeSemanticNode,
         on bounds: CGRect
@@ -292,9 +289,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
             traits.insert(.selected)
         }
         let presses = traits.contains(.button) || traits.contains(.link)
-        let tap: UInt32 = 1 << NuxieNativeSemanticAction.tap.rawValue
         return .init(frame: frame, traits: traits, value: node.value.isEmpty ? nil : node.value,
-                     actions: presses ? node.actions & tap : 0)
+                     actions: presses ? 1 << NuxieNativeSemanticAction.tap.rawValue : 0)
     }
 
     /// The engine's check state: two bits of a node's state, unchecked,
