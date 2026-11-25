@@ -134,6 +134,8 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// The wake timer while one is set, for checks.
     package var scheduledWake: (any DispatchSourceTimer)? { scheduled.wake }
 
+    /// A test seam, not public API.
+    ///
     /// How far the clock the machine reads runs ahead of the wall clock, in
     /// milliseconds. Zero, the wall clock itself, unless a test host moves
     /// it: the SDK never sets it. Every moment the presenter and its loop

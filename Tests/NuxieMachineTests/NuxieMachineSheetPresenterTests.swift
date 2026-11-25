@@ -95,6 +95,49 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
+    // MARK: The clock at its default
+
+    /// The test seam for the clock, at its default, leaves the presenter on
+    /// the wall clock: `clockAhead` is 0, and the start is handed the wall
+    /// clock's moment, so the record's wake is the next 18:00 (UTC) after
+    /// the wall clock's now. A moment a day off, or the clock's own offset
+    /// added to it, would ask for another day's 18:00. The wake timer is set
+    /// and still to come. Its deadline cannot be read: a dispatch timer does
+    /// not give it back.
+    @MainActor
+    func testTheClockAtItsDefaultIsTheWallClock() async throws {
+        let plan = NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: Self.waitsForTheEvening)],
+            root: "main", app: "app", experience: "evening", version: 1)
+        let host = UIViewController()
+        let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
+        XCTAssertEqual(presenter.clockAhead, 0, "the clock's offset is not 0 by default")
+
+        let before = Self.wallNow()
+        await presenter.start(plan: plan, store: ProbeStore(), event: "go")
+        let after = Self.wallNow()
+
+        guard case .open(let moment?) = presenter.status.record else { return XCTFail("\(presenter.status)") }
+        let expected = Set([Self.nextEvening(after: before), Self.nextEvening(after: after)])
+        XCTAssertTrue(expected.contains(moment),
+                      "the record waits for \(moment), not the next 18:00 after the wall clock: \(expected)")
+        let wake = try XCTUnwrap(presenter.scheduledWake, "no wake timer is set")
+        XCTAssertFalse(wake.isCancelled)
+        withExtendedLifetime(host) {}
+    }
+
+    /// Milliseconds since the Unix epoch on the wall clock.
+    private static func wallNow() -> Int64 {
+        Int64((Date().timeIntervalSince1970 * 1000).rounded(.down))
+    }
+
+    /// The first 18:00 UTC after `now`, as `until next 18:00` reads it.
+    private static func nextEvening(after now: Int64) -> Int64 {
+        let day: Int64 = 86_400_000
+        let evening = now / day * day + 18 * 3_600_000
+        return evening > now ? evening : evening + day
+    }
+
     // MARK: Each presentation laid out as its own style
 
     /// A sheet and a cover are each a controller of their own, set up as
