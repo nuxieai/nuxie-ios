@@ -409,6 +409,9 @@ package final class NuxieMachineScreenLoop {
     package var onFrame: (@MainActor (NuxieMachineFrame) async -> Void)?
     /// Told once when drawing fails; the loop has stopped by then.
     package var onFault: (@MainActor (NuxieMachineEdgeFault) -> Void)?
+    /// The moment each frame runs at: the wall clock, unless the owner
+    /// reads the machine's clock from elsewhere.
+    package var clock: @MainActor () -> Int64 = { nuxieMachineNow() }
 
     /// The native presentations the loop draws, bottom first, as the owner
     /// holds them.
@@ -532,7 +535,7 @@ package final class NuxieMachineScreenLoop {
                           touched: NuxieMachineShown?, elapsedSeconds: Float) async {
         let frame: NuxieMachineFrame
         var doing = "resize"
-        let now = nuxieMachineNow()
+        let now = clock()
         await beforeFrame?(now)
         guard !stopped else {
             frameInFlight = false

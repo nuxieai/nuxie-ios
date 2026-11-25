@@ -134,6 +134,25 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// The wake timer while one is set, for checks.
     package var scheduledWake: (any DispatchSourceTimer)? { scheduled.wake }
 
+    /// How far the clock the machine reads runs ahead of the wall clock, in
+    /// milliseconds. Zero, the wall clock itself, unless a test host moves
+    /// it: the SDK never sets it. Every moment the presenter and its loop
+    /// hand the edge is read from that clock ([`machineNow`]), and the wake
+    /// timer fires when that clock reaches the wake's moment. Moving it sets
+    /// the timer again, so a wake the move made due fires at once, through
+    /// the timer, as it would have at its moment.
+    package var clockAhead: Int64 = 0 {
+        didSet {
+            guard clockAhead != oldValue, case .open(let moment?) = state.record else { return }
+            schedule(moment)
+        }
+    }
+
+    /// The clock the machine reads: the wall clock, [`clockAhead`] on.
+    private func machineNow() -> Int64 {
+        nuxieMachineNow() + clockAhead
+    }
+
     /// The scheme the app fixes for its experiences: `system` (the default)
     /// follows the phone, `light` or `dark` overrides it, on every native
     /// presentation, as the SDK's experience controller applies it.
@@ -182,6 +201,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             return
         }
         let loop = NuxieMachineScreenLoop(edge: edge)
+        loop.clock = { [weak self] in self?.machineNow() ?? nuxieMachineNow() }
         loop.beforeFrame = { [weak self] now in await self?.catchUp(to: now) }
         loop.onFrame = { [weak self] _ in
             self?.takeReports()
@@ -197,7 +217,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         await loop.inLane {
             // The environment goes first, so the start's first frame is
             // drawn in it.
-            let now = nuxieMachineNow()
+            let now = machineNow()
             await tellEnvironment(at: now)
             await edge.start(event: event, now: now)
             takeReports()
@@ -357,7 +377,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         let edge = loop.edge
         Task { @MainActor [weak self] in
             await loop.inLane {
-                let now = nuxieMachineNow()
+                let now = self?.machineNow() ?? nuxieMachineNow()
                 await self?.catchUp(to: now)
                 await edge.closed(shown, now: now)
                 self?.takeReports()
@@ -374,7 +394,8 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             return
         }
         logger.info("machine.wake-at \(moment)")
-        scheduled.setWake(at: moment) { [weak self] in
+        // The timer runs on the wall clock: the moment is the machine's.
+        scheduled.setWake(at: moment - clockAhead) { [weak self] in
             Task { @MainActor in await self?.wakeNow() }
         }
     }
@@ -384,7 +405,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// has the edge ask for it.
     private func wakeNow() async {
         guard let loop else { return }
-        await loop.inLane { await catchUp(to: nuxieMachineNow()) }
+        await loop.inLane { await catchUp(to: machineNow()) }
     }
 
     /// Deliver every wake the record asks for at or before `now`, each at
