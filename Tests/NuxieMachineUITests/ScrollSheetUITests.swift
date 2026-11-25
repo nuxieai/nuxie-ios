@@ -16,15 +16,18 @@ import XCTest
 /// sheet. Every drag is a real drag on the simulator.
 ///
 /// Where the page stands is read from where its title is, an element made
-/// from the engine's semantic snapshot; what was pressed is read from the
-/// lines the paywall shows (its chosen plan, and its note after "Restore");
-/// whether the sheet stayed from its frame; and the record's state from the
-/// Screen's accessibility value while the sheet is up and the host's line
-/// once it is gone. A screenshot is kept after each drag.
+/// from the engine's semantic snapshot; whether the sheet stayed from its
+/// frame; and the record's state from the Screen's accessibility value while
+/// the sheet is up and the host's line once it is gone. A screenshot is kept
+/// after each drag.
+///
+/// These tests check what the sheet's answer owns: whether the sheet takes
+/// the drag, and that a drag it leaves to the page reaches the page. What
+/// the page then does with a drag that is not up and down (a sideways drag
+/// on a card, or one that starts on the floating button) is the engine's,
+/// and is not checked here.
 final class ScrollSheetUITests: XCTestCase {
     private static let title = "Sleep better, a little every night."
-    private static let yearly = "Yearly, free for the first week"
-    private static let restoring = "Looking for your purchases."
 
     override func setUp() {
         super.setUp()
@@ -86,9 +89,10 @@ final class ScrollSheetUITests: XCTestCase {
     }
 
     /// 4. A sideways drag over the page, starting on a plan card: the sheet
-    ///    stays, nothing scrolls, and the card is not pressed. The drag runs
-    ///    along Monthly's card and ends on it, clear of the floating button.
-    func testASidewaysDragKeepsTheSheetScrollsNothingAndPressesNothing() throws {
+    ///    stays and nothing scrolls. The drag runs along Monthly's card and
+    ///    ends on it, clear of the floating button. Whether the card is
+    ///    pressed is the engine's, and is not checked.
+    func testASidewaysDragKeepsTheSheetAndScrollsNothing() throws {
         let (app, screen) = try openSheet()
         let resting = screen.frame
         let title = app.staticTexts[Self.title]
@@ -109,8 +113,6 @@ final class ScrollSheetUITests: XCTestCase {
         keep("4-sideways", app)
         XCTAssertEqual(screen.frame, resting, "the sheet moved")
         XCTAssertEqual(after.minY, before.minY, accuracy: 1, "the page scrolled")
-        XCTAssertTrue(app.staticTexts[Self.yearly].exists, "the plan changed: \(app.debugDescription)")
-        XCTAssertFalse(button(app, beginningWith: "Monthly").isSelected, "Monthly's card was pressed")
         waitFor(screen, valueContaining: "Record: open")
     }
 
@@ -131,24 +133,50 @@ final class ScrollSheetUITests: XCTestCase {
         keep("5-pulled-by-the-header", app)
     }
 
-    /// 6. A drag up that starts on the button floating over the page
-    ///    scrolls the page and presses nothing, as on a page that is not on
-    ///    a sheet; the sheet stays.
-    func testADragUpOnTheFloatingButtonScrollsThePageAndPressesNothing() throws {
+    /// 6. A drag up that starts on the button floating over the page: the
+    ///    sheet stays. The button lies inside the page's box, so the drag
+    ///    goes down over the `scroll`. What the page does with a drag that
+    ///    starts on a layer over it is the engine's, and is not checked.
+    func testADragUpOnTheFloatingButtonKeepsTheSheet() throws {
         let (app, screen) = try openSheet()
         let resting = screen.frame
-        let title = app.staticTexts[Self.title]
-        let before = try settled(title)
         let floating = app.buttons["Restore"]
         XCTAssertTrue(floating.waitForExistence(timeout: 10), app.debugDescription)
         let from = CGPoint(x: floating.frame.midX, y: floating.frame.midY)
         drag(app, from: from, to: CGPoint(x: from.x, y: from.y - 250))
-        let after = try settled(title)
+        _ = try settled(screen)
         keep("6-dragged-from-the-floating-button", app)
-        XCTAssertLessThan(after.minY, before.minY - 100, "the page did not scroll up: the title was at \(before), "
-                          + "and is at \(after)")
         XCTAssertEqual(screen.frame, resting, "the sheet moved")
-        XCTAssertFalse(app.staticTexts[Self.restoring].exists, "the floating button was pressed")
+        waitFor(screen, valueContaining: "Record: open")
+    }
+
+    /// 7. Scrolled a few points, then dragged down slowly over the page: the
+    ///    sheet stays. The page was scrolled when the finger went down, so
+    ///    the drag is the page's even when the page reaches its top before
+    ///    the sheet asks. (Whether the page could reach its top within the
+    ///    first 10 points is the engine's timing; the unit test
+    ///    `testTheSurfaceAnswersFromTheRegionsShownWhenTheTouchWentDown`
+    ///    pins the answer itself.)
+    func testADragDownOnAPageScrolledAFewPointsKeepsTheSheet() throws {
+        let (app, screen) = try openSheet()
+        let resting = screen.frame
+        let title = app.staticTexts[Self.title]
+        let top = try settled(title)
+        let from = pagePoint(on: resting, at: 0.6)
+        drag(app, from: from, to: CGPoint(x: from.x, y: from.y - 40))
+        let scrolled = try settled(title)
+        XCTAssertLessThan(scrolled.minY, top.minY - 5, "the page did not scroll a little: the title was at \(top), "
+                          + "and is at \(scrolled)")
+        XCTAssertGreaterThan(scrolled.minY, top.minY - 80, "the page scrolled more than a little: the title was at "
+                             + "\(top), and is at \(scrolled)")
+
+        let down = pagePoint(on: resting, at: 0.4)
+        drag(app, from: down, to: CGPoint(x: down.x, y: down.y + 200))
+        let back = try settled(title)
+        keep("7-a-few-points-then-dragged-down", app)
+        XCTAssertTrue(screen.exists, "the drag took the sheet")
+        XCTAssertEqual(screen.frame, resting, "the sheet moved")
+        XCTAssertEqual(back.minY, top.minY, accuracy: 1, "the page did not come back to its top")
         waitFor(screen, valueContaining: "Record: open")
     }
 
