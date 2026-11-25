@@ -117,7 +117,7 @@ final class MachinePlaceTests: XCTestCase {
         let untold = try await Self.firstFrame(told: nil)
         let edge = try Self.edge()
         var now = Self.nine
-        await edge.environment(NuxieMachineEnvironment(dark: true), now: now)
+        await edge.environment(NuxieMachineEnvironment(dark: true, textSize: 17), now: now)
         await edge.start(event: "onboarding_completed", now: now)
         let shown = try await Self.top(edge)
         await edge.place(Self.upright, for: shown, now: now)
@@ -129,7 +129,7 @@ final class MachinePlaceTests: XCTestCase {
         XCTAssertTrue(Self.close(ground, 0x0D1214), "the page's ground is #\(String(format: "%06x", ground)), not dark")
 
         now += 1000
-        await edge.environment(NuxieMachineEnvironment(dark: false), now: now)
+        await edge.environment(NuxieMachineEnvironment(dark: false, textSize: 17), now: now)
         await edge.frame(elapsedSeconds: StillwaterPaywallEdgeTests.tick, now: now)
         let light = try await Self.look(edge, "light-after")
         try Self.expect(light, at: Self.upright, against: untold, "light, told after the place")

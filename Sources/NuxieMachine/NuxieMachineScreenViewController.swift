@@ -47,10 +47,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Frames drawn to the screen.
     package private(set) var framesDrawn = 0
 
-    /// Told when this Screen's colors would change with its traits: the
-    /// phone turned dark or light, or a style was forced on it or lifted.
-    /// The presenter reads the session's scheme again then.
-    package var onColorAppearanceChange: (@MainActor () -> Void)?
+    /// Told when the session's environment would change with this Screen's
+    /// traits: its colors (the phone turned dark or light, or a style was
+    /// forced on it or lifted) or the person's text size. The presenter
+    /// reads the session's environment again then.
+    package var onEnvironmentChange: (@MainActor () -> Void)?
 
     /// Pointers that arrived and wait for the next frame.
     fileprivate var pointers: [NuxieNativePointerEvent] = []
@@ -141,8 +142,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     override package func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        guard traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) else { return }
-        onColorAppearanceChange?()
+        let colors = traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection)
+        let textSize = traitCollection.preferredContentSizeCategory
+            != previousTraitCollection?.preferredContentSizeCategory
+        guard colors || textSize else { return }
+        onEnvironmentChange?()
     }
 
     /// The safe area changed with no change of size (the status bar came or
