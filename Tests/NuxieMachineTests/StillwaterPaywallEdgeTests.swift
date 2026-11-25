@@ -37,6 +37,15 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// 09:00 on day zero, in milliseconds.
     private static let nine: Int64 = 9 * 3_600_000
     private static let hour: Int64 = 3_600_000
+    private static let minute: Int64 = 60_000
+    /// 18:00 and 20:00 on day zero: the evening offer's start and end.
+    private static let evening: Int64 = 18 * 3_600_000
+    private static let offerEnds: Int64 = 20 * 3_600_000
+    /// How far apart two places read from the semantic tree may be and
+    /// still be the same place, in points.
+    private static let near: CGFloat = 0.5
+    /// The gap between two plan cards: the "Plan" column's `gap`.
+    private static let cardGap: CGFloat = 12
     /// One frame at 60 frames a second.
     static let tick: Float = 1.0 / 60.0
 
@@ -854,14 +863,183 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
+    // MARK: The evening offer in the plans
+
+    /// The evening offer joins Stillwater's plans while the paywall is up,
+    /// in four frames, at moments the test hands the edge:
+    ///
+    /// 1. 17:59: Yearly, chosen, and Monthly in the "Plan" group, and
+    ///    "Continue".
+    /// 2. The wake at 18:00: "Tonight only" joins at the top and is chosen
+    ///    (the record's plan is `annual_offer`), Yearly and Monthly move down
+    ///    one place, and the buy button reads "Claim the offer". The three
+    ///    cards are the same size, the list's gap apart. Outside the group
+    ///    nothing changes but the buy button, which the third card pushes
+    ///    down by a card and a gap and whose words change.
+    /// 3. A tap on Monthly: Monthly is chosen, "Continue", no card moves.
+    /// 4. The wake at 20:00: the offer leaves, the two cards move back up
+    ///    to their 17:59 places, and Monthly stays chosen. Outside the two
+    ///    cards the page is the 17:59 page.
+    ///
+    /// Kept as `stillwater-<n>-evening-1-1759`, `-evening-2-1800`,
+    /// `-evening-3-monthly` and `-evening-4-2000`.
+    func testTheEveningOfferJoinsAndLeavesThePlans() async throws {
+        let run = try Run()
+        do {
+            // 1. 17:59.
+            run.jump(to: Self.evening - Self.minute)
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            let started = await run.edge.log
+            XCTAssertTrue(started.contains(.wakeAt(Self.evening)), "the start asks for no wake at 18:00: \(started)")
+            try await run.layOut()
+            try await run.settle()
+            let early = try await run.look("evening-1-1759")
+            let (_, before) = try Self.plans(early)
+            Self.expect(before, ["Yearly", "Monthly"], chosen: "Yearly", "at 17:59")
+            Self.expectStacked(before, "at 17:59")
+            XCTAssertTrue(early.has("Continue"), "\(early.reading)")
+            XCTAssertFalse(early.has("Claim the offer"), "\(early.reading)")
+            let place = try XCTUnwrap(before.count == 2 ? before[1].bounds.minY - before[0].bounds.minY : nil,
+                                      "no two cards to measure a place by at 17:59")
+
+            // 2. The wake at 18:00.
+            run.jump(to: Self.evening)
+            await run.edge.wake(now: run.now)
+            try await run.settle()
+            let joined = try await run.look("evening-2-1800")
+            let (group, three) = try Self.plans(joined)
+            Self.expect(three, ["Tonight only", "Yearly", "Monthly"], chosen: "Tonight only", "at 18:00")
+            Self.expectStacked(three, "at 18:00")
+            let offered = try await run.edge.slot("plan")
+            XCTAssertEqual(offered, .enumeration("annual_offer"), "the offer did not take Yearly's choice at 18:00")
+            XCTAssertTrue(joined.has("Claim the offer"), "\(joined.reading)")
+            XCTAssertFalse(joined.has("Continue"), "\(joined.reading)")
+            if three.count == 3, before.count == 2 {
+                XCTAssertEqual(three[0].bounds.size.height, before[0].bounds.size.height, accuracy: Self.near,
+                               "the offer's card is not the size of the others")
+                Self.expectNear(three[0].bounds.minY, before[0].bounds.minY, "the offer is not in Yearly's place")
+                Self.expectNear(three[1].bounds.minY, before[0].bounds.minY + place, "Yearly did not move down one")
+                Self.expectNear(three[2].bounds.minY, before[1].bounds.minY + place, "Monthly did not move down one")
+            }
+            let buyEarly = try early.region(of: "Continue")
+            let buyJoined = try joined.region(of: "Claim the offer")
+            Self.expectNear(buyJoined.minY, buyEarly.minY + place, "the buy button did not move down one card")
+            XCTAssertTrue(Self.holds(early, joined, outside: [group, buyEarly, buyJoined]),
+                          "something outside the plans and the buy button changed at 18:00")
+
+            // 3. A tap on Monthly.
+            try await run.tap(joined.center(of: "Monthly"))
+            let chose = try await run.look("evening-3-monthly")
+            let (_, tapped) = try Self.plans(chose)
+            Self.expect(tapped, ["Tonight only", "Yearly", "Monthly"], chosen: "Monthly", "after Monthly's tap")
+            let monthly = try await run.edge.slot("plan")
+            XCTAssertEqual(monthly, .enumeration("monthly"), "the tap in Monthly's row did not choose Monthly")
+            XCTAssertTrue(chose.has("Continue"), "\(chose.reading)")
+            for (card, was) in zip(tapped, three) {
+                Self.expectNear(card.bounds.minY, was.bounds.minY, "\(card.name) moved on Monthly's tap")
+            }
+            let buyChose = try chose.region(of: "Continue")
+            XCTAssertTrue(Self.holds(joined, chose, outside: three.map(\.bounds) + [buyJoined, buyChose]),
+                          "something outside the cards and the buy button changed on Monthly's tap")
+
+            // 4. The wake at 20:00.
+            let asked = await run.edge.log
+            XCTAssertTrue(asked.contains(.wakeAt(Self.offerEnds)), "nothing asks for a wake at 20:00: \(asked)")
+            run.jump(to: Self.offerEnds)
+            await run.edge.wake(now: run.now)
+            try await run.settle()
+            let late = try await run.look("evening-4-2000")
+            let (_, after) = try Self.plans(late)
+            Self.expect(after, ["Yearly", "Monthly"], chosen: "Monthly", "at 20:00")
+            Self.expectStacked(after, "at 20:00")
+            let kept = try await run.edge.slot("plan")
+            XCTAssertEqual(kept, .enumeration("monthly"), "the offer's end moved Monthly's choice")
+            XCTAssertTrue(late.has("Continue"), "\(late.reading)")
+            XCTAssertFalse(late.has("Tonight only"), "\(late.reading)")
+            for (card, was) in zip(after, before) {
+                Self.expectNear(card.bounds.minY, was.bounds.minY, "\(card.name) is not back in its 17:59 place")
+            }
+            XCTAssertTrue(Self.holds(early, late, outside: before.map(\.bounds)),
+                          "outside the two cards, the page at 20:00 is not the 17:59 page")
+
+            let open = try await run.edge.recordOpen()
+            XCTAssertTrue(open, "the record ended")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// One plan card as the semantic tree reads it.
+    private struct PlanCard {
+        let name: String
+        let checked: Bool
+        let bounds: CGRect
+    }
+
+    private static let planNames = ["Tonight only", "Yearly", "Monthly"]
+
+    /// The "Plan" radio group's bounds, and the radio buttons inside it, in
+    /// reading order: each named by the plan its words begin with (or by
+    /// all its words, when none), whether it is checked, and where it is.
+    private static func plans(_ look: Look) throws -> (group: CGRect, cards: [PlanCard]) {
+        let byID = Dictionary(look.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let found = look.nodes.first { NuxieNativeSemanticRole(rawValue: $0.role) == .radioGroup && $0.label == "Plan" }
+        let group = try XCTUnwrap(found, "no \"Plan\" group: \(look.reading)")
+        func inGroup(_ node: NuxieNativeSemanticNode) -> Bool {
+            var parent = node.parentID
+            while let id = parent {
+                if id == group.id { return true }
+                parent = byID[id]?.parentID
+            }
+            return false
+        }
+        let cards = look.nodes.filter { NuxieNativeSemanticRole(rawValue: $0.role) == .radioButton && inGroup($0) }
+            .map { node in
+                PlanCard(name: planNames.first { node.label.hasPrefix($0) } ?? node.label,
+                         checked: node.stateFlags & NuxieNativeSemanticNode.checked != 0, bounds: node.bounds)
+            }
+        return (group.bounds, cards)
+    }
+
+    /// The cards read are `names`, in that order, and only `chosen` is
+    /// checked.
+    private static func expect(_ cards: [PlanCard], _ names: [String], chosen: String, _ when: String) {
+        XCTAssertEqual(cards.map(\.name), names, "\(when): the Plan group reads other cards")
+        XCTAssertEqual(cards.filter(\.checked).map(\.name), [chosen], "\(when): another card is checked")
+    }
+
+    /// The cards are the same size and stacked top to bottom in reading
+    /// order, the list's gap apart.
+    private static func expectStacked(_ cards: [PlanCard], _ when: String) {
+        guard let first = cards.first else { return XCTFail("\(when): no cards") }
+        for card in cards.dropFirst() {
+            XCTAssertEqual(card.bounds.width, first.bounds.width, accuracy: near, "\(when): \(card.name)'s width")
+            XCTAssertEqual(card.bounds.height, first.bounds.height, accuracy: near, "\(when): \(card.name)'s height")
+            XCTAssertEqual(card.bounds.minX, first.bounds.minX, accuracy: near, "\(when): \(card.name)'s left edge")
+        }
+        for (above, below) in zip(cards, cards.dropFirst()) {
+            XCTAssertEqual(below.bounds.minY - above.bounds.maxY, cardGap, accuracy: near,
+                           "\(when): the gap between \(above.name) and \(below.name)")
+        }
+    }
+
+    private static func expectNear(_ value: CGFloat, _ expected: CGFloat, _ message: String) {
+        XCTAssertEqual(value, expected, accuracy: near, "\(message): \(value), not \(expected)")
+    }
+
     // MARK: What the owner hears
 
     /// The owner hears each delivery's rows for it, in one report, with
     /// what is shown: the start shows the paywall, with the identity the
     /// session gave it; a tap on a plan shows the same and dismisses
     /// nothing; "Not now" shows nothing and tells its `dismiss` and its
-    /// wake. (The machine restates its wake moment, none until "Not now",
-    /// in each delivery.)
+    /// wake. (The machine restates its wake moment in each delivery: 18:00
+    /// from the start, the evening offer joining the plans, and 18:00 again
+    /// after "Not now", the offer owed for the evening.)
     func testEachDeliveryReportsTheRowsItsOwnerPerforms() async throws {
         let run = try Run()
         do {
@@ -875,14 +1053,14 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let paywall = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: instance),
                                                 route: "paywall", presentation: .sheet)
             XCTAssertEqual(shown, [paywall])
-            XCTAssertFalse(started.contains(.wakeAt(18 * Self.hour)), "\(started)")
+            XCTAssertTrue(started.contains(.wakeAt(Self.evening)), "the start asks for the offer's 18:00: \(started)")
             try await run.layOut()
             try await run.settle()
             let open = try await run.look("open")
             let beforeMonthly = run.owner.reports.count
             try await run.tap(open.center(of: "Monthly"))
             for case .delivered(let shownNow, let rows) in run.owner.reports.dropFirst(beforeMonthly) {
-                XCTAssertTrue(rows.allSatisfy { $0 == .wakeAt(nil) }, "a plan tap dismisses nothing: \(rows)")
+                XCTAssertTrue(rows.allSatisfy { $0 == .wakeAt(Self.evening) }, "a plan tap dismisses nothing: \(rows)")
                 XCTAssertEqual(shownNow, [paywall], "a plan tap changes what is shown")
             }
             XCTAssertNil(run.owner.reports.dropFirst(beforeMonthly).compactMap(\.dismissal).first)
