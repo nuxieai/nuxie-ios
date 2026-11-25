@@ -1975,6 +1975,29 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                     hint: try copyString(node.hint, label: "semantic hint")
                 ))
             }
+            // A runtime that lists no scroll regions leaves the count zero.
+            guard info.scroll_region_count <= 256 else { throw NuxieNativeSemanticTreeError.tooManyScrollRegions }
+            var scrollRegions: [NuxieNativeScrollRegion] = []
+            scrollRegions.reserveCapacity(info.scroll_region_count)
+            for index in 0..<info.scroll_region_count {
+                var region = NuxScrollRegionView()
+                region.struct_size = UInt32(MemoryLayout<NuxScrollRegionView>.size)
+                try requireOK(nux_semantic_snapshot_scroll_region(pointer, index, &region),
+                    operation: "read scroll region")
+                let parent: Int?
+                if region.parent == -1 {
+                    parent = nil
+                } else if region.parent >= 0, Int(region.parent) < index {
+                    parent = Int(region.parent)
+                } else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("scroll region's parent is not an earlier region")
+                }
+                scrollRegions.append(NuxieNativeScrollRegion(
+                    bounds: CGRect(x: CGFloat(region.min_x), y: CGFloat(region.min_y),
+                        width: CGFloat(region.max_x - region.min_x), height: CGFloat(region.max_y - region.min_y)),
+                    canScroll: region.can_scroll,
+                    parent: parent))
+            }
             let tree = try NuxieNativeSemanticTree(renderRevision: info.render_revision,
                 treeVersion: info.tree_version, nodes: nodes)
             let byID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
@@ -2030,7 +2053,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             try retireSemanticCapture()
             semanticCapture = (id, owned, fields, tree, inputIDs)
             return NuxieNativeSemanticCapture(id: id, tree: tree, fieldsByTextRun: fields, nativeInputs: inputs,
-                containsNativeObscuredValue: containsNativeObscuredValue)
+                containsNativeObscuredValue: containsNativeObscuredValue, scrollRegions: scrollRegions)
         } catch {
             try? owned.close()
             throw error
