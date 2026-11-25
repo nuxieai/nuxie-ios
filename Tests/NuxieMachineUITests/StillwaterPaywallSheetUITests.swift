@@ -433,7 +433,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     private func playTheStory(in appearance: Ground) throws {
         let app = launch(appearance, clock: "19:00")
         let screen = try openPaywall(app)
-        waitFor(screen, valueContaining: "Record: open, " + Self.wake(at: 20))
+        waitFor(screen, valueContaining: "Record: open, " + wake(at: 20))
 
         // 1. Open: the headline, both plans with their prices, and the
         // buttons, read top to bottom; nothing under an `if` is read.
@@ -514,7 +514,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         // stays open with its wake moment.
         notNow.tap()
         waitUntilGone(screen)
-        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + Self.wake(at: 18, days: 1))
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + wake(at: 18, days: 1))
         XCTAssertEqual(app.staticTexts["nuxie-machine-plan"].label, "Selected plan: monthly")
         keep("6-after-not-now", app, nil)
     }
@@ -787,7 +787,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)))
         waitUntilGone(screen, "the swipe from \(from) to \(to) on the sheet \(sheet), with the screen's insets "
                           + "\(screenInsets), did not take the sheet; the Screen is \(screen.exists ? "\(screen.frame)" : "gone")")
-        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + Self.wake(at: 18))
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + wake(at: 18))
         keep("1-after-swipe", app, nil)
 
         // 21:00: the offer's start and end are delivered in turn, nothing is
@@ -818,22 +818,26 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertTrue(screen.exists, "the swipe took the sheet")
         XCTAssertEqual(screen.frame, resting, "the sheet did not settle back")
         // Open, and still waiting for 20:00, when tonight's offer is skipped.
-        waitFor(screen, valueContaining: "Record: open, " + Self.wake(at: 20))
+        waitFor(screen, valueContaining: "Record: open, " + wake(at: 20))
         XCTAssertTrue(app.buttons["Continue"].exists, app.debugDescription)
         keep("1-after-cancelled-swipe", app, screen)
 
         // The machine's own dismissal still takes the sheet.
         app.buttons["Not now"].tap()
         waitUntilGone(screen)
-        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + Self.wake(at: 18, days: 1))
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + wake(at: 18, days: 1))
     }
 
+    /// Midnight UTC of the day `launch` started the host on, in seconds
+    /// since 1970. The film clock reads its times on that day, however long
+    /// the test then runs.
+    private var launchDay: TimeInterval = 0
+
     /// The host's words for a wake at `hour`:00 UTC, `days` after the day
-    /// the app was launched on, as the record line shows it. The film clock
-    /// reads its times on the launch day, taken here as today in UTC.
-    private static func wake(at hour: Int, days: Int = 0) -> String {
+    /// the app was launched on, as the record line shows it.
+    private func wake(at hour: Int, days: Int = 0) -> String {
         let day: TimeInterval = 86_400
-        let midnight = (Date().timeIntervalSince1970 / day).rounded(.down) * day
+        let midnight = launchDay
         let moment = Date(timeIntervalSince1970: midnight + Double(days) * day + Double(hour) * 3_600)
         return "wakes at " + moment.ISO8601Format()
     }
@@ -864,6 +868,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         if let textSize {
             app.launchArguments += ["--nuxie-machine-text-size", textSize]
         }
+        launchDay = (Date().timeIntervalSince1970 / 86_400).rounded(.down) * 86_400
         app.launch()
         return app
     }
