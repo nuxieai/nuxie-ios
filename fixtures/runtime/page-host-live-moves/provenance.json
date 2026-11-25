@@ -1,13 +1,13 @@
 {
-  "source": "nuxie-runtime crates/nuxie-runtime/tests/live_moves_device_fixture.rs (emit_device_fixtures) at 7f1137f8dc1fdd5fbd723a20e4db8aefebed261f; lifecycle sidecars from the live-moves device harness's check_live_fixture.py --emit-contract",
-  "purpose": "UNIV-5113 stage A real live-move actor probes, recaptured on the runtime with unit 22's two copies. Exact exporter bytes, no publisher claim.",
+  "source": "nuxie-runtime crates/nuxie-runtime/tests/live_moves_device_fixture.rs (emit_device_fixtures) at b601071eb307c0354121d8295322c0b067082db8; lifecycle sidecars from the live-moves device harness's check_live_fixture.py --emit-contract, its copy that reads flight records",
+  "purpose": "UNIV-5113 stage A real live-move actor probes, recaptured on the runtime that flies elements in place only. Exact exporter bytes, no publisher claim.",
   "command": "tools/bazel/runtime.py test -p nuxie-runtime --test live_moves_device_fixture, then page2.riv, page40.riv and video-inventory2.json from that test's undeclared outputs",
   "changes": "None. The test-only open seam uses Page/run/Page and clears the prepopulated fixture list before player creation. Production uses $nuxie.page and $nuxie.Page with an empty list.",
   "sha256": {
     "lifecycle2.json": "69fcac89b4279a8c57431eb6e656c1552a87fc8040e00d008b5ec9c979fb3149",
     "lifecycle40.json": "26fc1a565770fdaaefdaa4fd01c5472edcccb1cf1182931a3e6ea7e80e46d781",
-    "page2.riv": "17ed05b8710b50bacef3f0ef0446b84a23e0fe48a711b366eea529c87684bf95",
-    "page40.riv": "2a36daa6574f3815cc101056f22dae42050854215f017b52f81dae8bf3b7f4f8",
-    "video-inventory2.json": "62f920138a558e77e77c215f6dd0d35274ea32cdef479db5c52bc143064f39da"
+    "page2.riv": "132df628274c329ae3e6eb42985c6de5262b8bba73e37cb1832bfbd9aa1d6b02",
+    "page40.riv": "39abf3273c082f23097775f8e4a0686b888eef97186104ee70d96d35185e7ca6",
+    "video-inventory2.json": "92081a24200799123b9f6f4a7021d12e6a3bc200e1bb9476bd8bc0aa2a048b4f"
   }
 }
