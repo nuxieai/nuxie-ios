@@ -17,17 +17,17 @@ component Counter
     noted = false
 
   view
-    column padding="calc(env(safe-area-inset-top) + 24) 24 24" gap=12 background-color=#0d1214
-      text `Tapped ${count} times` color=#eef3f1 font-size=24 id="count"
+    column height=100% padding="calc(env(safe-area-inset-top) + 24) 24 24" gap=12 background-color=#0d1214
+      text `Tapped ${count} times` color=#eef3f1 font-size=1.41rem id="count"
       if noted
-        text "You have counted at least once." color=#9fcdb9 font-size=16 id="note"
-      text "This line sits below the note." color=#8a9794 font-size=14 id="below"
-      button padding=12 background-color=#232c30 press=bump id="bump"
-        text "Count" color=#eef3f1 font-size=16
-      button padding=12 background-color=#232c30 press=hide_note id="hide"
-        text "Hide the note" color=#eef3f1 font-size=16
-      button padding=12 press=close id="close"
-        text "Close" color=#8a9794 font-size=16
+        text "You have counted at least once." color=#9fcdb9 font-size=0.94rem id="note"
+      text "This line sits below the note." color=#8a9794 font-size=0.82rem id="below"
+      button padding=0.71rem background-color=#232c30 press=bump id="bump"
+        text "Count" color=#eef3f1 font-size=0.94rem
+      button padding=0.71rem background-color=#232c30 press=hide_note id="hide"
+        text "Hide the note" color=#eef3f1 font-size=0.94rem
+      button padding=0.71rem press=close id="close"
+        text "Close" color=#8a9794 font-size=0.94rem
       text `Total: ${1}` id="total" color=#8a9794
       text `Doubled: ${twice(21)}` id="doubled" color=#8a9794
       text `${40 + 2}` id="sum" color=#8a9794

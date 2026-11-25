@@ -1,5 +1,5 @@
 style Card
-  height=72 padding="0 20" gap=14 flex-direction=row align-items=center
+  height=4.24rem padding="0 20" gap=14 flex-direction=row align-items=center
   background-color=panel border-radius=18 border-width=1 border-color=edge
   :checked
     border-width=2 border-color=mint
@@ -9,7 +9,7 @@ style Radio
   align-items=center justify-content=center
 
 style CardText
-  color=ink font-size=17 font-weight=600 line-height=22
+  color=ink font-size=1rem font-weight=600 line-height=1.29rem
 
 component PlanCard
   props
