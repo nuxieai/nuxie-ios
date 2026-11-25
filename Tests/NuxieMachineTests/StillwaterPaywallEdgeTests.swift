@@ -895,8 +895,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             XCTAssertEqual(after.filter(Self.isPresentation), [.pop(instance: shown.instance)])
             let plan = try await edge.slot("plan")
             XCTAssertEqual(plan, .enumeration("monthly"), "the Monthly tap landed before the swipe")
-            let open = try await edge.recordOpen()
-            XCTAssertTrue(open, "the swipe ended the record while the offer's waits are owed")
+            let stillOpen = try await edge.recordOpen()
+            XCTAssertTrue(stillOpen, "the swipe ended the record while the offer's waits are owed")
             XCTAssertEqual(run.owner.dismissals, [])
             try await run.close()
         } catch {
