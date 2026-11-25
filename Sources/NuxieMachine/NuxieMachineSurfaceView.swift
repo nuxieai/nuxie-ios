@@ -18,6 +18,10 @@ import UIKit
 // - A cancelled touch is an exit. The timestamp is the touch's own.
 //
 // Left out: hover, which a phone does not have, and the fold environment.
+//
+// Added here, which the SDK's Screen view does not do: on a sheet, the view
+// answers the sheet's swipe from the last frame's scroll regions
+// (`gestureRecognizerShouldBegin`), so a `scroll` on a sheet scrolls.
 
 /// A transparent view whose layer is the Metal layer the engine draws into,
 /// and whose touches become the engine's pointers.
@@ -33,6 +37,13 @@ final class NuxieMachineSurfaceView: UIView {
     var onGeometryChange: (() -> Void)?
 
     private var pointerIDs: [ObjectIdentifier: Int32] = [:]
+
+    /// The scroll regions of the last frame shown ([`NuxieMachineScreenViewController.show`]),
+    /// in artboard points; none before the first.
+    var scrollRegions: [NuxieNativeScrollRegion]?
+    /// The touch that went down first while none was down, and where, in
+    /// artboard points. Cleared when that touch ends or is cancelled.
+    private var touchDown: (touch: ObjectIdentifier, point: CGPoint)?
 
     var metalLayer: CAMetalLayer {
         // The layer class above makes this cast always succeed.
@@ -69,11 +80,17 @@ final class NuxieMachineSurfaceView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { pointerIDs.removeAll() }
+        if window == nil {
+            pointerIDs.removeAll()
+            touchDown = nil
+        }
         onGeometryChange?()
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if touchDown == nil, let touch = touches.first {
+            touchDown = (ObjectIdentifier(touch), touch.location(in: self))
+        }
         deliver(touches, as: .down)
         super.touchesBegan(touches, with: event)
     }
@@ -84,13 +101,34 @@ final class NuxieMachineSurfaceView: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        forget(touches)
         deliver(touches, as: .up)
         super.touchesEnded(touches, with: event)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        forget(touches)
         deliver(touches, as: .exit)
         super.touchesCancelled(touches, with: event)
+    }
+
+    /// A sheet's swipe is a pan above this view, and UIKit asks this view,
+    /// the one under the finger, once the finger has moved about 10 points
+    /// whether it may begin. The answer comes from the last frame's scroll
+    /// regions ([`NuxieMachineSheetPan.mayBegin`]): over a `scroll`, a drag
+    /// stays with the page unless it is downward and the page is at its
+    /// top. Any other recognizer, or a pan before the first frame or with no
+    /// touch down, is answered as UIKit would.
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.view !== self,
+              let regions = scrollRegions, let start = touchDown?.point
+        else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
+        return NuxieMachineSheetPan.mayBegin(from: start, moving: pan.translation(in: self), over: regions)
+    }
+
+    private func forget(_ touches: Set<UITouch>) {
+        guard let down = touchDown, touches.contains(where: { ObjectIdentifier($0) == down.touch }) else { return }
+        touchDown = nil
     }
 
     private func deliver(_ touches: Set<UITouch>, as kind: NuxieNativePointerKind) {
@@ -130,6 +168,43 @@ final class NuxieMachineSurfaceView: UIView {
             return candidate
         }
         return nil
+    }
+}
+
+/// Whether a sheet's swipe may take a drag on a machine component, from
+/// where the drag went down and the scroll regions of the frame shown then.
+///
+/// - Down outside every region: yes, as on any sheet.
+/// - Down inside one or more regions: yes only when the drag is mostly
+///   downward and none of the regions under the touch can move toward its
+///   top. A page scrolled down moves back first, and an inner list at its
+///   top inside a page scrolled down moves the page. Otherwise no: the sheet
+///   stays and the drag goes on to the page, which scrolls up, springs at an
+///   end, or does nothing on a sideways drag.
+///
+/// A region's box is clipped by the boxes of the regions it is inside
+/// before the touch is tested against it, since the capture leaves its boxes
+/// unclipped. The answer is about where the page stood when the finger went
+/// down: one frame old, on purpose.
+package enum NuxieMachineSheetPan {
+    /// `start` and `regions` in the same points (the artboard's), and
+    /// `translation` the drag so far, positive y downward.
+    package static func mayBegin(from start: CGPoint, moving translation: CGPoint,
+                                 over regions: [NuxieNativeScrollRegion]) -> Bool {
+        var visible: [CGRect] = []
+        visible.reserveCapacity(regions.count)
+        for (index, region) in regions.enumerated() {
+            if let parent = region.parent, parent >= 0, parent < index {
+                visible.append(region.bounds.intersection(visible[parent]))
+            } else {
+                visible.append(region.bounds)
+            }
+        }
+        let under = regions.indices.filter { !visible[$0].isNull && visible[$0].contains(start) }
+        guard !under.isEmpty else { return true }
+        let downward = translation.y > 0 && abs(translation.y) > abs(translation.x)
+        guard downward else { return false }
+        return !under.contains { regions[$0].canScroll & NuxieNativeScrollRegion.towardTop != 0 }
     }
 }
 #endif

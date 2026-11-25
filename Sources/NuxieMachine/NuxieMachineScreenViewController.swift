@@ -91,7 +91,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
     ///
     /// - A cover: full screen, which has no swipe.
     /// - A sheet: a page sheet at the large detent with no grabber, which
-    ///   the person can swipe down (the native close).
+    ///   the person can swipe down (the native close). Over a `scroll`, a
+    ///   drag stays with the page unless it is downward with the page at
+    ///   its top ([`NuxieMachineSheetPan`]).
     ///
     /// Either way the Screen fills what it is presented in, to every edge,
     /// under the status bar and the home indicator where they reach it, and
@@ -269,6 +271,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// changed.
     package func show(_ capture: NuxieNativeSemanticCapture) {
         latest = capture
+        // A sheet's swipe asks the surface about the scroll regions of the
+        // frame on screen ([`NuxieMachineSheetPan`]).
+        surface.scrollRegions = capture.scrollRegions
         semantics.update(capture: capture, nativeControls: [:], project: { [surface] node in
             Self.projection(for: node, on: surface.bounds)
         }, submit: { [weak self] captureID, nodeID, action in
