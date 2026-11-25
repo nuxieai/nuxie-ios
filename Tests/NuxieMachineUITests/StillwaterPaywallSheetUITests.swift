@@ -41,6 +41,14 @@ import XCTest
 /// the same paywall as a cover, which is told the screen's insets and fills
 /// the screen.
 ///
+/// The paywall follows the person's text size: its text, and the heights of
+/// what holds it, are in `rem`, one `rem` being the body size the session is
+/// told. The host starts at a size with `--nuxie-machine-text-size` and
+/// changes it while the sheet is open by a Darwin notification, both on its
+/// window, standing in for the person's setting. Sizes read from text are
+/// compared with a tolerance, and nothing that depends on the screen's size
+/// is assumed.
+///
 /// Every place check reads UIKit's own values (the screen's insets, the
 /// frames, the view's insets), so the tests hold on any iPhone, one with a
 /// home button among them, where the bottom inset is 0. Where Stillwater's
@@ -123,6 +131,141 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         turnThePhone(.light)
         waitFor(app, screen, ground: .light, "the open paywall did not turn light again with the phone")
         keep("switch-3-light-again", app, screen, expecting: "1-open")
+    }
+
+    // MARK: The text size
+
+    /// UIKit's size categories, by the raw values the host takes: the
+    /// default (body 17), the largest standard size (body 23) and the
+    /// largest accessibility size (body 53).
+    private static let defaultSize = "UICTContentSizeCategoryL"
+    private static let largestStandardSize = "UICTContentSizeCategoryXXXL"
+    private static let largestAccessibilitySize = "UICTContentSizeCategoryAccessibilityXXXL"
+
+    /// The paywall at the largest standard text size, body 23, against the
+    /// default, body 17: opened at 17 and changed to 23 while it is open,
+    /// then opened at 23. At 23 the headline's text is taller than at 17,
+    /// opened at 23 as tall as changed to 23; the headline, the plans and
+    /// the buy button keep their order without running into one another;
+    /// the buy button can be tapped; and the session is told each size
+    /// once. Nothing is assumed about whether the page fits at 23: on a
+    /// small phone it runs past the sheet's bottom edge. Kept as
+    /// `text-size-17-light`, `text-size-change-17-to-23-light` and
+    /// `text-size-23-light`, the stills for a film.
+    func testThePaywallAtTheLargestStandardTextSize() throws {
+        let app = launch(.light, textSize: Self.defaultSize)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+        let at17 = try settledTitle(app, title, told: 17)
+        keep("text-size-17-light", app, screen)
+        expectInOrder(app, title, "at 17")
+        XCTAssertTrue(app.buttons["Continue"].isHittable, "at 17 the buy button cannot be tapped")
+
+        changeTextSize(to: Self.largestStandardSize)
+        let changed = try settledTitle(app, title, told: 23)
+        keep("text-size-change-17-to-23-light", app, screen)
+        XCTAssertGreaterThan(changed.height, at17.height * 1.2,
+                             "changed to 23 the headline is \(changed.height) tall, at 17 \(at17.height)")
+        expectInOrder(app, title, "changed to 23")
+        XCTAssertTrue(app.buttons["Continue"].isHittable, "changed to 23 the buy button cannot be tapped")
+        expectTold(app, [17, 23], "opened at 17 and changed to 23")
+        app.terminate()
+
+        let large = launch(.light, textSize: Self.largestStandardSize)
+        let largeScreen = try openPaywall(large)
+        let largeTitle = text(large, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(largeTitle.waitForExistence(timeout: 15), large.debugDescription)
+        let at23 = try settledTitle(large, largeTitle, told: 23)
+        keep("text-size-23-light", large, largeScreen)
+        XCTAssertGreaterThan(at23.height, at17.height * 1.2,
+                             "opened at 23 the headline is \(at23.height) tall, at 17 \(at17.height)")
+        XCTAssertEqual(at23.height, changed.height, accuracy: 1,
+                       "opened at 23 the headline is not as tall as changed to 23")
+        expectInOrder(large, largeTitle, "opened at 23")
+        XCTAssertTrue(large.buttons["Continue"].isHittable, "opened at 23 the buy button cannot be tapped")
+        expectTold(large, [23], "opened at 23")
+    }
+
+    /// The paywall at the largest accessibility text size, body 53: opened
+    /// at 23 and changed to 53 while it is open, its headline is taller
+    /// still, and the session is told 53. Kept as `text-size-53-light`.
+    /// Only that is checked: at 53 the page is far taller than the sheet and
+    /// nothing on it scrolls yet, so whether it fits, and what the buy
+    /// button's place is, are left out. The host's own screen is opened at
+    /// 23, where its button to start the record is on screen on every
+    /// iPhone.
+    func testThePaywallAtTheLargestAccessibilityTextSize() throws {
+        let app = launch(.light, textSize: Self.largestStandardSize)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+        let at23 = try settledTitle(app, title, told: 23)
+
+        changeTextSize(to: Self.largestAccessibilitySize)
+        let at53 = try settledTitle(app, title, told: 53)
+        keep("text-size-53-light", app, screen)
+        XCTAssertGreaterThan(at53.height, at23.height * 1.2,
+                             "at 53 the headline is \(at53.height) tall, at 23 \(at23.height)")
+        expectTold(app, [23, 53], "opened at 23 and changed to 53")
+    }
+
+    /// Post the Darwin notification the host changes its window's text size
+    /// with, to the size category `raw`.
+    private func changeTextSize(to raw: String) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("dev.nuxie.machine.text-size.\(raw)" as CFString), nil, nil, true)
+    }
+
+    /// The text size of every environment the session took so far, as the
+    /// host shows them (`nuxie-machine-environments`).
+    private func toldTextSizes(_ app: XCUIApplication) -> [Double] {
+        let shown = app.descendants(matching: .any)["nuxie-machine-environments"]
+        guard shown.waitForExistence(timeout: 10), shown.label != "none" else { return [] }
+        return shown.label.components(separatedBy: "; ").compactMap { told in
+            told.split(separator: " ").last.flatMap { Double($0) }
+        }
+    }
+
+    /// The headline's frame once the last text size the session was told is
+    /// `points` and the headline has stood still twice running: the frame
+    /// that draws the size is up.
+    private func settledTitle(_ app: XCUIApplication, _ title: XCUIElement, told points: Double) throws -> CGRect {
+        let deadline = Date().addingTimeInterval(15)
+        var last = CGRect.null
+        while Date() < deadline {
+            let told = toldTextSizes(app).last
+            let now = title.frame
+            if let told, abs(told - points) < 0.5, now == last, now.height > 0 { return now }
+            last = now
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        XCTFail("the headline did not settle at \(points): told \(toldTextSizes(app)), headline \(title.frame)")
+        throw NotRead()
+    }
+
+    /// The text sizes told are `want`, one for one, each within half a
+    /// point: each size told once. Kept as the note `text-size-told`.
+    private func expectTold(_ app: XCUIApplication, _ want: [Double], _ what: String) {
+        let told = toldTextSizes(app)
+        note(told.map { "\($0)" }.joined(separator: "\n"), kept: "text-size-told")
+        XCTAssertTrue(told.count == want.count && zip(told, want).allSatisfy { abs($0 - $1) < 0.5 },
+                      "\(what): the session was told \(told), not \(want)")
+    }
+
+    /// The headline, the two plans and the buy button, top to bottom, each
+    /// below the one before it without running into it.
+    private func expectInOrder(_ app: XCUIApplication, _ title: XCUIElement, _ what: String) {
+        let boxes = [title, button(app, beginningWith: "Yearly"), button(app, beginningWith: "Monthly"),
+                     app.buttons["Continue"]]
+        for box in boxes {
+            XCTAssertTrue(box.exists, "\(what): \(box) is not read")
+        }
+        for (above, below) in zip(boxes, boxes.dropFirst()) {
+            XCTAssertLessThanOrEqual(above.frame.maxY, below.frame.minY + 0.5,
+                                     "\(what): \(above.frame) runs into \(below.frame)")
+        }
     }
 
     /// Post the Darwin notification the host turns its window with.
@@ -519,9 +662,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     /// The host, on the phone as it is, or started in `appearance`; with
     /// `asCover`, presenting the paywall as a cover; with `mediumSheet`,
-    /// turning the presented sheet to the medium detent once it is up.
+    /// turning the presented sheet to the medium detent once it is up; with
+    /// `textSize`, started at that size category, by its raw value.
     private func launch(_ appearance: Ground? = nil, asCover: Bool = false,
-                        mediumSheet: Bool = false) -> XCUIApplication {
+                        mediumSheet: Bool = false, textSize: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--nuxie-machine-paywall"]
         if asCover {
@@ -532,6 +676,9 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         }
         if let appearance {
             app.launchArguments += ["--nuxie-machine-appearance", appearance.rawValue]
+        }
+        if let textSize {
+            app.launchArguments += ["--nuxie-machine-text-size", textSize]
         }
         app.launch()
         return app
@@ -808,18 +955,25 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         return place
     }
 
-    /// Stillwater's page, all of it: its top padding (64), the mark and the
-    /// headline's margin (40 and 28), the headline's two lines (76), the
-    /// plans' margin and the two plans with the gap between (40, 72, 12,
-    /// 72), the buy button and its margin (28 and 56), the error line's box
-    /// (52), the footer ("Not now" 48, the links 4 and 44, the terms' box 8
-    /// and 40), and its bottom padding (34). Its insets come on top.
-    private static let pageHeight: CGFloat = 718
+    /// Stillwater's page, all of it, at the default text size, one `rem`
+    /// being 17: its top padding (64), the mark and the headline's margin
+    /// (40 and 28), the headline's two lines (2 x 2.24rem, 76.16), the
+    /// plans' margin and the two plans with the gap between (40, 4.24rem
+    /// 72.08, 12, 72.08), the buy button and its margin (28 and 3.29rem
+    /// 55.93), the error line's box (2.36rem + 12, 52.12), the footer ("Not
+    /// now" 2.82rem 47.94, the links 4 and 2.59rem 44.03, the terms' box 8
+    /// and 2.36rem 40.12), and its bottom padding (34). Its insets come on
+    /// top. The checks that use it run at the default size.
+    private static let pageHeight: CGFloat = 718.46
+
+    /// Below the links, at the default text size: the terms' box (8 and
+    /// 2.36rem, 40.12) and the page's own bottom padding (34).
+    private static let belowTheLinks: CGFloat = 8 + 2.36 * 17 + 34
 
     /// Whether Stillwater's page fits what it is presented in, `frame`, told
     /// `told`. When it fits, its content keeps clear of the home indicator:
-    /// below the links ("Restore purchases"), the terms' box (8 and 40) and
-    /// the page's own bottom padding (34), then the told bottom inset. When
+    /// below the links ("Restore purchases"), the terms' box (8 and 40.12)
+    /// and the page's own bottom padding (34), then the told bottom inset. When
     /// it does not (a short screen, a phone on its side, a medium sheet),
     /// its content runs past the bottom edge, which is kept as the note
     /// `name-fit` and not checked.
@@ -834,7 +988,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
             return false
         }
         XCTAssertTrue(restore.exists, "\(name): the footer's links are not read")
-        XCTAssertEqual(frame.maxY - told.bottom - restore.frame.maxY, 82, accuracy: 1,
+        XCTAssertEqual(frame.maxY - told.bottom - restore.frame.maxY, Self.belowTheLinks, accuracy: 1,
                        "\(name): the footer does not end the page's padding above the home indicator")
         return true
     }

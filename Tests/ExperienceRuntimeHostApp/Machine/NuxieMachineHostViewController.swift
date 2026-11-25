@@ -23,6 +23,15 @@ import UIKit
 /// paywall is open: the simulator's own appearance setting does not reach a
 /// running app on every simulator.
 ///
+/// The person's text size is stood in for the same way, on the same window:
+/// `--nuxie-machine-text-size UICTContentSizeCategoryXXXL` (any of UIKit's
+/// size categories, by its raw value) starts the app at that size, and the
+/// Darwin notification `dev.nuxie.machine.text-size.<raw value>`, for the
+/// sizes in [`textSizeNotifications`], changes it while the app runs. Both
+/// set the window's trait override, so they need iOS 17 or later; on an
+/// older system they do nothing. Every environment the session was told is
+/// shown as the element `nuxie-machine-environments`.
+///
 /// `--nuxie-machine-paywall-cover` presents the same paywall as a cover:
 /// Stillwater's files as bundled, with the one word of the paywall's route
 /// that says how it is presented swapped in memory ([`asCover`]). As a
@@ -44,6 +53,12 @@ public final class NuxieMachineHostViewController: UIViewController {
         "dev.nuxie.machine.appearance.dark": .dark,
         "dev.nuxie.machine.appearance.light": .light,
     ]
+    /// The Darwin notifications that change the window's text size, with the
+    /// size category each one sets: the default, the largest standard and
+    /// the largest accessibility size.
+    public static let textSizeNotifications: [String: UIContentSizeCategory] = Dictionary(
+        uniqueKeysWithValues: [UIContentSizeCategory.large, .extraExtraExtraLarge, .accessibilityExtraExtraExtraLarge]
+            .map { ("dev.nuxie.machine.text-size.\($0.rawValue)", $0) })
     /// The host the notifications turn: the one on screen.
     private static weak var shown: NuxieMachineHostViewController?
     /// The window this host appeared in. Held here, since a cover takes the
@@ -139,6 +154,9 @@ public final class NuxieMachineHostViewController: UIViewController {
         if let appearance = Self.launchAppearance {
             view.window?.overrideUserInterfaceStyle = appearance
         }
+        if let textSize = Self.launchTextSize {
+            Self.set(textSize, on: view.window)
+        }
         Self.listenForAppearance(turning: self)
         if safeArea == nil, let scene = view.window?.windowScene {
             safeArea = NuxieMachineSafeAreaWindow(windowScene: scene) { [weak self] in self?.presenter?.edge }
@@ -160,7 +178,8 @@ public final class NuxieMachineHostViewController: UIViewController {
     }
 
     /// Turn the window `shown` appeared in when a test posts one of
-    /// [`appearanceNotifications`]. Listens once per app run.
+    /// [`appearanceNotifications`], or change its text size when it posts
+    /// one of [`textSizeNotifications`]. Listens once per app run.
     private static var listening = false
     private static func listenForAppearance(turning host: NuxieMachineHostViewController) {
         shown = host
@@ -168,16 +187,38 @@ public final class NuxieMachineHostViewController: UIViewController {
         guard !listening else { return }
         listening = true
         let center = CFNotificationCenterGetDarwinNotifyCenter()
-        for name in appearanceNotifications.keys {
+        for name in Array(appearanceNotifications.keys) + Array(textSizeNotifications.keys) {
             CFNotificationCenterAddObserver(center, nil, { _, _, name, _, _ in
                 guard let name else { return }
                 let raw = name.rawValue as String
                 Task { @MainActor in
-                    guard let style = NuxieMachineHostViewController.appearanceNotifications[raw] else { return }
-                    NuxieMachineHostViewController.shown?.appearedIn?.overrideUserInterfaceStyle = style
+                    let window = NuxieMachineHostViewController.shown?.appearedIn
+                    if let style = NuxieMachineHostViewController.appearanceNotifications[raw] {
+                        window?.overrideUserInterfaceStyle = style
+                    } else if let textSize = NuxieMachineHostViewController.textSizeNotifications[raw] {
+                        NuxieMachineHostViewController.set(textSize, on: window)
+                    }
                 }
             }, name as CFString, nil, .deliverImmediately)
         }
+    }
+
+    /// Set `window`'s text size to `category`, standing in for the person's
+    /// setting: its trait override, which every view and presentation in it
+    /// inherits. Needs iOS 17 or later.
+    private static func set(_ category: UIContentSizeCategory, on window: UIWindow?) {
+        guard #available(iOS 17.0, *) else { return }
+        window?.traitOverrides.preferredContentSizeCategory = category
+    }
+
+    /// The text size `--nuxie-machine-text-size` names by its raw value, if
+    /// any.
+    private static var launchTextSize: UIContentSizeCategory? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let at = arguments.firstIndex(of: "--nuxie-machine-text-size"), at + 1 < arguments.count
+        else { return nil }
+        let category = UIContentSizeCategory(rawValue: arguments[at + 1])
+        return category == .unspecified ? nil : category
     }
 
     /// The appearance `--nuxie-machine-appearance` names, if any.
@@ -295,8 +336,11 @@ extension NuxieMachineStillwaterFixture {
 /// once it has a place (the insets and size the session is told). And
 /// `nuxie-machine-places` is labeled with every place the session took, in
 /// order, from the edge's log (`edge`): `T R B L W H` each, `; ` between, or
-/// `none`. Both are read four times a second, so a UI test can tell a frame
-/// the app drew wrong from a screenshot taken wrong, and see each place told.
+/// `none`. `nuxie-machine-environments` is labeled the same way with every
+/// environment the session took, `light 17.0` or `dark 23.0` each. All are
+/// read four times a second, so a UI test can tell a frame the app drew
+/// wrong from a screenshot taken wrong, and see each place and environment
+/// told.
 @MainActor
 final class NuxieMachineSafeAreaWindow: UIWindow {
     init(windowScene: UIWindowScene, edge: @escaping @MainActor () -> NuxieMachineEdge? = { nil }) {
@@ -323,6 +367,7 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
         private let label = UILabel()
         private let surfaceLabel = UILabel()
         private let placesLabel = UILabel()
+        private let environmentsLabel = UILabel()
         private let edge: @MainActor () -> NuxieMachineEdge?
         /// Kept for the app's run, as the window is; it holds this weakly.
         private var timer: Timer?
@@ -360,6 +405,13 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             placesLabel.accessibilityIdentifier = "nuxie-machine-places"
             placesLabel.accessibilityLabel = "none"
             view.addSubview(placesLabel)
+            environmentsLabel.textColor = .clear
+            environmentsLabel.font = .systemFont(ofSize: 1)
+            environmentsLabel.frame = CGRect(x: 3, y: 0, width: 1, height: 1)
+            environmentsLabel.isAccessibilityElement = true
+            environmentsLabel.accessibilityIdentifier = "nuxie-machine-environments"
+            environmentsLabel.accessibilityLabel = "none"
+            view.addSubview(environmentsLabel)
             self.view = view
         }
 
@@ -397,8 +449,8 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
                 + "scale \(numbers[4]) drawn \(numbers[5]) \(numbers[6])" + viewInsets + place
         }
 
-        /// Every place the session took, from the edge's log. Kept as it was
-        /// once the edge is let go of.
+        /// Every place and every environment the session took, from the
+        /// edge's log. Kept as they were once the edge is let go of.
         private func readPlaces() {
             guard let edge = edge() else { return }
             Task { @MainActor [weak self] in
@@ -411,6 +463,12 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
                     [place.top, place.right, place.bottom, place.left, place.width, place.height]
                         .map { "\($0)" }.joined(separator: " ")
                 }.joined(separator: "; ")
+                let environments = log.compactMap { entry -> String? in
+                    guard case .environment(let environment) = entry else { return nil }
+                    return "\(environment.dark ? "dark" : "light") \(environment.textSize)"
+                }
+                self?.environmentsLabel.accessibilityLabel = environments.isEmpty
+                    ? "none" : environments.joined(separator: "; ")
             }
         }
 
