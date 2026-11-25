@@ -69,3 +69,62 @@ test "the trial's terms open and close"
   expect has "terms"
   tap "details"
   expect missing "terms"
+
+test "the evening offer joins the plans while she looks"
+  given customer.plan = "free"
+  clock to 17:00
+  event "onboarding_completed"
+  expect text "buy" == "Continue"
+  clock to 18:00
+  expect state offer_live == true
+  expect state plan == annual_offer
+  expect text "buy" == "Claim the offer"
+  tap "buy"
+  expect called purchase product=catalog[annual_offer]
+
+test "the evening offer leaves when it ends"
+  given customer.plan = "free"
+  clock to 17:00
+  event "onboarding_completed"
+  clock to 18:00
+  clock to 20:00
+  expect state offer_live == false
+  expect state plan == annual
+  expect text "buy" == "Continue"
+  expect route paywall
+
+test "an offer missed while she was away is skipped"
+  given customer.plan = "free"
+  clock to 17:00
+  event "onboarding_completed"
+  app closes
+  clock to 21:00
+  app opens
+  expect state offer_live == false
+  expect state plan == annual
+  expect text "buy" == "Continue"
+  expect route paywall
+
+test "an offer she comes back to in time leaves at 20:00"
+  given customer.plan = "free"
+  clock to 17:00
+  event "onboarding_completed"
+  app closes
+  clock to 19:30
+  app opens
+  expect state offer_live == true
+  expect state plan == annual_offer
+  clock to 20:00
+  expect state offer_live == false
+  expect state plan == annual
+  expect text "buy" == "Continue"
+
+test "a paywall first opened after 18:00 has no offer tonight"
+  given customer.plan = "free"
+  clock to 19:00
+  event "onboarding_completed"
+  clock to 20:00
+  expect state offer_ahead == false
+  expect state offer_live == false
+  expect text "buy" == "Continue"
+  expect route paywall
