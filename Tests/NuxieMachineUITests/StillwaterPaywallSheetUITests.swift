@@ -109,10 +109,15 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     /// For a screen reader the plan cards sit inside the "Plan" radio
     /// group: the group is read by its label, then the two cards, Yearly
-    /// then Monthly, the order of the plans the record hands the page, and
-    /// each card's frame lies inside the group's. The cards are rows of a
-    /// list once Stillwater draws them from one; a row read outside its
-    /// group, or in the order it was mounted, fails here.
+    /// then Monthly, the order of the `plans` list the record hands the
+    /// page, and each card's frame lies inside the group's. Stillwater draws
+    /// the cards as rows of that list (`for choice in plans key=choice.plan`),
+    /// so a row read outside its group, or in the order it was mounted,
+    /// fails here. A tap on Monthly's row then reaches the record as
+    /// Monthly's own plan, and the rows stay where they were, in the group
+    /// and in order, with Monthly now read as selected: a row redrawn as a
+    /// new one, or its press carrying another row's plan, fails the second
+    /// half. Kept as `plan-group` and `plan-group-monthly`.
     func testThePlanCardsAreReadInsideThePlanGroupInOrder() throws {
         let app = launch(.light)
         let screen = try openPaywall(app)
@@ -122,21 +127,37 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         let group = app.otherElements["Plan"]
         XCTAssertTrue(group.waitForExistence(timeout: 10), "the plans' group is not read: \(app.debugDescription)")
         keep("plan-group", app, screen)
+        try expectCardsInGroup(app, screen, group, yearly, monthly, "opened")
+        XCTAssertTrue(yearly.isSelected, "the chosen plan, yearly, is not read as selected")
+        XCTAssertFalse(monthly.isSelected, "monthly is read as selected while yearly is chosen")
 
-        let opened = reading(app, on: screen.frame)
-        let at = try XCTUnwrap(opened.firstIndex(of: "group \"Plan\""), "the plans' group is not read: \(opened)")
-        let next = Array(opened.dropFirst(at + 1).prefix(2))
-        XCTAssertEqual(next.count, 2, "nothing is read after the plans' group: \(opened)")
+        monthly.tap()
+        waitFor(screen, valueContaining: "Selected plan: monthly.")
+        waitFor(monthly, "selected == true", "monthly is not read as selected after its row's tap")
+        keep("plan-group-monthly", app, screen)
+        XCTAssertFalse(yearly.isSelected, "yearly is still read as selected after monthly's row was tapped")
+        try expectCardsInGroup(app, screen, group, yearly, monthly, "after monthly's tap")
+    }
+
+    /// The reading right after the "Plan" group is its two cards, Yearly then
+    /// Monthly, each inside the group's frame and Yearly above Monthly.
+    private func expectCardsInGroup(_ app: XCUIApplication, _ screen: XCUIElement, _ group: XCUIElement,
+                                    _ yearly: XCUIElement, _ monthly: XCUIElement, _ when: String) throws {
+        let read = reading(app, on: screen.frame)
+        let at = try XCTUnwrap(read.firstIndex(of: "group \"Plan\""), "\(when): the plans' group is not read: \(read)")
+        let next = Array(read.dropFirst(at + 1).prefix(2))
+        XCTAssertEqual(next.count, 2, "\(when): nothing is read after the plans' group: \(read)")
         XCTAssertTrue(next.first?.hasPrefix("button \"Yearly") ?? false,
-                      "Yearly is not read first in the group: \(opened)")
-        XCTAssertTrue(next.last?.hasPrefix("button \"Monthly") ?? false, "Monthly is not read second: \(opened)")
+                      "\(when): Yearly is not read first in the group: \(read)")
+        XCTAssertTrue(next.last?.hasPrefix("button \"Monthly") ?? false,
+                      "\(when): Monthly is not read second: \(read)")
 
         let inside = group.frame.insetBy(dx: -0.5, dy: -0.5)
         for card in [yearly, monthly] {
             XCTAssertTrue(inside.contains(card.frame),
-                          "\(card.label) at \(card.frame) is outside the group's \(group.frame)")
+                          "\(when): \(card.label) at \(card.frame) is outside the group's \(group.frame)")
         }
-        XCTAssertLessThan(yearly.frame.minY, monthly.frame.minY, "Yearly is not above Monthly")
+        XCTAssertLessThan(yearly.frame.minY, monthly.frame.minY, "\(when): Yearly is not above Monthly")
     }
 
     /// The paywall follows the phone while it is open: the phone turns dark
