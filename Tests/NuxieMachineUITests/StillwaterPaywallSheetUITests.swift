@@ -365,14 +365,18 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         expectTold(app, [23, 53], "opened at 23 and changed to 53")
     }
 
-    /// At the default text size, body 17, Stillwater's page fits the sheet:
-    /// its footer, "Not now" and "Restore purchases", is on screen with
-    /// nothing scrolled, inside the sheet and above the home indicator, and
-    /// can be tapped where it is. A drag up over the page then moves
-    /// nothing, since there is nothing to scroll, and the sheet stays; a
-    /// plan picked after it is the record's. Kept as `footer-17-light`,
-    /// `footer-17-after-drag-up` and `footer-17-monthly-chosen`. The path of
-    /// the film `stillwater-paywall-default`.
+    /// At the default text size, body 17, where Stillwater's page fits the
+    /// sheet: its footer, "Not now" and "Restore purchases", is on screen
+    /// with nothing scrolled, inside the sheet and above the home indicator,
+    /// and can be tapped where it is, and a drag up over the page moves
+    /// nothing, since there is nothing to scroll. Where the sheet is shorter
+    /// than the page needs ([`pageHeight`] and the home indicator's inset,
+    /// which a large sheet is told), the page scrolls on a drag up: that is
+    /// kept as the note `footer-17-fit` and neither part is checked. On every
+    /// phone the drag leaves the sheet in place and a plan picked after it
+    /// is the record's. Kept as `footer-17-light`, `footer-17-after-drag-up`
+    /// and `footer-17-monthly-chosen`. The path of the film
+    /// `stillwater-paywall-default`.
     func testAtTheDefaultTextSizeTheFooterIsOnScreenWithoutScrolling() throws {
         guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
         let app = launch(.light, textSize: Self.defaultSize)
@@ -384,22 +388,32 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         let screenInsets = try insets(app)
         let bottom = sheet.maxY - screenInsets.bottom
         let restore = app.buttons["Restore purchases"]
-        for element in [app.buttons["Not now"], restore] {
-            XCTAssertTrue(element.exists, "\(element) is not read: \(app.debugDescription)")
-            XCTAssertGreaterThanOrEqual(element.frame.minY, sheet.minY, "\(element) starts above the sheet \(sheet)")
-            XCTAssertLessThanOrEqual(element.frame.maxY, bottom + 0.5,
-                                     "\(element) runs past \(bottom), where the home indicator starts")
-            XCTAssertTrue(element.isHittable, "\(element) cannot be tapped where it is")
+        let needed = Self.pageHeight + screenInsets.bottom
+        let fits = sheet.height + 0.5 >= needed
+        if fits {
+            for element in [app.buttons["Not now"], restore] {
+                XCTAssertTrue(element.exists, "\(element) is not read: \(app.debugDescription)")
+                XCTAssertGreaterThanOrEqual(element.frame.minY, sheet.minY, "\(element) starts above the sheet \(sheet)")
+                XCTAssertLessThanOrEqual(element.frame.maxY, bottom + 0.5,
+                                         "\(element) runs past \(bottom), where the home indicator starts")
+                XCTAssertTrue(element.isHittable, "\(element) cannot be tapped where it is")
+            }
+        } else {
+            note("The page needs \(needed) points and the sheet has \(sheet.height): the page scrolls at 17, so "
+                     + "whether the footer is on screen unscrolled and still after a drag up is not checked.",
+                 kept: "footer-17-fit")
         }
         keep("footer-17-light", app, screen)
 
-        let footer = restore.frame
+        let footer = restore.exists ? restore.frame : nil
         dragUp(app, over: sheet)
         let after = try settled(title)
         keep("footer-17-after-drag-up", app, screen)
         XCTAssertEqual(screen.frame, sheet, "the drag moved the sheet")
-        XCTAssertEqual(after.minY, top.minY, accuracy: 1, "the page scrolled with nothing to scroll")
-        XCTAssertEqual(restore.frame.minY, footer.minY, accuracy: 1, "the footer moved with nothing to scroll")
+        if fits, let footer {
+            XCTAssertEqual(after.minY, top.minY, accuracy: 1, "the page scrolled with nothing to scroll")
+            XCTAssertEqual(restore.frame.minY, footer.minY, accuracy: 1, "the footer moved with nothing to scroll")
+        }
         waitFor(screen, valueContaining: "Record: open")
 
         let monthly = button(app, beginningWith: "Monthly")
@@ -419,10 +433,12 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// sheet still stays. (The host's stand-in store does not answer
     /// `restore`: its refusal, four seconds later, faults the record and
     /// closes the sheet, as `testAStoreAskedForAnUnknownExternFaults` pins.
-    /// This test ends before then.) Where the footer is before the drag is kept as the
-    /// note `footer-23-before`, not checked: on a taller phone it may be in
-    /// view already. Kept as `footer-23-before-drag`, `footer-23-after-drag`
-    /// and `footer-23-restoring`.
+    /// This test ends before then.) Where the footer is before the drag is
+    /// kept as the note `footer-23-before`, not checked: on a taller phone it
+    /// may be in view already, and on a shorter one it starts wholly below
+    /// the sheet and is not read at all until the page scrolls. Kept as
+    /// `footer-23-before-drag`, `footer-23-after-drag` and
+    /// `footer-23-restoring`.
     func testAtTheLargestStandardTextSizeADragUpBringsTheFooterIntoView() throws {
         guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
         let app = launch(.light, textSize: Self.largestStandardSize)
@@ -434,18 +450,22 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         let screenInsets = try insets(app)
         let bottom = sheet.maxY - screenInsets.bottom
         let restore = app.buttons["Restore purchases"]
-        XCTAssertTrue(restore.exists, "the footer's links are not read: \(app.debugDescription)")
-        let before = restore.frame
-        note("Before the drag \"Restore purchases\" is at \(before); the sheet is \(sheet) and the home indicator "
-                 + "starts at \(bottom).", kept: "footer-23-before")
+        let before = restore.exists ? restore.frame : nil
+        note("Before the drag \"Restore purchases\" is "
+                 + (before.map { "at \($0)" } ?? "not read, wholly below the sheet")
+                 + "; the sheet is \(sheet) and the home indicator starts at \(bottom).", kept: "footer-23-before")
         keep("footer-23-before-drag", app, screen)
 
         dragUp(app, over: sheet)
+        XCTAssertTrue(restore.waitForExistence(timeout: 10),
+                      "after the drag up the footer's links are not read: \(app.debugDescription)")
         let after = try settled(restore)
         keep("footer-23-after-drag", app, screen)
         XCTAssertEqual(screen.frame, sheet, "the drag moved the sheet")
-        XCTAssertLessThan(after.minY, before.minY - 20,
-                          "the page did not scroll: \"Restore purchases\" was at \(before), and is at \(after)")
+        if let before {
+            XCTAssertLessThan(after.minY, before.minY - 20,
+                              "the page did not scroll: \"Restore purchases\" was at \(before), and is at \(after)")
+        }
         XCTAssertGreaterThanOrEqual(after.minY, sheet.minY, "\"Restore purchases\" is above the sheet \(sheet)")
         XCTAssertLessThanOrEqual(after.maxY, bottom + 0.5,
                                  "\"Restore purchases\" at \(after) runs past \(bottom), where the home indicator starts")
@@ -482,6 +502,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
         dragUp(app, over: sheet)
         let details = app.buttons["About the trial"]
+        XCTAssertTrue(details.waitForExistence(timeout: 10),
+                      "after the drag up the footer's links are not read: \(app.debugDescription)")
         let shown = try settled(details)
         XCTAssertEqual(screen.frame, sheet, "the drag up moved the sheet")
         XCTAssertLessThanOrEqual(shown.maxY, bottom + 0.5,
@@ -497,6 +519,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         origin.withOffset(CGVector(dx: from.x, dy: from.y))
             .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: from.x, dy: from.y + 250)),
                    withVelocity: .slow, thenHoldForDuration: 0.3)
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "the headline is not read after the drag back down")
         let back = try settled(title)
         keep("scrolled-23-back-at-top", app, screen)
         XCTAssertTrue(screen.exists, "the drag down over the scrolled page took the sheet")
