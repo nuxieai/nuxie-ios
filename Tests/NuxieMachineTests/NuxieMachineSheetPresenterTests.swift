@@ -405,14 +405,74 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
+    /// Away received at 17:30 while a frame holds the loop's lane, and the
+    /// lane reached at 17:45: that run tells away at 17:30, and while it
+    /// waits on the session, back is received at 01:00 the next morning,
+    /// after the 18:00 wake, which is past the run's moment and not yet
+    /// delivered. Back is not told early, at the run's 17:45: it waits for
+    /// the next run and is told at 01:00, after 18:00, so the machine
+    /// delivers 18:00 with her away inside that call, and midnight too: the
+    /// offer waited for her and was given up, and the record exited. Told
+    /// at 17:45, she would have been here at 18:00 and the offer taken.
+    @MainActor
+    func testAReturnReceivedWhileARunWaitsIsToldAfterTheWakeBeforeIt() async throws {
+        let host = UIViewController()
+        let (presenter, edge, midnight) = try await startTheEveningAtFive(host)
+        let lane = try await holdTheLane(of: presenter)
+
+        Self.move(presenter, to: midnight + 17 * Self.hour + 30 * 60_000)
+        let away = Task { @MainActor in await presenter.presence(here: false) }
+        try await waitUntil("away is received") { presenter.presencesWaiting.count == 1 }
+        let departure = presenter.presencesWaiting[0]
+        Self.move(presenter, to: midnight + 17 * Self.hour + 45 * 60_000)
+        let turn = try await holdTheTurn(of: edge)
+        lane.open()
+        try await waitUntil("the run tells away and waits on the session") {
+            presenter.presencesWaiting.isEmpty && !presenter.here
+        }
+
+        let lapse = midnight + 24 * Self.hour
+        Self.move(presenter, to: lapse + Self.hour)
+        let back = Task { @MainActor in await presenter.presence(here: true) }
+        try await waitUntil("back is received") { presenter.presencesWaiting.count == 1 }
+        let comeBack = presenter.presencesWaiting[0]
+        XCTAssertTrue(comeBack.here)
+        XCTAssertGreaterThanOrEqual(comeBack.at, lapse + Self.hour, "back was not received at 01:00")
+        turn.open()
+        await away.value
+        await back.value
+
+        XCTAssertEqual(presenter.presencesWaiting, [])
+        XCTAssertEqual(presenter.presencesTold, [departure, comeBack],
+                       "back was not told at the moment it was received, after 18:00")
+        XCTAssertEqual(presenter.wakesDelivered, [], "the presenter delivered 18:00 with her here")
+        XCTAssertTrue(presenter.here)
+        let taken = try await edge.slot("taken")
+        XCTAssertEqual(taken, .bool(false), "the offer was taken: 18:00 was judged with her here")
+        XCTAssertEqual(presenter.status.record, .ended, "the offer was not given up")
+        let log = await edge.log
+        XCTAssertTrue(log.contains(.end(reason: .exited, fault: nil)), "the offer was not given up: \(log)")
+        withExtendedLifetime(host) {}
+    }
+
     /// Hold `presenter`'s lane, as a frame in flight holds it, until the
     /// gate is opened.
     @MainActor
-    private func holdTheLane(of presenter: NuxieMachineSheetPresenter) async throws -> LaneGate {
+    private func holdTheLane(of presenter: NuxieMachineSheetPresenter) async throws -> Gate {
         let loop = try XCTUnwrap(presenter.screenLoop, "the presenter holds no loop")
-        let gate = LaneGate()
+        let gate = Gate()
         Task { @MainActor in await loop.inLane { await gate.wait() } }
         try await waitUntil("the lane is held") { gate.holding }
+        return gate
+    }
+
+    /// Hold `edge`'s turn, as a delivery in flight holds it, until the gate
+    /// is opened: a delivery asked for meanwhile waits for it.
+    @MainActor
+    private func holdTheTurn(of edge: NuxieMachineEdge) async throws -> Gate {
+        let gate = Gate()
+        Task { await edge.holdingTurn { await gate.wait() } }
+        try await waitUntil("the edge's turn is held") { gate.holding }
         return gate
     }
 
@@ -639,9 +699,10 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     }
 }
 
-/// Holds a loop's lane from inside it until it is opened.
+/// Holds a loop's lane or an edge's turn from inside it until it is
+/// opened.
 @MainActor
-private final class LaneGate {
+private final class Gate {
     private(set) var holding = false
     private var waiting: CheckedContinuation<Void, Never>?
     private var opened = false
