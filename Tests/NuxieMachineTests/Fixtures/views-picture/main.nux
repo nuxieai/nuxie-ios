@@ -1,0 +1,28 @@
+component Gallery
+  platforms ios android
+
+  entry
+    on event "opened"
+    do open
+
+  routes
+    fits  Fits(close=close)  cover
+
+  action open
+    go(fits)
+
+  action close
+    dismiss("closed")
+    exit
+
+component Fits
+  props
+    close: action
+
+  view
+    column width=100% height=100% padding=20 gap=20 background-color=#0d1214
+      image "assets/hero.png" width=200 height=200 fit=fill label="Four colors"
+      image "assets/hero.png" width=200 height=200 fit=cover
+      image "assets/hero.png" width=200 height=200 fit=contain
+      button id="close" press=close
+        text "Close" color=#eef3f1 font-size=16
