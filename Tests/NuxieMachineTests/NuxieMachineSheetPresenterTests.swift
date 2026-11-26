@@ -310,8 +310,10 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         Self.move(presenter, to: midnight + 17 * Self.hour)
         await presenter.presence(here: false)
         XCTAssertTrue(presenter.here, "the session was told before it was made")
+        XCTAssertEqual(presenter.presencesWaiting.map(\.here), [false], "away was not kept for the start")
         await presenter.start(plan: plan, store: ProbeStore(), event: "go")
         XCTAssertFalse(presenter.here)
+        XCTAssertEqual(presenter.presencesWaiting, [], "away was kept after the start told it")
         let edge = try XCTUnwrap(presenter.edge)
         let log = await edge.log
         XCTAssertEqual(Array(log.prefix(2).dropFirst()), [.presence(here: false)],
@@ -323,6 +325,90 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
             presenter.status.record == .open(wakeAt: evening + 6 * Self.hour)
         }
         withExtendedLifetime(host) {}
+    }
+
+    /// Away at 17:30 and back at 19:00, both received while a frame holds
+    /// the loop's lane, and the lane reached only the next morning: each
+    /// is told, in order, at the moment it was received. Away is told
+    /// before the 18:00 wake, so the presenter delivers no wake as here;
+    /// back is told at 19:00, so the machine delivers 18:00 inside that
+    /// call with her away, and she is then here, so the offer is taken
+    /// and the record stays open. Told only at the lane's moment, the next
+    /// morning, the offer would have been given up at midnight.
+    @MainActor
+    func testAwayAndBackWhileTheLaneIsHeldAreEachToldAtTheirOwnMoment() async throws {
+        let host = UIViewController()
+        let (presenter, edge, midnight) = try await startTheEveningAtFive(host)
+        let gate = try await holdTheLane(of: presenter)
+
+        Self.move(presenter, to: midnight + 17 * Self.hour + 30 * 60_000)
+        let away = Task { @MainActor in await presenter.presence(here: false) }
+        try await waitUntil("away is received") { presenter.presencesWaiting.count == 1 }
+        Self.move(presenter, to: midnight + 19 * Self.hour)
+        let back = Task { @MainActor in await presenter.presence(here: true) }
+        try await waitUntil("back is received") { presenter.presencesWaiting.count == 2 }
+        let received = presenter.presencesWaiting
+        XCTAssertEqual(received.map(\.here), [false, true], "the two notices were not both kept, in order")
+        XCTAssertLessThan(received[0].at, midnight + 18 * Self.hour, "away was not taken at 17:30")
+        XCTAssertGreaterThanOrEqual(received[1].at, midnight + 19 * Self.hour, "back was not taken at 19:00")
+        Self.move(presenter, to: midnight + Self.day + 9 * Self.hour)
+
+        gate.open()
+        await away.value
+        await back.value
+        XCTAssertEqual(presenter.presencesWaiting, [])
+        let told = await Self.presences(edge)
+        XCTAssertEqual(told, [false, true], "away and back did not each reach the session, in order")
+        XCTAssertTrue(presenter.here)
+        XCTAssertFalse(presenter.wakesDelivered.contains(midnight + 18 * Self.hour),
+                       "18:00 was delivered by the presenter as here, not by the return with her away")
+        guard case .open = presenter.status.record else {
+            return XCTFail("back was not told at 19:00: the record is \(presenter.status.record)")
+        }
+        let taken = try await edge.slot("taken")
+        XCTAssertEqual(taken, .bool(true), "the offer was not taken when she came back at 19:00")
+        withExtendedLifetime(host) {}
+    }
+
+    /// Away received at 17:30 while a frame holds the loop's lane, and the
+    /// lane reached only at 18:30: the departure is told at 17:30, before
+    /// the 18:00 wake, so the wake is judged with her away. The offer is
+    /// ready and waits for her until midnight; it is not taken.
+    @MainActor
+    func testADepartureReceivedBeforeAWakeHasTheWakeJudgedWithHerAway() async throws {
+        let host = UIViewController()
+        let (presenter, edge, midnight) = try await startTheEveningAtFive(host)
+        let gate = try await holdTheLane(of: presenter)
+
+        Self.move(presenter, to: midnight + 17 * Self.hour + 30 * 60_000)
+        let away = Task { @MainActor in await presenter.presence(here: false) }
+        try await waitUntil("away is received") { presenter.presencesWaiting.count == 1 }
+        let evening = midnight + 18 * Self.hour
+        Self.move(presenter, to: evening + 30 * 60_000)
+
+        gate.open()
+        await away.value
+        try await waitUntil("18:00 is delivered") { presenter.wakesDelivered == [evening] }
+        let told = await Self.presences(edge)
+        XCTAssertEqual(told, [false])
+        XCTAssertEqual(presenter.status.record, .open(wakeAt: evening + 6 * Self.hour),
+                       "18:00 was not judged with her away")
+        let ready = try await edge.slot("ready")
+        XCTAssertEqual(ready, .bool(true), "the offer is not ready")
+        let taken = try await edge.slot("taken")
+        XCTAssertEqual(taken, .bool(false), "the offer was taken with her away")
+        withExtendedLifetime(host) {}
+    }
+
+    /// Hold `presenter`'s lane, as a frame in flight holds it, until the
+    /// gate is opened.
+    @MainActor
+    private func holdTheLane(of presenter: NuxieMachineSheetPresenter) async throws -> LaneGate {
+        let loop = try XCTUnwrap(presenter.screenLoop, "the presenter holds no loop")
+        let gate = LaneGate()
+        Task { @MainActor in await loop.inLane { await gate.wait() } }
+        try await waitUntil("the lane is held") { gate.holding }
+        return gate
     }
 
     // MARK: Each presentation laid out as its own style
@@ -545,6 +631,26 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
             guard Date() < deadline else { return XCTFail("timed out waiting until \(what)") }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+    }
+}
+
+/// Holds a loop's lane from inside it until it is opened.
+@MainActor
+private final class LaneGate {
+    private(set) var holding = false
+    private var waiting: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    func wait() async {
+        holding = true
+        guard !opened else { return }
+        await withCheckedContinuation { waiting = $0 }
+    }
+
+    func open() {
+        opened = true
+        waiting?.resume()
+        waiting = nil
     }
 }
 

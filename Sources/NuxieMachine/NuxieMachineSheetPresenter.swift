@@ -74,16 +74,21 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   frame is drawn, and again before the next frame after a rotation, a
 ///   change of size or of the safe area; the same place is told once, and
 ///   it goes when its presentation does ([`NuxieMachineToldPlaces`]).
-/// - Whether the person is in the app is told on the same path, once per
-///   change ([`presence(here:)`]): she leaves when the app enters the
-///   background and comes back when it is about to enter the foreground,
-///   as UIKit's notices say, which the presenter itself observes. An
-///   inactive app (the app switcher, a system alert over it) is still
-///   hers. Coming back is told before any wake due by then, so the machine
-///   delivers each wake she missed with her away, inside that one call;
-///   leaving is told after them, so a wake that came due while she was
-///   here is delivered as here. A wake the timer delivers while she is
-///   away and the app still runs is delivered as any other, and the
+/// - Whether the person is in the app is told on the same path
+///   ([`presence(here:)`]): she leaves when the app enters the background
+///   and comes back when it is about to enter the foreground, as UIKit's
+///   notices say, which the presenter itself observes. An inactive app
+///   (the app switcher, a system alert over it) is still hers. Each notice
+///   is kept as it is received, with the clock's moment then, in order
+///   ([`NuxieMachinePresence`]), and nothing is merged: away and back
+///   received while the loop's lane is held are two changes. The next run
+///   of the lane, whatever runs it (the notice's own, a frame, a close, the
+///   timer), tells each in turn at its own moment before anything else:
+///   for a departure, each wake due by its moment first, as here, then
+///   away; for a return, here first, so the machine delivers each wake she
+///   missed with her away inside that one call. A value the same as the
+///   one last told is not told again. A wake the timer delivers while she
+///   is away and the app still runs is delivered as any other, and the
 ///   machine judges it with her away.
 ///
 /// What the presenter owns has one end of life. The edge with its session,
@@ -150,9 +155,12 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// wake the machine delivers inside a presence call is not among them.
     package private(set) var wakesDelivered: [Int64] = []
 
-    /// Whether the person is in the app, as UIKit last said
-    /// ([`presence(here:)`]).
-    private var inApp = true
+    /// The notices that the person left or came back, as received and not
+    /// yet told, oldest first ([`presence(here:)`]).
+    private var received: [NuxieMachinePresence] = []
+
+    /// The notices received and not yet told, oldest first, for checks.
+    package var presencesWaiting: [NuxieMachinePresence] { received }
 
     /// Whether the session was last told the person is in the app: the one
     /// told value. A session starts with her here.
@@ -203,6 +211,10 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// The edge while the presenter holds it, for checks.
     package var edge: NuxieMachineEdge? { loop?.edge }
 
+    /// The loop while the presenter holds it, for checks: a check can hold
+    /// its lane.
+    package var screenLoop: NuxieMachineScreenLoop? { loop }
+
     /// A presenter that presents from `host` and tells `onStatus` what the
     /// host can show.
     package init(host: UIViewController, onStatus: @escaping @MainActor (NuxieMachineSheetStatus) -> Void) {
@@ -247,7 +259,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             // keeps for the start.
             let now = machineNow()
             await tellEnvironment(at: now)
-            await tellPresence(at: now)
+            await tellPresences(by: now)
             await edge.start(event: event, now: now)
             takeReports()
             await readPlan()
@@ -438,57 +450,79 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         await loop.inLane { await catchUp(to: machineNow()) }
     }
 
-    /// Deliver every wake the record asks for at or before `now`, each at
-    /// its own moment, oldest first, then the client's environment at `now`
-    /// if it changed, then each presented Screen's place that changed. Runs
-    /// inside the loop's lane, before each frame, close and timer's wake,
-    /// and for each of UIKit's notices that the person left or came back.
-    ///
-    /// Where the person is goes around the wakes: coming back is told
-    /// before them, and the machine delivers each wake she missed inside
-    /// that call, with her still away, so none is left due here; leaving is
-    /// told after them, so each wake that came due while she was here is
-    /// delivered first, as here.
+    /// Tell the session each notice received that the person left or came
+    /// back, in order, each at its own moment, then deliver every wake the
+    /// record asks for at or before `now`, each at its own moment, oldest
+    /// first, then the client's environment at `now` if it changed, then
+    /// each presented Screen's place that changed. Runs inside the loop's
+    /// lane, before each frame, close and timer's wake, and for each notice.
     private func catchUp(to now: Int64) async {
-        if inApp { await tellPresence(at: now) }
-        while let moment = state.dueWake(at: now), let edge = loop?.edge {
-            logger.info("machine.wake \(moment)")
-            send(.wakeTaken(moment))
-            wakesDelivered.append(moment)
-            await edge.wake(now: moment)
-            takeReports()
-        }
-        await tellPresence(at: now)
+        await tellPresences(by: now)
+        await deliverWakes(dueBy: now)
         await tellEnvironment(at: now)
         await tellPlaces(at: now)
+    }
+
+    /// Deliver every wake the record asks for at or before `moment`, each
+    /// at its own moment, oldest first.
+    private func deliverWakes(dueBy moment: Int64) async {
+        while let due = state.dueWake(at: moment), let edge = loop?.edge {
+            logger.info("machine.wake \(due)")
+            send(.wakeTaken(due))
+            wakesDelivered.append(due)
+            await edge.wake(now: due)
+            takeReports()
+        }
     }
 
     // MARK: Where the person is
 
     /// The person left the app (`here` false) or came back to it: what
     /// UIKit's background and foreground notices call, and a test host's
-    /// stand-in for them. It is taken at once, and told in the loop's lane
-    /// at the clock's moment, once per change, before anything else the
-    /// lane runs after it. Before the start it is kept, and told before
-    /// it; once the presenter has let go of its edge it changes nothing.
+    /// stand-in for them. The notice is kept at once, with the clock's
+    /// moment, after any received before it, and told in the loop's lane
+    /// ([`tellPresences(by:)`]). Before the start it is kept, and told
+    /// before it; once the presenter has let go of its edge it is dropped.
     package func presence(here: Bool) async {
-        inApp = here
+        receive(here: here)
+        await tellReceived()
+    }
+
+    /// Keep a notice as it is received: its value and the clock's moment
+    /// now, never earlier than the one before it.
+    private func receive(here: Bool) {
+        guard !started || loop != nil else { return }
+        let moment = max(machineNow(), received.last?.at ?? .min)
+        received.append(NuxieMachinePresence(here: here, at: moment))
+    }
+
+    /// Run the lane for what was received, if the presenter holds a loop.
+    private func tellReceived() async {
         guard let loop else { return }
         await loop.inLane { await catchUp(to: machineNow()) }
     }
 
-    /// Tell the session where the person is, at `now`, when it is not what
-    /// it was last told. Runs inside the loop's lane. Coming back delivers,
-    /// in the same call, every wake due by `now`: the wake the state holds
-    /// as due is taken first, as the wake loop takes each one, and the
-    /// rows, which say the record's next wake, give it its next.
-    private func tellPresence(at now: Int64) async {
-        guard inApp != here, let edge = loop?.edge else { return }
-        here = inApp
-        logger.info("machine.presence \(self.here ? "here" : "away", privacy: .public)")
-        if here, let moment = state.dueWake(at: now) { send(.wakeTaken(moment)) }
-        await edge.presence(here: here, now: now)
-        takeReports()
+    /// Tell the session each notice received, oldest first, each at its
+    /// own moment (`now` at the latest, the lane's moment). A departure
+    /// first delivers each wake due by its moment, which came due while
+    /// she was here; a return is told before any wake due by its moment,
+    /// and the machine delivers each one she missed with her away inside
+    /// that call: the wake the state holds as due is taken first, as the
+    /// wake loop takes each one, and the rows, which say the record's next
+    /// wake, give it its next. A value the same as the one last told is not
+    /// told again. Runs inside the loop's lane.
+    private func tellPresences(by now: Int64) async {
+        while !received.isEmpty {
+            let next = received.removeFirst()
+            let moment = min(next.at, now)
+            if !next.here { await deliverWakes(dueBy: moment) }
+            guard next.here != here, let edge = loop?.edge else { continue }
+            here = next.here
+            logger.info("machine.presence \(next.here ? "here" : "away", privacy: .public) \(moment)")
+            if next.here, let due = state.dueWake(at: moment) { send(.wakeTaken(due)) }
+            await edge.presence(here: next.here, now: moment)
+            takeReports()
+        }
     }
 
     /// Hear UIKit's notices that the person left the app and came back,
@@ -496,12 +530,14 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// the app enters the background, back when it is about to enter the
     /// foreground. Resigning active is not leaving.
     ///
-    /// The notice is taken where UIKit posts it, on the main thread, so a
-    /// frame or a wake that runs after it already goes by it. Leaving is
-    /// told in the loop's lane right away, under a background task, so the
-    /// call reaches the session before the app is suspended: no frame runs
-    /// in the background, and the lane's work runs on the main actor while
-    /// UIKit lets the app finish it.
+    /// Each notice is kept where UIKit posts it, on the main thread, with
+    /// the clock's moment then, so whatever runs the lane after it goes by
+    /// it, even when a frame held the lane and the app was suspended
+    /// before the lane ran again. Leaving is told in the loop's lane right
+    /// away, under a background task, so the call reaches the session
+    /// before the app is suspended: no frame runs in the background, and
+    /// the lane's work runs on the main actor while UIKit lets the app
+    /// finish it.
     private func observePresence() {
         let center = NotificationCenter.default
         scheduled.observe([
@@ -515,17 +551,17 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     }
 
     private func left() {
-        inApp = false
+        receive(here: false)
         let held = NuxieMachineBackgroundTask(named: "nuxie.machine.presence")
         Task { @MainActor [weak self] in
-            await self?.presence(here: false)
+            await self?.tellReceived()
             held.end()
         }
     }
 
     private func cameBack() {
-        inApp = true
-        Task { @MainActor [weak self] in await self?.presence(here: true) }
+        receive(here: true)
+        Task { @MainActor [weak self] in await self?.tellReceived() }
     }
 
     // MARK: The environment: light and dark, and the text size
@@ -662,6 +698,19 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         case .ended: "ended"
         case .fault(let code): "fault \(code)"
         }
+    }
+}
+
+/// One notice that the person left the app (`here` false) or came back,
+/// with the moment of the presenter's clock when it was received
+/// (milliseconds since the Unix epoch): the moment it is told at.
+package struct NuxieMachinePresence: Equatable, Sendable {
+    package let here: Bool
+    package let at: Int64
+
+    package init(here: Bool, at: Int64) {
+        self.here = here
+        self.at = at
     }
 }
 
