@@ -162,6 +162,10 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// The notices received and not yet told, oldest first, for checks.
     package var presencesWaiting: [NuxieMachinePresence] { received }
 
+    /// Each presence the session was told, with the moment it was told at,
+    /// oldest first, for checks.
+    package private(set) var presencesTold: [NuxieMachinePresence] = []
+
     /// Whether the session was last told the person is in the app: the one
     /// told value. A session starts with her here.
     package private(set) var here = true
@@ -520,6 +524,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             here = next.here
             logger.info("machine.presence \(next.here ? "here" : "away", privacy: .public) \(moment)")
             if next.here, let due = state.dueWake(at: moment) { send(.wakeTaken(due)) }
+            presencesTold.append(NuxieMachinePresence(here: next.here, at: moment))
             await edge.presence(here: next.here, now: moment)
             takeReports()
         }
