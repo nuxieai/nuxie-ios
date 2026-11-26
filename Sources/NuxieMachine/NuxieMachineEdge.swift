@@ -167,6 +167,10 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// a start, kept for its first frame; with a record open, delivered to
     /// it.
     case environment(NuxieMachineEnvironment)
+    /// The session took where the person is, in the app or away
+    /// ([`presence`]): before a start, kept for it; with a record open,
+    /// delivered to it.
+    case presence(here: Bool)
     /// The session took where the presentation is shown ([`place`]),
     /// delivered to the record.
     case place(NuxieMachineShown, NuxieMachineScreenPlace)
@@ -614,6 +618,33 @@ package actor NuxieMachineEdge {
                     await refused(error, doing: "wake", now: now, &delivery)
                     return
                 }
+                await apply(rows, now: now, &delivery)
+            }
+        }
+    }
+
+    /// The person is in the app (`here` true) or has left it, at `now`: a
+    /// delivery like a wake. Leaving tells an open record she is away. Coming
+    /// back delivers, inside this one call, each wake the record asked for at
+    /// or before `now`, at its own moment and with her still away, and then
+    /// tells the record she is here; their rows arrive together, in order,
+    /// and are applied as a wake's are, so the last `wake at` among them is
+    /// the one the record waits for. The same value again changes nothing.
+    ///
+    /// `now` follows the same rule as a wake's. A host tells it before
+    /// delivering any wake of its own at that moment, so the missed wakes
+    /// are judged with her away.
+    package func presence(here: Bool, now: Int64) async {
+        await inTurn { turn in
+            await deliver(turn, stopped: ()) { delivery in
+                let rows: [NuxieMachineRow]
+                do {
+                    rows = try session.presence(here: here, now: now)
+                } catch {
+                    await refused(error, doing: "presence", now: now, &delivery)
+                    return
+                }
+                log.append(.presence(here: here))
                 await apply(rows, now: now, &delivery)
             }
         }
