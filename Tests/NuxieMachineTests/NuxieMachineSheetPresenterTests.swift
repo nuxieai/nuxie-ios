@@ -332,9 +332,11 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     /// is told, in order, at the moment it was received. Away is told
     /// before the 18:00 wake, so the presenter delivers no wake as here;
     /// back is told at 19:00, so the machine delivers 18:00 inside that
-    /// call with her away, and she is then here, so the offer is taken
-    /// and the record stays open. Told only at the lane's moment, the next
-    /// morning, the offer would have been given up at midnight.
+    /// call with her away, and she is then here, so the offer is taken.
+    /// Taking it presents nothing and leaves no task armed, so the record
+    /// finishes. Told only at the lane's moment, the next morning, the offer
+    /// would have been given up at midnight, and the record would have
+    /// exited instead.
     @MainActor
     func testAwayAndBackWhileTheLaneIsHeldAreEachToldAtTheirOwnMoment() async throws {
         let host = UIViewController()
@@ -357,16 +359,19 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         await away.value
         await back.value
         XCTAssertEqual(presenter.presencesWaiting, [])
+        XCTAssertEqual(presenter.presencesTold, received,
+                       "away and back were not each told, in order, at the moment each was received")
         let told = await Self.presences(edge)
         XCTAssertEqual(told, [false, true], "away and back did not each reach the session, in order")
         XCTAssertTrue(presenter.here)
         XCTAssertFalse(presenter.wakesDelivered.contains(midnight + 18 * Self.hour),
                        "18:00 was delivered by the presenter as here, not by the return with her away")
-        guard case .open = presenter.status.record else {
-            return XCTFail("back was not told at 19:00: the record is \(presenter.status.record)")
-        }
         let taken = try await edge.slot("taken")
         XCTAssertEqual(taken, .bool(true), "the offer was not taken when she came back at 19:00")
+        XCTAssertEqual(presenter.status.record, .ended, "the record did not end once the offer was taken")
+        let log = await edge.log
+        XCTAssertTrue(log.contains(.end(reason: .finished, fault: nil)), "the record did not finish: \(log)")
+        XCTAssertFalse(log.contains(.end(reason: .exited, fault: nil)), "the offer was given up: \(log)")
         withExtendedLifetime(host) {}
     }
 
