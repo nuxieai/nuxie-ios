@@ -85,6 +85,36 @@ package enum NuxieMachineScreenReaderScroll {
         max(length - 48, length / 2, 1)
     }
 
+    /// The words the reader says after a page moved: which page of how many
+    /// the box now shows. English only: translating the SDK's spoken
+    /// strings is tracked as UNIV-7117.
+    package static func pageWords(_ page: Int, of pages: Int) -> String {
+        "Page \(page) of \(pages)"
+    }
+
+    /// Which page of how many a box `length` points long shows, scrolled to
+    /// `position` of `range`: the content is `range + length` long and
+    /// holds `max(1, ceil(content / length))` pages; at its end (within
+    /// half a point of `range`) the box shows the last, otherwise the page
+    /// its start is on.
+    package static func shownPage(position: CGFloat, range: CGFloat, length: CGFloat) -> (page: Int, of: Int) {
+        let length = max(length, 1)
+        let pages = max(1, Int(((range + length) / length).rounded(.up)))
+        if position >= range - 0.5 { return (pages, pages) }
+        return (min(pages, Int((max(position, 0) / length).rounded(.down)) + 1), pages)
+    }
+
+    /// The line for `region` after a page moved it along y (`vertical`) or
+    /// x, read from its position, which is where it is going; none when
+    /// the runtime does not read its position.
+    package static func pageLine(_ region: NuxieNativeScrollRegion, vertical: Bool) -> String? {
+        guard let scroll = region.scroll, let range = region.range else { return nil }
+        let at = vertical
+            ? shownPage(position: scroll.y, range: range.height, length: region.bounds.height)
+            : shownPage(position: scroll.x, range: range.width, length: region.bounds.width)
+        return pageWords(at.page, of: at.of)
+    }
+
     /// The move one page in `direction` asks for, from where `node` is: the
     /// first region from its own outward whose content can still move that
     /// way, and the move in a scroll wheel's sense, a page of that region's

@@ -565,8 +565,9 @@ final class ScreenReaderScrollingTests: XCTestCase {
     }
 
     /// A scroll gesture on an element of the page moves the page one page
-    /// in the next frame and tells the reader with nothing to say; at an
-    /// end it answers false, tells nothing and queues nothing. At its top
+    /// in the next frame, and once it moved the reader is told which page
+    /// shows ("Page n of m"); at an end it answers false, tells nothing and
+    /// queues nothing. At its top
     /// the page shows nothing above. A gesture up shows what is below: one
     /// page, `max(h - 48, h / 2, 1)` points of the page's box, which here
     /// is more than the page's range, so it stops at its end. Down brings
@@ -593,9 +594,13 @@ final class ScreenReaderScrollingTests: XCTestCase {
             XCTAssertFalse(reader.controller.screenReaderScrolling.wantsFrames, "nothing is queued at an end")
 
             XCTAssertTrue(title.accessibilityScroll(.up), "up shows what is below")
-            XCTAssertEqual(posted.count, 1, "the reader is told once")
-            XCTAssertNil(posted.first ?? "missing", "with nothing to say")
+            XCTAssertTrue(posted.isEmpty, "nothing is told before the page moved")
+            let length = page.bounds.height
+            let pages = max(1, Int(((range + length) / length).rounded(.up)))
+            XCTAssertGreaterThan(pages, 1)
             let down = try await reader.screenReaderFrames(kept: "3-paged-down")
+            XCTAssertEqual(posted.map { $0 as? String }, ["Page \(pages) of \(pages)"],
+                           "told once, with the last page: the step passes the range")
             XCTAssertEqual(down.scrolled.count, 1, "\(down.scrolled)")
             guard case .page(_, let region, let dx, let dy) = down.scrolled.first?.request else {
                 return XCTFail("no page went: \(down.scrolled)")
@@ -618,9 +623,10 @@ final class ScreenReaderScrollingTests: XCTestCase {
             XCTAssertFalse(reader.controller.screenReaderScrolling.wantsFrames)
 
             XCTAssertTrue(title.accessibilityScroll(.down), "down shows what is above")
-            XCTAssertEqual(posted.count, 2)
             let back = try await reader.screenReaderFrames(kept: "4-paged-up")
             XCTAssertEqual(back.scrolled.map(\.outcome), [.moved])
+            XCTAssertEqual(posted.map { $0 as? String }, ["Page \(pages) of \(pages)", "Page 1 of \(pages)"],
+                           "back at its top")
             let top = try XCTUnwrap(back.last.semantics)
             XCTAssertEqual(try XCTUnwrap(top.scrollRegions[0].scroll).y, 0, accuracy: 0.5)
             try await reader.close()

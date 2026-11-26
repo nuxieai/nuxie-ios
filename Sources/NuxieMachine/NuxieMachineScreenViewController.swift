@@ -69,8 +69,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// settled; a reveal waits for one. True before the first frame.
     private var lastSettled = true
     /// Told when the screen reader's scroll gesture moved a page, with the
-    /// argument posted: none, so nothing is said and the reader plays its
-    /// scroll sound. The post itself, unless a check listens instead.
+    /// argument posted: the page line, "Page n of m". The post itself,
+    /// unless a check listens instead.
     package var pageScrolled: (Any?) -> Void = { UIAccessibility.post(notification: .pageScrolled, argument: $0) }
     /// The size the engine lays this presentation's Screen out at and draws,
     /// once applied.
@@ -383,8 +383,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// A scroll gesture with the reader on the element of `nodeID`: the
     /// first `scroll` around the node that can move that way moves one page
-    /// in the next frame, and the reader is told, with nothing said. False
-    /// when none can, so the reader sounds the end.
+    /// in the next frame, and once it moved the reader is told which page
+    /// shows ([`frameEnded`]). False when none can, so the reader sounds the
+    /// end.
     private func scroll(from nodeID: UInt32, _ direction: UIAccessibilityScrollDirection) -> Bool {
         guard reachable, let loop, !loop.stopped, let capture = latest,
               let node = capture.tree.nodes.first(where: { $0.id == nodeID }),
@@ -393,7 +394,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
         else { return false }
         scrolling.page(wanted, from: nodeID)
         loop.requestFrame()
-        semantics.announcePageScrolled()
         return true
     }
 
@@ -422,11 +422,22 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// A frame that stepped this Screen ended: `scrolled` is what came of
     /// the moves it carried for it, and `settled` whether its step reported
-    /// itself settled. Asks for another frame while a reveal or a tap
-    /// behind one waits.
+    /// itself settled. A page that moved tells the reader which page its
+    /// region shows, read from the snapshot this frame drew, which reads
+    /// where the region is going. Asks for another frame while a reveal or
+    /// a tap behind one waits.
     package func frameEnded(_ scrolled: [NuxieMachineScrolled], settled: Bool) {
         lastSettled = settled
         scrolling.ended(scrolled, settled: settled)
+        let paged = scrolled.last { result in
+            if case .page = result.request { return result.outcome == .moved }
+            return false
+        }
+        if let paged, case .page(_, let region, _, let dy) = paged.request, let latest,
+           latest.scrollRegions.indices.contains(region) {
+            semantics.announcePageScrolled(
+                NuxieMachineScreenReaderScroll.pageLine(latest.scrollRegions[region], vertical: dy != 0))
+        }
         if scrolling.wantsFrames { loop?.requestFrame() }
     }
 

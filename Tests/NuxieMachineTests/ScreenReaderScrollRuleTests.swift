@@ -225,6 +225,46 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         XCTAssertEqual(NuxieMachineScreenReaderScroll.pageStep(0.5), 1)
     }
 
+    /// The page line counts pages of the content, the range plus the box:
+    /// the top of a region 3.2 boxes long shows page 1 of 4, its end (within
+    /// half a point) page 4 of 4, and between, the page its start is on.
+    func testThePageLineCountsThePagesOfTheContent() {
+        func line(_ position: CGFloat, _ range: CGFloat, _ length: CGFloat) -> String {
+            let at = NuxieMachineScreenReaderScroll.shownPage(position: position, range: range, length: length)
+            return NuxieMachineScreenReaderScroll.pageWords(at.page, of: at.of)
+        }
+        XCTAssertEqual(line(0, 220, 100), "Page 1 of 4", "the top")
+        XCTAssertEqual(line(150, 220, 100), "Page 2 of 4")
+        XCTAssertEqual(line(210, 220, 100), "Page 3 of 4")
+        XCTAssertEqual(line(219.6, 220, 100), "Page 4 of 4", "within half a point of the end")
+        XCTAssertEqual(line(220, 220, 100), "Page 4 of 4", "the end")
+        XCTAssertEqual(line(796, 1592, 844), "Page 1 of 3",
+                       "one page from the top, 48 points short of a box, is still on the first page")
+    }
+
+    /// A region's line reads its position along the axis the page moved: y
+    /// down the page, x sideways. None when its position is not read.
+    func testARegionsLineReadsTheAxisThePageMoved() {
+        let region = NuxieNativeScrollRegion(bounds: CGRect(x: 0, y: 0, width: 200, height: 844),
+                                             canScroll: Self.top | Self.left, parent: nil,
+                                             scroll: CGPoint(x: 400, y: 0), range: CGSize(width: 600, height: 0))
+        XCTAssertEqual(NuxieMachineScreenReaderScroll.pageLine(region, vertical: false), "Page 3 of 4")
+        XCTAssertEqual(NuxieMachineScreenReaderScroll.pageLine(region, vertical: true), "Page 1 of 1")
+        let unread = NuxieNativeScrollRegion(bounds: Self.surface, canScroll: Self.bottom, parent: nil)
+        XCTAssertNil(NuxieMachineScreenReaderScroll.pageLine(unread, vertical: true))
+    }
+
+    /// A region that fits its box can move no way, so no page goes to it and
+    /// no line is asked: the element answers false.
+    func testARegionThatFitsIsNeverAskedForALine() {
+        let fits = NuxieNativeScrollRegion(bounds: Self.surface, canScroll: 0, parent: nil,
+                                           scroll: .zero, range: .zero)
+        let inside = node(1, CGRect(x: 24, y: 100, width: 100, height: 40), region: 0)
+        for direction in [NuxieMachineScrollDirection.showBelow, .showAbove, .showRight, .showLeft] {
+            XCTAssertNil(NuxieMachineScreenReaderScroll.page(direction, from: inside, in: [fits]))
+        }
+    }
+
     /// The fingers' way names what shows next: up shows what is below, down
     /// what is above, left what is to the right, right what is to the left;
     /// next is down the page and previous up it.
@@ -281,8 +321,8 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
 
     /// An element tells its screen when focus reaches it, and passes a
     /// scroll gesture on, only for a node inside a `scroll`; its answer is
-    /// the screen's. The container tells the reader a page moved with
-    /// nothing to say.
+    /// the screen's. The container tells the reader a page moved with the
+    /// line it is given.
     func testAnElementPassesFocusAndScrollOnlyForANodeInAScroll() throws {
         let view = UIView(frame: Self.surface)
         var posted: [Any?] = []
@@ -317,9 +357,8 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         XCTAssertEqual(scrolled.map(\.0), [1, 1])
         XCTAssertEqual(scrolled.map(\.1), [.up, .down])
 
-        container.announcePageScrolled()
-        XCTAssertEqual(posted.count, 1)
-        XCTAssertNil(posted.first ?? "missing", "nothing is said with the page")
+        container.announcePageScrolled("Page 2 of 3")
+        XCTAssertEqual(posted.map { $0 as? String }, ["Page 2 of 3"])
     }
 
     // MARK: Helpers
