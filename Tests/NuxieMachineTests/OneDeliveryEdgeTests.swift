@@ -307,7 +307,7 @@ final class OneDeliveryEdgeTests: XCTestCase {
 
                     """),
             ],
-            root: "main", app: "app", experience: "once", version: 1)
+            assets: [], root: "main", app: "app", experience: "once", version: 1)
     }
 
 }
@@ -320,7 +320,8 @@ private final class OneDelivery {
 
     init(compiled plan: NuxieMachinePlanSource) throws {
         let owner = self.owner
-        edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(), onReport: { owner.heard($0) })
+        edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(),
+                                    bytes: NoFolderFiles(), onReport: { owner.heard($0) })
     }
 
     /// Move the clock to `moment`, as a host does before delivering a wake.

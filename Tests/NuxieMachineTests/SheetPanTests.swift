@@ -251,7 +251,8 @@ final class SheetPanTests: XCTestCase {
                 "the test bundle carries views-scroll/\(name).nux")
             return NuxieMachineSourceFile(path: "\(name).nux", text: try String(contentsOf: url, encoding: .utf8))
         }
-        return NuxieMachinePlanSource(files: files, root: "main", app: "app", experience: "quietly", version: 1)
+        return NuxieMachinePlanSource(files: files, assets: [], root: "main", app: "app", experience: "quietly",
+                                      version: 1)
     }
 }
 #endif

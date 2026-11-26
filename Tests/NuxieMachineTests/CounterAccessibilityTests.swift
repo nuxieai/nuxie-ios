@@ -402,7 +402,7 @@ final class CounterAccessibilityTests: XCTestCase {
 
                 """),
         ],
-        root: "main", app: "app", experience: "holding", version: 1)
+        assets: [], root: "main", app: "app", experience: "holding", version: 1)
 
     /// The plan cards of the `views-scroll` paywall.
     static let cards = ["Yearly", "Monthly", "Weekly"]
@@ -443,7 +443,7 @@ final class CounterAccessibilityTests: XCTestCase {
             files: [NuxieMachineSourceFile(path: "main.nux", text: try text("main")),
                     NuxieMachineSourceFile(path: "paywall.nux", text: lines.joined(separator: "\n")),
                     NuxieMachineSourceFile(path: "plan-card.nux", text: try text("plan-card"))],
-            root: "main", app: "app", experience: "quietly", version: 1)
+            assets: [], root: "main", app: "app", experience: "quietly", version: 1)
     }
 }
 
