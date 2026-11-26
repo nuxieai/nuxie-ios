@@ -141,8 +141,6 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     private var reveals = 0
     /// Calls asked of a spent snapshot, sent again.
     private var stale = 0
-    /// Frames waited for a settle.
-    private var waited = 0
     private var page: Page?
 
     /// A page asked for and not yet sent: from which node, which way, and
@@ -156,9 +154,6 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
 
     /// The most times a call asked of a spent snapshot is sent again.
     package static let staleRetries = 4
-    /// The most frames waited for a settle, ten seconds at sixty a second,
-    /// before what waits on one is let go.
-    package static let settleFrames = 600
 
     package init() {}
 
@@ -249,7 +244,6 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
                 switch result.outcome {
                 case .moved:
                     settling = node
-                    waited = 0
                 case .stayed:
                     break
                 case .stale:
@@ -270,17 +264,6 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
                 }
             }
         }
-        if settled {
-            settling = nil
-            waited = 0
-        } else if target != nil || heldTap != nil || settling != nil {
-            waited += 1
-            if waited >= Self.settleFrames {
-                target = nil
-                heldTap = nil
-                settling = nil
-                waited = 0
-            }
-        }
+        if settled { settling = nil }
     }
 }

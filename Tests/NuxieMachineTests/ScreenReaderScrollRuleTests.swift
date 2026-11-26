@@ -153,20 +153,21 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         XCTAssertFalse(scrolling.wantsFrames)
     }
 
-    /// What waits on a settle that never comes is let go after ten seconds
-    /// of frames, so the loop can rest.
-    func testWhatWaitsOnASettleThatNeverComesIsLetGo() throws {
-        let capture = try Self.capture([node(1, Self.below(0))], regions: [Self.page()])
+    /// A reveal and a tap behind it wait however long the page takes to
+    /// settle, and go in the first frame after it does.
+    func testARevealWaitsForTheSettleHoweverLongItTakes() throws {
+        let capture = try Self.capture([node(1, Self.below(0), actions: 0)], regions: [Self.page()])
         var scrolling = NuxieMachineScreenReaderScrolling()
         scrolling.focus(1)
         _ = scrolling.hold(tap: 1)
-        for _ in 0..<NuxieMachineScreenReaderScrolling.settleFrames {
-            XCTAssertTrue(scrolling.wantsFrames)
+        for _ in 0..<1000 {
             XCTAssertEqual(scrolling.take(capture, settled: false).scrolls, [])
             scrolling.ended([], settled: false)
         }
-        XCTAssertFalse(scrolling.wantsFrames)
-        XCTAssertNil(scrolling.heldTap)
+        XCTAssertTrue(scrolling.wantsFrames)
+        XCTAssertEqual(scrolling.heldTap, 1)
+        XCTAssertEqual(scrolling.take(capture, settled: true).scrolls,
+                       [.reveal(captureID: capture.id, nodeID: 1)])
     }
 
     // MARK: A tap behind a reveal
