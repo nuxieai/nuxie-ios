@@ -197,6 +197,12 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// player's, or the node is gone or no longer offers a tap. The tap is
     /// dropped and never sent again as a touch; the frame still runs.
     case refusedSemanticTap(NuxieMachineShown, node: UInt32)
+    /// The engine refused a screen reader's move of a `scroll` of the
+    /// presentation named ([`NuxieMachineScrollRequest`]): its snapshot is
+    /// no longer the player's, or the node or region is gone. The frame
+    /// still runs, and the outcome goes back to the component that asked
+    /// ([`NuxieMachineFrame.scrolled`]).
+    case refusedScroll(NuxieMachineShown, NuxieMachineScrollRequest)
     /// The session took the client's environment ([`environment`]): before
     /// a start, kept for its first frame; with a record open, delivered to
     /// it.
@@ -241,6 +247,21 @@ package struct NuxieMachineFrame: Equatable, Sendable {
     /// animation still running). Whatever the edge has waiting for a frame
     /// it asks for on its own ([`NuxieMachineEdge.frameAsks`]).
     package let keepGoing: Bool
+    /// What came of each screen reader's move of a `scroll` the frame
+    /// carried, in order; a frame that dropped them answers each refused.
+    package let scrolled: [NuxieMachineScrolled]
+    /// The presentations whose last step in this frame reported itself
+    /// settled: nothing in its player, a settling scroller included, needs
+    /// another step.
+    package let settled: Set<NuxieMachineShown>
+
+    package init(reported: [String], keepGoing: Bool, scrolled: [NuxieMachineScrolled] = [],
+                 settled: Set<NuxieMachineShown> = []) {
+        self.reported = reported
+        self.keepGoing = keepGoing
+        self.scrolled = scrolled
+        self.settled = settled
+    }
 }
 
 /// Where an edge asks its host for a frame. The edge asks whenever it leaves
@@ -611,10 +632,19 @@ package actor NuxieMachineEdge {
     /// player's, or the node is gone or offers no tap) is recorded as
     /// [`refusedSemanticTap`](NuxieMachineEdgeEntry.refusedSemanticTap) and
     /// dropped, never sent as a touch.
+    ///
+    /// `scrolls` are a screen reader's moves of that presentation's
+    /// `scroll`s, a reveal or a page, each asked of a snapshot, and go where
+    /// its pointers go. Each is sent to the player after the taps and before
+    /// the step; what came of each is in the frame's
+    /// [`scrolled`](NuxieMachineFrame.scrolled), and one the engine refuses
+    /// is also recorded as
+    /// [`refusedScroll`](NuxieMachineEdgeEntry.refusedScroll).
     @discardableResult
     package func frame(
         pointers: [NuxieNativePointerEvent] = [],
         semanticTaps: [NuxieMachineSemanticTap] = [],
+        scrolls: [NuxieMachineScrollRequest] = [],
         on touched: NuxieMachineShown? = nil,
         elapsedSeconds: Float,
         now: Int64
@@ -623,20 +653,27 @@ package actor NuxieMachineEdge {
             // Answers that arrive during this turn wait for the next frame.
             let answers = mailbox
             mailbox = []
-            let stepped = await deliver(turn, stopped: (reported: [String](), keepGoing: false)) { delivery in
-                var forwarded = Input(pointers: pointers, semanticTaps: semanticTaps)
+            let stopped = Stepped(reported: [], keepGoing: false,
+                                  scrolled: scrolls.map { NuxieMachineScrolled($0, .refused) })
+            let stepped = await deliver(turn, stopped: stopped) { delivery in
+                var forwarded = Input(pointers: pointers, semanticTaps: semanticTaps, scrolls: scrolls)
+                var dropped: [NuxieMachineScrolled] = []
                 if !forwarded.isEmpty, touched == nil || !holds(touched) {
                     log.append(.droppedTouches(touched))
+                    dropped = scrolls.map { NuxieMachineScrolled($0, .refused) }
                     forwarded = Input()
                 }
-                return await step(forwarded, on: touched, elapsedSeconds: elapsedSeconds, now: now, &delivery)
+                var result = await step(forwarded, on: touched, elapsedSeconds: elapsedSeconds, now: now, &delivery)
+                result.scrolled = dropped + result.scrolled
+                return result
             }
             for arrived in answers {
                 await deliver(turn, stopped: ()) { delivery in
                     await answer(arrived, now: now, &delivery)
                 }
             }
-            return NuxieMachineFrame(reported: stepped.reported, keepGoing: stepped.keepGoing)
+            return NuxieMachineFrame(reported: stepped.reported, keepGoing: stepped.keepGoing,
+                                     scrolled: stepped.scrolled, settled: stepped.settled)
         }
     }
 
@@ -953,13 +990,25 @@ package actor NuxieMachineEdge {
 
     // MARK: Frames
 
-    /// What a frame carries to the presentation it touched: the pointers
-    /// and the screen reader's taps that arrived for it.
+    /// What a frame carries to the presentation it touched: the pointers,
+    /// the screen reader's taps and its moves of a `scroll` that arrived for
+    /// it.
     private struct Input {
         var pointers: [NuxieNativePointerEvent] = []
         var semanticTaps: [NuxieMachineSemanticTap] = []
+        var scrolls: [NuxieMachineScrollRequest] = []
 
-        var isEmpty: Bool { pointers.isEmpty && semanticTaps.isEmpty }
+        var isEmpty: Bool { pointers.isEmpty && semanticTaps.isEmpty && scrolls.isEmpty }
+    }
+
+    /// What a frame's steps did: the events reported, whether the engine
+    /// keeps going, what came of the screen reader's moves, and which
+    /// presentations settled.
+    private struct Stepped {
+        var reported: [String]
+        var keepGoing: Bool
+        var scrolled: [NuxieMachineScrolled] = []
+        var settled: Set<NuxieMachineShown> = []
     }
 
     /// A frame's delivery: step the players of the presentations the edge
@@ -970,8 +1019,11 @@ package actor NuxieMachineEdge {
         elapsedSeconds: Float,
         now: Int64,
         _ delivery: inout Delivery
-    ) async -> (reported: [String], keepGoing: Bool) {
-        guard !screens.isEmpty else { return ([], false) }
+    ) async -> Stepped {
+        guard !screens.isEmpty else {
+            return Stepped(reported: [], keepGoing: false,
+                           scrolled: input.scrolls.map { NuxieMachineScrolled($0, .refused) })
+        }
         return await stepPlayers(input, on: touched, elapsedSeconds: elapsedSeconds, now: now, &delivery)
     }
 
@@ -1009,15 +1061,18 @@ package actor NuxieMachineEdge {
         elapsedSeconds: Float,
         now: Int64,
         _ delivery: inout Delivery
-    ) async -> (reported: [String], keepGoing: Bool) {
+    ) async -> Stepped {
+        let unsent = input.scrolls.map { NuxieMachineScrolled($0, .refused) }
         do {
             try session.setNow(now)
         } catch {
             await refused(error, doing: "the moment \(now)", now: now, &delivery)
-            return ([], false)
+            return Stepped(reported: [], keepGoing: false, scrolled: unsent)
         }
         var reported: [String] = []
         var keepGoing = false
+        var scrolled: [NuxieMachineScrolled] = []
+        var settled: [NuxieMachineShown: Bool] = [:]
         var waiting = input
         let players = screens.map { (shown: $0.presented.shown, player: $0.player) }
         for (shown, player) in players {
@@ -1028,14 +1083,16 @@ package actor NuxieMachineEdge {
                 waiting = Input()
             }
             guard let step = await stepPlayer(player, of: shown, forwarded, elapsedSeconds: elapsedSeconds,
-                                              now: now, &delivery) else { continue }
+                                              now: now, scrolled: &scrolled, &delivery) else { continue }
             reported += step.events.map(\.name)
             keepGoing = keepGoing || step.keepGoing
+            settled[shown] = step.settled
         }
         if !waiting.isEmpty, fault == nil {
             // The presentation they touched ended earlier in this frame.
             log.append(.droppedTouches(touched))
         }
+        scrolled += waiting.scrolls.map { NuxieMachineScrolled($0, .refused) }
         for _ in 0..<Self.settlingPasses {
             guard fault == nil else { break }
             let owing: [(shown: NuxieMachineShown, player: NuxieNativeRuntime)]
@@ -1049,12 +1106,15 @@ package actor NuxieMachineEdge {
             for (shown, player) in owing {
                 guard fault == nil else { break }
                 guard let step = await stepPlayer(player, of: shown, Input(), elapsedSeconds: 0, now: now,
-                                                  &delivery) else { continue }
+                                                  scrolled: &scrolled, &delivery) else { continue }
                 reported += step.events.map(\.name)
                 keepGoing = keepGoing || step.keepGoing
+                settled[shown] = step.settled
             }
         }
-        return fault == nil ? (reported, keepGoing) : ([], false)
+        guard fault == nil else { return Stepped(reported: [], keepGoing: false, scrolled: scrolled) }
+        return Stepped(reported: reported, keepGoing: keepGoing, scrolled: scrolled,
+                       settled: Set(settled.filter(\.value).keys))
     }
 
     /// One step of the player of the presentation `shown`, then the rows it
@@ -1063,22 +1123,48 @@ package actor NuxieMachineEdge {
     ///
     /// The screen reader's taps in `input` are queued on the player first,
     /// so the step hears them with its pointers. A tap the engine refuses is
-    /// recorded and dropped; the step runs without it.
+    /// recorded and dropped; the step runs without it. Its moves of a
+    /// `scroll` are sent next, each answered in `scrolled`; one asked of a
+    /// snapshot an earlier call spent is answered stale, for the component
+    /// to ask again of the next.
     private func stepPlayer(
         _ player: NuxieNativeRuntime,
         of shown: NuxieMachineShown,
         _ input: Input,
         elapsedSeconds: Float,
         now: Int64,
+        scrolled: inout [NuxieMachineScrolled],
         _ delivery: inout Delivery
     ) async -> NuxieNativePlayerStepResult? {
-        guard showing().contains(where: { $0.shown == shown }) else { return nil }
+        guard showing().contains(where: { $0.shown == shown }) else {
+            scrolled += input.scrolls.map { NuxieMachineScrolled($0, .refused) }
+            return nil
+        }
         for tap in input.semanticTaps {
             do {
                 try await player.queueSemanticAction(captureID: tap.captureID, nodeID: tap.nodeID, action: .tap)
             } catch {
                 log.append(.refusedSemanticTap(shown, node: tap.nodeID))
             }
+        }
+        for request in input.scrolls {
+            let moved: Bool
+            do {
+                switch request {
+                case .reveal(let captureID, let nodeID):
+                    moved = try await player.revealSemanticNode(captureID: captureID, nodeID: nodeID)
+                case .page(let captureID, let region, let dx, let dy):
+                    moved = try await player.scrollRegion(captureID: captureID, region: region, dx: dx, dy: dy)
+                }
+            } catch NuxieNativeRuntimeError.callFailed(let diagnostic) where diagnostic.status == .handleMismatch {
+                scrolled.append(NuxieMachineScrolled(request, .stale))
+                continue
+            } catch {
+                log.append(.refusedScroll(shown, request))
+                scrolled.append(NuxieMachineScrolled(request, .refused))
+                continue
+            }
+            scrolled.append(NuxieMachineScrolled(request, moved ? .moved : .stayed))
         }
         let step: NuxieNativePlayerStepResult
         do {
