@@ -72,10 +72,10 @@ package final class ExperienceSemanticAccessibilityContainer {
         self.pageScrolled = pageScrolled
     }
 
-    /// Tell the reader a `scroll` moved a page for it. Nothing is said
-    /// (the argument is none): the reader plays its scroll sound.
-    package func announcePageScrolled() {
-        pageScrolled(nil)
+    /// Tell the reader a `scroll` moved a page for it, with `line`, which
+    /// page it shows now, to say.
+    package func announcePageScrolled(_ line: String?) {
+        pageScrolled(line)
     }
 
     package func setActive(_ active: Bool) {
