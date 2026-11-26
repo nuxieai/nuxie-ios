@@ -135,6 +135,196 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         return evening > now ? evening : evening + day
     }
 
+    // MARK: Leaving the app and coming back
+
+    /// Stillwater's evening offer with nothing shown, so a presenter with
+    /// no window can run it: the start leaves the offer due, as "Not now"
+    /// does, and asks for 18:00. At 18:00 the offer is ready. With her here
+    /// it is taken at once (`taken`); with her away it waits six hours for
+    /// her, and is then given up, which ends the record.
+    private static let theEveningOffer = """
+        component App
+          state offer_due = false
+          state ready = false
+          state taken = false
+          entry
+            on event "go"
+            do arm
+          action arm
+            offer_due = true
+          task offer_time  when offer_due
+            after(next 18:00, offer_ready)
+          task evening_offer  when ready and here
+            change(show_offer)
+          task offer_lapses  when ready and not here
+            after(6h, give_up)
+          action offer_ready
+            offer_due = false
+            ready = true
+          action show_offer
+            ready = false
+            taken = true
+          action give_up
+            ready = false
+            exit
+
+        """
+
+    private static let hour: Int64 = 3_600_000
+    private static let day: Int64 = 86_400_000
+
+    /// A presenter whose record starts at 17:00 (UTC) today on its clock
+    /// and waits for 18:00, its edge, and today's midnight.
+    @MainActor
+    private func startTheEveningAtFive(_ host: UIViewController) async throws
+        -> (NuxieMachineSheetPresenter, NuxieMachineEdge, Int64) {
+        let plan = NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: Self.theEveningOffer)],
+            root: "main", app: "app", experience: "evening", version: 1)
+        let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
+        let midnight = Self.wallNow() / Self.day * Self.day
+        Self.move(presenter, to: midnight + 17 * Self.hour)
+        await presenter.start(plan: plan, store: ProbeStore(), event: "go")
+        let edge = try XCTUnwrap(presenter.edge, "the record did not stay open")
+        XCTAssertEqual(presenter.status.record, .open(wakeAt: midnight + 18 * Self.hour))
+        XCTAssertTrue(presenter.here, "a session starts with her here")
+        return (presenter, edge, midnight)
+    }
+
+    /// Move the presenter's clock to `moment`, as the test host's film
+    /// clock does.
+    @MainActor
+    private static func move(_ presenter: NuxieMachineSheetPresenter, to moment: Int64) {
+        presenter.clockAhead = moment - wallNow()
+    }
+
+    /// Every presence the session took, in order.
+    private static func presences(_ edge: NuxieMachineEdge) async -> [Bool] {
+        await edge.log.compactMap { entry -> Bool? in
+            if case .presence(let here) = entry { return here }
+            return nil
+        }
+    }
+
+    /// (a) Away at 17:00, back at 09:00 the next day: the presence call
+    /// delivers the 18:00 wake she missed with her away, so the offer
+    /// waits six hours for her and is given up at midnight, as Stillwater's
+    /// is, and the record ends. Had the wake been delivered with her here,
+    /// the offer would have been taken and the record would stay open. The
+    /// presenter itself delivers no wake: none is left due once she is back.
+    @MainActor
+    func testBackTheNextMorningTheMissedWakeIsDeliveredWithHerAway() async throws {
+        let host = UIViewController()
+        let (presenter, edge, midnight) = try await startTheEveningAtFive(host)
+        await presenter.presence(here: false)
+        XCTAssertFalse(presenter.here)
+
+        Self.move(presenter, to: midnight + Self.day + 9 * Self.hour)
+        await presenter.presence(here: true)
+        XCTAssertTrue(presenter.here)
+        XCTAssertEqual(presenter.status.record, .ended, "the offer was not given up")
+        let told = await Self.presences(edge)
+        XCTAssertEqual(told, [false, true])
+        let log = await edge.log
+        XCTAssertTrue(log.contains(.end(reason: .exited, fault: nil)), "\(log)")
+        XCTAssertEqual(presenter.wakesDelivered, [], "the presenter delivered a wake the presence call delivers")
+        XCTAssertNil(presenter.scheduledWake, "a wake is still scheduled after the end")
+        withExtendedLifetime(host) {}
+    }
+
+    /// (b) Away at 17:00, and the app still running at 18:00: the timer
+    /// delivers the wake as it does with her here, and the machine judges
+    /// it with her away. The offer is ready and waits for her until
+    /// midnight; it is not taken.
+    @MainActor
+    func testATimerWakeWhileSheIsAwayIsDeliveredAndJudgedWithHerAway() async throws {
+        let host = UIViewController()
+        let (presenter, edge, midnight) = try await startTheEveningAtFive(host)
+        await presenter.presence(here: false)
+
+        let evening = midnight + 18 * Self.hour
+        Self.move(presenter, to: evening + 60_000)
+        try await waitUntil("the timer delivers 18:00") { presenter.wakesDelivered == [evening] }
+        try await waitUntil("the record waits for midnight") {
+            presenter.status.record == .open(wakeAt: evening + 6 * Self.hour)
+        }
+        let ready = try await edge.slot("ready")
+        XCTAssertEqual(ready, .bool(true), "the offer is not ready")
+        let taken = try await edge.slot("taken")
+        XCTAssertEqual(taken, .bool(false), "the offer was taken with her away")
+        XCTAssertFalse(presenter.here)
+        withExtendedLifetime(host) {}
+    }
+
+    /// (c) Away told twice is told to the session once: the second changes
+    /// nothing, and the record waits for 18:00 as before.
+    @MainActor
+    func testTheSamePresenceToldTwiceIsToldOnce() async throws {
+        let host = UIViewController()
+        let (presenter, edge, midnight) = try await startTheEveningAtFive(host)
+        await presenter.presence(here: false)
+        await presenter.presence(here: false)
+        let told = await Self.presences(edge)
+        XCTAssertEqual(told, [false], "the same presence reached the session twice")
+        XCTAssertFalse(presenter.here)
+        XCTAssertEqual(presenter.status.record, .open(wakeAt: midnight + 18 * Self.hour))
+        XCTAssertEqual(presenter.wakesDelivered, [])
+        withExtendedLifetime(host) {}
+    }
+
+    /// (d) Away at 17:00 and back at 17:30, with nothing missed: only the
+    /// told value changes. The record waits for 18:00 as before, no wake is
+    /// delivered, and the offer is still due.
+    @MainActor
+    func testBackWithNothingMissedChangesOnlyWhereSheIs() async throws {
+        let host = UIViewController()
+        let (presenter, edge, midnight) = try await startTheEveningAtFive(host)
+        let before = presenter.status
+        await presenter.presence(here: false)
+        Self.move(presenter, to: midnight + 17 * Self.hour + 30 * 60_000)
+        await presenter.presence(here: true)
+        XCTAssertTrue(presenter.here)
+        XCTAssertEqual(presenter.status, before, "coming back with nothing missed moved the record")
+        XCTAssertEqual(presenter.wakesDelivered, [])
+        let told = await Self.presences(edge)
+        XCTAssertEqual(told, [false, true])
+        for (slot, value) in [("offer_due", true), ("ready", false), ("taken", false)] {
+            let read = try await edge.slot(slot)
+            XCTAssertEqual(read, .bool(value), "\(slot) changed")
+        }
+        XCTAssertNotNil(presenter.scheduledWake, "the 18:00 wake is no longer scheduled")
+        withExtendedLifetime(host) {}
+    }
+
+    /// Away before the start is kept, and told before it: the session is
+    /// told the environment, then that she is away, then starts. At 18:00
+    /// the timer's wake is judged with her away.
+    @MainActor
+    func testAwayBeforeTheStartIsToldBeforeIt() async throws {
+        let plan = NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: Self.theEveningOffer)],
+            root: "main", app: "app", experience: "evening", version: 1)
+        let host = UIViewController()
+        let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
+        let midnight = Self.wallNow() / Self.day * Self.day
+        Self.move(presenter, to: midnight + 17 * Self.hour)
+        await presenter.presence(here: false)
+        XCTAssertTrue(presenter.here, "the session was told before it was made")
+        await presenter.start(plan: plan, store: ProbeStore(), event: "go")
+        XCTAssertFalse(presenter.here)
+        let edge = try XCTUnwrap(presenter.edge)
+        let log = await edge.log
+        XCTAssertEqual(Array(log.prefix(2).dropFirst()), [.presence(here: false)],
+                       "away was not told right after the environment, before the start: \(log)")
+
+        let evening = midnight + 18 * Self.hour
+        Self.move(presenter, to: evening + 60_000)
+        try await waitUntil("the record waits for midnight") {
+            presenter.status.record == .open(wakeAt: evening + 6 * Self.hour)
+        }
+        withExtendedLifetime(host) {}
+    }
+
     // MARK: Each presentation laid out as its own style
 
     /// A sheet and a cover are each a controller of their own, set up as
