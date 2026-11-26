@@ -120,6 +120,17 @@ package final class NuxieMachineSession {
         try delivered(nux_machine_wake(handle, now))
     }
 
+    /// The person is in the app (`here` true) or has left it, at `now`. A
+    /// session starts with her here, and the same value again does nothing.
+    /// Leaving tells an open record she is away. Coming back first delivers
+    /// each wake the record asked for at or before `now`, at its own moment
+    /// and with her still away, then tells the record she is here; the rows
+    /// are every step's, in order. With no record open the session keeps the
+    /// value for the next start.
+    package func presence(here: Bool, now: Int64) throws -> [NuxieMachineRow] {
+        try delivered(nux_machine_presence(handle, here, now))
+    }
+
     /// The client's environment is now `environment`. Told once before the
     /// first start, so the first frame is drawn in it, and again whenever it
     /// changes. With a record open it is delivered to the record, as a wake
