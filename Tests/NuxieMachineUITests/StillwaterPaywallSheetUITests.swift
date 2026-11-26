@@ -1026,6 +1026,114 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + wake(at: 18, days: 1))
     }
 
+    // MARK: Leaving the app and coming back
+
+    /// "Not now" at 17:00 leaves the evening offer due at 18:00, and she
+    /// leaves the app at 17:00. The host stands in for her leaving and
+    /// coming back with its presence notices: a UI test cannot hold the app
+    /// in the background across a move of the clock, so the app stays up
+    /// and the presenter's timer delivers the wakes that come due while she
+    /// is away, as it does while a phone keeps the app running. With the
+    /// clock moved to 09:00 the next day, 18:00 finds her away: the offer
+    /// is ready and waits six hours for her, and at midnight it is given
+    /// up, which ends the record. Back the next morning, she is shown
+    /// nothing. Kept as `away-1-after-not-now` and `away-2-next-morning`.
+    func testAwayFromFiveUntilTheNextMorningTheOfferIsGivenUp() throws {
+        let app = launch(clock: "17:00,09:00+1d")
+        let screen = try openPaywall(app)
+        let notNow = app.buttons["Not now"]
+        XCTAssertTrue(notNow.waitForExistence(timeout: 15), app.debugDescription)
+        let record = app.staticTexts["nuxie-machine-record"]
+
+        notNow.tap()
+        waitUntilGone(screen)
+        waitFor(record, labelContaining: "Record: open, " + wake(at: 18))
+        tellPresence("away")
+        waitFor(app.descendants(matching: .any)["nuxie-machine-presences"], labelContaining: "away")
+        keep("away-1-after-not-now", app, nil)
+
+        moveTheClock(to: "09:00+1d")
+        waitFor(record, labelContaining: "Record: ended")
+        tellPresence("back")
+        XCTAssertFalse(app.descendants(matching: .any)["nuxie-machine-screen"].waitForExistence(timeout: 5),
+                       "something was presented the next morning: \(app.debugDescription)")
+        XCTAssertFalse(text(app, beginningWith: "A year of quiet minutes").exists, "the offer was shown")
+        XCTAssertTrue(record.label.contains("Record: ended"), record.label)
+        keep("away-2-next-morning", app, nil)
+    }
+
+    /// The same evening, back at 19:30. With the clock moved to 19:30 while
+    /// she is away, 18:00 finds her away: the offer is ready, and the
+    /// record waits until midnight for her before giving it up. Back at
+    /// 19:30, the offer is presented as a sheet, and a screen reader reads
+    /// its line and its two buttons. Kept as `back-1-away-at-1930` and
+    /// `back-2-the-offer`.
+    func testAwayFromFiveAndBackAtHalfPastSevenTheOfferIsPresented() throws {
+        let app = launch(clock: "17:00,19:30")
+        let screen = try openPaywall(app)
+        let notNow = app.buttons["Not now"]
+        XCTAssertTrue(notNow.waitForExistence(timeout: 15), app.debugDescription)
+        let record = app.staticTexts["nuxie-machine-record"]
+
+        notNow.tap()
+        waitUntilGone(screen)
+        waitFor(record, labelContaining: "Record: open, " + wake(at: 18))
+        tellPresence("away")
+        waitFor(app.descendants(matching: .any)["nuxie-machine-presences"], labelContaining: "away")
+
+        moveTheClock(to: "19:30")
+        waitFor(record, labelContaining: "Record: open, " + wake(at: 0, days: 1))
+        XCTAssertFalse(app.descendants(matching: .any)["nuxie-machine-screen"].exists,
+                       "the offer was presented while she was away")
+        keep("back-1-away-at-1930", app, nil)
+
+        tellPresence("back")
+        let offer = app.descendants(matching: .any)["nuxie-machine-screen"]
+        XCTAssertTrue(offer.waitForExistence(timeout: 30), "nothing was presented when she came back")
+        XCTAssertTrue(text(app, beginningWith: "A year of quiet minutes, for less.").waitForExistence(timeout: 15),
+                      app.debugDescription)
+        XCTAssertTrue(app.buttons["Claim the offer"].waitForExistence(timeout: 10), app.debugDescription)
+        let read = reading(app, on: offer.frame)
+        XCTAssertTrue(read.contains { $0.hasPrefix("text \"A year of quiet minutes, for less.") }, "\(read)")
+        XCTAssertTrue(read.contains("button \"Claim the offer\""), "\(read)")
+        XCTAssertTrue(read.contains("button \"No thanks\""), "\(read)")
+        waitFor(offer, valueContaining: "Record: open")
+        keep("back-2-the-offer", app, offer)
+    }
+
+    /// The app sent to the background and brought back with the Home
+    /// button: UIKit's own notices reach the presenter, which tells the
+    /// session away, then here, each once. The open paywall stays, and so
+    /// does the record's wake.
+    func testLeavingTheAppAndComingBackAreEachToldOnce() throws {
+        let app = launch()
+        let screen = try openPaywall(app)
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15), app.debugDescription)
+        waitFor(screen, valueContaining: "Record: open, " + wake(at: 18))
+        let presences = app.descendants(matching: .any)["nuxie-machine-presences"]
+        XCTAssertTrue(presences.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(presences.label, "none", "a presence was told before she left")
+
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10) || app.state == .runningBackgroundSuspended,
+                      "the app did not go to the background: \(app.state.rawValue)")
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "the app did not come back")
+        waitFor(presences, labelContaining: "away; here")
+        XCTAssertEqual(presences.label, "away; here", "leaving and coming back were not each told once")
+        XCTAssertTrue(screen.waitForExistence(timeout: 10), "the paywall went while the app was away")
+        waitFor(screen, valueContaining: "Record: open, " + wake(at: 18))
+        keep("left-and-back", app, screen)
+    }
+
+    /// Post the Darwin notification the host stands in for the person
+    /// leaving the app (`away`) or coming back (`back`) with.
+    private func tellPresence(_ which: String) {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("dev.nuxie.machine.presence.\(which)" as CFString), nil, nil, true)
+    }
+
     /// Midnight UTC of the day `launch` started the host on, in seconds
     /// since 1970. The film clock reads its times on that day, however long
     /// the test then runs.

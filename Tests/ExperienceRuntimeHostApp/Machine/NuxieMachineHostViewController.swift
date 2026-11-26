@@ -51,11 +51,21 @@ import UIKit
 /// with the machine's clock at the first time of day, and the Darwin
 /// notification `dev.nuxie.machine.clock.<time>` for each later one moves
 /// it there while the app runs, forward only. The times are of the day the
-/// app was launched, in UTC, the day the machine reads `next 18:00` in.
-/// Between moves the clock runs at the wall clock's pace. A move goes
-/// through the presenter's one seam for it,
-/// [`NuxieMachineSheetPresenter.clockAhead`], so a wake it makes due fires
-/// through the presenter's own timer.
+/// app was launched, in UTC, the day the machine reads `next 18:00` in; a
+/// time written `09:00+1d` is that time a day later. Between moves the
+/// clock runs at the wall clock's pace. A move goes through the
+/// presenter's one seam for it, [`NuxieMachineSheetPresenter.clockAhead`],
+/// so a wake it makes due fires through the presenter's own timer.
+///
+/// The Darwin notifications `dev.nuxie.machine.presence.away` and
+/// `dev.nuxie.machine.presence.back` stand in for the person leaving the
+/// app and coming back ([`presenceNotifications`]): each calls the
+/// presenter's [`NuxieMachineSheetPresenter.presence(here:)`], the entry
+/// UIKit's background and foreground notices call, with the app still in
+/// the foreground. A UI test cannot hold the app in the background across
+/// a move of the clock, so it says away, moves the clock and says back.
+/// Every presence the session took is shown as the element
+/// `nuxie-machine-presences`.
 ///
 /// `--nuxie-machine-scroll-sheet` opens a paywall whose page is a `scroll`,
 /// as a sheet, in place of Stillwater's: the `views-scroll` paywall, under a
@@ -75,6 +85,12 @@ public final class NuxieMachineHostViewController: UIViewController {
     public static let textSizeNotifications: [String: UIContentSizeCategory] = Dictionary(
         uniqueKeysWithValues: [UIContentSizeCategory.large, .extraExtraExtraLarge, .accessibilityExtraExtraExtraLarge]
             .map { ("dev.nuxie.machine.text-size.\($0.rawValue)", $0) })
+    /// The Darwin notifications that stand in for the person leaving the
+    /// app and coming back, with whether each says she is here.
+    public static let presenceNotifications: [String: Bool] = [
+        "dev.nuxie.machine.presence.away": false,
+        "dev.nuxie.machine.presence.back": true,
+    ]
     /// The host the notifications turn: the one on screen.
     private static weak var shown: NuxieMachineHostViewController?
     /// The window this host appeared in. Held here, since a cover takes the
@@ -199,8 +215,10 @@ public final class NuxieMachineHostViewController: UIViewController {
     }
 
     /// Turn the window `shown` appeared in when a test posts one of
-    /// [`appearanceNotifications`], or change its text size when it posts
-    /// one of [`textSizeNotifications`]. Listens once per app run.
+    /// [`appearanceNotifications`], change its text size when it posts one
+    /// of [`textSizeNotifications`], move the film clock, or tell its
+    /// presenter the person left or came back ([`presenceNotifications`]).
+    /// Listens once per app run.
     private static var listening = false
     private static func listenForAppearance(turning host: NuxieMachineHostViewController) {
         shown = host
@@ -209,7 +227,9 @@ public final class NuxieMachineHostViewController: UIViewController {
         listening = true
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         let clockMoves = Array((FilmClock.launched?.moves ?? [:]).keys)
-        for name in Array(appearanceNotifications.keys) + Array(textSizeNotifications.keys) + clockMoves {
+        let names = Array(appearanceNotifications.keys) + Array(textSizeNotifications.keys) + clockMoves
+            + Array(presenceNotifications.keys)
+        for name in names {
             CFNotificationCenterAddObserver(center, nil, { _, _, name, _, _ in
                 guard let name else { return }
                 let raw = name.rawValue as String
@@ -222,6 +242,9 @@ public final class NuxieMachineHostViewController: UIViewController {
                     } else if let moment = FilmClock.launched?.moves[raw],
                               let presenter = NuxieMachineHostViewController.shown?.presenter {
                         FilmClock.move(presenter, to: moment)
+                    } else if let here = NuxieMachineHostViewController.presenceNotifications[raw],
+                              let presenter = NuxieMachineHostViewController.shown?.presenter {
+                        await presenter.presence(here: here)
                     }
                 }
             }, name as CFString, nil, .deliverImmediately)
@@ -286,9 +309,10 @@ public final class NuxieMachineHostViewController: UIViewController {
 }
 
 /// The film clock `--nuxie-machine-clock` names: times of day (`HH:MM`,
-/// comma separated) on the day the app was launched, in UTC. The record
-/// starts at the first; each later one is a move a test asks for with the
-/// Darwin notification `dev.nuxie.machine.clock.<HH:MM>`.
+/// comma separated) on the day the app was launched, in UTC, or with `+Nd`
+/// (`09:00+1d`) that many days later. The record starts at the first; each
+/// later one is a move a test asks for with the Darwin notification
+/// `dev.nuxie.machine.clock.<time as written>`.
 struct FilmClock {
     private static let day: Int64 = 24 * 3_600_000
 
@@ -305,10 +329,16 @@ struct FilmClock {
         guard let at = arguments.firstIndex(of: "--nuxie-machine-clock"), at + 1 < arguments.count else { return nil }
         let midnight = wallNow() / day * day
         let times = arguments[at + 1].split(separator: ",").map(String.init)
-        let moments = times.compactMap { time -> Int64? in
-            let parts = time.split(separator: ":").compactMap { Int64($0) }
+        let moments = times.compactMap { written -> Int64? in
+            let halves = written.split(separator: "+", maxSplits: 1).map(String.init)
+            var days: Int64 = 0
+            if halves.count == 2 {
+                guard halves[1].hasSuffix("d"), let count = Int64(halves[1].dropLast()) else { return nil }
+                days = count
+            }
+            let parts = halves[0].split(separator: ":").compactMap { Int64($0) }
             guard parts.count == 2, (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return nil }
-            return midnight + (parts[0] * 60 + parts[1]) * 60_000
+            return midnight + days * day + (parts[0] * 60 + parts[1]) * 60_000
         }
         guard moments.count == times.count, let start = moments.first else { return nil }
         let moves = Dictionary(zip(times.dropFirst().map { "dev.nuxie.machine.clock.\($0)" }, moments.dropFirst()),
@@ -479,7 +509,8 @@ enum NuxieMachineScrollSheetFixture {
 /// `nuxie-machine-places` is labeled with every place the session took, in
 /// order, from the edge's log (`edge`): `T R B L W H` each, `; ` between, or
 /// `none`. `nuxie-machine-environments` is labeled the same way with every
-/// environment the session took, `light 17.0` or `dark 23.0` each. All are
+/// environment the session took, `light 17.0` or `dark 23.0` each, and
+/// `nuxie-machine-presences` with every presence, `here` or `away`. All are
 /// read four times a second, so a UI test can tell a frame the app drew
 /// wrong from a screenshot taken wrong, and see each place and environment
 /// told.
@@ -510,6 +541,7 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
         private let surfaceLabel = UILabel()
         private let placesLabel = UILabel()
         private let environmentsLabel = UILabel()
+        private let presencesLabel = UILabel()
         private let edge: @MainActor () -> NuxieMachineEdge?
         /// Kept for the app's run, as the window is; it holds this weakly.
         private var timer: Timer?
@@ -554,6 +586,13 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             environmentsLabel.accessibilityIdentifier = "nuxie-machine-environments"
             environmentsLabel.accessibilityLabel = "none"
             view.addSubview(environmentsLabel)
+            presencesLabel.textColor = .clear
+            presencesLabel.font = .systemFont(ofSize: 1)
+            presencesLabel.frame = CGRect(x: 4, y: 0, width: 1, height: 1)
+            presencesLabel.isAccessibilityElement = true
+            presencesLabel.accessibilityIdentifier = "nuxie-machine-presences"
+            presencesLabel.accessibilityLabel = "none"
+            view.addSubview(presencesLabel)
             self.view = view
         }
 
@@ -591,8 +630,8 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
                 + "scale \(numbers[4]) drawn \(numbers[5]) \(numbers[6])" + viewInsets + place
         }
 
-        /// Every place and every environment the session took, from the
-        /// edge's log. Kept as they were once the edge is let go of.
+        /// Every place, environment and presence the session took, from
+        /// the edge's log. Kept as they were once the edge is let go of.
         private func readPlaces() {
             guard let edge = edge() else { return }
             Task { @MainActor [weak self] in
@@ -611,6 +650,11 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
                 }
                 self?.environmentsLabel.accessibilityLabel = environments.isEmpty
                     ? "none" : environments.joined(separator: "; ")
+                let presences = log.compactMap { entry -> String? in
+                    guard case .presence(let here) = entry else { return nil }
+                    return here ? "here" : "away"
+                }
+                self?.presencesLabel.accessibilityLabel = presences.isEmpty ? "none" : presences.joined(separator: "; ")
             }
         }
 

@@ -41,6 +41,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// 18:00 and 20:00 on day zero: the evening offer's start and end.
     private static let evening: Int64 = 18 * 3_600_000
     private static let offerEnds: Int64 = 20 * 3_600_000
+    /// 17:00 on day zero, an hour before the evening offer.
+    private static let five: Int64 = 17 * 3_600_000
+    private static let day: Int64 = 24 * 3_600_000
     /// How far apart two places read from the semantic tree may be and
     /// still be the same place, in points.
     private static let near: CGFloat = 0.5
@@ -1259,6 +1262,111 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             try? await run.close()
             throw error
         }
+    }
+
+    // MARK: Leaving the app and coming back
+
+    /// "Not now" at 17:00 leaves the evening offer due at 18:00, and she
+    /// leaves the app at 17:00. Back at 09:00 the next day, the one presence
+    /// call delivers what she missed, each wake at its own moment with her
+    /// still away: at 18:00 the offer is ready and, with her away, waits
+    /// six hours for her; at midnight it is given up, and the record ends.
+    /// Only the offer's lapse ends it: had 18:00 found her here, the offer
+    /// would be presented. Nothing is presented, and the owner hears the end
+    /// as the last row.
+    func testAwayFromFiveUntilTheNextMorningTheOfferIsGivenUp() async throws {
+        let run = try Run()
+        do {
+            try await closeThePaywallAndLeave(at: Self.five, run)
+
+            let written = await run.edge.log.count
+            run.jump(to: Self.day + Self.nine)
+            await run.edge.presence(here: true, now: run.now)
+            let back = await Array(run.edge.log.dropFirst(written))
+            XCTAssertTrue(back.contains(.end(reason: .exited, fault: nil)), "the offer was not given up: \(back)")
+            XCTAssertFalse(back.contains { if case .opened = $0 { true } else { false } },
+                           "something was presented the next morning: \(back)")
+            let open = try await run.edge.recordOpen()
+            XCTAssertFalse(open, "the record is open the next morning")
+            let stack = await run.edge.stack
+            XCTAssertTrue(stack.isEmpty, "\(stack)")
+            guard case .delivered(let shown, let rows)? = run.owner.reports.last else {
+                return XCTFail("\(run.owner.reports)")
+            }
+            XCTAssertEqual(shown, [], "\(rows)")
+            XCTAssertEqual(rows.last, .end(.exited), "\(rows)")
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")], "the owner heard a dismissal")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// The same evening, back at 19:30: the presence call delivers 18:00
+    /// with her away, so the offer is ready and waits for her, and then she
+    /// is here, so the offer is presented as a sheet in that same call. The
+    /// edge opens it from the session's records, the owner hears it shown,
+    /// and it is drawn with its line and its buttons.
+    func testAwayFromFiveAndBackAtHalfPastSevenTheOfferIsPresented() async throws {
+        let run = try Run()
+        do {
+            try await closeThePaywallAndLeave(at: Self.five, run)
+
+            let written = await run.edge.log.count
+            run.jump(to: Self.evening + 90 * Self.minute)
+            await run.edge.presence(here: true, now: run.now)
+            let stack = await run.edge.stack
+            let offer = try XCTUnwrap(stack.last, "nothing was presented when she came back")
+            XCTAssertEqual(offer.route, "offer")
+            XCTAssertEqual(offer.presentation, .sheet)
+            let back = await Array(run.edge.log.dropFirst(written))
+            XCTAssertTrue(back.contains(.opened(offer.shown)), "\(back)")
+            let open = try await run.edge.recordOpen()
+            XCTAssertTrue(open, "the record ended when she came back")
+            guard case .delivered(let shown, _)? = run.owner.reports.last else {
+                return XCTFail("\(run.owner.reports)")
+            }
+            XCTAssertEqual(shown, [offer])
+
+            try await run.layOut()
+            try await run.settle()
+            let drawn = try await run.look("back-offer")
+            XCTAssertTrue(drawn.has("A year of quiet minutes, for less."), "\(drawn.reading)")
+            XCTAssertTrue(try drawn.isEnabled("Claim the offer"), "\(drawn.reading)")
+            XCTAssertTrue(drawn.has("No thanks"), "\(drawn.reading)")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Open the paywall at `moment`, tap "Not now", which leaves the evening
+    /// offer due and asks for 18:00, and leave the app a second later. The
+    /// record stays open, waiting for 18:00.
+    private func closeThePaywallAndLeave(at moment: Int64, _ run: Run) async throws {
+        run.jump(to: moment)
+        await run.edge.start(event: "onboarding_completed", now: run.now)
+        try await run.layOut()
+        try await run.settle()
+        let open = try await run.look("away-open")
+        try await run.tap(open.center(of: "Not now"))
+        let closed = await run.edge.log
+        XCTAssertTrue(closed.contains(.wakeAt(Self.evening)), "\"Not now\" does not ask for 18:00: \(closed)")
+        XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+        let written = closed.count
+        await run.edge.presence(here: false, now: run.advance())
+        let left = await Array(run.edge.log.dropFirst(written))
+        XCTAssertEqual(left.first, .presence(here: false), "\(left)")
+        let away = try await run.edge.recordOpen()
+        XCTAssertTrue(away, "leaving ended the record")
+        let fault = await run.edge.fault
+        XCTAssertNil(fault, "leaving faulted")
     }
 
     /// "Not now" dismisses the paywall, and the evening's wake starts a
