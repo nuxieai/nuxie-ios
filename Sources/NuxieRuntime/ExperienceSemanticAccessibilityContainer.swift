@@ -51,6 +51,7 @@ package final class ExperienceSemanticAccessibilityContainer {
     private let focusedElement: () -> AnyObject?
     private let moveFocus: (AnyObject) -> Void
     private let layoutChanged: () -> Void
+    private let pageScrolled: (Any?) -> Void
     private var objects: [UInt32: AnyObject] = [:]
     private var order: [UInt32] = []
     private var preferredFocusID: UInt32?
@@ -62,11 +63,19 @@ package final class ExperienceSemanticAccessibilityContainer {
     package init(view: UIView,
          focusedElement: @escaping () -> AnyObject? = { UIAccessibility.focusedElement(using: nil) as AnyObject? },
          moveFocus: @escaping (AnyObject) -> Void = { UIAccessibility.post(notification: .layoutChanged, argument: $0) },
-         layoutChanged: @escaping () -> Void = { UIAccessibility.post(notification: .layoutChanged, argument: nil) }) {
+         layoutChanged: @escaping () -> Void = { UIAccessibility.post(notification: .layoutChanged, argument: nil) },
+         pageScrolled: @escaping (Any?) -> Void = { UIAccessibility.post(notification: .pageScrolled, argument: $0) }) {
         self.view = view
         self.focusedElement = focusedElement
         self.moveFocus = moveFocus
         self.layoutChanged = layoutChanged
+        self.pageScrolled = pageScrolled
+    }
+
+    /// Tell the reader a `scroll` moved a page for it. Nothing is said
+    /// (the argument is none): the reader plays its scroll sound.
+    package func announcePageScrolled() {
+        pageScrolled(nil)
     }
 
     package func setActive(_ active: Bool) {
@@ -102,7 +111,9 @@ package final class ExperienceSemanticAccessibilityContainer {
         capture: NuxieNativeSemanticCapture,
         nativeControls: [UInt32: UIView],
         project: (NuxieNativeSemanticNode) -> Projection?,
-        submit: @escaping ExperienceSemanticAccessibilityElement.Submit
+        submit: @escaping ExperienceSemanticAccessibilityElement.Submit,
+        focused: ExperienceSemanticAccessibilityElement.Focused? = nil,
+        scroll: ExperienceSemanticAccessibilityElement.Scroll? = nil
     ) {
         guard let view else { clear(); return }
         guard isActive else { return }
@@ -126,7 +137,8 @@ package final class ExperienceSemanticAccessibilityContainer {
             }
             let element = elements[node.id]
                 ?? ExperienceSemanticAccessibilityElement(accessibilityContainer: view)
-            element.update(captureID: capture.id, node: node, projection: projection, submit: submit)
+            element.update(captureID: capture.id, node: node, projection: projection, submit: submit,
+                           focused: focused, scroll: scroll)
             next[node.id] = element
             ordered.append(element)
             nextObjects[node.id] = element

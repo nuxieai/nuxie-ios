@@ -25,6 +25,12 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
     package let label: String
     package let value: String
     package let hint: String
+    /// The innermost scroll region that clips this node, as an index into
+    /// its capture's [`scrollRegions`](NuxieNativeSemanticCapture.scrollRegions),
+    /// or none: a node under no `scroll`, or one read from a runtime that
+    /// does not say. A node with a region and no tap may be one scrolled
+    /// out of view.
+    package let scrollRegion: Int?
 
     package init(
         id: UInt32,
@@ -38,7 +44,8 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
         bounds: CGRect,
         label: String,
         value: String,
-        hint: String
+        hint: String,
+        scrollRegion: Int? = nil
     ) {
         self.id = id
         self.parentID = parentID
@@ -52,6 +59,7 @@ package struct NuxieNativeSemanticNode: Equatable, Sendable {
         self.label = label
         self.value = stateFlags & Self.obscured == 0 ? value : ""
         self.hint = hint
+        self.scrollRegion = scrollRegion
     }
 }
 
@@ -201,11 +209,32 @@ package struct NuxieNativeScrollRegion: Equatable, Sendable {
     /// The index of the region this one is inside, always an earlier one,
     /// or none.
     package let parent: Int?
+    /// How far its content has moved from its start on each axis, at or
+    /// above 0, in the scroller's own points; while a move settles, where it
+    /// is going. None from a runtime that does not say
+    /// ([`position(answeredSize:scrollX:scrollY:rangeX:rangeY:)`]).
+    package let scroll: CGPoint?
+    /// The most its content can move on each axis, with `scroll`. Zero on
+    /// an axis it does not scroll.
+    package let range: CGSize?
 
-    package init(bounds: CGRect, canScroll: UInt32, parent: Int?) {
+    package init(bounds: CGRect, canScroll: UInt32, parent: Int?, scroll: CGPoint? = nil, range: CGSize? = nil) {
         self.bounds = bounds
         self.canScroll = canScroll
         self.parent = parent
+        self.scroll = scroll
+        self.range = range
+    }
+
+    /// A region's position and range as a runtime answered them: `answeredSize`
+    /// is the struct size it returned. A runtime older than these fields
+    /// answers a smaller size and leaves them alone, so they are none unless
+    /// the answer covers all four ([`positionSize`]).
+    package static func position(answeredSize: UInt32, scrollX: Float, scrollY: Float, rangeX: Float,
+                                 rangeY: Float) -> (scroll: CGPoint, range: CGSize)? {
+        guard answeredSize >= positionSize else { return nil }
+        return (CGPoint(x: CGFloat(scrollX), y: CGFloat(scrollY)),
+                CGSize(width: CGFloat(rangeX), height: CGFloat(rangeY)))
     }
 }
 

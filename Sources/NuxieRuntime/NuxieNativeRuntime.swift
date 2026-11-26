@@ -35,6 +35,20 @@ package enum NuxieNativeRuntimeError: Error, Equatable, Sendable {
     case callFailed(NuxieNativeDiagnostic)
 }
 
+extension NuxieNativeScrollRegion {
+    /// The struct size a runtime answers with when it fills a region's
+    /// position and range: up to and including `range_y`.
+    package static let positionSize = UInt32(
+        MemoryLayout<NuxScrollRegionView>.offset(of: \NuxScrollRegionView.range_y)! + MemoryLayout<Float>.size)
+}
+
+extension NuxieNativeSemanticNode {
+    /// The struct size a runtime answers with when it fills a node's
+    /// `scroll_region`.
+    static let regionViewSize = UInt32(
+        MemoryLayout<NuxSemanticNodeView>.offset(of: \NuxSemanticNodeView.scroll_region)! + MemoryLayout<Int32>.size)
+}
+
 extension NuxieNativeRuntimeError: LocalizedError {
     package var errorDescription: String? {
         switch self {
@@ -373,6 +387,11 @@ package struct NuxieNativeFocusState: Equatable, Sendable {
 
 package struct NuxieNativePlayerStepResult: Equatable, Sendable {
     package var keepGoing: Bool
+    /// Whether the step left nothing in the player that needs another step
+    /// (a scroller settling, an animation running), the runtime's own
+    /// scheduling fact beside `keepGoing`. False from a runtime that cannot
+    /// say.
+    package var settled: Bool
     package let pointerHits: [NuxieNativePointerHit]
     package let focusResults: [Bool]
     package let focusState: NuxieNativeFocusState?
@@ -384,6 +403,7 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
 
     package init(
         keepGoing: Bool,
+        settled: Bool = false,
         pointerHits: [NuxieNativePointerHit],
         stateChanges: [(layerIndex: Int, coreType: UInt32, globalID: UInt32?)],
         events: [NuxieNativeEvent],
@@ -394,6 +414,7 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
         focusState: NuxieNativeFocusState? = nil
     ) {
         self.keepGoing = keepGoing
+        self.settled = settled
         self.pointerHits = pointerHits
         self.stateChanges = stateChanges
         self.events = events
@@ -406,6 +427,7 @@ package struct NuxieNativePlayerStepResult: Equatable, Sendable {
 
     package static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.keepGoing == rhs.keepGoing
+            && lhs.settled == rhs.settled
             && lhs.pointerHits == rhs.pointerHits
             && lhs.focusResults == rhs.focusResults
             && lhs.focusState == rhs.focusState
@@ -1588,6 +1610,30 @@ package actor NuxieNativeRuntime {
         try await executor.call { try state.retireSemanticCapture() }
     }
 
+    /// Bring node `nodeID` of capture `captureID` into view: every scroller
+    /// above it moves by the least that shows it, animated where it
+    /// animates. Whether any moved; a move retires the capture, as the
+    /// runtime makes it stale, and no move leaves it standing. Reveal again
+    /// only once a step reports itself settled
+    /// ([`NuxieNativePlayerStepResult.settled`]): a reveal while one
+    /// settles overshoots.
+    package func revealSemanticNode(captureID: UUID, nodeID: UInt32) async throws -> Bool {
+        let state = try requireState()
+        return try await executor.call { try state.revealSemanticNode(captureID: captureID, nodeID: nodeID) }
+    }
+
+    /// Move scroll region `region` of capture `captureID` by `dx`, `dy`
+    /// points, a scroll wheel's sense: a negative `dy` shows what is below.
+    /// It starts from where the content is going and stops at the region's
+    /// ends. Whether it moved, false at an end; a move retires the capture,
+    /// and no move leaves it standing.
+    package func scrollRegion(captureID: UUID, region: Int, dx: Float, dy: Float) async throws -> Bool {
+        let state = try requireState()
+        return try await executor.call {
+            try state.scrollRegion(captureID: captureID, region: region, dx: dx, dy: dy)
+        }
+    }
+
     package func executorThreadIdentity() async throws -> UInt64 {
         _ = try requireState()
         return try await executor.call {
@@ -1863,6 +1909,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         textRunNames: [String] = []
     ) throws -> NuxieNativePlayerStepResult {
         var keepGoing = false
+        var settled = true
         var focusResults: [Bool] = []
         var focusState: NuxieNativeFocusState?
         var pointerHits = Array(repeating: NuxieNativePointerHit.none, count: pointers.count)
@@ -1903,6 +1950,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
             if index == focusPlayerIndex { focusResults = result.focusResults }
             if index == finalPlayerIndex { textGeometry = result.textGeometry }
             keepGoing = keepGoing || result.keepGoing
+            settled = settled && result.settled
             for (index, hit) in result.pointerHits.enumerated() where index < pointerHits.count {
                 if hit.precedence > pointerHits[index].precedence {
                     pointerHits[index] = hit
@@ -1920,6 +1968,7 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
 
         return NuxieNativePlayerStepResult(
             keepGoing: keepGoing,
+            settled: settled,
             pointerHits: pointerHits,
             stateChanges: stateChanges,
             events: events,
@@ -1959,6 +2008,15 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 }
                 let value = node.state_flags & NuxieNativeSemanticNode.obscured == 0
                     ? try copyString(node.value, label: "semantic value") : ""
+                let scrollRegion: Int?
+                if node.struct_size < NuxieNativeSemanticNode.regionViewSize || node.scroll_region == -1 {
+                    // A runtime older than the field leaves it alone.
+                    scrollRegion = nil
+                } else if node.scroll_region >= 0, Int(node.scroll_region) < info.scroll_region_count {
+                    scrollRegion = Int(node.scroll_region)
+                } else {
+                    throw NuxieNativeRuntimeError.invalidNativeValue("semantic node's scroll region is not in the capture")
+                }
                 nodes.append(NuxieNativeSemanticNode(
                     id: node.id,
                     parentID: node.parent_id == -1 ? nil : UInt32(bitPattern: node.parent_id),
@@ -1972,7 +2030,8 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                         width: CGFloat(node.max_x - node.min_x), height: CGFloat(node.max_y - node.min_y)),
                     label: try copyString(node.label, label: "semantic label"),
                     value: value,
-                    hint: try copyString(node.hint, label: "semantic hint")
+                    hint: try copyString(node.hint, label: "semantic hint"),
+                    scrollRegion: scrollRegion
                 ))
             }
             // A runtime that lists no scroll regions leaves the count zero.
@@ -1992,11 +2051,16 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
                 } else {
                     throw NuxieNativeRuntimeError.invalidNativeValue("scroll region's parent is not an earlier region")
                 }
+                // The call returns the runtime's own size; an older runtime
+                // fills nothing past `parent`.
+                let position = NuxieNativeScrollRegion.position(answeredSize: region.struct_size,
+                    scrollX: region.scroll_x, scrollY: region.scroll_y,
+                    rangeX: region.range_x, rangeY: region.range_y)
                 scrollRegions.append(NuxieNativeScrollRegion(
                     bounds: CGRect(x: CGFloat(region.min_x), y: CGFloat(region.min_y),
                         width: CGFloat(region.max_x - region.min_x), height: CGFloat(region.max_y - region.min_y)),
                     canScroll: region.can_scroll,
-                    parent: parent))
+                    parent: parent, scroll: position?.scroll, range: position?.range))
             }
             let tree = try NuxieNativeSemanticTree(renderRevision: info.render_revision,
                 treeVersion: info.tree_version, nodes: nodes)
@@ -2185,6 +2249,32 @@ private final class NuxieNativeRuntimeState: @unchecked Sendable {
         // Exact semantic listeners may belong to a generated auxiliary player.
         // Consume their normal journals in the next ordinary occurrence step.
         auxiliaryPlayersNeedInitialStep = true
+    }
+
+    func revealSemanticNode(captureID: UUID, nodeID: UInt32) throws -> Bool {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "reveal semantic node")
+        }
+        var moved = false
+        try requireOK(nux_player_reveal_semantic_node(try player.require(), try capture.handle.require(),
+            nodeID, &moved), operation: "reveal semantic node")
+        // A move makes the capture stale; no move leaves it the player's.
+        if moved { try retireSemanticCapture() }
+        return moved
+    }
+
+    func scrollRegion(captureID: UUID, region: Int, dx: Float, dy: Float) throws -> Bool {
+        guard let capture = semanticCapture, capture.id == captureID else {
+            throw nativeFailure(status: NUX_STATUS_HANDLE_MISMATCH.rawValue, operation: "scroll region")
+        }
+        guard region >= 0, region <= Int(UInt32.max) else {
+            throw nativeFailure(status: NUX_STATUS_NOT_FOUND.rawValue, operation: "scroll region")
+        }
+        var moved = false
+        try requireOK(nux_player_scroll_region_by(try player.require(), try capture.handle.require(),
+            UInt32(region), dx, dy, &moved), operation: "scroll region")
+        if moved { try retireSemanticCapture() }
+        return moved
     }
 
     private static func makePlayers(
@@ -3378,8 +3468,15 @@ private final class NuxieNativePlayerStepResultHandle {
             try requireOK(nux_player_step_result_focus_input(result, index, &value), operation: "read focus input result")
             return value == 1
         }
+        // Whether nothing in the player needs another step, apart from
+        // `keep_going`. A runtime that cannot say is read as not settled.
+        var scheduling = NuxPlayerSchedulingInfo()
+        scheduling.struct_size = UInt32(MemoryLayout<NuxPlayerSchedulingInfo>.size)
+        let settled = nux_player_step_result_scheduling(result, &scheduling) == NUX_STATUS_OK.rawValue
+            && scheduling.settled
         return NuxieNativePlayerStepResult(
             keepGoing: info.keep_going,
+            settled: settled,
             pointerHits: pointerHits,
             stateChanges: stateChanges,
             events: events,
