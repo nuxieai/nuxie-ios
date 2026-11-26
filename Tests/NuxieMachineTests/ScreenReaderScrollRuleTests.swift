@@ -231,9 +231,9 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
     /// at its end. A range that is not a whole number of steps ends on a
     /// short last stop, and the stop before it is not the last page.
     func testThePageLineCountsInPageSteps() {
-        func line(_ position: CGFloat, _ range: CGFloat, _ length: CGFloat) -> String {
-            let at = NuxieMachineScreenReaderScroll.shownPage(position: position, range: range, length: length)
-            return NuxieMachineScreenReaderScroll.pageWords(at.page, of: at.of)
+        func line(_ position: CGFloat, _ range: CGFloat, _ length: CGFloat) -> String? {
+            NuxieMachineScreenReaderScroll.shownPage(position: position, range: range, length: length)
+                .map { NuxieMachineScreenReaderScroll.pageWords($0.page, of: $0.of) }
         }
         XCTAssertEqual(line(0, 1592, 844), "Page 1 of 3", "the top")
         XCTAssertEqual(line(796, 1592, 844), "Page 2 of 3", "one step down")
@@ -250,6 +250,39 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
 
         XCTAssertEqual(line(0, 284.6, 844), "Page 1 of 2", "less than a step: two pages")
         XCTAssertEqual(line(284.6, 284.6, 844), "Page 2 of 2")
+    }
+
+    /// Pages that cannot be counted have no line: a looping scroller's
+    /// unbounded range, a range, position or length that is not a number, a
+    /// negative range, or content of more than `mostPages` pages. A position
+    /// before the top reads the first page.
+    func testAPageLineNeedsPagesThatCanBeCounted() {
+        let page = NuxieMachineScreenReaderScroll.shownPage
+        XCTAssertNil(page(0, .infinity, 844), "an unbounded range")
+        XCTAssertNil(page(0, .nan, 844))
+        XCTAssertNil(page(.nan, 1000, 844))
+        XCTAssertNil(page(.infinity, 1000, 844))
+        XCTAssertNil(page(0, 1000, .nan))
+        XCTAssertNil(page(0, 1000, .infinity))
+        XCTAssertNil(page(0, -10, 844), "a negative range")
+        XCTAssertNil(page(0, 1e12, 844), "far more than the most pages")
+        let most = CGFloat(NuxieMachineScreenReaderScroll.mostPages - 2) * 796
+        XCTAssertEqual(page(most, most, 844).map { [$0.page, $0.of] },
+                       [NuxieMachineScreenReaderScroll.mostPages - 1, NuxieMachineScreenReaderScroll.mostPages - 1])
+        XCTAssertEqual(page(-40, 1000, 844).map { [$0.page, $0.of] }, [1, 3], "pulled past the top")
+        let looping = NuxieNativeScrollRegion(bounds: Self.surface, canScroll: Self.top | Self.bottom, parent: nil,
+                                              scroll: CGPoint(x: 0, y: 400), range: CGSize(width: 0, height: CGFloat.infinity))
+        XCTAssertNil(NuxieMachineScreenReaderScroll.pageLine(looping, vertical: true))
+    }
+
+    /// No page goes to a region whose box is not a finite length the way
+    /// it would move.
+    func testNoPageGoesToARegionWithoutAFiniteBox() {
+        let endless = NuxieNativeScrollRegion(bounds: CGRect(x: 0, y: 0, width: 390, height: CGFloat.infinity),
+                                              canScroll: Self.bottom | Self.right, parent: nil)
+        let inside = node(1, CGRect(x: 24, y: 100, width: 100, height: 40), region: 0)
+        XCTAssertNil(NuxieMachineScreenReaderScroll.page(.showBelow, from: inside, in: [endless]))
+        XCTAssertEqual(NuxieMachineScreenReaderScroll.page(.showRight, from: inside, in: [endless]).map(\.dx), -342)
     }
 
     /// A region's line reads its position along the axis the page moved: y
@@ -326,6 +359,85 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         scrolling.ended([NuxieMachineScrolled(request, .moved)], settled: false)
         XCTAssertEqual(scrolling.take(capture, settled: true).scrolls, [])
         XCTAssertFalse(scrolling.wantsFrames)
+    }
+
+    /// A page asked while a frame carries another waits for the next frame:
+    /// the earlier page's answer settles only that page, whichever way the
+    /// later one goes.
+    func testAPageAskedWhileAnotherIsInFlightGoesNext() throws {
+        let capture = try Self.capture([node(1, CGRect(x: 24, y: 400, width: 160, height: 44))],
+                                       regions: [NuxieNativeScrollRegion(bounds: Self.surface,
+                                                                          canScroll: Self.top | Self.bottom,
+                                                                          parent: nil)])
+        let down = NuxieMachineScrollRequest.page(captureID: capture.id, region: 0, dx: 0, dy: -796)
+        let up = NuxieMachineScrollRequest.page(captureID: capture.id, region: 0, dx: 0, dy: 796)
+        var scrolling = NuxieMachineScreenReaderScrolling()
+        scrolling.page(.showBelow, from: 1)
+        XCTAssertEqual(scrolling.take(capture, settled: false).scrolls, [down])
+        scrolling.page(.showBelow, from: 1)
+        scrolling.ended([NuxieMachineScrolled(down, .moved)], settled: false)
+        XCTAssertEqual(scrolling.take(capture, settled: false).scrolls, [down], "the page asked in flight goes")
+        scrolling.page(.showAbove, from: 1)
+        scrolling.ended([NuxieMachineScrolled(down, .moved)], settled: false)
+        XCTAssertEqual(scrolling.take(capture, settled: false).scrolls, [up], "the other way too")
+        scrolling.ended([NuxieMachineScrolled(up, .moved)], settled: false)
+        XCTAssertFalse(scrolling.wantsFrames)
+    }
+
+    /// A page in flight that comes back stale is asked again, with pages
+    /// its way asked since added to it; a page the other way asked since
+    /// replaces it. An answer to no page in flight changes nothing.
+    func testAStalePageInFlightJoinsOrGivesWayToPagesAskedSince() throws {
+        let capture = try Self.capture([node(1, CGRect(x: 24, y: 400, width: 160, height: 44))],
+                                       regions: [NuxieNativeScrollRegion(bounds: Self.surface,
+                                                                          canScroll: Self.top | Self.bottom,
+                                                                          parent: nil)])
+        let down = NuxieMachineScrollRequest.page(captureID: capture.id, region: 0, dx: 0, dy: -796)
+        var scrolling = NuxieMachineScreenReaderScrolling()
+        scrolling.page(.showBelow, from: 1)
+        XCTAssertEqual(scrolling.take(capture, settled: false).scrolls, [down])
+        scrolling.page(.showBelow, from: 1)
+        scrolling.ended([NuxieMachineScrolled(down, .stale)], settled: false)
+        let both = NuxieMachineScrollRequest.page(captureID: capture.id, region: 0, dx: 0, dy: -1592)
+        XCTAssertEqual(scrolling.take(capture, settled: false).scrolls, [both], "asked again with the later one")
+        scrolling.page(.showAbove, from: 1)
+        scrolling.ended([NuxieMachineScrolled(both, .stale)], settled: false)
+        let up = NuxieMachineScrollRequest.page(captureID: capture.id, region: 0, dx: 0, dy: 796)
+        XCTAssertEqual(scrolling.take(capture, settled: false).scrolls, [up], "the later way wins")
+        scrolling.ended([NuxieMachineScrolled(down, .moved)], settled: false)
+        XCTAssertTrue(scrolling.wantsFrames, "an answer to another page leaves the one in flight")
+        scrolling.ended([NuxieMachineScrolled(up, .moved)], settled: false)
+        XCTAssertFalse(scrolling.wantsFrames)
+    }
+
+    /// Focus that moves while a reveal is in flight is not undone by the
+    /// earlier reveal's answer, stale or refused, and spends none of its own
+    /// retries; a tap held while a frame carries an earlier one stays held.
+    func testFocusAndATapAskedInFlightOutliveTheEarlierAnswer() throws {
+        let capture = try Self.capture([node(1, Self.below(0), actions: 0), node(2, Self.below(100), actions: 0)],
+                                       regions: [Self.page()])
+        var scrolling = NuxieMachineScreenReaderScrolling()
+        scrolling.focus(1)
+        let first = NuxieMachineScrollRequest.reveal(captureID: capture.id, nodeID: 1)
+        XCTAssertEqual(scrolling.take(capture, settled: true).scrolls, [first])
+        scrolling.focus(2)
+        for _ in 0...NuxieMachineScreenReaderScrolling.staleRetries {
+            scrolling.ended([NuxieMachineScrolled(first, .stale)], settled: true)
+        }
+        scrolling.ended([NuxieMachineScrolled(first, .refused)], settled: true)
+        XCTAssertEqual(scrolling.target, 2)
+        XCTAssertEqual(scrolling.take(capture, settled: true).scrolls,
+                       [.reveal(captureID: capture.id, nodeID: 2)], "the later focus is revealed")
+
+        let shown = try Self.capture([node(3, CGRect(x: 24, y: 100, width: 160, height: 44),
+                                           actions: 1 << NuxieNativeSemanticAction.tap.rawValue)],
+                                     regions: [Self.page()])
+        var tapping = NuxieMachineScreenReaderScrolling()
+        XCTAssertTrue(tapping.hold(tap: 3))
+        XCTAssertEqual(tapping.take(shown, settled: true).tap?.nodeID, 3)
+        XCTAssertTrue(tapping.hold(tap: 3), "a second activation while the first is in flight")
+        tapping.ended([], settled: true)
+        XCTAssertEqual(tapping.heldTap, 3, "is not cleared by the first one's frame")
     }
 
     // MARK: The element
