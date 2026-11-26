@@ -13,12 +13,12 @@ import UIKit
 /// invisible, which is how the recovery affordances used to render. Deriving
 /// from measured background luminance keeps shell chrome legible over light,
 /// dark, and arbitrary authored colors.
-struct ExperienceShellPalette: Equatable {
+package struct ExperienceShellPalette: Equatable {
     /// True when chrome should render light-on-dark.
-    let prefersLightContent: Bool
+    package let prefersLightContent: Bool
 
     /// Titles and control glyphs.
-    var primary: UIColor {
+    package var primary: UIColor {
         prefersLightContent
             ? UIColor(white: 1, alpha: 0.95)
             : UIColor(white: 0, alpha: 0.9)
@@ -75,7 +75,7 @@ struct ExperienceShellPalette: Equatable {
     /// reads as nothing at all. The fractions are set so the band clears a
     /// visible margin on both polarities without turning the wait into a
     /// flashing surface.
-    var shimmerHighlight: (color: UIColor, fraction: CGFloat) {
+    package var shimmerHighlight: (color: UIColor, fraction: CGFloat) {
         prefersLightContent ? (.white, 0.16) : (.black, 0.09)
     }
 
@@ -90,7 +90,7 @@ struct ExperienceShellPalette: Equatable {
     /// a midpoint cutoff picks light content across a wide band of ordinary
     /// mid-tone colors where dark content is far more readable. A #AAAAAA
     /// background gives white 2.3:1 and black 9.0:1.
-    init(backgroundCandidates: [UIColor?]) {
+    package init(backgroundCandidates: [UIColor?]) {
         let opaque = backgroundCandidates
             .compactMap { $0 }
             .first { $0.nuxieAlpha >= 0.5 }
@@ -101,13 +101,13 @@ struct ExperienceShellPalette: Equatable {
         prefersLightContent = opaque.nuxieContrastWithWhite >= opaque.nuxieContrastWithBlack
     }
 
-    init(prefersLightContent: Bool) {
+    package init(prefersLightContent: Bool) {
         self.prefersLightContent = prefersLightContent
     }
 }
 
 extension UIColor {
-    var nuxieAlpha: CGFloat {
+    package var nuxieAlpha: CGFloat {
         var alpha: CGFloat = 0
         guard getRed(nil, green: nil, blue: nil, alpha: &alpha) else {
             var white: CGFloat = 0
@@ -120,7 +120,7 @@ extension UIColor {
     /// WCAG relative luminance, used only to decide light-on-dark vs
     /// dark-on-light. Colors that cannot be resolved into a component space
     /// report mid-grey so the caller falls back deliberately.
-    var nuxieRelativeLuminance: CGFloat {
+    package var nuxieRelativeLuminance: CGFloat {
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
@@ -141,12 +141,12 @@ extension UIColor {
     }
 
     /// WCAG contrast ratio of pure white against this color.
-    var nuxieContrastWithWhite: CGFloat {
+    package var nuxieContrastWithWhite: CGFloat {
         1.05 / (nuxieRelativeLuminance + 0.05)
     }
 
     /// WCAG contrast ratio of pure black against this color.
-    var nuxieContrastWithBlack: CGFloat {
+    package var nuxieContrastWithBlack: CGFloat {
         (nuxieRelativeLuminance + 0.05) / 0.05
     }
 
@@ -177,7 +177,7 @@ extension UIColor {
         )
     }
 
-    convenience init?(nuxieRGBAHex value: String) {
+    package convenience init?(nuxieRGBAHex value: String) {
         guard value.count == 9, value.first == "#",
               let rgba = UInt32(value.dropFirst(), radix: 16) else {
             return nil

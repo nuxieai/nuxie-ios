@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import NuxieRuntime
 import UIKit
 
 /// Owns the timing of native-page state; the coordinator owns the state writes.

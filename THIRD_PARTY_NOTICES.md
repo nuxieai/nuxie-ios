@@ -10,7 +10,7 @@ Copyright (c) 2020 Mercari, Inc.
 Source: https://github.com/mercari/ShimmerView
 
 The shimmering loading treatment in
-`Sources/Nuxie/Experiences/ExperienceViewController+iOS.swift` ports
+`Sources/NuxieRuntime/ExperienceShellShimmerView.swift` ports
 ShimmerView's effect geometry: squaring the gradient layer so the effect angle
 is independent of aspect ratio, deriving travel from the effect radius and span
 so the band clears the surface at any angle, animating `startPoint`/`endPoint`

@@ -1,4 +1,5 @@
 import Foundation
+import NuxieRuntime
 
 typealias ExperienceArtifactLoader = @Sendable (
     Experience,

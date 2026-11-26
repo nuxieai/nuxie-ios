@@ -1,3 +1,4 @@
+import NuxieRuntime
 import XCTest
 @testable import Nuxie
 #if SWIFT_PACKAGE
