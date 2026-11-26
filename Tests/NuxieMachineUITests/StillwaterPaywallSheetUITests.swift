@@ -484,8 +484,12 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// into view, and a tap on "About the trial" there shows the terms line
     /// with the sheet in place. A drag down over the page, which went down
     /// while the page was scrolled, brings the page back to its top and the
-    /// sheet stays; a drag down from the top of the page at its top then
-    /// takes the sheet, and the record stays open. Kept as
+    /// sheet stays. That drag runs at least 100 points farther than the drag
+    /// up, as far down as the screen allows above the home indicator, so the
+    /// page stops at its top whatever its height on the phone, and the sheet
+    /// still stays once the page has reached it. A drag down from the top of
+    /// the page at its top then takes the sheet, and the record stays open.
+    /// Kept as
     /// `scrolled-23-details-open`, `scrolled-23-back-at-top` and
     /// `scrolled-23-after-swipe`. The path of the film
     /// `stillwater-paywall-text-23`.
@@ -516,15 +520,20 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
         let origin = app.coordinate(withNormalizedOffset: .zero)
         let from = CGPoint(x: sheet.minX + 12, y: sheet.minY + sheet.height * 0.3)
+        let downTo = CGPoint(x: from.x, y: app.frame.maxY - screenInsets.bottom - 8)
+        XCTAssertGreaterThanOrEqual(downTo.y - from.y, Self.dragUpDistance + 100,
+                                    "the screen leaves no room to drag down from \(from) 100 points farther than "
+                                        + "the drag up's \(Self.dragUpDistance)")
         origin.withOffset(CGVector(dx: from.x, dy: from.y))
-            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: from.x, dy: from.y + 250)),
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: downTo.x, dy: downTo.y)),
                    withVelocity: .slow, thenHoldForDuration: 0.3)
         XCTAssertTrue(title.waitForExistence(timeout: 10), "the headline is not read after the drag back down")
         let back = try settled(title)
         keep("scrolled-23-back-at-top", app, screen)
         XCTAssertTrue(screen.exists, "the drag down over the scrolled page took the sheet")
         XCTAssertEqual(screen.frame, sheet, "the drag down over the scrolled page moved the sheet")
-        XCTAssertEqual(back.minY, top.minY, accuracy: 1, "the page did not come back to its top")
+        XCTAssertEqual(back.minY, top.minY, accuracy: 0.01,
+                       "the page did not come back to its top: the headline was at \(top), and is at \(back)")
 
         let swipe = try swipeStart(app, sheet)
         let end = CGPoint(x: swipe.x, y: min(app.frame.maxY - screenInsets.bottom - 8, swipe.y + sheet.height * 0.8))
@@ -535,12 +544,15 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         keep("scrolled-23-after-swipe", app, nil)
     }
 
+    /// How far [`dragUp(_:over:)`] drags, in points.
+    private static let dragUpDistance: CGFloat = 250
+
     /// A slow drag up most of the way across `sheet`, starting in the page's
     /// left padding three quarters of the way down, clear of every button.
     private func dragUp(_ app: XCUIApplication, over sheet: CGRect) {
         let origin = app.coordinate(withNormalizedOffset: .zero)
         let from = CGPoint(x: sheet.minX + 12, y: sheet.minY + sheet.height * 0.75)
-        let to = CGPoint(x: from.x, y: from.y - 250)
+        let to = CGPoint(x: from.x, y: from.y - Self.dragUpDistance)
         origin.withOffset(CGVector(dx: from.x, dy: from.y))
             .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)),
                    withVelocity: .slow, thenHoldForDuration: 0.3)
