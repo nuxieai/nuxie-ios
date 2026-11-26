@@ -169,7 +169,9 @@ final class SheetPanTests: XCTestCase {
     /// the `scroll` filling the surface, inside no other, whose box stays
     /// put as it scrolls. At its top it can move only toward its bottom;
     /// dragged up a little, both ways; dragged up past its end, only toward
-    /// its top. Never sideways.
+    /// its top. Never sideways. A region read at its full size carries its
+    /// position too: 0 at its top, the distance dragged, and its whole
+    /// range at its end.
     @MainActor
     func testTheCaptureListsThePageWithItsBoxAndTheWaysItCanMove() async throws {
         let run = try Counter(plan: Self.viewsScroll())
@@ -177,17 +179,35 @@ final class SheetPanTests: XCTestCase {
         try await run.layOut()
         do {
             let box = CGRect(x: 0, y: 0, width: CounterDriverEdgeTests.width, height: CounterDriverEdgeTests.height)
-            var regions = try await capture(run, name: "1-top")
+            /// The regions without their position, and the page's position.
+            func split(_ regions: [NuxieNativeScrollRegion]) throws
+                -> ([NuxieNativeScrollRegion], scroll: CGPoint, range: CGSize) {
+                let page = try XCTUnwrap(regions.first, "no region")
+                return (regions.map { NuxieNativeScrollRegion(bounds: $0.bounds, canScroll: $0.canScroll,
+                                                              parent: $0.parent) },
+                        try XCTUnwrap(page.scroll, "the page's position was not read"),
+                        try XCTUnwrap(page.range, "the page's range was not read"))
+            }
+            var (regions, scroll, range) = try split(try await capture(run, name: "1-top"))
             XCTAssertEqual(regions, [NuxieNativeScrollRegion(bounds: box, canScroll: Self.bottom, parent: nil)])
+            XCTAssertEqual(scroll, .zero)
+            XCTAssertEqual(range.width, 0)
+            XCTAssertGreaterThan(range.height, 80, "the page is taller than its box")
+            let whole = range
 
             try await drag(run, by: -80)
-            regions = try await capture(run, name: "2-moved")
+            (regions, scroll, range) = try split(try await capture(run, name: "2-moved"))
             XCTAssertEqual(regions, [NuxieNativeScrollRegion(bounds: box, canScroll: Self.top | Self.bottom,
                                                              parent: nil)])
+            XCTAssertEqual(scroll.x, 0)
+            XCTAssertEqual(scroll.y, 80, accuracy: 0.5, "dragged up 80")
+            XCTAssertEqual(range, whole)
 
             try await drag(run, by: -1400)
-            regions = try await capture(run, name: "3-end")
+            (regions, scroll, range) = try split(try await capture(run, name: "3-end"))
             XCTAssertEqual(regions, [NuxieNativeScrollRegion(bounds: box, canScroll: Self.top, parent: nil)])
+            XCTAssertEqual(scroll.y, whole.height, accuracy: 0.5, "at its end")
+            XCTAssertEqual(range, whole)
             try await run.edge.close()
         } catch {
             try? await run.edge.close()
