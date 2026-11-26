@@ -144,7 +144,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
             self.pointers += pointers
             loop.requestFrame()
         }
-        surface.onGeometryChange = { [weak self] in self?.loop?.requestFrame() }
+        surface.onGeometryChange = { [weak self] in
+            guard let self else { return }
+            // Out of its window the Screen is stepped no more: what the
+            // screen reader asked of it goes, so nothing waits for frames.
+            if surface.window == nil { scrolling.detach() }
+            loop?.requestFrame()
+        }
         surface.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(surface)
         view = container
@@ -361,15 +367,19 @@ package final class NuxieMachineScreenViewController: UIViewController {
         guard reachable, action == .tap, let loop, !loop.stopped, let capture = latest, capture.id == captureID,
               let node = capture.tree.nodes.first(where: { $0.id == nodeID }) else { return false }
         let tap: UInt32 = 1 << NuxieNativeSemanticAction.tap.rawValue
+        // The newest activation wins: a held tap replaces a tap not yet
+        // sent, and a tap pressed at once replaces a held one.
         if scrolling.revealPending(for: nodeID)
             || (node.actions & tap == 0 && node.scrollRegion != nil
                 && !NuxieMachineScreenReaderScroll.isShown(node, in: capture.scrollRegions)) {
             guard scrolling.hold(tap: nodeID) else { return false }
+            semanticTap = nil
             loop.requestFrame()
             return true
         }
         guard node.actions & tap != 0, semanticTap?.captureID != captureID else { return false }
         semanticTap = NuxieMachineSemanticTap(captureID: captureID, nodeID: nodeID)
+        scrolling.dropHeldTap()
         loop.requestFrame()
         return true
     }
@@ -401,25 +411,32 @@ package final class NuxieMachineScreenViewController: UIViewController {
     private func scroll(from nodeID: UInt32, _ direction: UIAccessibilityScrollDirection) -> Bool {
         guard reachable, let loop, !loop.stopped, let capture = latest,
               let node = capture.tree.nodes.first(where: { $0.id == nodeID }),
-              let wanted = Self.direction(direction)
+              let wanted = Self.direction(direction, from: node, in: capture.scrollRegions),
+              NuxieMachineScreenReaderScroll.page(wanted, from: node, in: capture.scrollRegions) != nil
         else { return false }
-        guard let move = NuxieMachineScreenReaderScroll.page(wanted, from: node, in: capture.scrollRegions)
-        else { return false }
-        scrolling.page(wanted, from: nodeID, region: move.region)
+        scrolling.page(wanted, from: nodeID)
         loop.requestFrame()
         return true
     }
 
-    /// What a scroll gesture asks to show. The reader names the way the
-    /// fingers move, and the content follows them, as in a scroll view: up
-    /// shows what is below, left what is to the right. Next is down the
-    /// page and previous up it.
-    package static func direction(_ direction: UIAccessibilityScrollDirection) -> NuxieMachineScrollDirection? {
+    /// What a scroll gesture asks to show, from `node`, by UIKit's
+    /// documented meaning of each direction. Up and down name the way the
+    /// view moves through its content, as its scroll indicator does: down
+    /// shows what is below, up what is above (a three-finger swipe up
+    /// arrives as down). Left and right name the way the fingers move: left
+    /// shows what is to the right, further on, and right what is before.
+    /// Next and previous go down and up the page, or, in a `scroll` that
+    /// moves only sideways, further on and back
+    /// ([`NuxieMachineScreenReaderScroll.onward`]).
+    package static func direction(_ direction: UIAccessibilityScrollDirection, from node: NuxieNativeSemanticNode,
+                                  in regions: [NuxieNativeScrollRegion]) -> NuxieMachineScrollDirection? {
         switch direction {
-        case .up, .next: return .showBelow
-        case .down, .previous: return .showAbove
+        case .down: return .showBelow
+        case .up: return .showAbove
         case .left: return .showRight
         case .right: return .showLeft
+        case .next: return NuxieMachineScreenReaderScroll.onward(true, from: node, in: regions)
+        case .previous: return NuxieMachineScreenReaderScroll.onward(false, from: node, in: regions)
         @unknown default: return nil
         }
     }
@@ -472,7 +489,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// Whether input waits for the next frame: pointers, a tap, or a move
     /// of a `scroll` the screen reader asked for.
-    fileprivate var hasInput: Bool { !pointers.isEmpty || semanticTap != nil || scrolling.wantsFrames }
+    fileprivate var hasInput: Bool { !pointers.isEmpty || semanticTap != nil || (hasSize && scrolling.wantsFrames) }
 
     private func updateAccessibility() {
         container.accessibilityValue = framesDrawn > 0 ? "\(statusText) Frames drawn: \(framesDrawn)." : "loading"
@@ -652,22 +669,25 @@ package final class NuxieMachineScreenLoop {
         let touching = screens.last { $0.hasInput }
         let touched = touching?.shown
         let pointers = touching?.takePointers() ?? []
-        let scrolls = touching?.takeScrolls() ?? []
-        let semanticTaps = touching?.takeSemanticTaps() ?? []
+        // A Screen that cannot be stepped (no window or size) is sent no
+        // screen reader request: its answer would never reach it.
+        let steppable = touching?.hasSize == true
+        let scrolls = steppable ? touching?.takeScrolls() ?? [] : []
+        let semanticTaps = steppable ? touching?.takeSemanticTaps() ?? [] : []
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.inLane {
                 await self.runFrame(pointers: pointers, semanticTaps: semanticTaps, scrolls: scrolls,
-                                    touched: touched, elapsedSeconds: elapsed)
+                                    touched: touched, touching: touching, elapsedSeconds: elapsed)
             }
         }
     }
 
     private func runFrame(pointers: [NuxieNativePointerEvent], semanticTaps: [NuxieMachineSemanticTap],
                           scrolls: [NuxieMachineScrollRequest], touched: NuxieMachineShown?,
-                          elapsedSeconds: Float) async {
+                          touching: NuxieMachineScreenViewController?, elapsedSeconds: Float) async {
         let frame: NuxieMachineFrame
         var doing = "resize"
         let now = clock()
@@ -707,8 +727,14 @@ package final class NuxieMachineScreenLoop {
             // draw: a Screen not drawn this frame still shows the snapshot
             // from before the step ([`frameEnded`]).
             for (screen, _) in stepped where !stopped {
-                screen.frameEnded(screen.shown == touched ? frame.scrolled : [],
+                screen.frameEnded(screen === touching ? frame.scrolled : [],
                                   settled: frame.settled.contains(screen.shown))
+            }
+            // The Screen whose requests the frame carried hears what came of
+            // them though it was not stepped (it lost its size, or its
+            // presentation ended): every request gets its answer.
+            if let touching, !stopped, !stepped.contains(where: { $0.screen === touching }) {
+                touching.frameEnded(frame.scrolled, settled: false)
             }
         } catch {
             frameInFlight = false
