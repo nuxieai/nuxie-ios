@@ -89,25 +89,57 @@ final class ScrollSheetUITests: XCTestCase {
     }
 
     /// 4. A sideways drag over the page, starting on a plan card: the sheet
-    ///    stays and nothing scrolls. The drag runs along Monthly's card and
-    ///    ends on it, clear of the floating button. Whether the card is
+    ///    stays and nothing scrolls. Which card does not matter: Monthly's
+    ///    when its card is wholly on screen in the sheet, otherwise Yearly's
+    ///    (on a short phone Monthly is below the fold, and the screen reader
+    ///    does not read it). The drag runs along a row of the card's visible
+    ///    part, above the screen's bottom inset, and stays clear of the
+    ///    floating button: on a row the button does not cover when the card
+    ///    has one, otherwise ending short of the button. Whether the card is
     ///    pressed is the engine's, and is not checked.
     func testASidewaysDragKeepsTheSheetAndScrollsNothing() throws {
         let (app, screen) = try openSheet()
         let resting = screen.frame
         let title = app.staticTexts[Self.title]
         let before = try settled(title)
+        let yearly = button(app, beginningWith: "Yearly")
+        XCTAssertTrue(yearly.waitForExistence(timeout: 10), app.debugDescription)
+        let bottomInset = try insets(app).bottom
+        let shown = CGRect(x: resting.minX, y: resting.minY, width: resting.width,
+                           height: resting.maxY - bottomInset - resting.minY)
         let monthly = button(app, beginningWith: "Monthly")
-        XCTAssertTrue(monthly.waitForExistence(timeout: 10), app.debugDescription)
-        let card = monthly.frame
-        let floating = app.buttons["Restore"].frame
-        var end = card.maxX - 30
-        if floating.minY < card.maxY, floating.maxY > card.minY {
+        let onMonthly = monthly.exists && shown.contains(monthly.frame)
+        let name = onMonthly ? "Monthly" : "Yearly"
+        let card = (onMonthly ? monthly : yearly).frame
+        let visible = card.intersection(shown)
+        XCTAssertGreaterThan(visible.isNull ? 0 : visible.height, 16,
+                             "\(name)'s card \(card) is not on screen in the sheet \(shown)")
+        let restore = app.buttons["Restore"]
+        let floating = restore.exists ? restore.frame : .null
+
+        // The rows of the visible card the floating button does not cover,
+        // each kept 8 points from the button and from the card's visible edge.
+        let margin: CGFloat = 8
+        var bands: [(top: CGFloat, bottom: CGFloat)] = []
+        if floating.isNull || floating.maxX <= visible.minX || floating.minX >= visible.maxX
+            || floating.maxY <= visible.minY || floating.minY >= visible.maxY {
+            bands = [(visible.minY, visible.maxY)]
+        } else {
+            if floating.minY > visible.minY { bands.append((visible.minY, floating.minY)) }
+            if floating.maxY < visible.maxY { bands.append((floating.maxY, visible.maxY)) }
+        }
+        let clear = bands.filter { $0.bottom - $0.top >= 2 * margin }.max { $0.bottom - $0.top < $1.bottom - $1.top }
+        var end = visible.maxX - 30
+        let row: CGFloat
+        if let clear {
+            row = (clear.top + clear.bottom) / 2
+        } else {
+            row = visible.midY
             end = min(end, floating.minX - 20)
         }
-        let from = CGPoint(x: card.minX + 30, y: card.midY)
-        XCTAssertGreaterThan(end - from.x, 100, "Monthly's card \(card) leaves no room for a sideways drag clear of "
-                             + "the floating button \(floating)")
+        let from = CGPoint(x: visible.minX + 30, y: row)
+        XCTAssertGreaterThan(end - from.x, 100, "\(name)'s card \(card), visible as \(visible), leaves no room for a "
+                             + "sideways drag at y \(row) clear of the floating button \(floating)")
         drag(app, from: from, to: CGPoint(x: end, y: from.y))
         let after = try settled(title)
         keep("4-sideways", app)
