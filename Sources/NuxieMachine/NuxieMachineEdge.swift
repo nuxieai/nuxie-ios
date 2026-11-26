@@ -16,14 +16,14 @@ package struct NuxieMachineSourceFile: Equatable, Sendable {
 
 /// One file of the Experience's folder that is not a source file, as the
 /// host found it: facts about it, never its bytes. A view lays a picture
-/// out from its size in pixels before any bytes exist; the bytes come from
-/// a byte source when a presentation that shows the file opens
-/// ([`NuxieMachineByteSource`]).
+/// out from its size in pixels before any bytes exist; the bytes of a
+/// picture or a face come from a byte source when a presentation that
+/// shows the file opens ([`NuxieMachineByteSource`]).
 package struct NuxieMachineAsset: Equatable, Sendable {
     package enum Kind: Equatable, Sendable {
         /// A PNG, JPEG or WebP file whose header gives its size in pixels.
         case picture(width: UInt32, height: UInt32)
-        /// A TTF or OTF file.
+        /// A TTF file: a face a `font` line names.
         case font
         /// Any other file, a file named as a picture whose header gives no
         /// size among them.
@@ -1416,15 +1416,17 @@ package actor NuxieMachineEdge {
     /// The compiled records opened on the engine at `artboard`, on its state
     /// machine, with no view model, and every asset the records hold filled
     /// before the import, as the session lists them by position
-    /// (`assets`): nothing is drawn with a picture missing, and nothing
-    /// arrives later. Text in a compiled view names no font, so the
-    /// platform font is this device's system face, supplied as the SDK
-    /// supplies a published Screen's System font. Each picture is the
-    /// bytes `source` gives for its path in the folder, asked for here, and
-    /// the import waits for every answer. A path the source has no bytes
-    /// for stops the edge with `edge.unsupplied-asset`, naming it. The
-    /// positions stay here: they become the import's asset ordinals and
-    /// nothing else sees them. The records' own catalog
+    /// (`assets`): nothing is drawn with a face or a picture missing, and
+    /// nothing arrives later. The platform font, the face of a text with no
+    /// `font-family`, is this device's system face, supplied as the SDK
+    /// supplies a published Screen's System font; a scene with no such
+    /// text has no platform font and takes no lease of it. Each face and
+    /// each picture is the bytes `source` gives for its path in the
+    /// folder, asked for here, and the import waits for every answer. A
+    /// path the source has no bytes for stops the edge with
+    /// `edge.unsupplied-asset`, naming it. The positions stay here: they
+    /// become the import's asset ordinals and nothing else sees them. The
+    /// records' own catalog
     /// ([`NuxieNativeRuntime.inspectAssets`]) is read only to give the
     /// import what it expects.
     private static func openRecords(_ records: Data, artboard: Int, assets: [NuxieMachineSceneAsset],
@@ -1435,7 +1437,7 @@ package actor NuxieMachineEdge {
             switch asset {
             case .platformFont:
                 platformFont.append(position)
-            case .picture(let path):
+            case .font(let path), .picture(let path):
                 let given: Data
                 do {
                     given = try await source.bytes(for: path)

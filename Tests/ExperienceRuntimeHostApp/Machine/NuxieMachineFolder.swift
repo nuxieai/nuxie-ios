@@ -50,8 +50,8 @@ struct NuxieMachineFolder {
 
     /// A file's kind by its name: a picture when it is named as one and
     /// its header gives its size (read here for a PNG only, so a JPEG or a
-    /// WebP file is listed as another file), a font for a TTF or OTF file,
-    /// and another file for any other.
+    /// WebP file is listed as another file), a font for a TTF file, and
+    /// another file for any other.
     private static func kind(of file: URL) throws -> NuxieMachineAsset.Kind {
         switch file.pathExtension.lowercased() {
         case "png", "jpg", "jpeg", "webp":
@@ -60,7 +60,7 @@ struct NuxieMachineFolder {
             let header = handle.readData(ofLength: 24)
             guard let size = pngSize(header) else { return .other }
             return .picture(width: size.width, height: size.height)
-        case "ttf", "otf":
+        case "ttf":
             return .font
         default:
             return .other

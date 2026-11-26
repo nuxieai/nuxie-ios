@@ -240,9 +240,10 @@ package final class NuxieMachineSession {
 
     /// The records' assets, in the order the records hold them (an asset's
     /// index here is its position, the ordinal the engine's import takes),
-    /// and what the host fills each with: the platform font, first when a
-    /// view shows text, then each picture once, by its path in the folder.
-    /// Empty when no view shows text or a picture.
+    /// and what the host fills each with: the platform font, first when
+    /// some text has no face of its own; then each face a text draws in,
+    /// once, by its file's path in the folder; then each picture once, by
+    /// its path. Empty when no view shows text or a picture.
     package func sceneAssets() throws -> [NuxieMachineSceneAsset] {
         var count = 0
         try NuxieMachineError.check(nux_machine_scene_asset_count(handle, &count))
@@ -253,6 +254,9 @@ package final class NuxieMachineSession {
             switch kind {
             case NuxieMachineStatus.assetPlatformFont:
                 return .platformFont
+            case NuxieMachineStatus.assetFont:
+                guard let path = NuxieMachineStrings.copy(path) else { throw NuxieMachineError.assetDoesNotFit }
+                return .font(path: path)
             case NuxieMachineStatus.assetPicture:
                 guard let path = NuxieMachineStrings.copy(path) else { throw NuxieMachineError.assetDoesNotFit }
                 return .picture(path: path)
@@ -608,7 +612,10 @@ package enum NuxieMachineSceneAsset: Equatable, Sendable {
     /// The face a text with no font of its own is drawn in: the
     /// platform's own.
     case platformFont
-    /// The bytes of the folder's file at `path`.
+    /// A face a text draws in: the bytes of the folder's TTF file at
+    /// `path`.
+    case font(path: String)
+    /// A picture: the bytes of the folder's file at `path`.
     case picture(path: String)
 }
 
