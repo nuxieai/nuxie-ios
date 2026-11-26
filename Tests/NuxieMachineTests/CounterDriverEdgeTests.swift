@@ -454,7 +454,7 @@ final class Counter {
             root: "main", app: "app", experience: "upgrade", version: 1)
     }
 
-    /// A line of text the record changes when its evening wait comes due.
+    /// A line of text the record changes when its evening task comes due.
     static func eveningPlan() -> NuxieMachinePlanSource {
         let main = """
         use Clock from "clock"
@@ -476,19 +476,12 @@ final class Counter {
             armed = true
             go(clock)
 
-          wait evening
-            while armed
-            until next 18:00
-            then ring within 6h
-            else give_up
+          task evening  when armed
+            after(next 18:00, ring)
 
           action ring
             armed = false
             line = "It is evening."
-
-          action give_up
-            armed = false
-            exit
 
           action close
             dismiss("closed")
@@ -530,6 +523,7 @@ final class Counter {
             annual = store(ios="app.pro.yearly", android="pro:yearly"))
 
           state armed = false
+          state ready = false
           state purchase_failed = false
           state line = "Not evening yet."
 
@@ -545,14 +539,18 @@ final class Counter {
           action start
             armed = true
         \(presentsFirst ? "    go(clock)\n" : "")
-          wait evening
-            while armed
-            until next 18:00
-            then ring within 6h
-            else give_up
+          task evening  when armed
+            after(next 18:00, mark_ready)
+
+          task ring_now  when ready and here
+            change(ring)
+
+          action mark_ready
+            armed = false
+            ready = true
 
           action ring
-            armed = false
+            ready = false
             send bought = purchase(catalog[annual])
 
           action purchased
@@ -564,10 +562,6 @@ final class Counter {
                 purchase_failed = true
                 line = "The purchase did not go through."
         \(presentsFirst ? "" : "        go(clock)\n")
-          action give_up
-            armed = false
-            exit
-
           action close
             dismiss("closed")
             exit
