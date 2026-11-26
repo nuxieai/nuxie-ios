@@ -231,11 +231,11 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     }
 
     /// A store asked for an extern it cannot perform ends in the one fault
-    /// path. "Restore purchases" calls `restore`, which the stand-in store
-    /// does not answer. A stopped edge steps nothing more and tells nothing
+    /// path. "Restore purchases" calls `restore`, which this test's store
+    /// cannot perform. A stopped edge steps nothing more and tells nothing
     /// more.
     func testAStoreAskedForAnUnknownExternFaults() async throws {
-        let run = try Run()
+        let run = try Run(refusing: ["restore"])
         do {
             await run.edge.start(event: "onboarding_completed", now: run.now)
             try await run.layOut()
@@ -256,6 +256,44 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let afterFault = try await run.tap(open.center(of: "Monthly"))
             XCTAssertEqual(afterFault, [], "a stopped edge steps nothing")
             XCTAssertEqual(run.owner.dismissals.count, 1, "a stopped edge tells nothing more")
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// "Restore purchases" with the stand-in store: it answers `restore` as
+    /// it answers a purchase, with status `failed`. The paywall then shows
+    /// the error line under an enabled buy button, as after a failed
+    /// purchase, and the record stays open with nothing faulted.
+    func testRestorePurchasesThatFailsShowsTheErrorLine() async throws {
+        let run = try Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
+            try await run.settle()
+            let open = try await run.look("open")
+            let written = await run.edge.log.count
+            try await run.tap(open.center(of: "Restore purchases"))
+            await run.edge.storeAnswered()
+            try await run.settle()
+            let restored = try await run.look("restore-failed")
+            XCTAssertEqual(run.store.calls.map(\.externName), ["restore"])
+            let answered = await run.edge.log.dropFirst(written).compactMap { entry -> NuxieMachineReply? in
+                if case .reply(_, let reply) = entry { return reply }
+                return nil
+            }
+            XCTAssertEqual(answered, [.purchase(.failed)])
+            let marked = try await run.edge.slot("purchase_failed")
+            XCTAssertEqual(marked, .bool(true))
+            XCTAssertTrue(restored.has(Self.errorLine), "\(restored.reading)")
+            XCTAssertTrue(try restored.isEnabled("Continue"), "\(restored.reading)")
+            let stillOpen = try await run.edge.recordOpen()
+            XCTAssertTrue(stillOpen, "a failed restore ended the record")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            XCTAssertTrue(run.owner.dismissals.isEmpty, "a failed restore dismissed the paywall")
             try await run.close()
         } catch {
             try? await run.close()
@@ -368,7 +406,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// dropped, applies nothing, tells nothing and is no fault, even when
     /// the store failed the call.
     func testAnAnswerAfterTheRecordEndedIsDropped() async throws {
-        let run = try Run(plan: Self.leavesPlan, holdingStore: true)
+        let run = try Run(plan: Self.leavesPlan, holdingStore: true, refusing: ["restore"])
         do {
             await run.edge.start(event: "go", now: run.now)
             try await run.layOut()
@@ -380,7 +418,8 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             XCTAssertFalse(open, "leaving ends the record")
             XCTAssertEqual(run.owner.dismissals, [.machine(reason: "left")], "the owner hears one dismissal")
 
-            // The stand-in store fails `restore`, after the record ended.
+            // The store cannot perform `restore`, and says so after the
+            // record ended.
             run.store.release()
             await run.edge.storeAnswered()
             let beforeAnswer = await run.edge.log.count
@@ -405,7 +444,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// `restore`, released after that record ended and a second started,
     /// is dropped.
     func testARefusalForAnEndedRecordLeavesTheNextRecordAlone() async throws {
-        try await checkAnAnswerForAnEndedRecord(answering: [:], dropped: nil)
+        try await checkAnAnswerForAnEndedRecord(answering: [:], refusing: ["restore"], dropped: nil)
     }
 
     /// The same with a successful awaited answer: it is dropped, not handed
@@ -420,9 +459,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// untouched, its owner hears nothing for it, the log has one dropped
     /// entry for the old call, nothing faults, and a tap on the second
     /// record is still handled.
-    private func checkAnAnswerForAnEndedRecord(answering: [String: NuxieMachineReply],
+    private func checkAnAnswerForAnEndedRecord(answering: [String: NuxieMachineReply], refusing: Set<String> = [],
                                                dropped reply: NuxieMachineReply?) async throws {
-        let run = try Run(plan: Self.leavesPlan, holdingStore: true, answering: answering)
+        let run = try Run(plan: Self.leavesPlan, holdingStore: true, answering: answering, refusing: refusing)
         do {
             await run.edge.start(event: "go", now: run.now)
             try await run.layOut()
@@ -1591,11 +1630,12 @@ private final class Run {
     private var looked = 0
 
     /// Stillwater's plan, or `plan`. A holding store answers each call only
-    /// when the test releases it, and `answering` gives a reply for an
-    /// extern in place of the stand-in's.
+    /// when the test releases it, `answering` gives a reply for an extern in
+    /// place of the stand-in's, and the store cannot perform the externs
+    /// `refusing` names.
     init(plan: NuxieMachinePlanSource? = nil, holdingStore: Bool = false,
-         answering: [String: NuxieMachineReply] = [:]) throws {
-        let store = RecordingStore(holds: holdingStore, answering: answering)
+         answering: [String: NuxieMachineReply] = [:], refusing: Set<String> = []) throws {
+        let store = RecordingStore(holds: holdingStore, answering: answering, refusing: refusing)
         self.store = store
         let owner = self.owner
         edge = try NuxieMachineEdge(plan: plan ?? Fixture.load(), store: store, onReport: { owner.heard($0) })
@@ -1713,21 +1753,24 @@ private final class Run {
 }
 
 /// A store that hands every call to the stand-in, or answers it with the
-/// reply `answering` gives for its extern, and keeps them. A holding one
-/// gives each answer only when the test releases it: a release that comes
-/// before its call lets that call answer at once.
+/// reply `answering` gives for its extern, or cannot perform it when
+/// `refusing` names its extern, and keeps them. A holding one gives each
+/// answer only when the test releases it: a release that comes before its
+/// call lets that call answer at once.
 private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
     private let lock = NSLock()
     private var received: [NuxieMachineCall] = []
     private let standIn = NuxieMachineStandInStore()
     private let holds: Bool
     private let answering: [String: NuxieMachineReply]
+    private let refusing: Set<String>
     private var held: [CheckedContinuation<Void, Never>] = []
     private var releasedEarly = 0
 
-    init(holds: Bool, answering: [String: NuxieMachineReply]) {
+    init(holds: Bool, answering: [String: NuxieMachineReply], refusing: Set<String>) {
         self.holds = holds
         self.answering = answering
+        self.refusing = refusing
     }
 
     var calls: [NuxieMachineCall] {
@@ -1749,6 +1792,7 @@ private final class RecordingStore: NuxieMachineStore, @unchecked Sendable {
                 if goes { continuation.resume() }
             }
         }
+        if refusing.contains(call.externName) { throw NuxieMachineStoreFault.unknownExtern(call.externName) }
         if let reply = answering[call.externName] { return reply }
         return try await standIn.perform(call)
     }

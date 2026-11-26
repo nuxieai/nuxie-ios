@@ -31,13 +31,13 @@ extension NuxieMachineReply {
 }
 
 /// STAND-IN for a store. It buys nothing and talks to no store: it answers
-/// `purchase` with a `Purchase` whose status is `failed`, and any other
-/// extern with a fault. A real store replaces it in a later slice.
+/// `purchase` and `restore` with a `Purchase` whose status is `failed`, and
+/// any other extern with a fault. A real store replaces it in a later slice.
 package struct NuxieMachineStandInStore: NuxieMachineStore {
     package init() {}
 
     package func perform(_ call: NuxieMachineCall) async throws -> NuxieMachineReply {
-        guard call.externName == "purchase" else {
+        guard call.externName == "purchase" || call.externName == "restore" else {
             throw NuxieMachineStoreFault.unknownExtern(call.externName)
         }
         return .purchase(.failed)

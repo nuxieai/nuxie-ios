@@ -430,10 +430,10 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// purchases" ends inside the sheet and above the home indicator, and
     /// the sheet stays. A tap on it then starts a restore: the record's
     /// purchase is pending, read as the buy button not enabled, and the
-    /// sheet still stays. (The host's stand-in store does not answer
-    /// `restore`: its refusal, four seconds later, faults the record and
-    /// closes the sheet, as `testAStoreAskedForAnUnknownExternFaults` pins.
-    /// This test ends before then.) Where the footer is before the drag is
+    /// sheet still stays. (The host's stand-in store answers `restore` four
+    /// seconds later as it answers a purchase, with status `failed`, and the
+    /// error line shows, as `testRestorePurchasesThatFailsShowsTheErrorLine`
+    /// pins. This test ends before then.) Where the footer is before the drag is
     /// kept as the note `footer-23-before`, not checked: on a taller phone it
     /// may be in view already, and on a shorter one it starts wholly below
     /// the sheet and is not read at all until the page scrolls. Kept as
