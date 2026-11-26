@@ -690,9 +690,10 @@ final class ScreenReaderScrollingTests: XCTestCase {
     // still-frames rule alone.
 
     /// On a page that never reports itself settled, focus on "About the
-    /// trial", below the fold, reveals it once the frames show the page
-    /// still, and a tap that arrives while the reveal moves waits behind it
-    /// and presses the link once it is still again: the terms line shows.
+    /// trial", below the fold, reveals it once a whole run of frames shows
+    /// the link still, and a tap that arrives while the reveal moves waits
+    /// behind it and presses the link once it is still again: the terms
+    /// line shows.
     @MainActor
     func testOnAPageThatNeverSettlesFocusRevealsALinkAndAHeldTapPressesIt() async throws {
         let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
@@ -704,14 +705,22 @@ final class ScreenReaderScrollingTests: XCTestCase {
             for _ in 0..<NuxieMachineScreenReaderScroll.stillFrames + 1 {
                 still = try await reader.screenReaderFrame(unsettled: true).drawn
             }
-            XCTAssertTrue(reader.controller.screenReaderScrolling.atRest, "still frames, never settled: at rest")
+            XCTAssertFalse(reader.controller.screenReaderScrolling.atRest,
+                           "still frames with nothing waited on are not rest")
             let element = try reader.element("About the trial")
             let capture = try XCTUnwrap(still?.semantics)
             let before = try XCTUnwrap(capture.tree.nodes.first { $0.label == "About the trial" })
             XCTAssertFalse(NuxieMachineScreenReaderScroll.isShown(before, in: capture.scrollRegions),
                            "\(before.bounds) is below the fold")
             element.accessibilityElementDidBecomeFocused()
-            let first = try await reader.screenReaderFrame(unsettled: true)
+            var waited = 0
+            var first = try await reader.screenReaderFrame(unsettled: true)
+            while first.frame.scrolled.isEmpty, waited < 30 {
+                waited += 1
+                first = try await reader.screenReaderFrame(unsettled: true)
+            }
+            XCTAssertEqual(waited, NuxieMachineScreenReaderScroll.stillFrames + 1,
+                           "the reveal waits a whole run of still frames of the link")
             XCTAssertEqual(first.frame.scrolled.map(\.outcome), [.moved], "the reveal went: \(first.frame.scrolled)")
             XCTAssertTrue(element.accessibilityActivate(), "a tap during the reveal is taken")
             XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "and waits")
@@ -749,10 +758,15 @@ final class ScreenReaderScrollingTests: XCTestCase {
             try reader.element("Restore purchases").accessibilityElementDidBecomeFocused()
             var boxes: [CGRect] = []
             var rests: [Bool] = []
+            var revealedAt: Int?
             func link(_ drawn: DrawnFrame?) throws -> NuxieNativeSemanticNode {
                 try XCTUnwrap(drawn?.semantics?.tree.nodes.first { $0.label == "Restore purchases" })
             }
-            let revealed = try await reader.screenReaderFrames(kept: "3-revealed", unsettled: true) { _, drawn in
+            let revealed = try await reader.screenReaderFrames(kept: "3-revealed", unsettled: true) { frame, drawn in
+                if revealedAt == nil,
+                   frame.scrolled.contains(where: { if case .reveal = $0.request { true } else { false } }) {
+                    revealedAt = boxes.count
+                }
                 boxes.append(try link(drawn).bounds)
                 rests.append(reader.controller.screenReaderScrolling.atRest)
             }
@@ -771,8 +785,12 @@ final class ScreenReaderScrollingTests: XCTestCase {
             }
             XCTAssertGreaterThan(moving, NuxieMachineScreenReaderScroll.stillFrames,
                                  "the reveal animates over several frames: \(boxes.map(\.minY))")
-            XCTAssertTrue(rests.contains(true), "it comes to rest: \(rests)")
-            for (index, box) in boxes.enumerated() where rests[index] {
+            let sent = try XCTUnwrap(revealedAt, "a reveal went")
+            XCTAssertTrue(rests[sent...].contains(true), "it comes to rest after the reveal: \(rests)")
+            // Before the reveal the link was still where it was: that rest
+            // is what let the reveal go. From the reveal on, rest comes only
+            // near where it stops.
+            for (index, box) in boxes.enumerated() where index >= sent && rests[index] {
                 XCTAssertLessThan(abs(box.minY - stop.minY), NuxieMachineScreenReaderScroll.stillDistance,
                                   "frame \(index) was at rest with the link at \(box.minY), short of \(stop.minY)")
             }
@@ -783,6 +801,55 @@ final class ScreenReaderScrollingTests: XCTestCase {
             XCTAssertNotEqual(shown.actions & 1, 0, "in view it offers its tap")
             print("unsettled reveal: link minY per frame \(boxes.map { ($0.minY * 100).rounded() / 100 }), "
                   + "at rest \(rests.map { $0 ? 1 : 0 }), stops at \(stop.minY)")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// On a page that never reports itself settled, a page scroll and then
+    /// at once a focus on "Restore purchases", which the page leaves below
+    /// the fold: the reveal waits until a whole run of frames shows the
+    /// link still after the page's move, so exactly one reveal goes, and the
+    /// link ends whole in view.
+    @MainActor
+    func testOnAPageThatNeverSettlesAFocusRightAfterAPageWaitsForTheLinkToBeStill() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-unsettled-page-focus")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            _ = try await reader.screenReaderFrames(kept: "2-at-rest")
+            let title = try reader.element(startingWith: "Ten quiet minutes,")
+            XCTAssertTrue(title.accessibilityScroll(.up))
+            _ = try await reader.screenReaderFrames(kept: "3-at-the-end")
+            func link(_ drawn: DrawnFrame?) throws -> NuxieNativeSemanticNode {
+                try XCTUnwrap(drawn?.semantics?.tree.nodes.first { $0.label == "Restore purchases" })
+            }
+
+            XCTAssertTrue(title.accessibilityScroll(.down), "back up the page")
+            try reader.element("Restore purchases").accessibilityElementDidBecomeFocused()
+            var boxes: [CGRect] = []
+            var revealedAt: [Int] = []
+            let run = try await reader.screenReaderFrames(kept: "4-revealed", unsettled: true) { frame, drawn in
+                if frame.scrolled.contains(where: { if case .reveal = $0.request { true } else { false } }) {
+                    revealedAt.append(boxes.count)
+                }
+                boxes.append(try link(drawn).bounds)
+            }
+            let reveals = run.scrolled.filter { if case .reveal = $0.request { true } else { false } }
+            XCTAssertEqual(reveals.map(\.outcome), [.moved], "exactly one reveal: \(run.scrolled)")
+            let at = try XCTUnwrap(revealedAt.first)
+            XCTAssertGreaterThan(at, NuxieMachineScreenReaderScroll.stillFrames, "not before a whole run")
+            for index in (at - NuxieMachineScreenReaderScroll.stillFrames)..<at {
+                XCTAssertLessThan(abs(boxes[index].minY - boxes[index - 1].minY),
+                                  NuxieMachineScreenReaderScroll.stillDistance,
+                                  "frame \(index), before the reveal, moved the link: \(boxes.map(\.minY))")
+            }
+            let after = try XCTUnwrap(run.last.semantics)
+            XCTAssertTrue(NuxieMachineScreenReaderScroll.isShown(try link(run.last), in: after.scrollRegions))
+            print("page then focus: link minY per frame \(boxes.map { ($0.minY * 100).rounded() / 100 }), "
+                  + "reveal sent in frame \(at)")
             try await reader.close()
         } catch {
             try? await reader.close()
