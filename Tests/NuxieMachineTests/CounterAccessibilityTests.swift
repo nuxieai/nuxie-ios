@@ -548,7 +548,7 @@ final class ScreenReaderScrollingTests: XCTestCase {
 
             XCTAssertTrue(element.accessibilityActivate(), "a tap during the reveal is taken")
             XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "and waits: nothing is queued for the engine")
-            let id = try XCTUnwrap(reader.nodes(in: first.drawn).first { $0.label == "About the trial" }?.id)
+            let id = try XCTUnwrap(reader.nodes(in: try XCTUnwrap(first.drawn)).first { $0.label == "About the trial" }?.id)
             XCTAssertEqual(reader.controller.screenReaderScrolling.heldTap, id)
             XCTAssertFalse(element.accessibilityActivate(), "one tap waits at a time")
 
@@ -679,6 +679,181 @@ final class ScreenReaderScrollingTests: XCTestCase {
             throw error
         }
     }
+
+    // MARK: A page that never settles
+
+    // No machine fixture has both a `scroll` and an animation that never
+    // stops, so these run Stillwater's paywall with every step told to the
+    // controller as not settled, the way such a page reports it: the
+    // engine, the reveal, its animation and the captures are real; only the
+    // settle the controller hears is withheld, so rest can come from the
+    // still-frames rule alone.
+
+    /// On a page that never reports itself settled, focus on "About the
+    /// trial", below the fold, reveals it once the frames show the page
+    /// still, and a tap that arrives while the reveal moves waits behind it
+    /// and presses the link once it is still again: the terms line shows.
+    @MainActor
+    func testOnAPageThatNeverSettlesFocusRevealsALinkAndAHeldTapPressesIt() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-unsettled-held")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            _ = try await reader.screenReaderFrames(kept: "2-at-rest")
+            var still: DrawnFrame?
+            for _ in 0..<NuxieMachineScreenReaderScroll.stillFrames + 1 {
+                still = try await reader.screenReaderFrame(unsettled: true).drawn
+            }
+            XCTAssertTrue(reader.controller.screenReaderScrolling.atRest, "still frames, never settled: at rest")
+            let element = try reader.element("About the trial")
+            let capture = try XCTUnwrap(still?.semantics)
+            let before = try XCTUnwrap(capture.tree.nodes.first { $0.label == "About the trial" })
+            XCTAssertFalse(NuxieMachineScreenReaderScroll.isShown(before, in: capture.scrollRegions),
+                           "\(before.bounds) is below the fold")
+            element.accessibilityElementDidBecomeFocused()
+            let first = try await reader.screenReaderFrame(unsettled: true)
+            XCTAssertEqual(first.frame.scrolled.map(\.outcome), [.moved], "the reveal went: \(first.frame.scrolled)")
+            XCTAssertTrue(element.accessibilityActivate(), "a tap during the reveal is taken")
+            XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "and waits")
+
+            let rest = try await reader.screenReaderFrames(kept: "3-pressed", unsettled: true)
+            let reveals = rest.scrolled.filter { if case .reveal = $0.request { true } else { false } }
+            XCTAssertEqual(reveals, [], "no second reveal: \(rest.scrolled)")
+            XCTAssertEqual(rest.reported.filter { $0 == "tap" }, ["tap"], "pressed once: \(rest.reported)")
+            let refused = await reader.refusedTaps()
+            XCTAssertEqual(refused, [], "the tap went once the link offered one")
+            XCTAssertTrue(reader.labels.contains(StillwaterPaywallEdgeTests.termsLine), "\(reader.read)")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// On a page that never reports itself settled, while a reveal's
+    /// animation moves "Restore purchases" up the page the rule never
+    /// reports rest until the link is within half a point of where it
+    /// stops, so a second reveal sent then could not overshoot by more
+    /// (UNIV-7080); no frame that moved it half a point or more is at rest.
+    /// At rest, the link shows whole and offers its tap. One reveal in all.
+    @MainActor
+    func testOnAPageThatNeverSettlesNoRestIsSeenWhileARevealMoves() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-unsettled-move")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            _ = try await reader.screenReaderFrames(kept: "2-at-rest")
+            for _ in 0..<NuxieMachineScreenReaderScroll.stillFrames + 1 {
+                try await reader.screenReaderFrame(unsettled: true)
+            }
+            try reader.element("Restore purchases").accessibilityElementDidBecomeFocused()
+            var boxes: [CGRect] = []
+            var rests: [Bool] = []
+            func link(_ drawn: DrawnFrame?) throws -> NuxieNativeSemanticNode {
+                try XCTUnwrap(drawn?.semantics?.tree.nodes.first { $0.label == "Restore purchases" })
+            }
+            let revealed = try await reader.screenReaderFrames(kept: "3-revealed", unsettled: true) { _, drawn in
+                boxes.append(try link(drawn).bounds)
+                rests.append(reader.controller.screenReaderScrolling.atRest)
+            }
+            // Where the link stops: two seconds more of frames, nothing asked.
+            var stop = try link(revealed.last).bounds
+            for _ in 0..<120 {
+                stop = try link(try await reader.screenReaderFrame(unsettled: true).drawn).bounds
+            }
+            let reveals = revealed.scrolled.filter { if case .reveal = $0.request { true } else { false } }
+            XCTAssertEqual(reveals.map(\.outcome), [.moved], "one reveal, which moved: \(revealed.scrolled)")
+            var moving = 0
+            for index in boxes.indices.dropFirst() where abs(boxes[index].minY - boxes[index - 1].minY) >= 0.5 {
+                moving += 1
+                XCTAssertFalse(rests[index], "frame \(index) moved the link \(boxes[index - 1]) to \(boxes[index]) "
+                                   + "and was seen at rest")
+            }
+            XCTAssertGreaterThan(moving, NuxieMachineScreenReaderScroll.stillFrames,
+                                 "the reveal animates over several frames: \(boxes.map(\.minY))")
+            XCTAssertTrue(rests.contains(true), "it comes to rest: \(rests)")
+            for (index, box) in boxes.enumerated() where rests[index] {
+                XCTAssertLessThan(abs(box.minY - stop.minY), NuxieMachineScreenReaderScroll.stillDistance,
+                                  "frame \(index) was at rest with the link at \(box.minY), short of \(stop.minY)")
+            }
+            let after = try XCTUnwrap(revealed.last.semantics)
+            let shown = try link(revealed.last)
+            XCTAssertTrue(NuxieMachineScreenReaderScroll.isShown(shown, in: after.scrollRegions),
+                          "\(shown.bounds) is whole inside its scroll")
+            XCTAssertNotEqual(shown.actions & 1, 0, "in view it offers its tap")
+            print("unsettled reveal: link minY per frame \(boxes.map { ($0.minY * 100).rounded() / 100 }), "
+                  + "at rest \(rests.map { $0 ? 1 : 0 }), stops at \(stop.minY)")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    // MARK: Frames not drawn, and the surface going away
+
+    /// A page that moved in a frame not drawn is not told yet: the snapshot
+    /// on screen is from before the move and would read the page it left.
+    /// The next drawn frame tells it, read from that frame's snapshot.
+    @MainActor
+    func testAPageLineWaitsForADrawnFrame() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-page-undrawn")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            let opened = try await reader.screenReaderFrames(kept: "2-at-rest")
+            var posted: [Any?] = []
+            reader.controller.pageScrolled = { posted.append($0) }
+            let page = try XCTUnwrap(opened.last.semantics).scrollRegions[0]
+            let range = try XCTUnwrap(page.range).height
+            let step = NuxieMachineScreenReaderScroll.pageStep(page.bounds.height)
+            let pages = 1 + Int(((range - 0.5) / step).rounded(.up))
+            XCTAssertGreaterThan(pages, 1)
+
+            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.up))
+            let undrawn = try await reader.screenReaderFrame(drawn: false)
+            XCTAssertEqual(undrawn.frame.scrolled.map(\.outcome), [.moved], "the page moved")
+            XCTAssertTrue(posted.isEmpty, "a frame not drawn tells nothing: \(posted)")
+            XCTAssertFalse(reader.controller.screenReaderScrolling.atRest, "nor is it at rest")
+            XCTAssertTrue(reader.controller.screenReaderScrolling.wantsFrames, "it asks for a frame to tell it")
+            let drawn = try await reader.screenReaderFrame()
+            XCTAssertEqual(posted.map { $0 as? String }, ["Page \(pages) of \(pages)"],
+                           "told after the drawn frame, from its snapshot")
+            let shown = try XCTUnwrap(drawn.drawn?.semantics).scrollRegions[0]
+            XCTAssertEqual(try XCTUnwrap(shown.scroll).y, min(step, range), accuracy: 0.5)
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// When the loop stops (the surface goes away), what the reader asked
+    /// and is not done goes with it: a reveal, a tap held behind it and a
+    /// page queued.
+    @MainActor
+    func testTheSurfaceGoingAwayDropsEverything() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-stop")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            _ = try await reader.screenReaderFrames(kept: "2-at-rest")
+            let link = try reader.element("About the trial")
+            link.accessibilityElementDidBecomeFocused()
+            XCTAssertTrue(link.accessibilityActivate())
+            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.up))
+            XCTAssertTrue(reader.controller.screenReaderScrolling.wantsFrames)
+            reader.loop.screens = [reader.controller]
+            reader.loop.stop()
+            XCTAssertEqual(reader.controller.screenReaderScrolling, NuxieMachineScreenReaderScrolling(),
+                           "everything asked is dropped")
+            XCTAssertFalse(link.accessibilityActivate(), "and nothing more is taken")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
 }
 
 /// What a screen reader reads for one element.
@@ -763,9 +938,14 @@ private final class Reader {
     /// edge, the frame is drawn with its snapshot (read back without text
     /// recognition or a kept image, unless `kept` names it), the controller
     /// shows the snapshot and hears what came of its moves and whether the
-    /// step settled.
+    /// step settled. `unsettled` tells the controller the step did not
+    /// settle whatever it reported, as on a page whose animation never
+    /// stops; a frame not `drawn` steps and draws nothing, as when the
+    /// surface has no drawable, so the controller keeps the snapshot from
+    /// before the step.
     @discardableResult
-    func screenReaderFrame(kept: String? = nil) async throws -> (frame: NuxieMachineFrame, drawn: DrawnFrame) {
+    func screenReaderFrame(kept: String? = nil, unsettled: Bool = false, drawn shows: Bool = true) async throws
+        -> (frame: NuxieMachineFrame, drawn: DrawnFrame?) {
         let touched = await run.edge.shown
         let pointers = controller.takePointers()
         let scrolls = controller.takeScrolls()
@@ -774,10 +954,10 @@ private final class Reader {
                                            elapsedSeconds: CounterDriverEdgeTests.tick, now: run.advance())
         let fault = await run.edge.fault
         XCTAssertNil(fault, "the frame faulted")
-        let drawn: DrawnFrame
+        var drawn: DrawnFrame?
         if let kept {
             drawn = try await draw(reported: stepped.reported, name: kept)
-        } else {
+        } else if shows {
             let screen = await run.edge.screen()
             let runtime = try XCTUnwrap(screen, "nothing is presented")
             let size = surface.bounds.size
@@ -788,17 +968,20 @@ private final class Reader {
             controller.show(capture)
             drawn = DrawnFrame(reported: stepped.reported, lines: [], semantics: capture)
         }
-        let settled = touched.map { stepped.settled.contains($0) } ?? false
+        let settled = !unsettled && (touched.map { stepped.settled.contains($0) } ?? false)
         controller.frameEnded(touched.map { _ in stepped.scrolled } ?? [], settled: settled)
         return (stepped, drawn)
     }
 
     /// What frames run for a screen reader did, until the controller asks
-    /// for no more and a frame's step reports itself settled, at most
-    /// `limit`, then one more drawn and kept as `kept`: each frame's moves
-    /// and what came of them, whether each settled, the events reported,
-    /// and the last frame drawn.
-    func screenReaderFrames(limit: Int = 900, kept: String) async throws
+    /// for no more and a frame's step reports itself settled (or, with
+    /// `unsettled`, as on a page that never settles, until the controller
+    /// asks for no more), at most `limit`, then one more drawn and kept as
+    /// `kept`: each frame's moves and what came of them, whether each
+    /// settled, the events reported, and the last frame drawn. `each` hears
+    /// every frame before the kept one, after the controller heard it.
+    func screenReaderFrames(limit: Int = 900, kept: String, unsettled: Bool = false,
+                            each: ((NuxieMachineFrame, DrawnFrame) throws -> Void)? = nil) async throws
         -> (scrolled: [NuxieMachineScrolled], settled: [Bool], reported: [String], last: DrawnFrame) {
         var scrolled: [NuxieMachineScrolled] = []
         var settled: [Bool] = []
@@ -810,18 +993,19 @@ private final class Reader {
         }
         var rested = false
         for _ in 0..<limit {
-            let result = try await screenReaderFrame()
+            let result = try await screenReaderFrame(unsettled: unsettled)
             heard(result.frame)
-            if !controller.screenReaderScrolling.wantsFrames, settled.last == true {
+            try each?(result.frame, try XCTUnwrap(result.drawn))
+            if !controller.screenReaderScrolling.wantsFrames, unsettled || settled.last == true {
                 rested = true
                 break
             }
         }
         XCTAssertTrue(rested, "after \(limit) frames the Screen has not settled, or the controller still asks "
                           + "for frames: \(controller.screenReaderScrolling)")
-        let last = try await screenReaderFrame(kept: kept)
+        let last = try await screenReaderFrame(kept: kept, unsettled: unsettled)
         heard(last.frame)
-        return (scrolled, settled, reported, last.drawn)
+        return (scrolled, settled, reported, try XCTUnwrap(last.drawn))
     }
 
     private func draw(reported: [String], name step: String) async throws -> DrawnFrame {
