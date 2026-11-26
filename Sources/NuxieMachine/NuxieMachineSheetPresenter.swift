@@ -81,15 +81,18 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   (the app switcher, a system alert over it) is still hers. Each notice
 ///   is kept as it is received, with the clock's moment then, in order
 ///   ([`NuxieMachinePresence`]), and nothing is merged: away and back
-///   received while the loop's lane is held are two changes. The next run
-///   of the lane, whatever runs it (the notice's own, a frame, a close, the
-///   timer), tells each in turn at its own moment before anything else:
-///   for a departure, each wake due by its moment first, as here, then
-///   away; for a return, here first, so the machine delivers each wake she
-///   missed with her away inside that one call. A value the same as the
-///   one last told is not told again. A wake the timer delivers while she
-///   is away and the app still runs is delivered as any other, and the
-///   machine judges it with her away.
+///   received while the loop's lane is held are two changes. Each run of
+///   the lane, whatever runs it (a notice's own, a frame, a close, the
+///   timer), first tells each notice received by the run's moment, in
+///   turn, at its own moment: for a departure, each wake due by its moment
+///   first, as here, then away; for a return, here first, so the machine
+///   delivers each wake she missed with her away inside that one call. A
+///   notice received after the run's moment (while the run waited on a
+///   delivery) is not told early: it waits for the next run, and its own
+///   run is at no earlier moment than it, so none is left behind. A value
+///   the same as the one last told is not told again. A wake the timer
+///   delivers while she is away and the app still runs is delivered as
+///   any other, and the machine judges it with her away.
 ///
 /// What the presenter owns has one end of life. The edge with its session,
 /// the loop that runs its frames, the Screens, and the wake timer are let
@@ -260,8 +263,10 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         await loop.inLane {
             // The environment goes first, so the start's first frame is
             // drawn in it; then where the person is, which the session
-            // keeps for the start.
-            let now = machineNow()
+            // keeps for the start. The start is the lane run for every
+            // notice received before it, so its moment is no earlier than
+            // any of theirs.
+            let now = max(machineNow(), received.last?.at ?? .min)
             await tellEnvironment(at: now)
             await tellPresences(by: now)
             await edge.start(event: event, now: now)
@@ -488,37 +493,46 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// ([`tellPresences(by:)`]). Before the start it is kept, and told
     /// before it; once the presenter has let go of its edge it is dropped.
     package func presence(here: Bool) async {
-        receive(here: here)
-        await tellReceived()
+        guard let moment = receive(here: here) else { return }
+        await tellReceived(at: moment)
     }
 
     /// Keep a notice as it is received: its value and the clock's moment
-    /// now, never earlier than the one before it.
-    private func receive(here: Bool) {
-        guard !started || loop != nil else { return }
+    /// now, never earlier than the one before it. Returns that moment, or
+    /// none when the notice is dropped.
+    private func receive(here: Bool) -> Int64? {
+        guard !started || loop != nil else { return nil }
         let moment = max(machineNow(), received.last?.at ?? .min)
         received.append(NuxieMachinePresence(here: here, at: moment))
+        return moment
     }
 
-    /// Run the lane for what was received, if the presenter holds a loop.
-    private func tellReceived() async {
+    /// Run the lane for the notice received at `moment`, if the presenter
+    /// holds a loop: the run made for it, which every notice has. Its moment
+    /// is the clock's when the lane is reached and never earlier than the
+    /// notice's, so the notice is told in it at the latest, even when a run
+    /// before it left the notice for later or the clock was set back.
+    private func tellReceived(at moment: Int64) async {
         guard let loop else { return }
-        await loop.inLane { await catchUp(to: machineNow()) }
+        await loop.inLane { await catchUp(to: max(machineNow(), moment)) }
     }
 
-    /// Tell the session each notice received, oldest first, each at its
-    /// own moment (`now` at the latest, the lane's moment). A departure
-    /// first delivers each wake due by its moment, which came due while
-    /// she was here; a return is told before any wake due by its moment,
-    /// and the machine delivers each one she missed with her away inside
-    /// that call: the wake the state holds as due is taken first, as the
-    /// wake loop takes each one, and the rows, which say the record's next
-    /// wake, give it its next. A value the same as the one last told is not
-    /// told again. Runs inside the loop's lane.
+    /// Tell the session each notice received at or before `now`, the lane
+    /// run's moment, oldest first, each at its own moment. A notice
+    /// received after `now` (while this run waited on a delivery) is not
+    /// told early: it stays, with every one after it, for the next run of
+    /// the lane, at the latest the one made for it ([`tellReceived(at:)`]).
+    /// A departure first delivers each wake due by its moment, which came
+    /// due while she was here; a return is told before any wake due by its
+    /// moment, and the machine delivers each one she missed with her away
+    /// inside that call: the wake the state holds as due is taken first, as
+    /// the wake loop takes each one, and the rows, which say the record's
+    /// next wake, give it its next. A value the same as the one last told
+    /// is not told again. Runs inside the loop's lane.
     private func tellPresences(by now: Int64) async {
-        while !received.isEmpty {
-            let next = received.removeFirst()
-            let moment = min(next.at, now)
+        while let next = received.first, next.at <= now {
+            received.removeFirst()
+            let moment = next.at
             if !next.here { await deliverWakes(dueBy: moment) }
             guard next.here != here, let edge = loop?.edge else { continue }
             here = next.here
@@ -556,17 +570,17 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     }
 
     private func left() {
-        receive(here: false)
+        guard let moment = receive(here: false) else { return }
         let held = NuxieMachineBackgroundTask(named: "nuxie.machine.presence")
         Task { @MainActor [weak self] in
-            await self?.tellReceived()
+            await self?.tellReceived(at: moment)
             held.end()
         }
     }
 
     private func cameBack() {
-        receive(here: true)
-        Task { @MainActor [weak self] in await self?.tellReceived() }
+        guard let moment = receive(here: true) else { return }
+        Task { @MainActor [weak self] in await self?.tellReceived(at: moment) }
     }
 
     // MARK: The environment: light and dark, and the text size

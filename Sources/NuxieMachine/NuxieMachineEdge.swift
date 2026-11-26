@@ -743,6 +743,12 @@ package actor NuxieMachineEdge {
         try await inTurn { _ in try session.recordOpen() }
     }
 
+    /// Run `body` holding the edge's turn, as a delivery in flight holds
+    /// it. For checks: a check can make a delivery wait for it.
+    package func holdingTurn(_ body: @Sendable () async -> Void) async {
+        await inTurn { _ in await body() }
+    }
+
     /// The value of the root slot named `name` in the session's record,
     /// between deliveries.
     package func slot(_ name: String) async throws -> NuxieMachineValue {
