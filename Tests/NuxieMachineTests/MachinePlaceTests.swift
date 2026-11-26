@@ -266,7 +266,8 @@ final class MachinePlaceTests: XCTestCase {
     // MARK: Helpers
 
     private static func edge() throws -> NuxieMachineEdge {
-        try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(), onReport: { _ in })
+        try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(),
+                             bytes: NoFolderFiles(), onReport: { _ in })
     }
 
     /// Stillwater's first frame, told `told` after the start and before the
@@ -378,8 +379,9 @@ final class MachinePlaceTests: XCTestCase {
                     due = false
 
                 """)],
-            root: "main", app: "app", experience: "evening", version: 1)
-        let edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(), onReport: { _ in })
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
+        let edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(),
+                                        bytes: NoFolderFiles(), onReport: { _ in })
         return NuxieMachineScreenLoop(edge: edge)
     }
 

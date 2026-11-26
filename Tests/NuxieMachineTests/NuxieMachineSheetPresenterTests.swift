@@ -46,7 +46,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         do {
             let store = ProbeStore()
             edgeStore = store
-            await presenter.start(plan: plan, store: store, event: "onboarding_completed")
+            await presenter.start(plan: plan, store: store, bytes: NoFolderFiles(), event: "onboarding_completed")
         }
 
         XCTAssertEqual(presenter.status.record, .fault("edge.no-host"))
@@ -65,7 +65,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     func testAPresenterFreedWhileItsRecordWaitsLeavesNothingScheduled() async throws {
         let plan = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: Self.waitsForTheEvening)],
-            root: "main", app: "app", experience: "evening", version: 1)
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
         let host = UIViewController()
         var presenter: NuxieMachineSheetPresenter? = NuxieMachineSheetPresenter(host: host) { _ in }
         weak let heldPresenter = presenter
@@ -73,7 +73,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         do {
             let store = ProbeStore()
             edgeStore = store
-            await presenter?.start(plan: plan, store: store, event: "go")
+            await presenter?.start(plan: plan, store: store, bytes: NoFolderFiles(), event: "go")
         }
 
         let status = try XCTUnwrap(presenter?.status)
@@ -105,13 +105,13 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     func testTheClockAtItsDefaultIsTheWallClock() async throws {
         let plan = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: Self.waitsForTheEvening)],
-            root: "main", app: "app", experience: "evening", version: 1)
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
         let host = UIViewController()
         let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
         XCTAssertEqual(presenter.clockAhead, 0, "the clock's offset is not 0 by default")
 
         let before = Self.wallNow()
-        await presenter.start(plan: plan, store: ProbeStore(), event: "go")
+        await presenter.start(plan: plan, store: ProbeStore(), bytes: NoFolderFiles(), event: "go")
         let after = Self.wallNow()
 
         guard case .open(let moment?) = presenter.status.record else { return XCTFail("\(presenter.status)") }
@@ -180,11 +180,11 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         -> (NuxieMachineSheetPresenter, NuxieMachineEdge, Int64) {
         let plan = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: Self.theEveningOffer)],
-            root: "main", app: "app", experience: "evening", version: 1)
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
         let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
         let midnight = Self.wallNow() / Self.day * Self.day
         Self.move(presenter, to: midnight + 17 * Self.hour)
-        await presenter.start(plan: plan, store: ProbeStore(), event: "go")
+        await presenter.start(plan: plan, store: ProbeStore(), bytes: NoFolderFiles(), event: "go")
         let edge = try XCTUnwrap(presenter.edge, "the record did not stay open")
         XCTAssertEqual(presenter.status.record, .open(wakeAt: midnight + 18 * Self.hour))
         XCTAssertTrue(presenter.here, "a session starts with her here")
@@ -303,7 +303,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     func testAwayBeforeTheStartIsToldBeforeIt() async throws {
         let plan = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: Self.theEveningOffer)],
-            root: "main", app: "app", experience: "evening", version: 1)
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
         let host = UIViewController()
         let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
         let midnight = Self.wallNow() / Self.day * Self.day
@@ -311,7 +311,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         await presenter.presence(here: false)
         XCTAssertTrue(presenter.here, "the session was told before it was made")
         XCTAssertEqual(presenter.presencesWaiting.map(\.here), [false], "away was not kept for the start")
-        await presenter.start(plan: plan, store: ProbeStore(), event: "go")
+        await presenter.start(plan: plan, store: ProbeStore(), bytes: NoFolderFiles(), event: "go")
         XCTAssertFalse(presenter.here)
         XCTAssertEqual(presenter.presencesWaiting, [], "away was kept after the start told it")
         let edge = try XCTUnwrap(presenter.edge)
@@ -495,9 +495,10 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     private static func loop(
         plan: NuxieMachinePlanSource = NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: waitsForTheEvening)],
-            root: "main", app: "app", experience: "evening", version: 1)
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
     ) throws -> NuxieMachineScreenLoop {
-        let edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(), onReport: { _ in })
+        let edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(),
+                                        bytes: NoFolderFiles(), onReport: { _ in })
         return NuxieMachineScreenLoop(edge: edge)
     }
 
@@ -624,7 +625,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
                 """),
         ],
-        root: "main", app: "app", experience: "again", version: 1)
+        assets: [], root: "main", app: "app", experience: "again", version: 1)
 
     /// Wait until the presented Screen is laid out at `expected`, as the
     /// Screen's frames lay it out, and give its address. Only the address is

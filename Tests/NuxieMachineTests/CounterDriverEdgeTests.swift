@@ -280,7 +280,8 @@ final class Counter {
 
     init(plan: NuxieMachinePlanSource) throws {
         let owner = self.owner
-        edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(), onReport: { owner.heard($0) })
+        edge = try NuxieMachineEdge(plan: plan, store: NuxieMachineStandInStore(),
+                                    bytes: NoFolderFiles(), onReport: { owner.heard($0) })
         asks = FrameAskCount(edge)
     }
 
@@ -383,7 +384,7 @@ final class Counter {
         return NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: try text("main")),
                     NuxieMachineSourceFile(path: "counter.nux", text: try text("counter"))],
-            root: "main", app: "app", experience: "tally", version: 1)
+            assets: [], root: "main", app: "app", experience: "tally", version: 1)
     }
 
     /// A paywall whose "Buy" starts a purchase; the stand-in store fails it,
@@ -451,7 +452,7 @@ final class Counter {
         return NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
                     NuxieMachineSourceFile(path: "paywall.nux", text: paywall + "\n")],
-            root: "main", app: "app", experience: "upgrade", version: 1)
+            assets: [], root: "main", app: "app", experience: "upgrade", version: 1)
     }
 
     /// A line of text the record changes when its evening task comes due.
@@ -502,7 +503,7 @@ final class Counter {
         return NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
                     NuxieMachineSourceFile(path: "clock.nux", text: clock + "\n")],
-            root: "main", app: "app", experience: "evening", version: 1)
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
     }
 
     /// A record that waits for the evening, then starts a purchase there;
@@ -581,7 +582,7 @@ final class Counter {
         return NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
                     NuxieMachineSourceFile(path: "clock.nux", text: clock + "\n")],
-            root: "main", app: "app", experience: "evening", version: 1)
+            assets: [], root: "main", app: "app", experience: "evening", version: 1)
     }
 
     /// A component whose button writes a color the records cannot carry.
@@ -626,7 +627,7 @@ final class Counter {
         return NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
                     NuxieMachineSourceFile(path: "paint.nux", text: paint + "\n")],
-            root: "main", app: "app", experience: "spoiled", version: 1)
+            assets: [], root: "main", app: "app", experience: "spoiled", version: 1)
     }
 }
 

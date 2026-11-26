@@ -25,10 +25,13 @@ package final class NuxieMachineSession {
     package let planName: UInt64
 
     /// Compile `files` with `root` (the root file's path without `.nux`) under
-    /// the app, Experience and version given, admit the plan, and hold it with
-    /// no record yet.
+    /// the app, Experience and version given, with `assets`, the rows of
+    /// the folder's other files, beside them; admit the plan, and hold it
+    /// with no record yet. A file a view shows that no row names is refused
+    /// (`asset.missing`).
     package init(
         files: [(path: String, text: String)],
+        assets: [NuxieMachineAsset],
         root: String,
         app: String,
         experience: String,
@@ -37,20 +40,24 @@ package final class NuxieMachineSession {
         var session: OpaquePointer?
         var name: UInt64 = 0
         var refusalsLength = 0
-        let borrowed = files.flatMap { [$0.path, $0.text] } + [root, app, experience]
+        let borrowed = files.flatMap { [$0.path, $0.text] } + assets.map(\.path) + [root, app, experience]
         let status: UInt32 = try NuxieMachineStrings.lend(borrowed) { views in
             var given: [NuxMachineFile] = []
             for at in files.indices {
                 given.append(NuxMachineFile(path: views[2 * at], text: views[2 * at + 1]))
             }
+            let rows = assets.enumerated().map { at, asset in asset.carried(path: views[2 * files.count + at]) }
             let tail = views.count - 3
             var refusals = [UInt8](repeating: 0, count: 64 * 1024)
             let capacity = refusals.count
             let status = given.withUnsafeBufferPointer { files in
-                refusals.withUnsafeMutableBufferPointer { buffer in
-                    nux_machine_session_new(
-                        files.baseAddress, files.count, views[tail], views[tail + 1], views[tail + 2], version,
-                        &session, &name, buffer.baseAddress, capacity, &refusalsLength)
+                rows.withUnsafeBufferPointer { assets in
+                    refusals.withUnsafeMutableBufferPointer { buffer in
+                        nux_machine_session_new(
+                            files.baseAddress, files.count, assets.baseAddress, assets.count,
+                            views[tail], views[tail + 1], views[tail + 2], version,
+                            &session, &name, buffer.baseAddress, capacity, &refusalsLength)
+                    }
                 }
             }
             if status == NuxieMachineStatus.refused {
@@ -231,13 +238,28 @@ package final class NuxieMachineSession {
         return artboard
     }
 
-    /// The records' asset the platform's own font goes into, by its position
-    /// among their assets, or none when no view shows text.
-    package func scenePlatformFont() throws -> Int? {
-        var has = false
-        var asset = 0
-        try NuxieMachineError.check(nux_machine_scene_platform_font(handle, &has, &asset))
-        return has ? asset : nil
+    /// The records' assets, in the order the records hold them (an asset's
+    /// index here is its position, the ordinal the engine's import takes),
+    /// and what the host fills each with: the platform font, first when a
+    /// view shows text, then each picture once, by its path in the folder.
+    /// Empty when no view shows text or a picture.
+    package func sceneAssets() throws -> [NuxieMachineSceneAsset] {
+        var count = 0
+        try NuxieMachineError.check(nux_machine_scene_asset_count(handle, &count))
+        return try (0..<count).map { position -> NuxieMachineSceneAsset in
+            var kind: UInt32 = 0
+            var path = NuxMachineStr(ptr: nil, len: 0)
+            try NuxieMachineError.check(nux_machine_scene_asset(handle, position, &kind, &path))
+            switch kind {
+            case NuxieMachineStatus.assetPlatformFont:
+                return .platformFont
+            case NuxieMachineStatus.assetPicture:
+                guard let path = NuxieMachineStrings.copy(path) else { throw NuxieMachineError.assetDoesNotFit }
+                return .picture(path: path)
+            default:
+                throw NuxieMachineError.assetDoesNotFit
+            }
+        }
     }
 
     /// Whether the session holds scene writes for the presentation `shown`
@@ -580,6 +602,32 @@ package struct NuxieMachineScreenPlace: Equatable, Sendable {
     }
 }
 
+/// What the host fills one asset of the compiled records with, as the
+/// session lists them ([`NuxieMachineSession.sceneAssets`]).
+package enum NuxieMachineSceneAsset: Equatable, Sendable {
+    /// The face a text with no font of its own is drawn in: the
+    /// platform's own.
+    case platformFont
+    /// The bytes of the folder's file at `path`.
+    case picture(path: String)
+}
+
+extension NuxieMachineAsset {
+    /// The row as the header lays it out, its path lent for the call: the
+    /// one place the struct is made.
+    fileprivate func carried(path lent: NuxMachineStr) -> NuxMachineAsset {
+        switch kind {
+        case .picture(let width, let height):
+            NuxMachineAsset(path: lent, kind: NuxieMachineStatus.assetPicture, bytes: byteCount,
+                            width: width, height: height)
+        case .font:
+            NuxMachineAsset(path: lent, kind: NuxieMachineStatus.assetFont, bytes: byteCount, width: 0, height: 0)
+        case .other:
+            NuxMachineAsset(path: lent, kind: NuxieMachineStatus.assetOther, bytes: byteCount, width: 0, height: 0)
+        }
+    }
+}
+
 /// Every status but `NUX_MACHINE_OK`, with the header's meaning.
 package enum NuxieMachineError: Error, Equatable, Sendable {
     /// A pointer the interface needed was NULL.
@@ -629,6 +677,9 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     /// The place could not be read: its size is smaller than the header's,
     /// or a number in it is not finite.
     case placeDoesNotFit
+    /// An asset's kind is not one a file of the folder can be, or the
+    /// records named an asset of a kind this module does not fill.
+    case assetDoesNotFit
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
 
@@ -656,6 +707,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .replyDoesNotFit: "reply_does_not_fit"
         case .environmentDoesNotFit: "environment_does_not_fit"
         case .placeDoesNotFit: "place_does_not_fit"
+        case .assetDoesNotFit: "asset_does_not_fit"
         case .unknownStatus(let status): "status_\(status)"
         }
     }
@@ -689,6 +741,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_REPLY_DOES_NOT_FIT): .replyDoesNotFit,
         UInt32(NUX_MACHINE_ENVIRONMENT_DOES_NOT_FIT): .environmentDoesNotFit,
         UInt32(NUX_MACHINE_PLACE_DOES_NOT_FIT): .placeDoesNotFit,
+        UInt32(NUX_MACHINE_ASSET_DOES_NOT_FIT): .assetDoesNotFit,
     ]
 }
 
@@ -711,6 +764,10 @@ private enum NuxieMachineStatus {
     static let valueNumber = UInt32(NUX_MACHINE_VALUE_NUMBER)
     static let valueText = UInt32(NUX_MACHINE_VALUE_TEXT)
     static let valueEnum = UInt32(NUX_MACHINE_VALUE_ENUM)
+    static let assetPicture = UInt32(NUX_MACHINE_ASSET_PICTURE)
+    static let assetFont = UInt32(NUX_MACHINE_ASSET_FONT)
+    static let assetOther = UInt32(NUX_MACHINE_ASSET_OTHER)
+    static let assetPlatformFont = UInt32(NUX_MACHINE_ASSET_PLATFORM_FONT)
 }
 
 /// Strings across the interface: lent in for the length of one call, copied

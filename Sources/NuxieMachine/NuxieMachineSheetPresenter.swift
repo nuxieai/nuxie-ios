@@ -231,15 +231,17 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     }
 
     /// Compile the plan and start a record on `event`; each presentation
-    /// the machine shows is drawn from the plan's own views and presented
-    /// natively. A presenter starts once.
-    package func start(plan: NuxieMachinePlanSource, store: any NuxieMachineStore, event: String) async {
+    /// the machine shows is drawn from the plan's own views, with the bytes
+    /// of the folder's files it shows from `bytes`, and presented natively.
+    /// A presenter starts once.
+    package func start(plan: NuxieMachinePlanSource, store: any NuxieMachineStore,
+                       bytes: any NuxieMachineByteSource, event: String) async {
         guard !started else { return }
         started = true
         let edge: NuxieMachineEdge
         do {
             let inbox = reports
-            edge = try NuxieMachineEdge(plan: plan, store: store, onReport: { inbox.post($0) })
+            edge = try NuxieMachineEdge(plan: plan, store: store, bytes: bytes, onReport: { inbox.post($0) })
         } catch {
             send(.hostFault(error as? NuxieMachineEdgeFault
                 ?? NuxieMachineEdgeFault(code: "edge.open", detail: "\(error)")))

@@ -88,7 +88,9 @@ public final class NuxieMachineCounterHostViewController: UIViewController {
         Task { @MainActor [weak self] in
             do {
                 let plan = try NuxieMachineCounterFixture.load(from: .main)
-                await presenter.start(plan: plan, store: NuxieMachineStandInStore(), event: "opened")
+                let folder = try NuxieMachineFolder(named: NuxieMachineCounterFixture.folder, in: .main)
+                await presenter.start(plan: plan, store: NuxieMachineStandInStore(), bytes: folder.bytes,
+                                      event: "opened")
             } catch {
                 self?.recordLabel.text = "Record: the fixture did not load (\(error))"
             }
@@ -101,10 +103,14 @@ public final class NuxieMachineCounterHostViewController: UIViewController {
 }
 
 /// The counter as the staged host app bundles it under `views-slice-1/`:
-/// its two program files and the plan's header. The same files the machine's
-/// simulator suite uses. The bundled `main.test.nux` is there for
-/// provenance only; `load` names the program files, so it is never loaded.
+/// its two program files, the plan's header, and the rows of the folder's
+/// other files. The same files the machine's simulator suite uses. The
+/// bundled `main.test.nux` is there for provenance only; `load` names the
+/// program files, so it is never loaded.
 enum NuxieMachineCounterFixture {
+    /// The folder in the app bundle.
+    static let folder = "views-slice-1"
+
     private struct Provenance: Decodable {
         struct Plan: Decodable {
             let root: String
@@ -124,14 +130,16 @@ enum NuxieMachineCounterFixture {
         func data(_ name: String) throws -> Data {
             let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
             guard let url = bundle.url(forResource: parts[0], withExtension: parts[1],
-                                       subdirectory: "views-slice-1") else { throw Missing(name: name) }
+                                       subdirectory: folder) else { throw Missing(name: name) }
             return try Data(contentsOf: url)
         }
         let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
         let files = try ["main.nux", "counter.nux"].map {
             NuxieMachineSourceFile(path: $0, text: String(decoding: try data($0), as: UTF8.self))
         }
-        return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
-                                      experience: provenance.plan.experience, version: provenance.plan.version)
+        let assets = try NuxieMachineFolder(named: folder, in: bundle).assets()
+        return NuxieMachinePlanSource(files: files, assets: assets, root: provenance.plan.root,
+                                      app: provenance.plan.app, experience: provenance.plan.experience,
+                                      version: provenance.plan.version)
     }
 }

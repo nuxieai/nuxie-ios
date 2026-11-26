@@ -295,7 +295,11 @@ public final class NuxieMachineHostViewController: UIViewController {
                 let plan = Self.showsScrollSheet
                     ? try NuxieMachineScrollSheetFixture.load(from: .main)
                     : try NuxieMachineStillwaterFixture.load(from: .main, asCover: Self.presentsACover)
-                await presenter.start(plan: plan, store: NuxieMachineSlowStore(), event: "onboarding_completed")
+                let folder = try NuxieMachineFolder(named: Self.showsScrollSheet
+                                                        ? NuxieMachineScrollSheetFixture.folder
+                                                        : NuxieMachineStillwaterFixture.folder, in: .main)
+                await presenter.start(plan: plan, store: NuxieMachineSlowStore(), bytes: folder.bytes,
+                                      event: "onboarding_completed")
             } catch {
                 self?.recordLabel.text = "Record: the fixture did not load (\(error))"
             }
@@ -375,10 +379,14 @@ struct NuxieMachineSlowStore: NuxieMachineStore {
 }
 
 /// Stillwater as the staged host app bundles it under `stillwater/`: its
-/// five program files and the plan's header. The same files the machine's
-/// simulator suite uses. The bundled `main.test.nux` is there for
-/// provenance only; `load` names the program files, so it is never loaded.
+/// five program files, the plan's header, and the rows of the folder's
+/// other files. The same files the machine's simulator suite uses. The
+/// bundled `main.test.nux` is there for provenance only; `load` names the
+/// program files, so it is never loaded.
 enum NuxieMachineStillwaterFixture {
+    /// The folder in the app bundle.
+    static let folder = "stillwater"
+
     private struct Provenance: Decodable {
         struct Plan: Decodable {
             let root: String
@@ -409,7 +417,7 @@ enum NuxieMachineStillwaterFixture {
         func data(_ name: String) throws -> Data {
             let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
             guard let url = bundle.url(forResource: parts[0], withExtension: parts[1],
-                                       subdirectory: "stillwater") else { throw Missing(name: name) }
+                                       subdirectory: folder) else { throw Missing(name: name) }
             return try Data(contentsOf: url)
         }
         let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
@@ -418,8 +426,10 @@ enum NuxieMachineStillwaterFixture {
             let swapped = asCover && name == "main.nux" ? try Self.asCover(text) : text
             return NuxieMachineSourceFile(path: name, text: swapped)
         }
-        return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
-                                      experience: provenance.plan.experience, version: provenance.plan.version)
+        let assets = try NuxieMachineFolder(named: folder, in: bundle).assets()
+        return NuxieMachinePlanSource(files: files, assets: assets, root: provenance.plan.root,
+                                      app: provenance.plan.app, experience: provenance.plan.experience,
+                                      version: provenance.plan.version)
     }
 }
 
@@ -445,7 +455,12 @@ extension NuxieMachineStillwaterFixture {
 /// - its second layer is a button floating over the page, pinned near its
 ///   bottom right, that presses the paywall's `restore`. A drag that starts
 ///   on it starts over the `scroll`, though not inside it.
+///
+/// The rows of the folder's other files are as bundled.
 enum NuxieMachineScrollSheetFixture {
+    /// The folder in the app bundle.
+    static let folder = "views-scroll"
+
     struct Missing: Error, CustomStringConvertible {
         let what: String
         var description: String { "views-scroll: \(what)" }
@@ -457,7 +472,7 @@ enum NuxieMachineScrollSheetFixture {
 
     static func load(from bundle: Bundle) throws -> NuxieMachinePlanSource {
         func text(_ name: String) throws -> String {
-            guard let url = bundle.url(forResource: name, withExtension: "nux", subdirectory: "views-scroll")
+            guard let url = bundle.url(forResource: name, withExtension: "nux", subdirectory: folder)
             else { throw Missing(what: "\(name).nux is not in the app bundle") }
             return String(decoding: try Data(contentsOf: url), as: UTF8.self)
         }
@@ -491,7 +506,8 @@ enum NuxieMachineScrollSheetFixture {
                                                                                             with: sheetRoute)),
                     NuxieMachineSourceFile(path: "paywall.nux", text: lines.joined(separator: "\n")),
                     NuxieMachineSourceFile(path: "plan-card.nux", text: try text("plan-card"))],
-            root: "main", app: "app", experience: "quietly", version: 1)
+            assets: try NuxieMachineFolder(named: folder, in: bundle).assets(), root: "main", app: "app",
+            experience: "quietly", version: 1)
     }
 }
 

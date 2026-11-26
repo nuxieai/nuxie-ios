@@ -46,7 +46,7 @@ final class MachineColorSchemeTests: XCTestCase {
     func testDarkToldBeforeTheStartDrawsTheFirstFrameDark() async throws {
         for (told, palette) in [(nil, Palette.light), (false, .light), (true, .dark)] as [(Bool?, Palette)] {
             let edge = try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(),
-                                            onReport: { _ in })
+                                            bytes: NoFolderFiles(), onReport: { _ in })
             if let told {
                 await edge.environment(NuxieMachineEnvironment(dark: told, textSize: 17), now: Self.nine)
                 let log = await edge.log
@@ -68,7 +68,8 @@ final class MachineColorSchemeTests: XCTestCase {
     /// machine itself makes the same environment harmless. Light again
     /// draws light.
     func testAChangeWhileOpenIsDrawnInTheNextFrameAndTheSameAgainWritesNothing() async throws {
-        let edge = try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(), onReport: { _ in })
+        let edge = try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(),
+                                        bytes: NoFolderFiles(), onReport: { _ in })
         var now = Self.nine
         await edge.environment(NuxieMachineEnvironment(dark: false, textSize: 17), now: now)
         await edge.start(event: "onboarding_completed", now: now)
@@ -128,7 +129,8 @@ final class MachineColorSchemeTests: XCTestCase {
             let (host, window) = Self.host(phone)
             let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
             presenter.colorSchemeMode = mode
-            await presenter.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(), event: "go")
+            await presenter.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
+                                  bytes: NoFolderFiles(), event: "go")
             let told = try XCTUnwrap(presenter.environment, "nothing was told before the start")
             XCTAssertEqual(told.dark, dark, "a \(mode) app on a phone in \(phone.rawValue)")
             let log = try await XCTUnwrap(presenter.edge).log
@@ -147,7 +149,8 @@ final class MachineColorSchemeTests: XCTestCase {
     func testSystemFollowsThePhoneAndTellsEachSchemeOnce() async throws {
         let (host, window) = Self.host(.light)
         let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
-        await presenter.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(), event: "go")
+        await presenter.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
+                              bytes: NoFolderFiles(), event: "go")
         let edge = try XCTUnwrap(presenter.edge)
         XCTAssertEqual(presenter.environment?.dark, false)
 
@@ -184,7 +187,7 @@ final class MachineColorSchemeTests: XCTestCase {
     @MainActor
     func testAScreenDrawsInItsForcedSchemeOrItsWindowsAndSaysWhenItChanges() async throws {
         let edge = try NuxieMachineEdge(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
-                                        onReport: { _ in })
+                                        bytes: NoFolderFiles(), onReport: { _ in })
         let loop = NuxieMachineScreenLoop(edge: edge)
         let presented = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 1), route: "screen",
                                               presentation: .sheet)
@@ -261,7 +264,7 @@ final class MachineColorSchemeTests: XCTestCase {
         var titles: [Double: CGRect] = [:]
         for points in [17.0, 23.0] {
             let edge = try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(),
-                                            onReport: { _ in })
+                                            bytes: NoFolderFiles(), onReport: { _ in })
             await edge.environment(NuxieMachineEnvironment(dark: false, textSize: points), now: Self.nine)
             await edge.start(event: "onboarding_completed", now: Self.nine)
             try await Self.layOut(edge)
@@ -282,7 +285,8 @@ final class MachineColorSchemeTests: XCTestCase {
     /// again writes nothing and asks for no frame. 17 again draws the
     /// headline as tall as it first was.
     func testATextSizeChangeWhileOpenIsMeasuredInTheNextFrameAndTheSameAgainWritesNothing() async throws {
-        let edge = try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(), onReport: { _ in })
+        let edge = try NuxieMachineEdge(plan: Fixture.load(), store: NuxieMachineStandInStore(),
+                                        bytes: NoFolderFiles(), onReport: { _ in })
         var now = Self.nine
         await edge.environment(NuxieMachineEnvironment(dark: false, textSize: 17), now: now)
         await edge.start(event: "onboarding_completed", now: now)
@@ -338,7 +342,8 @@ final class MachineColorSchemeTests: XCTestCase {
         window.traitOverrides.preferredContentSizeCategory = .large
         host.updateTraitsIfNeeded()
         let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
-        await presenter.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(), event: "go")
+        await presenter.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
+                              bytes: NoFolderFiles(), event: "go")
         let edge = try XCTUnwrap(presenter.edge)
         let first = try XCTUnwrap(presenter.environment, "nothing was told before the start")
         XCTAssertEqual(first.textSize, 17, accuracy: 0.5, "the default size was not told before the start")
@@ -380,7 +385,8 @@ final class MachineColorSchemeTests: XCTestCase {
         XCTAssertEqual(larger.traitCollection.preferredContentSizeCategory, .extraExtraExtraLarge,
                        "the host did not take its window's text size")
         let second = NuxieMachineSheetPresenter(host: larger) { _ in }
-        await second.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(), event: "go")
+        await second.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
+                           bytes: NoFolderFiles(), event: "go")
         let secondEdge = try XCTUnwrap(second.edge)
         let toldFirst = await Self.textSizes(secondEdge)
         Self.expect(toldFirst, [23], "23 was not told before the start")
@@ -394,7 +400,7 @@ final class MachineColorSchemeTests: XCTestCase {
     func testAScreenSaysWhenItsTextSizeChanges() async throws {
         guard #available(iOS 17.0, *) else { throw XCTSkip("trait overrides need iOS 17") }
         let edge = try NuxieMachineEdge(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
-                                        onReport: { _ in })
+                                        bytes: NoFolderFiles(), onReport: { _ in })
         let loop = NuxieMachineScreenLoop(edge: edge)
         let presented = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 1), route: "screen",
                                               presentation: .sheet)
@@ -471,7 +477,7 @@ final class MachineColorSchemeTests: XCTestCase {
                 due = false
 
             """)],
-        root: "main", app: "app", experience: "evening", version: 1)
+        assets: [], root: "main", app: "app", experience: "evening", version: 1)
 
     /// A host view controller, the root of a window whose style stands in
     /// for the phone's.

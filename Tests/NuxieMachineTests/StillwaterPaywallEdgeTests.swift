@@ -399,7 +399,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                     text "Not now" color=#c9d3d0 font-size=16
 
             """)],
-        root: "main", app: "app", experience: "leaves", version: 1)
+        assets: [], root: "main", app: "app", experience: "leaves", version: 1)
 
     /// An answer that arrives after its record ended is dropped: the
     /// machine dropped the call when the record ended, so it is recorded as
@@ -1638,7 +1638,8 @@ private final class Run {
         let store = RecordingStore(holds: holdingStore, answering: answering, refusing: refusing)
         self.store = store
         let owner = self.owner
-        edge = try NuxieMachineEdge(plan: plan ?? Fixture.load(), store: store, onReport: { owner.heard($0) })
+        edge = try NuxieMachineEdge(plan: plan ?? Fixture.load(), store: store,
+                                    bytes: NoFolderFiles(), onReport: { owner.heard($0) })
         asks = FrameAskCount(edge)
     }
 
@@ -1863,7 +1864,7 @@ enum Fixture {
         let files = try ["main.nux", "paywall.nux", "plan-card.nux", "screens.nux", "done.nux"].map {
             NuxieMachineSourceFile(path: $0, text: String(decoding: try data($0), as: UTF8.self))
         }
-        return NuxieMachinePlanSource(files: files, root: provenance.plan.root, app: provenance.plan.app,
+        return NuxieMachinePlanSource(files: files, assets: [], root: provenance.plan.root, app: provenance.plan.app,
                                       experience: provenance.plan.experience, version: provenance.plan.version)
     }
 
@@ -1882,7 +1883,7 @@ enum Fixture {
             return NuxieMachineSourceFile(path: file.path,
                                           text: file.text.replacingOccurrences(of: presents, with: purchases))
         }
-        return NuxieMachinePlanSource(files: files, root: plan.root, app: plan.app,
+        return NuxieMachinePlanSource(files: files, assets: plan.assets, root: plan.root, app: plan.app,
                                       experience: plan.experience, version: plan.version)
     }
 }

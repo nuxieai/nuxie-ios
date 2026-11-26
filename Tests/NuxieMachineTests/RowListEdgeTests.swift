@@ -193,7 +193,7 @@ final class RowListEdgeTests: XCTestCase {
             files: [NuxieMachineSourceFile(path: "main.nux", text: main + "\n"),
                     NuxieMachineSourceFile(path: "plans.nux", text: plans + "\n"),
                     NuxieMachineSourceFile(path: "card.nux", text: card + "\n")],
-            root: "main", app: "app", experience: "rows", version: 1)
+            assets: [], root: "main", app: "app", experience: "rows", version: 1)
     }
 }
 #endif

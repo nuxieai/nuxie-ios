@@ -14,17 +14,51 @@ package struct NuxieMachineSourceFile: Equatable, Sendable {
     }
 }
 
-/// What a session compiles: the files, the root file's path without `.nux`,
-/// and the header's app, Experience and version.
+/// One file of the Experience's folder that is not a source file, as the
+/// host found it: facts about it, never its bytes. A view lays a picture
+/// out from its size in pixels before any bytes exist; the bytes come from
+/// a byte source when a presentation that shows the file opens
+/// ([`NuxieMachineByteSource`]).
+package struct NuxieMachineAsset: Equatable, Sendable {
+    package enum Kind: Equatable, Sendable {
+        /// A PNG, JPEG or WebP file whose header gives its size in pixels.
+        case picture(width: UInt32, height: UInt32)
+        /// A TTF or OTF file.
+        case font
+        /// Any other file, a file named as a picture whose header gives no
+        /// size among them.
+        case other
+    }
+
+    /// Its path from the folder, `/` between its parts, as an `image`
+    /// names it (`assets/hero.png`).
+    package let path: String
+    package let kind: Kind
+    /// How many bytes it holds.
+    package let byteCount: UInt64
+
+    package init(path: String, kind: Kind, byteCount: UInt64) {
+        self.path = path
+        self.kind = kind
+        self.byteCount = byteCount
+    }
+}
+
+/// What a session compiles: the files, the folder's other files beside
+/// them, the root file's path without `.nux`, and the header's app,
+/// Experience and version.
 package struct NuxieMachinePlanSource: Equatable, Sendable {
     package let files: [NuxieMachineSourceFile]
+    package let assets: [NuxieMachineAsset]
     package let root: String
     package let app: String
     package let experience: String
     package let version: UInt32
 
-    package init(files: [NuxieMachineSourceFile], root: String, app: String, experience: String, version: UInt32) {
+    package init(files: [NuxieMachineSourceFile], assets: [NuxieMachineAsset], root: String, app: String,
+                 experience: String, version: UInt32) {
         self.files = files
+        self.assets = assets
         self.root = root
         self.app = app
         self.experience = experience
@@ -333,6 +367,8 @@ package final class NuxieMachineFrameAsks: @unchecked Sendable {
 package actor NuxieMachineEdge {
     private let session: NuxieMachineSession
     private let store: any NuxieMachineStore
+    /// Where the bytes of the folder's files a view shows come from.
+    private let bytes: any NuxieMachineByteSource
     /// The owner, told only by [`deliver`].
     private let owner: @Sendable (NuxieMachineEdgeReport) -> Void
 
@@ -494,9 +530,12 @@ package actor NuxieMachineEdge {
         }
     }
 
-    /// Compile the plan into a session that draws its own views: each
-    /// presentation is drawn from the compiled records by a player the
-    /// session drives. `onReport`
+    /// Compile the plan, with the rows of its folder's other files, into a
+    /// session that draws its own views: each presentation is drawn from
+    /// the compiled records by a player the session drives, with the bytes
+    /// of each file it shows asked of `bytes` before it opens. A program
+    /// that shows a file no row names is refused (`asset.missing`), as any
+    /// refusal is: this throws the compiler's text. `onReport`
     /// hears one report per delivery that did something for it: the fault
     /// when the delivery ended in one, otherwise what is shown and the rows
     /// it performs, in order. It is called inside the edge's turn, so it
@@ -504,13 +543,15 @@ package actor NuxieMachineEdge {
     package init(
         plan: NuxieMachinePlanSource,
         store: any NuxieMachineStore,
+        bytes: any NuxieMachineByteSource,
         onReport: @escaping @Sendable (NuxieMachineEdgeReport) -> Void
     ) throws {
         let session = try NuxieMachineSession(
-            files: plan.files.map { ($0.path, $0.text) }, root: plan.root,
+            files: plan.files.map { ($0.path, $0.text) }, assets: plan.assets, root: plan.root,
             app: plan.app, experience: plan.experience, version: plan.version)
         self.session = session
         self.store = store
+        self.bytes = bytes
         self.owner = onReport
     }
 
@@ -1234,11 +1275,13 @@ package actor NuxieMachineEdge {
 
     // MARK: Compiled views
 
-    /// A presentation the session shows, opened by the sync: a player on the compiled records, at the artboard its
-    /// component is drawn in, with the session's driver for this
-    /// presentation set on it once. The writes the presenting step made are
-    /// held for that driver and land in the player's first step. None, with
-    /// the edge stopped, when any of it fails.
+    /// A presentation the session shows, opened by the sync: a player on
+    /// the compiled records, at the artboard its component is drawn in,
+    /// with every asset of the records filled ([`openRecords`]) and the
+    /// session's driver for this presentation set on it once. The writes
+    /// the presenting step made are held for that driver and land in the
+    /// player's first step. None, with the edge stopped, when any of it
+    /// fails.
     private func openPlayer(for presented: NuxieMachinePresented,
                             _ delivery: inout Delivery) async -> NuxieNativeRuntime? {
         let route = presented.route
@@ -1246,8 +1289,8 @@ package actor NuxieMachineEdge {
         do {
             let records = try session.sceneRecords()
             let artboard = try session.sceneArtboard(for: presented.shown)
-            let font = try session.scenePlatformFont()
-            player = try await Self.openRecords(records, artboard: artboard, platformFont: font)
+            let assets = try session.sceneAssets()
+            player = try await Self.openRecords(records, artboard: artboard, assets: assets, from: bytes)
         } catch NuxieMachineError.noArtboard {
             fail(NuxieMachineEdgeFault(code: "edge.no-view",
                 detail: "present \(route) as \(presented.shown.instance); its component has no view"), &delivery)
@@ -1285,36 +1328,61 @@ package actor NuxieMachineEdge {
     }
 
     /// The compiled records opened on the engine at `artboard`, on its state
-    /// machine, with no view model. Text in a compiled view names no font,
-    /// so it is drawn in the platform's own: this device's system face,
-    /// supplied as the SDK supplies a published Screen's System font, into
-    /// the one asset the session names. The records hold no other asset.
-    private static func openRecords(_ records: Data, artboard: Int, platformFont: Int?) async throws
-        -> NuxieNativeRuntime
-    {
-        let assets = try await NuxieNativeRuntime.inspectAssets(bytes: records)
-        var leases: [ExperienceRuntimeSystemFontCache.Lease] = []
+    /// machine, with no view model, and every asset the records hold filled
+    /// before the import, as the session lists them by position
+    /// (`assets`): nothing is drawn with a picture missing, and nothing
+    /// arrives later. Text in a compiled view names no font, so the
+    /// platform font is this device's system face, supplied as the SDK
+    /// supplies a published Screen's System font. Each picture is the
+    /// bytes `source` gives for its path in the folder, asked for here, and
+    /// the import waits for every answer. A path the source has no bytes
+    /// for stops the edge with `edge.unsupplied-asset`, naming it. The
+    /// positions stay here: they become the import's asset ordinals and
+    /// nothing else sees them. The records' own catalog
+    /// ([`NuxieNativeRuntime.inspectAssets`]) is read only to give the
+    /// import what it expects.
+    private static func openRecords(_ records: Data, artboard: Int, assets: [NuxieMachineSceneAsset],
+                                    from source: any NuxieMachineByteSource) async throws -> NuxieNativeRuntime {
         var external: [Int: Data] = [:]
-        for asset in assets where !asset.isEmbedded {
-            guard asset.kind == .font, asset.ordinal == platformFont else {
-                throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
-                    detail: "the compiled records need \(asset.name), which is not the platform's font")
+        var platformFont: [Int] = []
+        for (position, asset) in assets.enumerated() {
+            switch asset {
+            case .platformFont:
+                platformFont.append(position)
+            case .picture(let path):
+                let given: Data
+                do {
+                    given = try await source.bytes(for: path)
+                } catch {
+                    throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
+                        detail: "no bytes for \(path), which a view shows: \(error)")
+                }
+                guard !given.isEmpty else {
+                    throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
+                        detail: "no bytes for \(path), which a view shows: the source gave none")
+                }
+                external[position] = given
             }
-            // The regular face: a compiled view names no weight yet.
-            let lease = try ExperienceRuntimeSystemFontCache.shared.prepare(weight: "400", style: "normal")
-            leases.append(lease)
-            external[asset.ordinal] = lease.candidate.bytes
         }
-        if let platformFont, external[platformFont] == nil {
-            throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
-                detail: "the compiled records have no font asset at \(platformFont)")
+        let expected = try await NuxieNativeRuntime.inspectAssets(bytes: records)
+        var leases: [ExperienceRuntimeSystemFontCache.Lease] = []
+        do {
+            for position in platformFont {
+                // The regular face: a compiled view names no weight.
+                let lease = try ExperienceRuntimeSystemFontCache.shared.prepare(weight: "400", style: "normal")
+                leases.append(lease)
+                external[position] = lease.candidate.bytes
+            }
+        } catch {
+            ExperienceRuntimeSystemFontCache.shared.didFailImport(leases)
+            throw error
         }
         do {
             // A phone's size in points until the owner lays it out at its
             // view's size, before the first step.
             let player = try await NuxieNativeRuntime.open(
                 bytes: records, artboardIndex: artboard, player: .defaultScene, pixelWidth: 390, pixelHeight: 844,
-                importMode: .configured(moduleName: "nuxie", expectedAssets: assets, externalAssets: external))
+                importMode: .configured(moduleName: "nuxie", expectedAssets: expected, externalAssets: external))
             ExperienceRuntimeSystemFontCache.shared.didImport(leases)
             return player
         } catch {

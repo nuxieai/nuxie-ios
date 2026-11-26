@@ -354,7 +354,7 @@ private final class Stack {
     init() throws {
         let owner = self.owner
         edge = try NuxieMachineEdge(plan: Self.plan(), store: NuxieMachineStandInStore(),
-                                    onReport: { owner.heard($0) })
+                                    bytes: NoFolderFiles(), onReport: { owner.heard($0) })
     }
 
     func advance() -> Int64 {
@@ -437,7 +437,7 @@ private final class Stack {
         return NuxieMachinePlanSource(
             files: [NuxieMachineSourceFile(path: "main.nux", text: try text("main")),
                     NuxieMachineSourceFile(path: "card.nux", text: try text("card"))],
-            root: "main", app: "app", experience: "stack", version: 1)
+            assets: [], root: "main", app: "app", experience: "stack", version: 1)
     }
 }
 
