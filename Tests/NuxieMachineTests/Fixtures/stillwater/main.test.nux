@@ -7,7 +7,7 @@ test "the offer waits for her to come back"
   app closes
   clock to 18:00
   expect route none
-  expect held client
+  expect held server
   clock to 20:00
   app opens
   expect route offer
