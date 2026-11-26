@@ -93,15 +93,17 @@ package enum NuxieMachineScreenReaderScroll {
     }
 
     /// Which page of how many a box `length` points long shows, scrolled to
-    /// `position` of `range`: the content is `range + length` long and
-    /// holds `max(1, ceil(content / length))` pages; at its end (within
-    /// half a point of `range`) the box shows the last, otherwise the page
-    /// its start is on.
+    /// `position` of `range`, counted in page steps ([`pageStep`]), so each
+    /// page a screen reader moves reaches the next: the first page is at
+    /// the top and one more starts at each step, the last at the end,
+    /// `1 + ceil(range / step)` in all (half a point short of a whole step
+    /// adds none). Within half a point of `range` the box shows the last;
+    /// short of it, the step it is nearest, never the last.
     package static func shownPage(position: CGFloat, range: CGFloat, length: CGFloat) -> (page: Int, of: Int) {
-        let length = max(length, 1)
-        let pages = max(1, Int(((range + length) / length).rounded(.up)))
+        let step = pageStep(length)
+        let pages = 1 + Int((max(range - 0.5, 0) / step).rounded(.up))
         if position >= range - 0.5 { return (pages, pages) }
-        return (min(pages, Int((max(position, 0) / length).rounded(.down)) + 1), pages)
+        return (min(pages - 1, Int((max(position, 0) / step + 0.5).rounded(.down)) + 1), pages)
     }
 
     /// The line for `region` after a page moved it along y (`vertical`) or

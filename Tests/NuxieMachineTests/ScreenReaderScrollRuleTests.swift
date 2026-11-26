@@ -225,21 +225,31 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         XCTAssertEqual(NuxieMachineScreenReaderScroll.pageStep(0.5), 1)
     }
 
-    /// The page line counts pages of the content, the range plus the box:
-    /// the top of a region 3.2 boxes long shows page 1 of 4, its end (within
-    /// half a point) page 4 of 4, and between, the page its start is on.
-    func testThePageLineCountsThePagesOfTheContent() {
+    /// The page line counts in page steps, so each page moved reaches the
+    /// next: a box 844 points long steps 796, and a range of two whole
+    /// steps reads page 1 of 3 at its top, 2 of 3 one step down and 3 of 3
+    /// at its end. A range that is not a whole number of steps ends on a
+    /// short last stop, and the stop before it is not the last page.
+    func testThePageLineCountsInPageSteps() {
         func line(_ position: CGFloat, _ range: CGFloat, _ length: CGFloat) -> String {
             let at = NuxieMachineScreenReaderScroll.shownPage(position: position, range: range, length: length)
             return NuxieMachineScreenReaderScroll.pageWords(at.page, of: at.of)
         }
-        XCTAssertEqual(line(0, 220, 100), "Page 1 of 4", "the top")
-        XCTAssertEqual(line(150, 220, 100), "Page 2 of 4")
-        XCTAssertEqual(line(210, 220, 100), "Page 3 of 4")
-        XCTAssertEqual(line(219.6, 220, 100), "Page 4 of 4", "within half a point of the end")
-        XCTAssertEqual(line(220, 220, 100), "Page 4 of 4", "the end")
-        XCTAssertEqual(line(796, 1592, 844), "Page 1 of 3",
-                       "one page from the top, 48 points short of a box, is still on the first page")
+        XCTAssertEqual(line(0, 1592, 844), "Page 1 of 3", "the top")
+        XCTAssertEqual(line(796, 1592, 844), "Page 2 of 3", "one step down")
+        XCTAssertEqual(line(1592, 1592, 844), "Page 3 of 3", "the end")
+        XCTAssertEqual(line(1591.6, 1592, 844), "Page 3 of 3", "within half a point of the end")
+        XCTAssertEqual(line(0, 1592.4, 844), "Page 1 of 3", "half a point over two steps adds no page")
+
+        XCTAssertEqual(line(0, 1000, 844), "Page 1 of 3")
+        XCTAssertEqual(line(796, 1000, 844), "Page 2 of 3", "one step down, short of the end")
+        XCTAssertEqual(line(990, 1000, 844), "Page 2 of 3", "short of the end is never the last page")
+        XCTAssertEqual(line(1000, 1000, 844), "Page 3 of 3", "the short last stop")
+        XCTAssertEqual(line(300, 1000, 844), "Page 1 of 3", "nearer the top than the next step")
+        XCTAssertEqual(line(500, 1000, 844), "Page 2 of 3", "nearer the next step")
+
+        XCTAssertEqual(line(0, 284.6, 844), "Page 1 of 2", "less than a step: two pages")
+        XCTAssertEqual(line(284.6, 284.6, 844), "Page 2 of 2")
     }
 
     /// A region's line reads its position along the axis the page moved: y
@@ -248,7 +258,8 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         let region = NuxieNativeScrollRegion(bounds: CGRect(x: 0, y: 0, width: 200, height: 844),
                                              canScroll: Self.top | Self.left, parent: nil,
                                              scroll: CGPoint(x: 400, y: 0), range: CGSize(width: 600, height: 0))
-        XCTAssertEqual(NuxieMachineScreenReaderScroll.pageLine(region, vertical: false), "Page 3 of 4")
+        XCTAssertEqual(NuxieMachineScreenReaderScroll.pageLine(region, vertical: false), "Page 4 of 5",
+                       "x: a box 200 wide steps 152, so 600 is five pages and 400 nearest the fourth")
         XCTAssertEqual(NuxieMachineScreenReaderScroll.pageLine(region, vertical: true), "Page 1 of 1")
         let unread = NuxieNativeScrollRegion(bounds: Self.surface, canScroll: Self.bottom, parent: nil)
         XCTAssertNil(NuxieMachineScreenReaderScroll.pageLine(unread, vertical: true))

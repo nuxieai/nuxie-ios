@@ -595,8 +595,7 @@ final class ScreenReaderScrollingTests: XCTestCase {
 
             XCTAssertTrue(title.accessibilityScroll(.up), "up shows what is below")
             XCTAssertTrue(posted.isEmpty, "nothing is told before the page moved")
-            let length = page.bounds.height
-            let pages = max(1, Int(((range + length) / length).rounded(.up)))
+            let pages = 1 + Int(((range - 0.5) / step).rounded(.up))
             XCTAssertGreaterThan(pages, 1)
             let down = try await reader.screenReaderFrames(kept: "3-paged-down")
             XCTAssertEqual(posted.map { $0 as? String }, ["Page \(pages) of \(pages)"],
@@ -838,9 +837,8 @@ private final class Reader {
     /// A drag by one pointer from `start`, `by` points down (up when
     /// negative), in 30 frames, held still for 10 more, then let go and
     /// left to settle for four seconds of frames. None is drawn. The settle
-    /// is a fixed count, not "until the step stops asking": with the
-    /// semantic tree built, the engine's step keeps asking for another
-    /// frame even once the page is still. Held still before it is let go,
+    /// is a fixed count, enough for the spring back, not "until the step
+    /// reports itself settled". Held still before it is let go,
     /// the drag carries no flick, and four seconds outlast the spring back
     /// from past the end.
     func drag(from start: CGPoint, by distance: CGFloat) async throws {
