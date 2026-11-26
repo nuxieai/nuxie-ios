@@ -1,0 +1,29 @@
+font "Brand" = "assets/brand.ttf"
+
+component Hours
+  platforms ios android
+
+  entry
+    on event "opened"
+    do open
+
+  routes
+    words  Words(close=close)  cover
+
+  action open
+    go(words)
+
+  action close
+    dismiss("closed")
+    exit
+
+component Words
+  props
+    close: action
+
+  view
+    column width=100% height=100% padding=20 gap=20 align-items=flex-start background-color=#0d1214
+      text "Quiet hours begin at nine" font-family="Brand" font-size=24 color=#eef3f1 id="brand"
+      text "Quiet hours begin at nine" font-size=24 color=#eef3f1 id="phone"
+      button id="close" press=close
+        text "Close" font-family="Brand" font-size=16 color=#eef3f1
