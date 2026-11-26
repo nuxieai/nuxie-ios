@@ -5,7 +5,9 @@
 // in ScreenReaderScrollRuleTests (`testTheRevealRow`, `testTheHeldTapRow`,
 // `testTheAskedPageRow`, `testThePageInFlightRow`, `testTheAnnouncementRow`,
 // `testDetachingLeavesNothingPending`); the Screen going away, on the engine,
-// by ScreenReaderScrollingTests' `testTheSurfaceGoingAwayDropsEverything`.
+// by ScreenReaderScrollingTests' `testTheSurfaceGoingAwayDropsEverything`,
+// `testAnySequenceEndingInADetachLetsTheLoopRest` and
+// `testATapQueuedForAScreenWithNoSizeIsDropped`.
 //
 // Every input below reaches the rule. Each request a frame carried gets its
 // answer, even when the Screen was not stepped or drew nothing; a Screen that
@@ -41,10 +43,14 @@
 //   answer stale                sent again, at most `staleRetries` times
 //   answer refused              let go
 //   answer for an earlier node  nothing (stale or refused)
+//   answer after a detach       nothing: the reveal no longer counts
 //   capture loses the node      let go at the next take (its element goes with it)
 //   VoiceOver turns off         nothing: a reveal under way finishes, one waiting
 //                               still goes (one move of the page, no harm)
-//   Screen leaves its window    dropped (`detach`); `stop` drops it too
+//   Screen leaves its window,   dropped (`detach`); `stop` drops it too
+//     is covered or leaves the
+//     loop's Screens
+//   Screen loses its size       kept, asking for no frame until the size is back
 //
 // Held tap (`heldTap`)
 //   same node tapped again      answers false: one tap waits
@@ -63,7 +69,10 @@
 //     past retries, or refused  else dropped
 //   capture loses the node      dropped at the next take
 //   VoiceOver turns off         nothing: it still goes
-//   Screen leaves its window    dropped
+//   Screen leaves its window,   dropped
+//     is covered or leaves the
+//     loop's Screens
+//   Screen loses its size       kept, asking for no frame until the size is back
 //
 // Asked page (`asked`: at most one, as its node and way)
 //   another page asked, any     replaces it: the latest wins (pages do not add up)
@@ -76,7 +85,10 @@
 //   capture loses the node, or  dropped when its frame takes it; its region is found
 //     no region around it can   from the node in that frame's capture, never kept
 //     move that way             from an earlier one
-//   Screen leaves its window    dropped
+//   Screen leaves its window,   dropped
+//     is covered or leaves the
+//     loop's Screens
+//   Screen loses its size       kept, asking for no frame until the size is back
 //
 // Page in flight (`paging`: one at a time)
 //   a page asked                nothing: it is the asked page and waits
@@ -88,7 +100,10 @@
 //                               `staleRetries` times, unless a newer page was asked
 //                               (then that one goes instead)
 //   answer to another request   nothing
-//   Screen leaves its window    dropped
+//   Screen leaves its window,   dropped; its answer, when it comes, changes nothing
+//     is covered or leaves the
+//     loop's Screens
+//   Screen loses its size       its answer still comes (the frame carried it)
 //
 // Page announcement (`announcing`: a page that moved, not yet told)
 //   a page asked                nothing
@@ -100,7 +115,46 @@
 //                               the region found again from the page's node
 //   capture loses the node or   told with nothing to say
 //     the region
-//   Screen leaves its window    dropped untold
+//   Screen leaves its window,   dropped untold
+//     is covered or leaves the
+//     loop's Screens
+//   Screen loses its size       held: no frame is drawn, and none is asked for
+//
+// Queued tap (the controller's `semanticTap`: a tap on a node in view, or a
+// held tap whose node now offers one, waiting for the next frame)
+//   another activation          the newest wins (Held tap row); one of the same
+//                               snapshot is refused
+//   next frame, Screen stepped  sent with that frame, beside its pointers
+//   next frame, Screen cannot   dropped: its answer could not reach it, and kept
+//     be stepped                it would keep the loop from resting
+//   Screen leaves its window,   dropped
+//     is covered or leaves the
+//     loop's Screens; the loop
+//     stops
+//
+// What keeps frames coming. The loop rests once no Screen has input
+// (`hasInput`: pointers, a queued tap, or, while it can be stepped, anything
+// in the rows above, `wantsFrames`), nothing asked for a frame since the last
+// began, and the engine's drawn step does not ask for another. Every piece of
+// state that feeds those, and what each of four changes does to it:
+//
+//   state                  leaves window   loses size      covered         leaves Screens
+//   reveal, settling,      dropped         kept; no frame  dropped         dropped
+//     held tap, asked                      asked
+//     page, page in
+//     flight, page line
+//   stale counts, reveal   reset           kept            reset           reset
+//     counts, rest window
+//   queued tap             dropped         dropped at the  dropped         dropped
+//                                          next take
+//   pointers (not this     kept; sent with kept; sent with kept; sent with kept, never read
+//     PR's)                the next frame  the next frame  the next frame
+//   a frame asked          one frame, then one frame, then one frame, then one frame, then
+//     (`requestFrame`)     rest            rest            rest            rest
+//   the sheet pan's touch  cleared         kept until the  kept until the  kept until the
+//     and regions (not                     touch ends      touch ends      touch ends
+//     this PR's; never
+//     asks for a frame)
 
 import CoreGraphics
 import Foundation
@@ -639,6 +693,9 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
             case .reveal(_, let node):
                 switch result.outcome {
                 case .moved:
+                    // Only a reveal this rule sent and still counts: after a
+                    // detach none is, and its answer changes nothing.
+                    guard revealing == node else { continue }
                     settling = node
                     moved = true
                 case .stayed:

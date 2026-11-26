@@ -40,8 +40,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The Screen under a sheet keeps its elements, hidden, so its place is
     /// kept for when the sheet has gone, and none of them takes an action
     /// until then.
+    /// Covered, it drops what the screen reader asked of it and has not
+    /// been sent ([`dropScreenReaderRequests`]): the reader's focus is on
+    /// what covers it, and a held tap must not press a node under a sheet.
     package var reachable = true {
-        didSet { viewIfLoaded?.accessibilityElementsHidden = !reachable }
+        didSet {
+            viewIfLoaded?.accessibilityElementsHidden = !reachable
+            if !reachable { dropScreenReaderRequests() }
+        }
     }
 
     /// Frames drawn to the screen.
@@ -148,7 +154,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
             guard let self else { return }
             // Out of its window the Screen is stepped no more: what the
             // screen reader asked of it goes, so nothing waits for frames.
-            if surface.window == nil { scrolling.detach() }
+            if surface.window == nil { dropScreenReaderRequests() }
             loop?.requestFrame()
         }
         surface.translatesAutoresizingMaskIntoConstraints = false
@@ -465,7 +471,16 @@ package final class NuxieMachineScreenViewController: UIViewController {
         if let told = scrolling.ended(scrolled, settled: settled, drawn: drawn) {
             semantics.announcePageScrolled(told.line)
         }
-        if scrolling.wantsFrames { loop?.requestFrame() }
+        if hasSize, scrolling.wantsFrames { loop?.requestFrame() }
+    }
+
+    /// The Screen left its window, was covered or left the loop: the tap it
+    /// queued and everything it asked of its `scroll`s go, so nothing of the
+    /// screen reader's keeps a frame coming. Answers to requests already in
+    /// a frame still arrive and change nothing.
+    fileprivate func dropScreenReaderRequests() {
+        semanticTap = nil
+        scrolling.detach()
     }
 
     /// The pointers that arrived for this Screen since the last frame took
@@ -487,9 +502,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// not been sent, for checks.
     package var screenReaderScrolling: NuxieMachineScreenReaderScrolling { scrolling }
 
-    /// Whether input waits for the next frame: pointers, a tap, or a move
-    /// of a `scroll` the screen reader asked for.
-    fileprivate var hasInput: Bool { !pointers.isEmpty || semanticTap != nil || (hasSize && scrolling.wantsFrames) }
+    /// The screen reader's tap queued for the next frame, for checks.
+    package var queuedTap: NuxieMachineSemanticTap? { semanticTap }
+
+    /// Whether input waits for the next frame: pointers, a tap, or, while
+    /// the Screen can be stepped, a move of a `scroll` the screen reader
+    /// asked for.
+    package var hasInput: Bool { !pointers.isEmpty || semanticTap != nil || (hasSize && scrolling.wantsFrames) }
 
     private func updateAccessibility() {
         container.accessibilityValue = framesDrawn > 0 ? "\(statusText) Frames drawn: \(framesDrawn)." : "loading"
@@ -564,9 +583,21 @@ package final class NuxieMachineScreenLoop {
 
     /// The native presentations the loop draws, bottom first, as the owner
     /// holds them.
+    /// A Screen that leaves the list drops what the screen reader asked of
+    /// it ([`NuxieMachineScreenViewController.dropScreenReaderRequests`]).
     package var screens: [NuxieMachineScreenViewController] = [] {
-        didSet { requestFrame() }
+        didSet {
+            for screen in oldValue where !screens.contains(where: { $0 === screen }) {
+                screen.dropScreenReaderRequests()
+            }
+            requestFrame()
+        }
     }
+
+    /// Whether any Screen has input waiting for a frame
+    /// ([`NuxieMachineScreenViewController.hasInput`]): while none has, and
+    /// nothing else asks, the loop rests.
+    package var inputWaits: Bool { screens.contains { $0.hasInput } }
 
     package private(set) var stopped = false
     // Touched off the main actor only by `deinit`, after every other use.
@@ -662,27 +693,39 @@ package final class NuxieMachineScreenLoop {
         guard !stopped, !frameInFlight else { return }
         frameRequested = false
         frameInFlight = true
-        // The pointers and the screen reader's tap go with the presentation
-        // they touched, the top one that has any; the rest wait for the next
-        // frame. The frame's wakes run first and may end it, and the edge
-        // then drops them.
-        let touching = screens.last { $0.hasInput }
-        let touched = touching?.shown
-        let pointers = touching?.takePointers() ?? []
-        // A Screen that cannot be stepped (no window or size) is sent no
-        // screen reader request: its answer would never reach it.
-        let steppable = touching?.hasSize == true
-        let scrolls = steppable ? touching?.takeScrolls() ?? [] : []
-        let semanticTaps = steppable ? touching?.takeSemanticTaps() ?? [] : []
+        let input = takeInput()
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.inLane {
-                await self.runFrame(pointers: pointers, semanticTaps: semanticTaps, scrolls: scrolls,
-                                    touched: touched, touching: touching, elapsedSeconds: elapsed)
+                await self.runFrame(pointers: input.pointers, semanticTaps: input.semanticTaps,
+                                    scrolls: input.scrolls, touched: input.touching?.shown,
+                                    touching: input.touching, elapsedSeconds: elapsed)
             }
         }
+    }
+
+    /// What the next frame carries, taken from the Screens now. The
+    /// pointers and the screen reader's requests go with the presentation
+    /// they touched, the top one that has any; the rest wait for the next
+    /// frame. The frame's wakes run first and may end it, and the edge then
+    /// drops them. A Screen that cannot be stepped (no window or size) is
+    /// sent no screen reader request, since its answer would not reach it,
+    /// and the tap it queued is dropped, so it cannot keep the loop from
+    /// resting; its pointers go as before.
+    package func takeInput() -> (touching: NuxieMachineScreenViewController?, pointers: [NuxieNativePointerEvent],
+                                 scrolls: [NuxieMachineScrollRequest], semanticTaps: [NuxieMachineSemanticTap]) {
+        guard let touching = screens.last(where: { $0.hasInput }) else { return (nil, [], [], []) }
+        let pointers = touching.takePointers()
+        guard touching.hasSize else {
+            _ = touching.takeSemanticTaps()
+            return (touching, pointers, [], [])
+        }
+        // The scrolls first: a tap that waited behind a reveal joins the
+        // queued tap there.
+        let scrolls = touching.takeScrolls()
+        return (touching, pointers, scrolls, touching.takeSemanticTaps())
     }
 
     private func runFrame(pointers: [NuxieNativePointerEvent], semanticTaps: [NuxieMachineSemanticTap],
@@ -754,8 +797,7 @@ package final class NuxieMachineScreenLoop {
     /// reader's tap waiting, or on screen the engine's step.
     private func rest(after frame: NuxieMachineFrame, drawing: Bool) {
         guard !stopped else { return }
-        let input = screens.contains { $0.hasInput }
-        let another = frameRequested || input || (drawing && frame.keepGoing)
+        let another = frameRequested || inputWaits || (drawing && frame.keepGoing)
         displayLink?.isPaused = !another
         if !another { lastTimestamp = nil }
     }

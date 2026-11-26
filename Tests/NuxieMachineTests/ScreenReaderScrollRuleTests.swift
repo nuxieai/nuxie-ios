@@ -952,7 +952,8 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
     }
 
     /// Whatever was asked and in whatever state, a Screen that goes away
-    /// or leaves its window leaves nothing pending and asks for no frames.
+    /// or leaves its window leaves nothing pending and asks for no frames,
+    /// and the answers to a frame still in flight then change nothing.
     func testDetachingLeavesNothingPending() throws {
         let out = try Self.capture([node(1, Self.below(0), actions: 0), node(2, Self.below(100), actions: 0),
                                     node(3, CGRect(x: 24, y: 400, width: 160, height: 44), actions: Self.tap)],
@@ -988,6 +989,12 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
             scrolling.detach()
             XCTAssertEqual(scrolling, NuxieMachineScreenReaderScrolling(), "round \(round)")
             XCTAssertFalse(scrolling.wantsFrames, "round \(round)")
+            // The answers to what the last frame carried still come, and
+            // change nothing.
+            let outcome: NuxieMachineScrollOutcome = [.moved, .stayed, .stale, .refused][next(4)]
+            scrolling.ended(taken.map { NuxieMachineScrolled($0, outcome) }, settled: next(2) == 0,
+                            drawn: next(2) == 0 ? nil : out)
+            XCTAssertFalse(scrolling.wantsFrames, "round \(round): \(outcome) after the detach")
         }
     }
 

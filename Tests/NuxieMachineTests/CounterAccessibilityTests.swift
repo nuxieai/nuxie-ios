@@ -960,6 +960,128 @@ final class ScreenReaderScrollingTests: XCTestCase {
             throw error
         }
     }
+
+    /// Whatever the reader asked, in whatever order, a Screen whose surface
+    /// leaves its window has no input waiting and the loop may rest, and the
+    /// answers to what a frame took before still come and change nothing:
+    /// 200 random sequences of focus, focus lost, activations (held taps
+    /// and queued ones), scroll gestures, frames taking what is asked,
+    /// answers to what they took, and the Screen covered and uncovered, each
+    /// ending with the surface leaving its window.
+    @MainActor
+    func testAnySequenceEndingInADetachLetsTheLoopRest() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-detach")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            let opened = try await reader.screenReaderFrames(kept: "2-at-rest")
+            let controller = reader.controller
+            let elements = [try reader.element("Restore purchases"), try reader.element("About the trial"),
+                            try reader.element(try Self.buttonInView(opened.last, on: reader).label),
+                            try reader.element(startingWith: "Ten quiet minutes,")]
+            reader.loop.screens = [controller]
+            let view = try XCTUnwrap(controller.view)
+            let directions: [UIAccessibilityScrollDirection] = [.up, .down, .left, .right, .next, .previous]
+            var seed: UInt64 = 0x2545_F491_4F6C_DD1D
+            func next(_ bound: Int) -> Int {
+                seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                return Int((seed >> 33) % UInt64(bound))
+            }
+            var queued = 0
+            for round in 0..<200 {
+                if view.window == nil {
+                    reader.window.addSubview(view)
+                    view.frame = reader.window.bounds
+                    view.layoutIfNeeded()
+                }
+                var taken: [NuxieMachineScrollRequest] = []
+                for _ in 0..<next(14) {
+                    let element = elements[next(elements.count)]
+                    switch next(8) {
+                    case 0: element.accessibilityElementDidBecomeFocused()
+                    case 1: element.accessibilityElementDidLoseFocus()
+                    case 2, 3: _ = element.accessibilityActivate()
+                    case 4: _ = element.accessibilityScroll(directions[next(directions.count)])
+                    case 5: taken = reader.loop.takeInput().scrolls
+                    case 6:
+                        let outcome: NuxieMachineScrollOutcome = [.moved, .stayed, .stale, .refused][next(4)]
+                        controller.frameEnded(taken.map { NuxieMachineScrolled($0, outcome) }, settled: next(2) == 0)
+                        taken = []
+                    default:
+                        controller.reachable = false
+                        controller.reachable = true
+                    }
+                }
+                if controller.queuedTap != nil { queued += 1 }
+                view.removeFromSuperview()
+                XCTAssertEqual(controller.screenReaderScrolling, NuxieMachineScreenReaderScrolling(), "round \(round)")
+                XCTAssertNil(controller.queuedTap, "round \(round): the queued tap goes")
+                XCTAssertFalse(controller.hasInput, "round \(round): no input waits")
+                XCTAssertFalse(reader.loop.inputWaits, "round \(round): the loop may rest")
+                let outcome: NuxieMachineScrollOutcome = [.moved, .stayed, .stale, .refused][next(4)]
+                controller.frameEnded(taken.map { NuxieMachineScrolled($0, outcome) }, settled: next(2) == 0)
+                XCTAssertFalse(controller.screenReaderScrolling.wantsFrames, "round \(round): \(outcome) after it")
+                XCTAssertFalse(reader.loop.inputWaits, "round \(round): the loop may still rest")
+            }
+            XCTAssertGreaterThan(queued, 10, "queued taps were among what the detach dropped")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// A tap queued for a Screen that then loses its size, still in its
+    /// window, is dropped by the next frame's take, not kept, so the loop
+    /// may rest. A reveal the reader asked for is kept and asks for no frame
+    /// until the size is back.
+    @MainActor
+    func testATapQueuedForAScreenWithNoSizeIsDropped() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-no-size")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            let opened = try await reader.screenReaderFrames(kept: "2-at-rest")
+            let controller = reader.controller
+            let button = try Self.buttonInView(opened.last, on: reader)
+            reader.loop.screens = [controller]
+            try reader.element("Restore purchases").accessibilityElementDidBecomeFocused()
+            XCTAssertTrue(try reader.element(button.label).accessibilityActivate())
+            XCTAssertEqual(controller.queuedTap?.nodeID, button.id, "\(button.label)'s tap is queued")
+
+            let view = try XCTUnwrap(controller.view)
+            view.frame = CGRect(x: 0, y: 0, width: 0, height: 0)
+            view.layoutIfNeeded()
+            XCTAssertNotNil(view.window, "still in its window")
+            XCTAssertTrue(reader.loop.inputWaits, "the queued tap waits for the next frame")
+            let input = reader.loop.takeInput()
+            XCTAssertTrue(input.touching === controller)
+            XCTAssertEqual(input.semanticTaps, [], "a Screen that cannot be stepped is sent no tap")
+            XCTAssertEqual(input.scrolls, [], "nor a move")
+            XCTAssertNil(controller.queuedTap, "the tap is dropped")
+            XCTAssertFalse(reader.loop.inputWaits, "the loop may rest")
+            XCTAssertTrue(controller.screenReaderScrolling.wantsFrames, "the reveal is kept")
+
+            view.frame = reader.window.bounds
+            view.layoutIfNeeded()
+            XCTAssertTrue(reader.loop.inputWaits, "with its size back the reveal asks for frames again")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// A button wholly on the surface and offering a tap in `frame`.
+    @MainActor
+    private static func buttonInView(_ frame: DrawnFrame, on reader: Reader) throws -> NuxieNativeSemanticNode {
+        let capture = try XCTUnwrap(frame.semantics)
+        return try XCTUnwrap(capture.tree.nodes.first {
+            $0.actions & 1 != 0 && !$0.label.isEmpty
+                && NuxieMachineScreenReaderScroll.isShown($0, in: capture.scrollRegions)
+                && reader.surface.bounds.contains($0.bounds)
+        }, "a button in view")
+    }
 }
 
 /// What a screen reader reads for one element.
