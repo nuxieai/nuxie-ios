@@ -964,7 +964,7 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     }
 
     /// A swipe down takes the sheet, and the record stays open: the evening
-    /// offer's waits, armed when the paywall opened at 09:00, are still owed
+    /// offer's tasks, armed when the paywall opened at 09:00, are still owed
     /// (a swipe down runs no `close`), so it waits for 18:00. With the clock
     /// moved to 21:00, both of the offer's moments are delivered, its start
     /// and its end, and the record ends.

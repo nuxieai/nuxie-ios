@@ -155,7 +155,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     }
 
     /// A swipe down pops the paywall, and the record stays open: the
-    /// evening offer's waits, armed when the paywall opened, are still owed,
+    /// evening offer's tasks, armed when the paywall opened, are still owed,
     /// and a swipe down runs no `close`. So the record asks for 18:00, the
     /// offer's start. Delivered then, the offer goes live with nothing
     /// presented and asks for 20:00, its end; delivered then, nothing is
@@ -187,7 +187,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             }, [.pop(instance: shown.instance)])
             XCTAssertTrue(closing.contains(.wakeAt(Self.evening)), "the offer's start is not asked for: \(closing)")
             let waiting = try await run.edge.recordOpen()
-            XCTAssertTrue(waiting, "a swipe down leaves the offer's waits owed")
+            XCTAssertTrue(waiting, "a swipe down leaves the offer's tasks owed")
             let noFault = await run.edge.fault
             XCTAssertNil(noFault)
             XCTAssertTrue(run.owner.dismissals.isEmpty, "a swipe down has already closed the sheet")
@@ -266,9 +266,9 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     /// normal close, as the machine's rows say: it pops the paywall with no
     /// `dismiss` row (the gesture has already closed the sheet), and the
     /// record stays open, asking for 18:00, the evening offer's start, whose
-    /// waits a swipe down leaves owed. The owner hears no dismissal and
+    /// tasks a swipe down leaves owed. The owner hears no dismissal and
     /// nothing faults. The store's answer, released after, goes to the
-    /// session; the offer's waits keep the record open, and it tells
+    /// session; the offer's tasks keep the record open, and it tells
     /// nothing.
     func testASwipeDownWhileThePurchaseWaitsIsANormalCloseAndTheOfferStillWaits() async throws {
         let run = try Run(holdingStore: true)
@@ -303,7 +303,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let failed = try await run.edge.slot("purchase_failed")
             XCTAssertEqual(failed, .bool(true), "the answer did not reach the record")
             let afterAnswer = try await run.edge.recordOpen()
-            XCTAssertTrue(afterAnswer, "the answer ended the record while the offer's waits are owed")
+            XCTAssertTrue(afterAnswer, "the answer ended the record while the offer's tasks are owed")
             let stillNoFault = await run.edge.fault
             XCTAssertNil(stillNoFault)
             XCTAssertEqual(run.owner.dismissals, [], "the answer tells nothing")
@@ -890,13 +890,13 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let after = await Array(edge.log.dropFirst(written))
             let noFault = await edge.fault
             XCTAssertNil(noFault, "\(after)")
-            // The swipe pops the paywall; the evening offer's waits keep the
+            // The swipe pops the paywall; the evening offer's tasks keep the
             // record open.
             XCTAssertEqual(after.filter(Self.isPresentation), [.pop(instance: shown.instance)])
             let plan = try await edge.slot("plan")
             XCTAssertEqual(plan, .enumeration("monthly"), "the Monthly tap landed before the swipe")
             let stillOpen = try await edge.recordOpen()
-            XCTAssertTrue(stillOpen, "the swipe ended the record while the offer's waits are owed")
+            XCTAssertTrue(stillOpen, "the swipe ended the record while the offer's tasks are owed")
             XCTAssertEqual(run.owner.dismissals, [])
             try await run.close()
         } catch {
@@ -1124,7 +1124,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
 
     /// A swipe down's close tells the owner that nothing is shown, with no
     /// dismissal and no end: its last row restates the wake for 18:00, the
-    /// evening offer's start, whose waits a swipe down leaves owed. (The end
+    /// evening offer's start, whose tasks a swipe down leaves owed. (The end
     /// it reaches once the offer has passed is in
     /// `testASwipeDownPopsThePaywallAndTheRecordEndsWhenTheOfferHasPassed`.)
     func testASwipeDownReportsThatNothingIsShownAndTheOffersWake() async throws {
@@ -1181,9 +1181,11 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
     // MARK: Waking and resting
 
     /// "Not now" leaves the evening offer owed and asks for a wake at 18:00.
-    /// Delivered then, the wake runs Stillwater's `show_offer`, which
-    /// presents the offer as a sheet: the edge opens it from the session's
-    /// records, as it opened the paywall, and the owner hears it shown.
+    /// Delivered then, the wake runs Stillwater's `offer_ready`, and with
+    /// her here its `evening_offer` task runs `show_offer` in the same
+    /// delivery, which presents the offer as a sheet: the edge opens it from
+    /// the session's records, as it opened the paywall, and the owner hears
+    /// it shown.
     func testAWakeAtTheEveningMomentOpensTheOffer() async throws {
         let run = try Run()
         do {
@@ -1715,11 +1717,12 @@ enum Fixture {
 
     /// Stillwater's plan with the evening's `show_offer` starting a purchase
     /// of the offer in place of presenting it, so the wake moves the record
-    /// on with nothing presented.
+    /// on with nothing presented. `show_offer` is run by the
+    /// `evening_offer` task, once the offer is ready and she is here.
     static func purchasingInTheEvening() throws -> NuxieMachinePlanSource {
         let plan = try load()
-        let presents = "  action show_offer\n    offer_due = false\n    go(offer)\n"
-        let purchases = "  action show_offer\n    offer_due = false\n"
+        let presents = "  action show_offer\n    ready = false\n    go(offer)\n"
+        let purchases = "  action show_offer\n    ready = false\n"
             + "    send bought = purchase(catalog[annual_offer])\n"
         let files = try plan.files.map { file -> NuxieMachineSourceFile in
             guard file.path == "main.nux" else { return file }
