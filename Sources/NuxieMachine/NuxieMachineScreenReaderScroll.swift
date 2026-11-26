@@ -1,3 +1,78 @@
+#if os(iOS) && !targetEnvironment(macCatalyst)
+// What a screen reader has asked of a machine Screen's `scroll`s and is not
+// done, and what each input does to it ([`NuxieMachineScreenReaderScrolling`]).
+// "Nothing" leaves it as it is. Every other cell is checked by its row's test
+// in ScreenReaderScrollRuleTests (`testTheRevealRow`, `testTheHeldTapRow`,
+// `testThePageInFlightRow`, `testTheQueuedPagesRow`,
+// `testTheAnnouncementRow`); the surface going away, on the engine, by
+// ScreenReaderScrollingTests' `testTheSurfaceGoingAwayDropsEverything`.
+//
+// "At rest" is a drawn frame whose step reported itself settled, or the last
+// of `stillFrames` drawn frames in a row in which no region's position changed
+// and the waited-on node's box moved less than `stillDistance`, each frame and
+// across the run
+// ([`NuxieMachineScreenReaderScroll.isAtRest`]). A frame that steps but is not
+// drawn shows no capture of its step, so it is never at rest.
+//
+// Reveal (`target`; `settling` once it moved)
+//   same node asked again       nothing
+//   another node asked          replaces it: the latest focus is the one revealed
+//   a page, either way          nothing
+//   frame not drawn             not at rest: no reveal goes, one moving stays moving
+//   answer moved                waits for rest (`settling`), then is checked again
+//   answer stayed               checked at the next rest: let go if it shows whole,
+//                               else sent again, at most once per region around it
+//   answer stale                sent again, at most `staleRetries` times
+//   answer refused              let go
+//   answer for an earlier node  nothing (stale or refused)
+//   capture loses the node      let go at the next take
+//   surface goes away           dropped (`stop` clears everything)
+//
+// Held tap (`heldTap`)
+//   same node tapped again      answers false: one tap waits
+//   another node tapped         replaces it, and its node is the one revealed
+//   a page, either way          nothing
+//   frame not drawn             not at rest: it does not go
+//   its reveal moved            waits for rest
+//   its reveal stayed, stale    goes at the next rest if its node then offers a tap,
+//     past retries, or refused  else dropped
+//   capture loses the node      dropped at the next take
+//   surface goes away           dropped
+//
+// Page in flight (`paging`: the one page a frame carries)
+//   a page asked, any node,     nothing: it is queued for a later frame
+//     region or way
+//   frame not drawn             nothing: its answer is a fact of the step
+//   answer moved                done; its region's line waits to be told
+//   answer stayed or refused    done, nothing told
+//   answer stale                queued again first: joined by its region's queued
+//                               page its way, dropped for one the other way; at
+//                               most `staleRetries` times
+//   answer to another request   nothing
+//   capture loses the region    the engine answers refused
+//   surface goes away           dropped
+//
+// Pages queued (`pages`: one per region, kept in the order asked)
+//   same region, same way       adds a page to it (from whichever node)
+//   same region, other way      replaces it: the latest way asked
+//   another region              a page of its own, after those asked before it
+//   frame not drawn             nothing: a page is a move by a distance and does
+//                               not wait for rest
+//   any answer                  nothing (answers touch only the page in flight)
+//   capture loses the node      dropped when its frame takes it; one whose node now
+//     or no region can move     moves no region that way too
+//   surface goes away           dropped
+//
+// Page announcement (`announcing`: a page that moved, not yet told)
+//   a page asked                nothing
+//   another page moved          replaced: the reader hears what shows last
+//   another page stayed, stale  nothing
+//     or refused
+//   frame not drawn             held: the capture on screen is from before the move
+//   frame drawn                 told, "Page n of m" read from that frame's capture
+//   capture loses the region    told with nothing to say
+//   surface goes away           dropped untold
+
 import CoreGraphics
 import Foundation
 import NuxieRuntime
@@ -157,27 +232,110 @@ package enum NuxieMachineScreenReaderScroll {
         case .showLeft: return (index, step, 0)
         }
     }
+
+    /// Drawn frames in a row that must change nothing before a Screen
+    /// whose step never reports itself settled (an animation that never
+    /// stops keeps it going) counts as at rest. One still frame is not
+    /// enough: a scroller turning at the end of a spring, or between two
+    /// steps of its animation, can draw the same box twice. Three at 60
+    /// frames a second is 50 milliseconds, short enough that a reveal on
+    /// such a page waits no longer than a person notices.
+    package static let stillFrames = 3
+
+    /// The most a waited-on node's box may move, at any edge, from one
+    /// drawn frame to the next and across the whole run of still frames, and
+    /// still count as still, in points: the half point [`isShown`] allows,
+    /// so a move that small cannot change whether the node shows whole. A
+    /// scroller easing to a stop creeps less than that each frame for its
+    /// last few frames; held to the whole run as well, rest comes only once
+    /// what is left of its travel is about that small (on Stillwater's
+    /// reveal, a fraction of a point before it stops).
+    package static let stillDistance: CGFloat = 0.5
+
+    /// Whether a Screen is at rest after a drawn frame: its step reported
+    /// itself settled, or `frames`, the drawn frames so far with the
+    /// latest last, end in [`stillFrames`] frames each of which changed
+    /// nothing since the one before: no region's position (the position a
+    /// region is going to, read as soon as a move is asked), the same
+    /// waited-on node, and its box (where it is drawn, which follows the
+    /// move as it animates) moved less than [`stillDistance`] at each edge,
+    /// from each frame to the next and from the first of the run to the
+    /// last. A box that is the same exactly is still, a placeholder's
+    /// included.
+    package static func isAtRest(settled: Bool, frames: [NuxieMachineRestSample]) -> Bool {
+        if settled { return true }
+        guard frames.count > stillFrames else { return false }
+        let recent = Array(frames.suffix(stillFrames + 1))
+        let unchanged = zip(recent, recent.dropFirst()).allSatisfy { before, after in
+            before.positions == after.positions && before.node == after.node && isStill(before.box, after.box)
+        }
+        return unchanged && isStill(recent[0].box, recent[stillFrames].box)
+    }
+
+    private static func isStill(_ before: CGRect?, _ after: CGRect?) -> Bool {
+        guard let before, let after else { return before == nil && after == nil }
+        if before == after { return true }
+        let moves = [after.minX - before.minX, after.minY - before.minY,
+                     after.maxX - before.maxX, after.maxY - before.maxY]
+        return moves.allSatisfy { $0.isFinite && abs($0) < stillDistance }
+    }
+}
+
+/// What a drawn frame's capture says about whether a Screen is at rest: each
+/// region's position, in order, and the box of the node a reveal or a tap
+/// waits on ([`NuxieMachineScreenReaderScroll.isAtRest`]).
+package struct NuxieMachineRestSample: Equatable, Sendable {
+    package let positions: [CGPoint?]
+    package let node: UInt32?
+    package let box: CGRect?
+
+    package init(positions: [CGPoint?], node: UInt32?, box: CGRect?) {
+        self.positions = positions
+        self.node = node
+        self.box = box
+    }
+
+    /// The sample of `capture` waiting on `node`, whose box is none when the
+    /// capture has no such node.
+    package init(_ capture: NuxieNativeSemanticCapture, waitingOn node: UInt32?) {
+        self.init(positions: capture.scrollRegions.map(\.scroll), node: node,
+                  box: node.flatMap { id in capture.tree.nodes.first { $0.id == id }?.bounds })
+    }
+}
+
+/// What the reader is told after a page moved: the line, or none when there
+/// is nothing to say (its pages cannot be counted, or the capture lost its
+/// region), told all the same.
+package struct NuxieMachinePageAnnouncement: Equatable, Sendable {
+    package let line: String?
+
+    package init(line: String?) {
+        self.line = line
+    }
 }
 
 /// What a machine component has asked of its `scroll`s for a screen reader
-/// and not yet sent: the node focus reached, a tap waiting behind its
-/// reveal, and a page. Each frame takes what may go now ([`take`]) and hears
-/// back what came of it ([`ended`]).
+/// and is not done: the node focus reached, a tap waiting behind its reveal,
+/// pages, and the line of a page that moved. Each frame takes what may go now
+/// ([`take`]) and hears back what came of it and what it drew ([`ended`]).
+/// The table at the top of this file says what each input does to each.
 ///
-/// The rule for reveals: reveal only when the last frame's step reported
-/// itself settled, since a reveal while a scroller settles adds the node's
-/// remaining travel to where it is going and overshoots. Focus can move
-/// faster than a reveal settles, so only the latest node is held. Once a
-/// reveal has settled, a node still not whole inside its regions is
-/// revealed again (each scroller's move is worked out from where the node
-/// was drawn before the scrollers inside it moved), at most as many times
-/// in all as it has regions around it.
+/// The rule for reveals: reveal only at rest, since a reveal while a
+/// scroller settles adds the node's remaining travel to where it is going
+/// and overshoots. Focus can move faster than a reveal settles, so only the
+/// latest node is held. Once a reveal has come to rest, a node still not
+/// whole inside its regions is revealed again (each scroller's move is
+/// worked out from where the node was drawn before the scrollers inside it
+/// moved), at most as many times in all as it has regions around it.
 ///
 /// A screen reader's tap on a node that waits for a reveal (its own, or one
 /// that does not show and offers no tap until it does) waits behind it, and
-/// goes in the first settled frame after, to the snapshot of that frame, if
-/// the node then offers a tap. A page does not wait for a settle: it starts
-/// from where the content is going.
+/// goes in the first frame at rest after, to the snapshot of that frame, if
+/// the node then offers a tap. A page does not wait for rest: it starts from
+/// where the content is going. A frame carries one page; pages are kept one
+/// per region, so pages asked from nodes in different regions each go to
+/// their own. The line for a page that moved is told after a frame whose
+/// capture shows the move, one that was drawn.
 ///
 /// What a frame carries is kept apart from what is asked while it is in
 /// flight: a frame's answers settle only the requests it carried, so a page,
@@ -187,17 +345,33 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     package private(set) var target: UInt32?
     /// A tap waiting behind a reveal.
     package private(set) var heldTap: UInt32?
-    /// The node of the reveal that moved and has not settled.
+    /// The node of the reveal that moved and has not come to rest.
     package private(set) var settling: UInt32?
+    /// Whether the last frame was at rest
+    /// ([`NuxieMachineScreenReaderScroll.isAtRest`]); none is before the
+    /// first drawn frame.
+    package private(set) var atRest = false
     /// Reveals sent for `target`.
     private var reveals = 0
     /// Calls asked of a spent snapshot, sent again.
     private var stale = 0
-    /// Pages asked for since the last frame took them.
-    private var page: Page?
+    /// Pages asked for and not yet sent, one per region, oldest first.
+    private var pages: [Page] = []
     /// The page a frame carries and has not answered, and the request it
     /// went as; only its answer touches it.
     private var paging: Flight?
+    /// A page that moved and whose line is not yet told: its region and
+    /// whether it moved along y.
+    private var announcing: Told?
+    /// The drawn frames the rest rule reads, the latest last.
+    private var frames: [NuxieMachineRestSample] = []
+
+    /// A page that moved, to be told: its region and whether it moved
+    /// along y.
+    private struct Told: Equatable, Sendable {
+        let region: Int
+        let vertical: Bool
+    }
 
     /// A page in flight and the request it went as.
     private struct Flight: Equatable, Sendable {
@@ -205,9 +379,10 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
         let request: NuxieMachineScrollRequest
     }
 
-    /// A page asked for and not yet sent: from which node, which way, and
-    /// how many.
+    /// Pages asked for and not yet sent: the region they were asked of, the
+    /// node the first was asked from, which way, and how many.
     private struct Page: Equatable, Sendable {
+        var region: Int
         let node: UInt32
         let direction: NuxieMachineScrollDirection
         var count: Int
@@ -237,49 +412,63 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     }
 
     /// Whether a tap on `node` has to wait behind a reveal: one is asked
-    /// for it, or moving and not settled.
+    /// for it, or moving and not at rest.
     package func revealPending(for node: UInt32) -> Bool {
         target == node || settling == node
     }
 
-    /// One more page `direction` from `node`; pages asked before a frame
-    /// takes them add up.
-    package mutating func page(_ direction: NuxieMachineScrollDirection, from node: UInt32) {
-        if var waiting = page, waiting.direction == direction {
-            waiting.count += 1
-            page = waiting
-        } else {
-            page = Page(node: node, direction: direction, count: 1)
+    /// One more page `direction` from `node`, which takes region `region`
+    /// of the capture it was asked of ([`NuxieMachineScreenReaderScroll.page`]).
+    /// Pages asked of a region before a frame takes them add up its way;
+    /// one the other way replaces them.
+    package mutating func page(_ direction: NuxieMachineScrollDirection, from node: UInt32, region: Int) {
+        if let index = pages.firstIndex(where: { $0.region == region }) {
+            if pages[index].direction == direction {
+                pages[index].count += 1
+                return
+            }
+            pages.remove(at: index)
         }
+        pages.append(Page(region: region, node: node, direction: direction, count: 1))
     }
 
-    /// Whether anything waits for a frame: something to send or a settle to
-    /// see.
+    /// Whether anything waits for a frame: something to send, a rest to
+    /// see, or a line to tell once a frame is drawn.
     package var wantsFrames: Bool {
-        target != nil || heldTap != nil || settling != nil || page != nil || paging != nil
+        target != nil || heldTap != nil || settling != nil || !pages.isEmpty || paging != nil
+            || announcing != nil
+    }
+
+    /// The pages waiting, one per region, oldest first, as region, way and
+    /// count, for checks.
+    package var queuedPages: [(region: Int, direction: NuxieMachineScrollDirection, count: Int)] {
+        pages.map { ($0.region, $0.direction, $0.count) }
     }
 
     /// What the coming frame carries, asked of `capture`, the snapshot on
-    /// screen, after a frame whose step was `settled` or not: a page, a
-    /// reveal, and a tap that waited.
-    package mutating func take(_ capture: NuxieNativeSemanticCapture?, settled: Bool)
+    /// screen: the oldest page that can still go, and, at rest, a reveal or
+    /// a tap that waited.
+    package mutating func take(_ capture: NuxieNativeSemanticCapture?)
         -> (scrolls: [NuxieMachineScrollRequest], tap: NuxieMachineSemanticTap?) {
         guard let capture else { return ([], nil) }
         var scrolls: [NuxieMachineScrollRequest] = []
         var tap: NuxieMachineSemanticTap?
         let nodes = capture.tree.nodes
-        if let waiting = page {
-            page = nil
-            if let node = nodes.first(where: { $0.id == waiting.node }),
-               let move = NuxieMachineScreenReaderScroll.page(waiting.direction, from: node, in: capture.scrollRegions) {
-                let request = NuxieMachineScrollRequest.page(captureID: capture.id, region: move.region,
-                                                             dx: move.dx * Float(waiting.count),
-                                                             dy: move.dy * Float(waiting.count))
-                scrolls.append(request)
-                paging = Flight(page: waiting, request: request)
-            }
+        while !pages.isEmpty {
+            var waiting = pages.removeFirst()
+            guard let node = nodes.first(where: { $0.id == waiting.node }),
+                  let move = NuxieMachineScreenReaderScroll.page(waiting.direction, from: node,
+                                                                 in: capture.scrollRegions)
+            else { continue }
+            let request = NuxieMachineScrollRequest.page(captureID: capture.id, region: move.region,
+                                                         dx: move.dx * Float(waiting.count),
+                                                         dy: move.dy * Float(waiting.count))
+            waiting.region = move.region
+            scrolls.append(request)
+            paging = Flight(page: waiting, request: request)
+            break
         }
-        guard settled, settling == nil else { return (scrolls, nil) }
+        guard atRest, settling == nil else { return (scrolls, nil) }
         if let wanted = target {
             if let node = nodes.first(where: { $0.id == wanted }),
                !NuxieMachineScreenReaderScroll.isShown(node, in: capture.scrollRegions),
@@ -301,9 +490,13 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     }
 
     /// The frame that carried what [`take`] gave ended: `scrolled` is what
-    /// came of each request, and `settled` whether its step reported itself
-    /// settled.
-    package mutating func ended(_ scrolled: [NuxieMachineScrolled], settled: Bool) {
+    /// came of each request, `settled` whether its step reported itself
+    /// settled, and `drawn` the capture of the frame it drew, none when it
+    /// drew none. Answers what the reader is told now, if anything: the line
+    /// of a page that moved, once a drawn frame shows it.
+    @discardableResult
+    package mutating func ended(_ scrolled: [NuxieMachineScrolled], settled: Bool,
+                                drawn capture: NuxieNativeSemanticCapture?) -> NuxieMachinePageAnnouncement? {
         for result in scrolled {
             switch result.request {
             case .reveal(_, let node):
@@ -321,23 +514,46 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
                 case .refused:
                     if target == node { target = nil }
                 }
-            case .page:
-                // Only the page this answers leaves flight; pages asked
-                // since stay queued for the next frame. A stale one is asked
-                // again, ahead of later pages its way; a later page the other
-                // way replaces it, being what was asked last.
+            case .page(_, _, _, let dy):
                 guard let flying = paging, flying.request == result.request else { continue }
                 paging = nil
-                guard result.outcome == .stale, flying.page.stale < Self.staleRetries else { continue }
-                var again = flying.page
-                again.stale += 1
-                if let queued = page {
-                    guard queued.direction == again.direction else { continue }
-                    again.count += queued.count
+                switch result.outcome {
+                case .moved:
+                    announcing = Told(region: flying.page.region, vertical: dy != 0)
+                case .stayed, .refused:
+                    break
+                case .stale:
+                    requeue(flying.page)
                 }
-                page = again
             }
         }
-        if settled { settling = nil }
+        guard let capture else {
+            atRest = false
+            return nil
+        }
+        frames.append(NuxieMachineRestSample(capture, waitingOn: settling ?? target ?? heldTap))
+        if frames.count > NuxieMachineScreenReaderScroll.stillFrames + 1 { frames.removeFirst() }
+        atRest = NuxieMachineScreenReaderScroll.isAtRest(settled: settled, frames: frames)
+        if atRest { settling = nil }
+        guard let told = announcing else { return nil }
+        announcing = nil
+        let regions = capture.scrollRegions
+        return NuxieMachinePageAnnouncement(line: regions.indices.contains(told.region)
+            ? NuxieMachineScreenReaderScroll.pageLine(regions[told.region], vertical: told.vertical) : nil)
+    }
+
+    /// A page in flight that came back stale goes again first, a bounded
+    /// number of times: pages its region asked since its way join it; one
+    /// the other way stands instead, being what was asked last.
+    private mutating func requeue(_ page: Page) {
+        guard page.stale < Self.staleRetries else { return }
+        var again = page
+        again.stale += 1
+        if let index = pages.firstIndex(where: { $0.region == again.region }) {
+            guard pages[index].direction == again.direction else { return }
+            again.count += pages.remove(at: index).count
+        }
+        pages.insert(again, at: 0)
     }
 }
+#endif

@@ -61,13 +61,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// refused and one of a newer snapshot replaces it (the engine would
     /// refuse the older one anyway).
     fileprivate var semanticTap: NuxieMachineSemanticTap?
-    /// What the screen reader asked of this Screen's `scroll`s and has not
-    /// been sent: a reveal of the node it focused, a tap waiting behind it,
-    /// a page ([`NuxieMachineScreenReaderScrolling`]).
+    /// What the screen reader asked of this Screen's `scroll`s and is not
+    /// done: a reveal of the node it focused, a tap waiting behind it,
+    /// pages, a page line to tell, and whether the Screen is at rest
+    /// ([`NuxieMachineScreenReaderScrolling`]).
     fileprivate var scrolling = NuxieMachineScreenReaderScrolling()
-    /// Whether the last frame that stepped this Screen reported its step
-    /// settled; a reveal waits for one. True before the first frame.
-    private var lastSettled = true
+    /// Whether a snapshot was shown since the last frame ended: the frame
+    /// that ends next drew it ([`frameEnded`]).
+    private var shownSinceFrame = false
     /// Told when the screen reader's scroll gesture moved a page, with the
     /// argument posted: the page line, "Page n of m". The post itself,
     /// unless a check listens instead.
@@ -283,6 +284,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// changed.
     package func show(_ capture: NuxieNativeSemanticCapture) {
         latest = capture
+        shownSinceFrame = true
         // A sheet's swipe asks the surface about the scroll regions of the
         // frame on screen ([`NuxieMachineSheetPan`]).
         surface.scrollRegions = capture.scrollRegions
@@ -352,7 +354,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The engine takes no tap on a node a `scroll` clips wholly away. So a
     /// tap on a node that is being brought into view, or that does not
     /// show and offers no tap, waits behind its reveal, and goes in the
-    /// first settled frame after, if the node then offers one
+    /// first frame at rest after, if the node then offers one
     /// ([`NuxieMachineScreenReaderScrolling`]). Focus normally brought it
     /// into view before the person taps, as it does in a scroll view.
     private func activate(_ nodeID: UInt32, in captureID: UUID, _ action: NuxieNativeSemanticAction) -> Bool {
@@ -373,8 +375,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     }
 
     /// The screen reader's focus reached the element of `nodeID`, a node
-    /// inside a `scroll`: it is brought into view once the Screen is
-    /// settled ([`NuxieMachineScreenReaderScrolling`]).
+    /// inside a `scroll`: it is brought into view once the Screen is at
+    /// rest ([`NuxieMachineScreenReaderScrolling`]).
     private func focused(_ nodeID: UInt32) {
         guard reachable, let loop, !loop.stopped else { return }
         scrolling.focus(nodeID)
@@ -389,10 +391,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
     private func scroll(from nodeID: UInt32, _ direction: UIAccessibilityScrollDirection) -> Bool {
         guard reachable, let loop, !loop.stopped, let capture = latest,
               let node = capture.tree.nodes.first(where: { $0.id == nodeID }),
-              let wanted = Self.direction(direction),
-              NuxieMachineScreenReaderScroll.page(wanted, from: node, in: capture.scrollRegions) != nil
+              let wanted = Self.direction(direction)
         else { return false }
-        scrolling.page(wanted, from: nodeID)
+        guard let move = NuxieMachineScreenReaderScroll.page(wanted, from: node, in: capture.scrollRegions)
+        else { return false }
+        scrolling.page(wanted, from: nodeID, region: move.region)
         loop.requestFrame()
         return true
     }
@@ -415,33 +418,25 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// one, for the next frame, asked of the snapshot shown now. The tap
     /// goes beside any other the frame carries.
     package func takeScrolls() -> [NuxieMachineScrollRequest] {
-        let taken = scrolling.take(latest, settled: lastSettled)
+        let taken = scrolling.take(latest)
         if let tap = taken.tap, semanticTap == nil { semanticTap = tap }
         return taken.scrolls
     }
 
     /// A frame that stepped this Screen ended: `scrolled` is what came of
     /// the moves it carried for it, and `settled` whether its step reported
-    /// itself settled. A page that moved tells the reader which page its
-    /// region shows, read from the snapshot this frame drew, which reads
-    /// where the region is going, or tells it with nothing to say when the
-    /// pages cannot be counted. Asks for another frame while a reveal or
-    /// a tap behind one waits.
+    /// itself settled. It drew the snapshot shown since the last frame
+    /// ended, if one was: a frame not drawn leaves the snapshot from before
+    /// its step on screen, so it is not at rest, and a page that moved is
+    /// told only after a drawn frame, with the line read from that frame's
+    /// snapshot, which reads where the region is going, or with nothing to
+    /// say when the pages cannot be counted. Asks for another frame while
+    /// anything waits.
     package func frameEnded(_ scrolled: [NuxieMachineScrolled], settled: Bool) {
-        lastSettled = settled
-        scrolling.ended(scrolled, settled: settled)
-        let paged = scrolled.last { result in
-            if case .page = result.request { return result.outcome == .moved }
-            return false
-        }
-        if let paged, case .page(_, let region, _, let dy) = paged.request {
-            // With no line to say (its pages cannot be counted, or the
-            // snapshot lost its region), the reader is still told, with none.
-            let line = latest.flatMap { capture in
-                capture.scrollRegions.indices.contains(region)
-                    ? NuxieMachineScreenReaderScroll.pageLine(capture.scrollRegions[region], vertical: dy != 0) : nil
-            }
-            semantics.announcePageScrolled(line)
+        let drawn = shownSinceFrame ? latest : nil
+        shownSinceFrame = false
+        if let told = scrolling.ended(scrolled, settled: settled, drawn: drawn) {
+            semantics.announcePageScrolled(told.line)
         }
         if scrolling.wantsFrames { loop?.requestFrame() }
     }
@@ -698,8 +693,9 @@ package final class NuxieMachineScreenLoop {
                 }
             }
             // Each Screen the frame stepped hears what came of the screen
-            // reader's moves it carried, and whether it settled, once its
-            // new snapshot is shown.
+            // reader's moves it carried, and whether it settled, after its
+            // draw: a Screen not drawn this frame still shows the snapshot
+            // from before the step ([`frameEnded`]).
             for (screen, _) in stepped where !stopped {
                 screen.frameEnded(screen.shown == touched ? frame.scrolled : [],
                                   settled: frame.settled.contains(screen.shown))
