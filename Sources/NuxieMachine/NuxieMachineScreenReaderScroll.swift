@@ -8,35 +8,53 @@
 // ScreenReaderScrollingTests' `testTheSurfaceGoingAwayDropsEverything`.
 //
 // "At rest" is a drawn frame whose step reported itself settled, or the last
-// of `stillFrames` drawn frames in a row in which no region's position changed
-// and the waited-on node's box moved less than `stillDistance`, each frame and
-// across the run
-// ([`NuxieMachineScreenReaderScroll.isAtRest`]). A frame that steps but is not
-// drawn shows no capture of its step, so it is never at rest.
+// of `stillFrames` drawn frames in a row of the node waited on now (one moving,
+// else a held tap's, else the focused one) in which no region's position
+// changed and its box moved less than `stillDistance`, each frame and across
+// the run ([`NuxieMachineScreenReaderScroll.isAtRest`]). The run starts over
+// when the node waited on changes (from none too) and when a page or reveal
+// moved; frames with no node waited on never count, so then only a settled
+// step is rest. A frame that steps but is not drawn shows no capture of its
+// step, so it is never at rest.
 //
 // Reveal (`target`; `settling` once it moved)
-//   same node asked again       nothing
-//   another node asked          replaces it: the latest focus is the one revealed
-//   a page, either way          nothing
+//   same node focused again     nothing
+//   another node in a `scroll`  replaces it: the latest focus is the one revealed,
+//     focused                   after still frames of that node
+//   a node under no `scroll`    let go, unless a tap is held (its row)
+//     focused
+//   focus leaves its node       let go (`accessibilityElementDidLoseFocus`)
+//   focus leaves another node   nothing
+//   a page asked                nothing
+//   a page goes in the frame    no reveal in that frame; the page's move starts
+//                               the still frames over
 //   frame not drawn             not at rest: no reveal goes, one moving stays moving
-//   answer moved                waits for rest (`settling`), then is checked again
+//   answer moved                waits for rest (`settling`), then is checked again;
+//                               the still frames start over
 //   answer stayed               checked at the next rest: let go if it shows whole,
 //                               else sent again, at most once per region around it
 //   answer stale                sent again, at most `staleRetries` times
 //   answer refused              let go
 //   answer for an earlier node  nothing (stale or refused)
-//   capture loses the node      let go at the next take
+//   capture loses the node      let go at the next take (its element goes with it)
+//   VoiceOver turns off         nothing: a reveal under way finishes, one waiting
+//                               still goes (one move of the page, no harm)
 //   surface goes away           dropped (`stop` clears everything)
 //
 // Held tap (`heldTap`)
 //   same node tapped again      answers false: one tap waits
-//   another node tapped         replaces it, and its node is the one revealed
-//   a page, either way          nothing
+//   another node tapped         replaces it
+//   focus moves to another      nothing: the tap was a deliberate activation, so
+//     node, under a `scroll`    its node is revealed and tapped first, and the
+//     or not, or leaves         focused node revealed after
+//   a page asked                nothing
+//   a page goes in the frame    it does not go in that frame
 //   frame not drawn             not at rest: it does not go
 //   its reveal moved            waits for rest
 //   its reveal stayed, stale    goes at the next rest if its node then offers a tap,
 //     past retries, or refused  else dropped
 //   capture loses the node      dropped at the next take
+//   VoiceOver turns off         nothing: it still goes
 //   surface goes away           dropped
 //
 // Page in flight (`paging`: the one page a frame carries)
@@ -261,11 +279,15 @@ package enum NuxieMachineScreenReaderScroll {
     /// move as it animates) moved less than [`stillDistance`] at each edge,
     /// from each frame to the next and from the first of the run to the
     /// last. A box that is the same exactly is still, a placeholder's
-    /// included.
+    /// included. Frames with no node waited on never count: positions read
+    /// where a region is going, not where its content is drawn, so only a
+    /// node's box shows a move still in flight, and with none only a
+    /// settled step is rest.
     package static func isAtRest(settled: Bool, frames: [NuxieMachineRestSample]) -> Bool {
         if settled { return true }
         guard frames.count > stillFrames else { return false }
         let recent = Array(frames.suffix(stillFrames + 1))
+        guard recent.allSatisfy({ $0.node != nil }) else { return false }
         let unchanged = zip(recent, recent.dropFirst()).allSatisfy { before, after in
             before.positions == after.positions && before.node == after.node && isStill(before.box, after.box)
         }
@@ -322,18 +344,24 @@ package struct NuxieMachinePageAnnouncement: Equatable, Sendable {
 ///
 /// The rule for reveals: reveal only at rest, since a reveal while a
 /// scroller settles adds the node's remaining travel to where it is going
-/// and overshoots. Focus can move faster than a reveal settles, so only the
-/// latest node is held. Once a reveal has come to rest, a node still not
-/// whole inside its regions is revealed again (each scroller's move is
-/// worked out from where the node was drawn before the scrollers inside it
-/// moved), at most as many times in all as it has regions around it.
+/// and overshoots. Rest is a settled step, or still frames of the node now
+/// waited on, counted from when it became the one waited on or from the
+/// last move answered, whichever is later. Focus can move faster than a
+/// reveal settles, so only the latest node is held. Once a reveal has come
+/// to rest, a node still not whole inside its regions is revealed again
+/// (each scroller's move is worked out from where the node was drawn before
+/// the scrollers inside it moved), at most as many times in all as it has
+/// regions around it. Focus that moves to a node under no `scroll`, or
+/// leaves the node, lets its reveal go.
 ///
 /// A screen reader's tap on a node that waits for a reveal (its own, or one
 /// that does not show and offers no tap until it does) waits behind it, and
 /// goes in the first frame at rest after, to the snapshot of that frame, if
-/// the node then offers a tap. A page does not wait for rest: it starts from
-/// where the content is going. A frame carries one page; pages are kept one
-/// per region, so pages asked from nodes in different regions each go to
+/// the node then offers a tap. The tap was a deliberate activation, so focus
+/// moving on does not cancel it: its node is revealed and tapped first, and
+/// the node focus moved to after. A page does not wait for rest: it starts
+/// from where the content is going. A frame carries one page; pages are kept
+/// one per region, so pages asked from nodes in different regions each go to
 /// their own. The line for a page that moved is told after a frame whose
 /// capture shows the move, one that was drawn.
 ///
@@ -343,28 +371,37 @@ package struct NuxieMachinePageAnnouncement: Equatable, Sendable {
 package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     /// The node focus reached last that still needs a reveal.
     package private(set) var target: UInt32?
-    /// A tap waiting behind a reveal.
+    /// A tap waiting behind a reveal of its node.
     package private(set) var heldTap: UInt32?
     /// The node of the reveal that moved and has not come to rest.
     package private(set) var settling: UInt32?
-    /// Whether the last frame was at rest
-    /// ([`NuxieMachineScreenReaderScroll.isAtRest`]); none is before the
-    /// first drawn frame.
-    package private(set) var atRest = false
-    /// Reveals sent for `target`.
+    /// The node the reveal counts are for: the last one a reveal went for.
+    private var revealing: UInt32?
+    /// Reveals sent for `revealing`.
     private var reveals = 0
-    /// Calls asked of a spent snapshot, sent again.
+    /// Calls asked of a spent snapshot, sent again, for `revealing`.
     private var stale = 0
     /// Pages asked for and not yet sent, one per region, oldest first.
     private var pages: [Page] = []
     /// The page a frame carries and has not answered, and the request it
     /// went as; only its answer touches it.
     private var paging: Flight?
-    /// A page that moved and whose line is not yet told: its region and
-    /// whether it moved along y.
+    /// A page that moved and whose line is not yet told.
     private var announcing: Told?
-    /// The drawn frames the rest rule reads, the latest last.
+    /// What the last drawn frame showed of rest.
+    private var rest = Rest.none
+    /// The drawn frames the rest rule reads, the latest last, all of the
+    /// node waited on since the last move answered.
     private var frames: [NuxieMachineRestSample] = []
+
+    /// What the last frame showed of rest: none, a settled step (rest
+    /// whatever is waited on), or still frames of one node (rest for that
+    /// node only).
+    private enum Rest: Equatable, Sendable {
+        case none
+        case settled
+        case still(UInt32)
+    }
 
     /// A page that moved, to be told: its region and whether it moved
     /// along y.
@@ -394,27 +431,83 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
 
     package init() {}
 
-    /// Focus reached `node`, which has a region: it is the one to reveal.
+    /// The node a reveal or a tap waits on, whose still frames make rest:
+    /// one moving, else a held tap's, else the focused one.
+    private var waitedOn: UInt32? { settling ?? heldTap ?? target }
+
+    /// Whether the last frame was at rest for what waits now: its step
+    /// settled, or it ended a run of still frames of the node waited on now
+    /// ([`NuxieMachineScreenReaderScroll.isAtRest`]); never before the
+    /// first drawn frame.
+    package var atRest: Bool {
+        switch rest {
+        case .none: return false
+        case .settled: return true
+        case .still(let node): return node == waitedOn
+        }
+    }
+
+    /// Focus reached `node`, which has a region: it is the one to reveal,
+    /// with its reveals counted afresh.
     package mutating func focus(_ node: UInt32) {
         guard target != node else { return }
         target = node
-        reveals = 0
-        stale = 0
+        afresh(node)
+    }
+
+    /// Focus reached a node under no `scroll`: the node focus left needs no
+    /// reveal. A held tap still goes.
+    package mutating func focusOutside() {
+        target = nil
+    }
+
+    /// Focus left `node`: if it is the one to reveal, it no longer is. A
+    /// held tap still goes.
+    package mutating func focusLeft(_ node: UInt32) {
+        if target == node { target = nil }
     }
 
     /// A tap on `node` waits behind its reveal; one already waiting for it
-    /// stands, so a second answers false.
+    /// stands, so a second answers false. Another node's replaces it.
     package mutating func hold(tap node: UInt32) -> Bool {
         guard heldTap != node else { return false }
         heldTap = node
-        if target != node && settling != node { focus(node) }
+        if target != node { afresh(node) }
         return true
     }
 
     /// Whether a tap on `node` has to wait behind a reveal: one is asked
-    /// for it, or moving and not at rest.
+    /// for it, held behind its own, or moving and not at rest.
     package func revealPending(for node: UInt32) -> Bool {
-        target == node || settling == node
+        target == node || settling == node || heldTap == node
+    }
+
+    /// A new ask for `node`: its reveals are counted from none.
+    private mutating func afresh(_ node: UInt32) {
+        guard revealing == node, settling != node else { return }
+        reveals = 0
+        stale = 0
+    }
+
+    /// Whether a reveal of `id`, `node` in `capture`, may go now, counting
+    /// it: one more than it has had, at most one per region around it.
+    private mutating func mayReveal(_ id: UInt32, _ node: NuxieNativeSemanticNode,
+                                    in capture: NuxieNativeSemanticCapture) -> Bool {
+        if revealing != id {
+            revealing = id
+            reveals = 0
+            stale = 0
+        }
+        guard reveals < NuxieMachineScreenReaderScroll.regions(of: node, in: capture.scrollRegions).count
+        else { return false }
+        reveals += 1
+        return true
+    }
+
+    /// The reveals of `node` are over: refused, or stale too often.
+    private mutating func giveUp(_ node: UInt32) {
+        reveals = Int.max
+        if target == node { target = nil }
     }
 
     /// One more page `direction` from `node`, which takes region `region`
@@ -468,25 +561,35 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
             paging = Flight(page: waiting, request: request)
             break
         }
-        guard atRest, settling == nil else { return (scrolls, nil) }
+        // A page moves the content under a reveal: the reveal waits for rest
+        // after it.
+        guard scrolls.isEmpty, settling == nil, atRest else { return (scrolls, nil) }
+        let tapBit: UInt32 = 1 << NuxieNativeSemanticAction.tap.rawValue
+        if let held = heldTap {
+            // The tap first: its node is revealed, then tapped.
+            let node = nodes.first { $0.id == held }
+            if let node, !NuxieMachineScreenReaderScroll.isShown(node, in: capture.scrollRegions),
+               mayReveal(held, node, in: capture) {
+                scrolls.append(.reveal(captureID: capture.id, nodeID: held))
+                return (scrolls, nil)
+            }
+            heldTap = nil
+            if target == held { target = nil }
+            if let node, node.actions & tapBit != 0 {
+                tap = NuxieMachineSemanticTap(captureID: capture.id, nodeID: held)
+            }
+            return (scrolls, tap)
+        }
         if let wanted = target {
             if let node = nodes.first(where: { $0.id == wanted }),
                !NuxieMachineScreenReaderScroll.isShown(node, in: capture.scrollRegions),
-               reveals < NuxieMachineScreenReaderScroll.regions(of: node, in: capture.scrollRegions).count {
-                reveals += 1
+               mayReveal(wanted, node, in: capture) {
                 scrolls.append(.reveal(captureID: capture.id, nodeID: wanted))
                 return (scrolls, nil)
             }
             target = nil
         }
-        if let held = heldTap {
-            heldTap = nil
-            let tapBit: UInt32 = 1 << NuxieNativeSemanticAction.tap.rawValue
-            if let node = nodes.first(where: { $0.id == held }), node.actions & tapBit != 0 {
-                tap = NuxieMachineSemanticTap(captureID: capture.id, nodeID: held)
-            }
-        }
-        return (scrolls, tap)
+        return (scrolls, nil)
     }
 
     /// The frame that carried what [`take`] gave ended: `scrolled` is what
@@ -497,22 +600,24 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     @discardableResult
     package mutating func ended(_ scrolled: [NuxieMachineScrolled], settled: Bool,
                                 drawn capture: NuxieNativeSemanticCapture?) -> NuxieMachinePageAnnouncement? {
+        var moved = false
         for result in scrolled {
             switch result.request {
             case .reveal(_, let node):
                 switch result.outcome {
                 case .moved:
                     settling = node
+                    moved = true
                 case .stayed:
                     break
                 case .stale:
-                    if target == node {
+                    if revealing == node {
                         stale += 1
-                        reveals -= 1
-                        if stale > Self.staleRetries { target = nil }
+                        reveals = max(0, reveals - 1)
+                        if stale > Self.staleRetries { giveUp(node) }
                     }
                 case .refused:
-                    if target == node { target = nil }
+                    if revealing == node { giveUp(node) }
                 }
             case .page(_, _, _, let dy):
                 guard let flying = paging, flying.request == result.request else { continue }
@@ -520,6 +625,7 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
                 switch result.outcome {
                 case .moved:
                     announcing = Told(region: flying.page.region, vertical: dy != 0)
+                    moved = true
                 case .stayed, .refused:
                     break
                 case .stale:
@@ -527,13 +633,21 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
                 }
             }
         }
+        // The still frames start over when something moved or another node
+        // is waited on; frames with none waited on are not kept.
+        let node = waitedOn
+        if moved || node == nil || frames.last?.node != node { frames = [] }
         guard let capture else {
-            atRest = false
+            rest = .none
             return nil
         }
-        frames.append(NuxieMachineRestSample(capture, waitingOn: settling ?? target ?? heldTap))
-        if frames.count > NuxieMachineScreenReaderScroll.stillFrames + 1 { frames.removeFirst() }
-        atRest = NuxieMachineScreenReaderScroll.isAtRest(settled: settled, frames: frames)
+        if let node {
+            frames.append(NuxieMachineRestSample(capture, waitingOn: node))
+            if frames.count > NuxieMachineScreenReaderScroll.stillFrames + 1 { frames.removeFirst() }
+        }
+        rest = settled ? .settled
+            : (node.map { NuxieMachineScreenReaderScroll.isAtRest(settled: false, frames: frames) ? .still($0) : .none }
+                ?? .none)
         if atRest { settling = nil }
         guard let told = announcing else { return nil }
         announcing = nil

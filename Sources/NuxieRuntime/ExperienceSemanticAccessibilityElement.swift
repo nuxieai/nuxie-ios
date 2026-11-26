@@ -8,15 +8,17 @@ import UIKit
 /// activation may ask for, are the screen's: they arrive in its projection
 /// ([`ExperienceSemanticAccessibilityContainer.Projection`]).
 ///
-/// An element whose node is inside a `scroll` also tells its screen when
-/// the reader's focus reaches it ([`Focused`]), so the screen can bring it
-/// into view, and passes the reader's scroll gestures on it to its screen
-/// ([`Scroll`]). A screen that does neither leaves them out.
+/// An element also tells its screen when the reader's focus reaches it or
+/// leaves it ([`Focused`]), so the screen can bring a node inside a `scroll`
+/// into view and stop bringing one focus has left, and an element whose node
+/// is inside a `scroll` passes the reader's scroll gestures on it to its
+/// screen ([`Scroll`]). A screen that does neither leaves them out.
 @MainActor
 package final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
     package typealias Submit = (UUID, UInt32, NuxieNativeSemanticAction) -> Bool
-    /// The reader's focus reached the element of node `nodeID`.
-    package typealias Focused = (UInt32) -> Void
+    /// The reader's focus reached (`true`) or left (`false`) the element of
+    /// node `nodeID`.
+    package typealias Focused = (UInt32, Bool) -> Void
     /// The reader asked to scroll from the element of node `nodeID`; whether
     /// anything will move.
     package typealias Scroll = (UInt32, UIAccessibilityScrollDirection) -> Bool
@@ -79,14 +81,22 @@ package final class ExperienceSemanticAccessibilityElement: UIAccessibilityEleme
     override package func accessibilityIncrement() { _ = perform(.increase) }
     override package func accessibilityDecrement() { _ = perform(.decrease) }
 
-    /// The reader's focus reached this element: a node inside a `scroll`
-    /// tells its screen, which brings it into view.
+    /// The reader's focus reached this element: its screen hears, and
+    /// brings a node inside a `scroll` into view.
     override package func accessibilityElementDidBecomeFocused() {
         super.accessibilityElementDidBecomeFocused()
-        guard isAccessibilityElement, let node, node.scrollRegion != nil, let focused,
+        guard isAccessibilityElement, let node, let focused,
               let container = accessibilityContainer as? UIView,
               Self.allowsAccessibilityAction(in: container) else { return }
-        focused(node.id)
+        focused(node.id, true)
+    }
+
+    /// The reader's focus left this element: its screen hears, and stops
+    /// bringing it into view.
+    override package func accessibilityElementDidLoseFocus() {
+        super.accessibilityElementDidLoseFocus()
+        guard let node, let focused else { return }
+        focused(node.id, false)
     }
 
     /// A scroll gesture with the reader on this element: its screen moves

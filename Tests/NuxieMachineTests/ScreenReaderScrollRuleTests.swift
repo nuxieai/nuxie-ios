@@ -161,8 +161,58 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
                                  width: -CGFloat.infinity, height: -CGFloat.infinity)
         XCTAssertTrue(rule.isAtRest(settled: false, frames: Array(repeating: sample(box: placeholder), count: 4)),
                       "a box the same exactly")
-        XCTAssertTrue(rule.isAtRest(settled: false, frames: Array(repeating: sample(node: nil, box: nil), count: 4)),
-                      "nothing waited on: the positions alone")
+        XCTAssertFalse(rule.isAtRest(settled: false, frames: Array(repeating: sample(node: nil, box: nil), count: 4)),
+                       "nothing waited on: positions read where a region is going, so only a settled step is rest")
+        XCTAssertTrue(rule.isAtRest(settled: true, frames: Array(repeating: sample(node: nil, box: nil), count: 4)))
+    }
+
+    /// A focus right after a page moved waits a whole run of still frames
+    /// of the newly focused node before its reveal goes, and still frames
+    /// with nothing waited on, however many, are not rest.
+    func testAFocusRightAfterAPageMovedWaitsAWholeRunOnTheNewNode() throws {
+        let capture = try Self.capture([node(1, CGRect(x: 24, y: 400, width: 160, height: 44)), node(5, Self.below(0))],
+                                       regions: [Self.page()])
+        var scrolling = NuxieMachineScreenReaderScrolling()
+        for _ in 0..<10 { scrolling.ended([], settled: false, drawn: capture) }
+        XCTAssertFalse(scrolling.atRest, "frames with nothing waited on do not count")
+        scrolling.page(.showBelow, from: 1, region: 0)
+        let paged = NuxieMachineScrollRequest.page(captureID: capture.id, region: 0, dx: 0, dy: -796)
+        XCTAssertEqual(scrolling.take(capture).scrolls, [paged])
+        scrolling.ended([NuxieMachineScrolled(paged, .moved)], settled: false, drawn: capture)
+        scrolling.focus(5)
+        for frame in 0...NuxieMachineScreenReaderScroll.stillFrames {
+            XCTAssertEqual(scrolling.take(capture).scrolls, [], "frame \(frame) of the run on node 5")
+            scrolling.ended([], settled: false, drawn: capture)
+        }
+        XCTAssertTrue(scrolling.atRest)
+        XCTAssertEqual(scrolling.take(capture).scrolls, [.reveal(captureID: capture.id, nodeID: 5)],
+                       "after a whole run of still frames of node 5")
+    }
+
+    /// Rest seen for one node is not rest for another: focus moving to a
+    /// new node starts the run over, and a settled step is rest whatever
+    /// waits.
+    func testRestForOneNodeIsNotRestForAnother() throws {
+        let capture = try Self.capture([node(5, Self.below(0)), node(6, Self.below(100))], regions: [Self.page()])
+        var scrolling = NuxieMachineScreenReaderScrolling()
+        scrolling.focus(5)
+        for _ in 0...NuxieMachineScreenReaderScroll.stillFrames {
+            scrolling.ended([], settled: false, drawn: capture)
+        }
+        XCTAssertTrue(scrolling.atRest, "a run of still frames of node 5")
+        scrolling.focus(6)
+        XCTAssertFalse(scrolling.atRest, "is not rest for node 6")
+        XCTAssertEqual(scrolling.take(capture).scrolls, [])
+        for _ in 0...NuxieMachineScreenReaderScroll.stillFrames {
+            XCTAssertEqual(scrolling.take(capture).scrolls, [])
+            scrolling.ended([], settled: false, drawn: capture)
+        }
+        XCTAssertEqual(scrolling.take(capture).scrolls, [.reveal(captureID: capture.id, nodeID: 6)])
+        var settled = NuxieMachineScreenReaderScrolling()
+        settled.ended([], settled: true, drawn: capture)
+        settled.focus(5)
+        XCTAssertTrue(settled.atRest, "a settled step is rest whatever waits")
+        XCTAssertEqual(settled.take(capture).scrolls, [.reveal(captureID: capture.id, nodeID: 5)])
     }
 
     // MARK: Reveals
@@ -336,6 +386,35 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         XCTAssertEqual(scrolling.take(capture).scrolls, [one], "answer stale: sent again")
         scrolling.ended([NuxieMachineScrolled(one, .moved)], settled: true, drawn: capture)
 
+        // A node under no `scroll` focused: let go. Focus leaving another
+        // node: nothing. Focus leaving its node: let go.
+        scrolling.focus(2)
+        scrolling.focusOutside()
+        XCTAssertNil(scrolling.target, "a node under no scroll focused: let go")
+        XCTAssertEqual(scrolling.take(capture).scrolls, [])
+        scrolling.focus(2)
+        scrolling.focusLeft(1)
+        XCTAssertEqual(scrolling.target, 2, "focus leaving another node: nothing")
+        scrolling.focusLeft(2)
+        XCTAssertNil(scrolling.target, "focus leaving its node: let go")
+        XCTAssertEqual(scrolling.take(capture).scrolls, [])
+
+        // A page goes in the frame: no reveal goes with it, and the page's
+        // move starts the still frames over.
+        let pageable = try Self.capture([node(1, Self.below(0)), node(3, CGRect(x: 24, y: 400, width: 160, height: 44))],
+                                        regions: [Self.page()])
+        scrolling.ended([], settled: true, drawn: pageable)
+        scrolling.focus(1)
+        scrolling.page(.showBelow, from: 3, region: 0)
+        let paged = NuxieMachineScrollRequest.page(captureID: pageable.id, region: 0, dx: 0, dy: -796)
+        XCTAssertEqual(scrolling.take(pageable).scrolls, [paged], "a page goes in the frame: no reveal with it")
+        scrolling.ended([NuxieMachineScrolled(paged, .moved)], settled: false, drawn: pageable)
+        XCTAssertFalse(scrolling.atRest, "the page's move starts the still frames over")
+        scrolling.ended([], settled: true, drawn: pageable)
+        XCTAssertEqual(scrolling.take(pageable).scrolls, [.reveal(captureID: pageable.id, nodeID: 1)])
+        scrolling.ended([NuxieMachineScrolled(.reveal(captureID: pageable.id, nodeID: 1), .moved)], settled: true,
+                        drawn: capture)
+
         // The capture loses the node: let go at the next take.
         let without = try Self.capture([node(2, Self.below(100))], regions: [Self.page()])
         scrolling.focus(2)
@@ -411,7 +490,8 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         XCTAssertFalse(scrolling.hold(tap: 1), "same node: one tap waits")
         XCTAssertTrue(scrolling.hold(tap: 2), "another node")
         XCTAssertEqual(scrolling.heldTap, 2, "replaces it")
-        XCTAssertEqual(scrolling.target, 2, "and its node is the one revealed")
+        XCTAssertTrue(scrolling.revealPending(for: 2), "and its node is the one revealed")
+        XCTAssertFalse(scrolling.revealPending(for: 1))
 
         // Frame not drawn: it does not go, though the node offers a tap.
         scrolling.ended([], settled: true, drawn: nil)
@@ -443,6 +523,47 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
                         drawn: out)
         XCTAssertNil(scrolling.take(out).tap, "its reveal refused, the node offers none: dropped")
         XCTAssertNil(scrolling.heldTap)
+
+        // Focus moves to another node in a `scroll`: the held tap's node is
+        // revealed and tapped first, the focused node revealed after.
+        XCTAssertTrue(scrolling.hold(tap: 1))
+        scrolling.focus(2)
+        XCTAssertEqual(scrolling.take(out).scrolls, [.reveal(captureID: out.id, nodeID: 1)],
+                       "focus moved on: the tap's node is revealed first")
+        scrolling.ended([NuxieMachineScrolled(.reveal(captureID: out.id, nodeID: 1), .moved)], settled: true,
+                        drawn: inView)
+        XCTAssertEqual(scrolling.take(inView).tap, NuxieMachineSemanticTap(captureID: inView.id, nodeID: 1),
+                       "and the tap goes")
+        XCTAssertEqual(scrolling.target, 2, "the focused node waits its turn")
+        scrolling.ended([], settled: true, drawn: out)
+        XCTAssertEqual(scrolling.take(out).scrolls, [.reveal(captureID: out.id, nodeID: 2)], "then it is revealed")
+        scrolling.ended([NuxieMachineScrolled(.reveal(captureID: out.id, nodeID: 2), .moved)], settled: true,
+                        drawn: inView)
+        _ = scrolling.take(inView)
+
+        // Focus moves to a node under no `scroll`, or leaves the node: the
+        // tap still goes.
+        XCTAssertTrue(scrolling.hold(tap: 1))
+        scrolling.focusOutside()
+        scrolling.focusLeft(1)
+        XCTAssertEqual(scrolling.heldTap, 1, "focus moving away keeps the tap")
+        XCTAssertEqual(scrolling.take(out).scrolls, [.reveal(captureID: out.id, nodeID: 1)])
+        scrolling.ended([NuxieMachineScrolled(.reveal(captureID: out.id, nodeID: 1), .moved)], settled: true,
+                        drawn: inView)
+        XCTAssertEqual(scrolling.take(inView).tap, NuxieMachineSemanticTap(captureID: inView.id, nodeID: 1),
+                       "and it goes")
+
+        // A page goes in the frame: the tap waits for the next rest.
+        let pageable = try Self.capture([node(1, CGRect(x: 24, y: 400, width: 160, height: 44), actions: Self.tap)],
+                                        regions: [NuxieNativeScrollRegion(bounds: Self.surface, canScroll: Self.bottom,
+                                                                          parent: nil)])
+        XCTAssertTrue(scrolling.hold(tap: 1))
+        scrolling.page(.showBelow, from: 1, region: 0)
+        let paged = scrolling.take(pageable)
+        XCTAssertEqual(paged.scrolls.count, 1, "the page goes")
+        XCTAssertNil(paged.tap, "a page goes in the frame: the tap does not")
+        scrolling.ended([NuxieMachineScrolled(paged.scrolls[0], .moved)], settled: true, drawn: pageable)
+        XCTAssertEqual(scrolling.take(pageable).tap?.nodeID, 1, "it goes at the next rest")
 
         // The capture loses the node: dropped.
         let without = try Self.capture([node(2, Self.below(100), actions: Self.tap)], regions: [Self.page()])
@@ -856,11 +977,11 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
 
     // MARK: The element
 
-    /// An element tells its screen when focus reaches it, and passes a
-    /// scroll gesture on, only for a node inside a `scroll`; its answer is
-    /// the screen's. The container tells the reader a page moved with the
-    /// line it is given.
-    func testAnElementPassesFocusAndScrollOnlyForANodeInAScroll() throws {
+    /// An element tells its screen every time focus reaches it or leaves
+    /// it, and passes a scroll gesture on only for a node inside a `scroll`;
+    /// its answer is the screen's. The container tells the reader a page
+    /// moved with the line it is given.
+    func testAnElementPassesEveryFocusChangeAndScrollOnlyForANodeInAScroll() throws {
         let view = UIView(frame: Self.surface)
         var posted: [Any?] = []
         let container = ExperienceSemanticAccessibilityContainer(view: view, focusedElement: { nil },
@@ -876,7 +997,9 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         var answer = true
         container.update(capture: capture, nativeControls: [:], project: { node in
             NuxieMachineScreenViewController.projection(for: node, on: Self.surface)
-        }, submit: { _, _, _ in false }, focused: { focused.append($0) }, scroll: { node, direction in
+        }, submit: { _, _, _ in false }, focused: { node, gained in
+            focused.append(gained ? node : 100 + node)
+        }, scroll: { node, direction in
             scrolled.append((node, direction))
             return answer
         })
@@ -885,8 +1008,9 @@ final class ScreenReaderScrollRuleTests: XCTestCase {
         let outside = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Out" })
 
         inside.accessibilityElementDidBecomeFocused()
+        inside.accessibilityElementDidLoseFocus()
         outside.accessibilityElementDidBecomeFocused()
-        XCTAssertEqual(focused, [1])
+        XCTAssertEqual(focused, [1, 101, 2], "every focus change, under a scroll or not, and focus leaving")
         XCTAssertTrue(inside.accessibilityScroll(.up))
         answer = false
         XCTAssertFalse(inside.accessibilityScroll(.down), "the screen's answer: nothing moves that way")

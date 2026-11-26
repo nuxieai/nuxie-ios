@@ -292,8 +292,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
             Self.projection(for: node, on: surface.bounds)
         }, submit: { [weak self] captureID, nodeID, action in
             self?.activate(nodeID, in: captureID, action) ?? false
-        }, focused: { [weak self] nodeID in
-            self?.focused(nodeID)
+        }, focused: { [weak self] nodeID, gained in
+            self?.focused(nodeID, gained)
         }, scroll: { [weak self] nodeID, direction in
             self?.scroll(from: nodeID, direction) ?? false
         })
@@ -374,13 +374,23 @@ package final class NuxieMachineScreenViewController: UIViewController {
         return true
     }
 
-    /// The screen reader's focus reached the element of `nodeID`, a node
-    /// inside a `scroll`: it is brought into view once the Screen is at
-    /// rest ([`NuxieMachineScreenReaderScrolling`]).
-    private func focused(_ nodeID: UInt32) {
+    /// The screen reader's focus reached (`gained`) or left the element of
+    /// `nodeID`. A node inside a `scroll` is brought into view once the
+    /// Screen is at rest; focus on a node under none, or leaving the node,
+    /// lets a reveal still waiting for it go
+    /// ([`NuxieMachineScreenReaderScrolling`]).
+    private func focused(_ nodeID: UInt32, _ gained: Bool) {
         guard reachable, let loop, !loop.stopped else { return }
-        scrolling.focus(nodeID)
-        loop.requestFrame()
+        guard gained else {
+            scrolling.focusLeft(nodeID)
+            return
+        }
+        if latest?.tree.nodes.first(where: { $0.id == nodeID })?.scrollRegion != nil {
+            scrolling.focus(nodeID)
+            loop.requestFrame()
+        } else {
+            scrolling.focusOutside()
+        }
     }
 
     /// A scroll gesture with the reader on the element of `nodeID`: the
