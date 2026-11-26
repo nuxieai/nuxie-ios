@@ -61,6 +61,17 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// refused and one of a newer snapshot replaces it (the engine would
     /// refuse the older one anyway).
     fileprivate var semanticTap: NuxieMachineSemanticTap?
+    /// What the screen reader asked of this Screen's `scroll`s and has not
+    /// been sent: a reveal of the node it focused, a tap waiting behind it,
+    /// a page ([`NuxieMachineScreenReaderScrolling`]).
+    fileprivate var scrolling = NuxieMachineScreenReaderScrolling()
+    /// Whether the last frame that stepped this Screen reported its step
+    /// settled; a reveal waits for one. True before the first frame.
+    private var lastSettled = true
+    /// Told when the screen reader's scroll gesture moved a page, with the
+    /// argument posted: none, so nothing is said and the reader plays its
+    /// scroll sound. The post itself, unless a check listens instead.
+    package var pageScrolled: (Any?) -> Void = { UIAccessibility.post(notification: .pageScrolled, argument: $0) }
     /// The size the engine lays this presentation's Screen out at and draws,
     /// once applied.
     fileprivate var sized: Size?
@@ -73,7 +84,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The Screen's lines and buttons, as its surface's accessibility
     /// elements: the engine's semantic snapshot of each frame drawn, shown
     /// the way every Screen the engine draws shows it.
-    private lazy var semantics = ExperienceSemanticAccessibilityContainer(view: surface)
+    private lazy var semantics = ExperienceSemanticAccessibilityContainer(
+        view: surface, pageScrolled: { [weak self] argument in self?.pageScrolled(argument) })
     /// The snapshot the elements show now; an activation acts on it only.
     private var latest: NuxieNativeSemanticCapture?
     /// Whether the surface's layer has been given the engine's Metal device,
@@ -278,16 +290,27 @@ package final class NuxieMachineScreenViewController: UIViewController {
             Self.projection(for: node, on: surface.bounds)
         }, submit: { [weak self] captureID, nodeID, action in
             self?.activate(nodeID, in: captureID, action) ?? false
+        }, focused: { [weak self] nodeID in
+            self?.focused(nodeID)
+        }, scroll: { [weak self] nodeID, direction in
+            self?.scroll(from: nodeID, direction) ?? false
         })
     }
 
     /// How a machine Screen whose surface has `bounds` shows `node`, or none
     /// for a node no element stands for: one with no role UIKit reads, or
-    /// one drawn nowhere on the surface. A button or a link takes a tap when
-    /// its node offers one. The engine offers none for a disabled button or
-    /// one a `scroll` clips wholly away; such a node is still read, and its
-    /// activation answers false. A radio is a button, selected while its
-    /// check state is checked; one not checked, or mixed, is not selected.
+    /// one drawn nowhere on the surface and under no `scroll`. A node on the
+    /// surface stands where it is drawn on it. One a `scroll` has moved off
+    /// the surface keeps its own box, off the surface, as a scroll view's
+    /// subview out of view does, so the reader can reach it and bring it
+    /// into view ([`focused`]).
+    ///
+    /// A button or a link takes a tap when its node offers one. The engine
+    /// offers none for a disabled button or one a `scroll` clips wholly
+    /// away; a button inside a `scroll` that is not disabled still takes an
+    /// activation, which waits for it to be brought into view
+    /// ([`activate`]). A radio is a button, selected while its check state
+    /// is checked; one not checked, or mixed, is not selected.
     package static func projection(
         for node: NuxieNativeSemanticNode,
         on bounds: CGRect
@@ -295,16 +318,21 @@ package final class NuxieMachineScreenViewController: UIViewController {
         guard var traits = ExperienceSemanticAccessibilityContainer.traits(for: node) else { return nil }
         // The artboard is laid out at the surface's size with its origin
         // at zero: a point on it is the same point on the surface.
-        let frame = node.bounds.intersection(bounds)
-        guard !frame.isNull, !frame.isInfinite, !frame.isEmpty else { return nil }
+        var frame = node.bounds.intersection(bounds)
+        if frame.isNull || frame.isInfinite || frame.isEmpty {
+            guard node.scrollRegion != nil, !node.bounds.isNull, !node.bounds.isInfinite,
+                  node.bounds.width.isFinite, node.bounds.height.isFinite else { return nil }
+            frame = node.bounds
+        }
         if node.role == NuxieNativeSemanticRole.radioButton.rawValue,
            node.stateFlags & checkState == NuxieNativeSemanticNode.checked {
             traits.insert(.selected)
         }
         let presses = traits.contains(.button) || traits.contains(.link)
         let tap: UInt32 = 1 << NuxieNativeSemanticAction.tap.rawValue
+        let revealable = node.scrollRegion != nil && node.stateFlags & NuxieNativeSemanticNode.disabled == 0
         return .init(frame: frame, traits: traits, value: node.value.isEmpty ? nil : node.value,
-                     actions: presses ? node.actions & tap : 0)
+                     actions: presses ? (revealable ? tap : node.actions & tap) : 0)
     }
 
     /// The engine's check state: two bits of a node's state, unchecked,
@@ -320,13 +348,86 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// refuses), nor does an activation of a snapshot already replaced, nor
     /// one while this Screen is out of reach or its loop has stopped. A
     /// snapshot takes one tap ([`semanticTap`]).
+    ///
+    /// The engine takes no tap on a node a `scroll` clips wholly away. So a
+    /// tap on a node that is being brought into view, or that does not
+    /// show and offers no tap, waits behind its reveal, and goes in the
+    /// first settled frame after, if the node then offers one
+    /// ([`NuxieMachineScreenReaderScrolling`]). Focus normally brought it
+    /// into view before the person taps, as it does in a scroll view.
     private func activate(_ nodeID: UInt32, in captureID: UUID, _ action: NuxieNativeSemanticAction) -> Bool {
         guard reachable, action == .tap, let loop, !loop.stopped, let capture = latest, capture.id == captureID,
-              capture.tree.nodes.contains(where: { $0.id == nodeID }),
-              semanticTap?.captureID != captureID else { return false }
+              let node = capture.tree.nodes.first(where: { $0.id == nodeID }) else { return false }
+        let tap: UInt32 = 1 << NuxieNativeSemanticAction.tap.rawValue
+        if scrolling.revealPending(for: nodeID)
+            || (node.actions & tap == 0 && node.scrollRegion != nil
+                && !NuxieMachineScreenReaderScroll.isShown(node, in: capture.scrollRegions)) {
+            guard scrolling.hold(tap: nodeID) else { return false }
+            loop.requestFrame()
+            return true
+        }
+        guard node.actions & tap != 0, semanticTap?.captureID != captureID else { return false }
         semanticTap = NuxieMachineSemanticTap(captureID: captureID, nodeID: nodeID)
         loop.requestFrame()
         return true
+    }
+
+    /// The screen reader's focus reached the element of `nodeID`, a node
+    /// inside a `scroll`: it is brought into view once the Screen is
+    /// settled ([`NuxieMachineScreenReaderScrolling`]).
+    private func focused(_ nodeID: UInt32) {
+        guard reachable, let loop, !loop.stopped else { return }
+        scrolling.focus(nodeID)
+        loop.requestFrame()
+    }
+
+    /// A scroll gesture with the reader on the element of `nodeID`: the
+    /// first `scroll` around the node that can move that way moves one page
+    /// in the next frame, and the reader is told, with nothing said. False
+    /// when none can, so the reader sounds the end.
+    private func scroll(from nodeID: UInt32, _ direction: UIAccessibilityScrollDirection) -> Bool {
+        guard reachable, let loop, !loop.stopped, let capture = latest,
+              let node = capture.tree.nodes.first(where: { $0.id == nodeID }),
+              let wanted = Self.direction(direction),
+              NuxieMachineScreenReaderScroll.page(wanted, from: node, in: capture.scrollRegions) != nil
+        else { return false }
+        scrolling.page(wanted, from: nodeID)
+        loop.requestFrame()
+        semantics.announcePageScrolled()
+        return true
+    }
+
+    /// What a scroll gesture asks to show. The reader names the way the
+    /// fingers move, and the content follows them, as in a scroll view: up
+    /// shows what is below, left what is to the right. Next is down the
+    /// page and previous up it.
+    package static func direction(_ direction: UIAccessibilityScrollDirection) -> NuxieMachineScrollDirection? {
+        switch direction {
+        case .up, .next: return .showBelow
+        case .down, .previous: return .showAbove
+        case .left: return .showRight
+        case .right: return .showLeft
+        @unknown default: return nil
+        }
+    }
+
+    /// The screen reader's moves of a `scroll` and a tap that waited behind
+    /// one, for the next frame, asked of the snapshot shown now. The tap
+    /// goes beside any other the frame carries.
+    package func takeScrolls() -> [NuxieMachineScrollRequest] {
+        let taken = scrolling.take(latest, settled: lastSettled)
+        if let tap = taken.tap, semanticTap == nil { semanticTap = tap }
+        return taken.scrolls
+    }
+
+    /// A frame that stepped this Screen ended: `scrolled` is what came of
+    /// the moves it carried for it, and `settled` whether its step reported
+    /// itself settled. Asks for another frame while a reveal or a tap
+    /// behind one waits.
+    package func frameEnded(_ scrolled: [NuxieMachineScrolled], settled: Bool) {
+        lastSettled = settled
+        scrolling.ended(scrolled, settled: settled)
+        if scrolling.wantsFrames { loop?.requestFrame() }
     }
 
     /// The pointers that arrived for this Screen since the last frame took
@@ -344,8 +445,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
         return semanticTap.map { [$0] } ?? []
     }
 
-    /// Whether input waits for the next frame: pointers or a tap.
-    fileprivate var hasInput: Bool { !pointers.isEmpty || semanticTap != nil }
+    /// What the screen reader has asked of this Screen's `scroll`s and has
+    /// not been sent, for checks.
+    package var screenReaderScrolling: NuxieMachineScreenReaderScrolling { scrolling }
+
+    /// Whether input waits for the next frame: pointers, a tap, or a move
+    /// of a `scroll` the screen reader asked for.
+    fileprivate var hasInput: Bool { !pointers.isEmpty || semanticTap != nil || scrolling.wantsFrames }
 
     private func updateAccessibility() {
         container.accessibilityValue = framesDrawn > 0 ? "\(statusText) Frames drawn: \(framesDrawn)." : "loading"
@@ -508,6 +614,7 @@ package final class NuxieMachineScreenLoop {
         for screen in screens {
             screen.pointers = []
             screen.semanticTap = nil
+            screen.scrolling = NuxieMachineScreenReaderScrolling()
         }
     }
 
@@ -524,20 +631,22 @@ package final class NuxieMachineScreenLoop {
         let touching = screens.last { $0.hasInput }
         let touched = touching?.shown
         let pointers = touching?.takePointers() ?? []
+        let scrolls = touching?.takeScrolls() ?? []
         let semanticTaps = touching?.takeSemanticTaps() ?? []
         let elapsed = lastTimestamp.map { Float(max(0, timestamp - $0)) } ?? 0
         lastTimestamp = timestamp
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.inLane {
-                await self.runFrame(pointers: pointers, semanticTaps: semanticTaps, touched: touched,
-                                    elapsedSeconds: elapsed)
+                await self.runFrame(pointers: pointers, semanticTaps: semanticTaps, scrolls: scrolls,
+                                    touched: touched, elapsedSeconds: elapsed)
             }
         }
     }
 
     private func runFrame(pointers: [NuxieNativePointerEvent], semanticTaps: [NuxieMachineSemanticTap],
-                          touched: NuxieMachineShown?, elapsedSeconds: Float) async {
+                          scrolls: [NuxieMachineScrollRequest], touched: NuxieMachineShown?,
+                          elapsedSeconds: Float) async {
         let frame: NuxieMachineFrame
         var doing = "resize"
         let now = clock()
@@ -557,8 +666,8 @@ package final class NuxieMachineScreenLoop {
                 try await screen.applySize(runtime)
                 stepped.append((screen, runtime))
             }
-            frame = await edge.frame(pointers: pointers, semanticTaps: semanticTaps, on: touched,
-                                     elapsedSeconds: elapsedSeconds, now: now)
+            frame = await edge.frame(pointers: pointers, semanticTaps: semanticTaps, scrolls: scrolls,
+                                     on: touched, elapsedSeconds: elapsedSeconds, now: now)
             doing = "render"
             for (screen, runtime) in stepped where screen.isDrawable && !stopped {
                 drawing = true
@@ -571,6 +680,13 @@ package final class NuxieMachineScreenLoop {
                 } else if after != nil {
                     frameRequested = true
                 }
+            }
+            // Each Screen the frame stepped hears what came of the screen
+            // reader's moves it carried, and whether it settled, once its
+            // new snapshot is shown.
+            for (screen, _) in stepped where !stopped {
+                screen.frameEnded(screen.shown == touched ? frame.scrolled : [],
+                                  settled: frame.settled.contains(screen.shown))
             }
         } catch {
             frameInFlight = false
