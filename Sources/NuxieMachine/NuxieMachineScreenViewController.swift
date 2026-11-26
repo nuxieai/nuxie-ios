@@ -424,7 +424,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// the moves it carried for it, and `settled` whether its step reported
     /// itself settled. A page that moved tells the reader which page its
     /// region shows, read from the snapshot this frame drew, which reads
-    /// where the region is going. Asks for another frame while a reveal or
+    /// where the region is going, or tells it with nothing to say when the
+    /// pages cannot be counted. Asks for another frame while a reveal or
     /// a tap behind one waits.
     package func frameEnded(_ scrolled: [NuxieMachineScrolled], settled: Bool) {
         lastSettled = settled
@@ -433,10 +434,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
             if case .page = result.request { return result.outcome == .moved }
             return false
         }
-        if let paged, case .page(_, let region, _, let dy) = paged.request, let latest,
-           latest.scrollRegions.indices.contains(region) {
-            semantics.announcePageScrolled(
-                NuxieMachineScreenReaderScroll.pageLine(latest.scrollRegions[region], vertical: dy != 0))
+        if let paged, case .page(_, let region, _, let dy) = paged.request {
+            // With no line to say (its pages cannot be counted, or the
+            // snapshot lost its region), the reader is still told, with none.
+            let line = latest.flatMap { capture in
+                capture.scrollRegions.indices.contains(region)
+                    ? NuxieMachineScreenReaderScroll.pageLine(capture.scrollRegions[region], vertical: dy != 0) : nil
+            }
+            semantics.announcePageScrolled(line)
         }
         if scrolling.wantsFrames { loop?.requestFrame() }
     }

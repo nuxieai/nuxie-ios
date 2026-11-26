@@ -98,30 +98,42 @@ package enum NuxieMachineScreenReaderScroll {
     /// the top and one more starts at each step, the last at the end,
     /// `1 + ceil(range / step)` in all (half a point short of a whole step
     /// adds none). Within half a point of `range` the box shows the last;
-    /// short of it, the step it is nearest, never the last.
-    package static func shownPage(position: CGFloat, range: CGFloat, length: CGFloat) -> (page: Int, of: Int) {
+    /// short of it, the step it is nearest, never the last. None when the
+    /// pages cannot be counted: a range, position or length that is not a
+    /// finite number (a looping scroller's range is unbounded), a negative
+    /// range, or more than [`mostPages`].
+    package static func shownPage(position: CGFloat, range: CGFloat, length: CGFloat) -> (page: Int, of: Int)? {
+        guard range.isFinite, range >= 0, position.isFinite, length.isFinite else { return nil }
         let step = pageStep(length)
-        let pages = 1 + Int((max(range - 0.5, 0) / step).rounded(.up))
+        let steps = (max(range - 0.5, 0) / step).rounded(.up)
+        guard steps.isFinite, steps < CGFloat(mostPages) else { return nil }
+        let pages = 1 + Int(steps)
         if position >= range - 0.5 { return (pages, pages) }
-        return (min(pages - 1, Int((max(position, 0) / step + 0.5).rounded(.down)) + 1), pages)
+        let nearest = (max(position, 0) / step + 0.5).rounded(.down)
+        return (min(pages - 1, Int(min(nearest, CGFloat(pages))) + 1), pages)
     }
+
+    /// The most pages a page line counts; a longer content has none.
+    package static let mostPages = 10_000
 
     /// The line for `region` after a page moved it along y (`vertical`) or
     /// x, read from its position, which is where it is going; none when
-    /// the runtime does not read its position.
+    /// the runtime does not read its position or its pages cannot be
+    /// counted ([`shownPage`]).
     package static func pageLine(_ region: NuxieNativeScrollRegion, vertical: Bool) -> String? {
         guard let scroll = region.scroll, let range = region.range else { return nil }
-        let at = vertical
+        let shown = vertical
             ? shownPage(position: scroll.y, range: range.height, length: region.bounds.height)
             : shownPage(position: scroll.x, range: range.width, length: region.bounds.width)
-        return pageWords(at.page, of: at.of)
+        return shown.map { pageWords($0.page, of: $0.of) }
     }
 
     /// The move one page in `direction` asks for, from where `node` is: the
     /// first region from its own outward whose content can still move that
     /// way, and the move in a scroll wheel's sense, a page of that region's
     /// box. None when no region above the node can move that way: at an
-    /// end, or under no `scroll`.
+    /// end, or under no `scroll`, or when the region's box is not a finite
+    /// length that way.
     package static func page(_ direction: NuxieMachineScrollDirection, from node: NuxieNativeSemanticNode,
                              in regions: [NuxieNativeScrollRegion]) -> (region: Int, dx: Float, dy: Float)? {
         let bit: UInt32
@@ -134,11 +146,15 @@ package enum NuxieMachineScreenReaderScroll {
         guard let index = Self.regions(of: node, in: regions).first(where: { regions[$0].canScroll & bit != 0 })
         else { return nil }
         let box = regions[index].bounds
+        let vertical = direction == .showBelow || direction == .showAbove
+        let length = vertical ? box.height : box.width
+        guard length.isFinite else { return nil }
+        let step = Float(pageStep(length))
         switch direction {
-        case .showBelow: return (index, 0, -Float(pageStep(box.height)))
-        case .showAbove: return (index, 0, Float(pageStep(box.height)))
-        case .showRight: return (index, -Float(pageStep(box.width)), 0)
-        case .showLeft: return (index, Float(pageStep(box.width)), 0)
+        case .showBelow: return (index, 0, -step)
+        case .showAbove: return (index, 0, step)
+        case .showRight: return (index, -step, 0)
+        case .showLeft: return (index, step, 0)
         }
     }
 }
@@ -162,6 +178,10 @@ package enum NuxieMachineScreenReaderScroll {
 /// goes in the first settled frame after, to the snapshot of that frame, if
 /// the node then offers a tap. A page does not wait for a settle: it starts
 /// from where the content is going.
+///
+/// What a frame carries is kept apart from what is asked while it is in
+/// flight: a frame's answers settle only the requests it carried, so a page,
+/// focus or tap asked before it ends waits for the next frame.
 package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     /// The node focus reached last that still needs a reveal.
     package private(set) var target: UInt32?
@@ -173,7 +193,17 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
     private var reveals = 0
     /// Calls asked of a spent snapshot, sent again.
     private var stale = 0
+    /// Pages asked for since the last frame took them.
     private var page: Page?
+    /// The page a frame carries and has not answered, and the request it
+    /// went as; only its answer touches it.
+    private var paging: Flight?
+
+    /// A page in flight and the request it went as.
+    private struct Flight: Equatable, Sendable {
+        let page: Page
+        let request: NuxieMachineScrollRequest
+    }
 
     /// A page asked for and not yet sent: from which node, which way, and
     /// how many.
@@ -225,7 +255,9 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
 
     /// Whether anything waits for a frame: something to send or a settle to
     /// see.
-    package var wantsFrames: Bool { target != nil || heldTap != nil || settling != nil || page != nil }
+    package var wantsFrames: Bool {
+        target != nil || heldTap != nil || settling != nil || page != nil || paging != nil
+    }
 
     /// What the coming frame carries, asked of `capture`, the snapshot on
     /// screen, after a frame whose step was `settled` or not: a page, a
@@ -237,12 +269,14 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
         var tap: NuxieMachineSemanticTap?
         let nodes = capture.tree.nodes
         if let waiting = page {
+            page = nil
             if let node = nodes.first(where: { $0.id == waiting.node }),
                let move = NuxieMachineScreenReaderScroll.page(waiting.direction, from: node, in: capture.scrollRegions) {
-                scrolls.append(.page(captureID: capture.id, region: move.region, dx: move.dx * Float(waiting.count),
-                                     dy: move.dy * Float(waiting.count)))
-            } else {
-                page = nil
+                let request = NuxieMachineScrollRequest.page(captureID: capture.id, region: move.region,
+                                                             dx: move.dx * Float(waiting.count),
+                                                             dy: move.dy * Float(waiting.count))
+                scrolls.append(request)
+                paging = Flight(page: waiting, request: request)
             }
         }
         guard settled, settling == nil else { return (scrolls, nil) }
@@ -279,8 +313,8 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
                 case .stayed:
                     break
                 case .stale:
-                    stale += 1
                     if target == node {
+                        stale += 1
                         reveals -= 1
                         if stale > Self.staleRetries { target = nil }
                     }
@@ -288,12 +322,20 @@ package struct NuxieMachineScreenReaderScrolling: Equatable, Sendable {
                     if target == node { target = nil }
                 }
             case .page:
-                if result.outcome == .stale, var waiting = page, waiting.stale < Self.staleRetries {
-                    waiting.stale += 1
-                    page = waiting
-                } else {
-                    page = nil
+                // Only the page this answers leaves flight; pages asked
+                // since stay queued for the next frame. A stale one is asked
+                // again, ahead of later pages its way; a later page the other
+                // way replaces it, being what was asked last.
+                guard let flying = paging, flying.request == result.request else { continue }
+                paging = nil
+                guard result.outcome == .stale, flying.page.stale < Self.staleRetries else { continue }
+                var again = flying.page
+                again.stale += 1
+                if let queued = page {
+                    guard queued.direction == again.direction else { continue }
+                    again.count += queued.count
                 }
+                page = again
             }
         }
         if settled { settling = nil }
