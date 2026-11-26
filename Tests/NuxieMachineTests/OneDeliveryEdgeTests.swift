@@ -256,6 +256,7 @@ final class OneDeliveryEdgeTests: XCTestCase {
           platforms ios android
 
           state up = false
+          state noon = false
 
           entry
             on event "opened"
@@ -268,20 +269,20 @@ final class OneDeliveryEdgeTests: XCTestCase {
             up = true
             go(clock)
 
-          wait noon
-            while up
-            until next 12:00
-            then swap within 6h
-            else give_up
+          task at_noon  when up
+            after(next 12:00, mark_noon)
+
+          task swap_now  when noon and here
+            change(swap)
+
+          action mark_noon
+            up = false
+            noon = true
 
           action swap
-            up = false
+            noon = false
             dismiss("swapped")
             go(clock)
-
-          action give_up
-            up = false
-            exit
 
           action close
             dismiss("closed")

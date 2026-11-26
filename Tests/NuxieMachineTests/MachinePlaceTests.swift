@@ -372,11 +372,8 @@ final class MachinePlaceTests: XCTestCase {
                     do arm
                   action arm
                     due = true
-                  wait later
-                    while due
-                    until next 18:00
-                    then fire within 6h
-                    else exit
+                  task later  when due
+                    after(next 18:00, fire)
                   action fire
                     due = false
 

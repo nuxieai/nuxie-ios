@@ -25,11 +25,8 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
             do arm
           action arm
             due = true
-          wait later
-            while due
-            until next 18:00
-            then fire within 6h
-            else exit
+          task later  when due
+            after(next 18:00, fire)
           action fire
             due = false
 
@@ -131,7 +128,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         Int64((Date().timeIntervalSince1970 * 1000).rounded(.down))
     }
 
-    /// The first 18:00 UTC after `now`, as `until next 18:00` reads it.
+    /// The first 18:00 UTC after `now`, as `after(next 18:00, …)` reads it.
     private static func nextEvening(after now: Int64) -> Int64 {
         let day: Int64 = 86_400_000
         let evening = now / day * day + 18 * 3_600_000
@@ -233,6 +230,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
                   state first_up = false
                   state later = false
+                  state ready = false
 
                   entry
                     on event "opened"
@@ -245,31 +243,27 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
                     first_up = true
                     go(clock)
 
-                  wait noon
-                    while first_up
-                    until next 12:00
-                    then hide within 6h
-                    else give_up
+                  task noon  when first_up
+                    after(next 12:00, hide)
 
                   action hide
                     first_up = false
                     later = true
                     dismiss("hidden")
 
-                  wait evening
-                    while later
-                    until next 18:00
-                    then show_again within 6h
-                    else give_up
+                  task evening  when later
+                    after(next 18:00, mark_ready)
+
+                  task show  when ready and here
+                    change(show_again)
+
+                  action mark_ready
+                    later = false
+                    ready = true
 
                   action show_again
-                    later = false
+                    ready = false
                     go(clock)
-
-                  action give_up
-                    first_up = false
-                    later = false
-                    exit
 
                   action close
                     dismiss("closed")
