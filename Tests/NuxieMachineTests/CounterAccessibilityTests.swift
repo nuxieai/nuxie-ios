@@ -564,14 +564,53 @@ final class ScreenReaderScrollingTests: XCTestCase {
         }
     }
 
+    /// The newest activation wins. A tap held behind its reveal ("Restore
+    /// purchases", below the fold) is dropped when a button in view is
+    /// activated, whose tap goes at once; and a tap held after a tap in view
+    /// not yet sent replaces it.
+    @MainActor
+    func testTheNewestActivationWins() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.footerSize, name: "stillwater-30-newest")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            let opened = try await reader.screenReaderFrames(kept: "2-at-rest")
+            let capture = try XCTUnwrap(opened.last.semantics)
+            let inView = try XCTUnwrap(capture.tree.nodes.first {
+                $0.actions & 1 != 0 && !$0.label.isEmpty
+                    && NuxieMachineScreenReaderScroll.isShown($0, in: capture.scrollRegions)
+                    && reader.surface.bounds.contains($0.bounds)
+            }, "a button in view")
+            let link = try XCTUnwrap(capture.tree.nodes.first { $0.label == "Restore purchases" })
+            let held = try reader.element("Restore purchases")
+            let pressed = try reader.element(inView.label)
+
+            XCTAssertTrue(held.accessibilityActivate(), "the link below the fold takes a tap, which waits")
+            XCTAssertEqual(reader.controller.screenReaderScrolling.heldTap, link.id)
+            XCTAssertTrue(pressed.accessibilityActivate(), "\(inView.label), in view, activates")
+            XCTAssertNil(reader.controller.screenReaderScrolling.heldTap, "the held tap is dropped")
+            XCTAssertEqual(reader.controller.takeSemanticTaps().map(\.nodeID), [inView.id], "the newest goes at once")
+
+            XCTAssertTrue(pressed.accessibilityActivate())
+            XCTAssertTrue(held.accessibilityActivate(), "a held tap after it")
+            XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "replaces the tap not yet sent")
+            XCTAssertEqual(reader.controller.screenReaderScrolling.heldTap, link.id)
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
     /// A scroll gesture on an element of the page moves the page one page
     /// in the next frame, and once it moved the reader is told which page
     /// shows ("Page n of m"); at an end it answers false, tells nothing and
     /// queues nothing. At its top
-    /// the page shows nothing above. A gesture up shows what is below: one
-    /// page, `max(h - 48, h / 2, 1)` points of the page's box, which here
-    /// is more than the page's range, so it stops at its end. Down brings
-    /// it back to its top. The headline, scrolled off the surface, keeps
+    /// the page shows nothing above. `.down`, which UIKit sends for a
+    /// three-finger swipe up (it names the way the scroll indicator moves),
+    /// shows what is below: one page, `max(h - 48, h / 2, 1)` points of the
+    /// page's box, which here is more than the page's range, so it stops at
+    /// its end. `.up` brings it back to its top. The headline, scrolled off the surface, keeps
     /// its element there.
     @MainActor
     func testAScrollGestureMovesThePageOnePageAndAtAnEndAnswersFalse() async throws {
@@ -589,11 +628,11 @@ final class ScreenReaderScrollingTests: XCTestCase {
             XCTAssertGreaterThan(range, 0, "the page scrolls at \(Self.footerSize)")
             let step = NuxieMachineScreenReaderScroll.pageStep(page.bounds.height)
 
-            XCTAssertFalse(title.accessibilityScroll(.down), "at its top the page shows nothing above")
+            XCTAssertFalse(title.accessibilityScroll(.up), "at its top the page shows nothing above")
             XCTAssertTrue(posted.isEmpty, "nothing is told at an end")
             XCTAssertFalse(reader.controller.screenReaderScrolling.wantsFrames, "nothing is queued at an end")
 
-            XCTAssertTrue(title.accessibilityScroll(.up), "up shows what is below")
+            XCTAssertTrue(title.accessibilityScroll(.down), "down shows what is below")
             XCTAssertTrue(posted.isEmpty, "nothing is told before the page moved")
             let pages = 1 + Int(((range - 0.5) / step).rounded(.up))
             XCTAssertGreaterThan(pages, 1)
@@ -617,11 +656,11 @@ final class ScreenReaderScrollingTests: XCTestCase {
                                "the headline off the surface is at its own box")
             }
 
-            XCTAssertFalse(title.accessibilityScroll(.up), "at its end the page shows nothing more below")
+            XCTAssertFalse(title.accessibilityScroll(.down), "at its end the page shows nothing more below")
             XCTAssertEqual(posted.count, 1, "nothing is told at an end")
             XCTAssertFalse(reader.controller.screenReaderScrolling.wantsFrames)
 
-            XCTAssertTrue(title.accessibilityScroll(.down), "down shows what is above")
+            XCTAssertTrue(title.accessibilityScroll(.up), "up shows what is above")
             let back = try await reader.screenReaderFrames(kept: "4-paged-up")
             XCTAssertEqual(back.scrolled.map(\.outcome), [.moved])
             XCTAssertEqual(posted.map { $0 as? String }, ["Page \(pages) of \(pages)", "Page 1 of \(pages)"],
@@ -821,13 +860,13 @@ final class ScreenReaderScrollingTests: XCTestCase {
             _ = try await reader.frame(name: "1-open")
             _ = try await reader.screenReaderFrames(kept: "2-at-rest")
             let title = try reader.element(startingWith: "Ten quiet minutes,")
-            XCTAssertTrue(title.accessibilityScroll(.up))
+            XCTAssertTrue(title.accessibilityScroll(.down))
             _ = try await reader.screenReaderFrames(kept: "3-at-the-end")
             func link(_ drawn: DrawnFrame?) throws -> NuxieNativeSemanticNode {
                 try XCTUnwrap(drawn?.semantics?.tree.nodes.first { $0.label == "Restore purchases" })
             }
 
-            XCTAssertTrue(title.accessibilityScroll(.down), "back up the page")
+            XCTAssertTrue(title.accessibilityScroll(.up), "back up the page")
             try reader.element("Restore purchases").accessibilityElementDidBecomeFocused()
             var boxes: [CGRect] = []
             var revealedAt: [Int] = []
@@ -877,7 +916,7 @@ final class ScreenReaderScrollingTests: XCTestCase {
             let pages = 1 + Int(((range - 0.5) / step).rounded(.up))
             XCTAssertGreaterThan(pages, 1)
 
-            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.up))
+            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.down))
             let undrawn = try await reader.screenReaderFrame(drawn: false)
             XCTAssertEqual(undrawn.frame.scrolled.map(\.outcome), [.moved], "the page moved")
             XCTAssertTrue(posted.isEmpty, "a frame not drawn tells nothing: \(posted)")
@@ -896,8 +935,8 @@ final class ScreenReaderScrollingTests: XCTestCase {
     }
 
     /// When the loop stops (the surface goes away), what the reader asked
-    /// and is not done goes with it: a reveal, a tap held behind it and a
-    /// page queued.
+    /// and is not done goes with it: a reveal, a tap held behind it and the
+    /// page asked.
     @MainActor
     func testTheSurfaceGoingAwayDropsEverything() async throws {
         let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
@@ -908,7 +947,7 @@ final class ScreenReaderScrollingTests: XCTestCase {
             let link = try reader.element("About the trial")
             link.accessibilityElementDidBecomeFocused()
             XCTAssertTrue(link.accessibilityActivate())
-            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.up))
+            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.down))
             XCTAssertTrue(reader.controller.screenReaderScrolling.wantsFrames)
             reader.loop.screens = [reader.controller]
             reader.loop.stop()
