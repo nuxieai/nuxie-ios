@@ -7,25 +7,41 @@ import UIKit
 /// What the element says beyond the node's own words, and which actions an
 /// activation may ask for, are the screen's: they arrive in its projection
 /// ([`ExperienceSemanticAccessibilityContainer.Projection`]).
+///
+/// An element whose node is inside a `scroll` also tells its screen when
+/// the reader's focus reaches it ([`Focused`]), so the screen can bring it
+/// into view, and passes the reader's scroll gestures on it to its screen
+/// ([`Scroll`]). A screen that does neither leaves them out.
 @MainActor
 package final class ExperienceSemanticAccessibilityElement: UIAccessibilityElement {
     package typealias Submit = (UUID, UInt32, NuxieNativeSemanticAction) -> Bool
+    /// The reader's focus reached the element of node `nodeID`.
+    package typealias Focused = (UInt32) -> Void
+    /// The reader asked to scroll from the element of node `nodeID`; whether
+    /// anything will move.
+    package typealias Scroll = (UInt32, UIAccessibilityScrollDirection) -> Bool
 
     package private(set) var captureID: UUID?
     private var node: NuxieNativeSemanticNode?
     private var actions: UInt32 = 0
     private var submit: Submit?
+    private var focused: Focused?
+    private var scroll: Scroll?
 
     package func update(
         captureID: UUID,
         node: NuxieNativeSemanticNode,
         projection: ExperienceSemanticAccessibilityContainer.Projection,
-        submit: @escaping Submit
+        submit: @escaping Submit,
+        focused: Focused? = nil,
+        scroll: Scroll? = nil
     ) {
         self.captureID = captureID
         self.node = node
         self.actions = projection.actions
         self.submit = submit
+        self.focused = focused
+        self.scroll = scroll
         accessibilityLabel = node.label
         accessibilityValue = projection.value
         accessibilityHint = node.hint.isEmpty ? nil : node.hint
@@ -49,6 +65,8 @@ package final class ExperienceSemanticAccessibilityElement: UIAccessibilityEleme
         node = nil
         actions = 0
         submit = nil
+        focused = nil
+        scroll = nil
         isAccessibilityElement = false
         accessibilityLabel = nil
         accessibilityValue = nil
@@ -60,6 +78,26 @@ package final class ExperienceSemanticAccessibilityElement: UIAccessibilityEleme
     override package func accessibilityActivate() -> Bool { perform(.tap) }
     override package func accessibilityIncrement() { _ = perform(.increase) }
     override package func accessibilityDecrement() { _ = perform(.decrease) }
+
+    /// The reader's focus reached this element: a node inside a `scroll`
+    /// tells its screen, which brings it into view.
+    override package func accessibilityElementDidBecomeFocused() {
+        super.accessibilityElementDidBecomeFocused()
+        guard isAccessibilityElement, let node, node.scrollRegion != nil, let focused,
+              let container = accessibilityContainer as? UIView,
+              Self.allowsAccessibilityAction(in: container) else { return }
+        focused(node.id)
+    }
+
+    /// A scroll gesture with the reader on this element: its screen moves
+    /// the `scroll` around the node one page. False when nothing can move
+    /// that way, so the reader sounds the end.
+    override package func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        guard isAccessibilityElement, let node, node.scrollRegion != nil, let scroll,
+              let container = accessibilityContainer as? UIView,
+              Self.allowsAccessibilityAction(in: container) else { return false }
+        return scroll(node.id, direction)
+    }
 
     package static func allowsInteraction(in view: UIView) -> Bool {
         var current: UIView? = view
