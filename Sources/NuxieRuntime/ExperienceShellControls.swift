@@ -11,18 +11,18 @@ import UIKit
 /// the runtime's layout: callers pin it to the safe area as an overlay so the
 /// authored surface underneath keeps its full container geometry.
 @MainActor
-final class ExperienceGlassControl: UIControl {
+package final class ExperienceGlassControl: UIControl {
     static let diameter: CGFloat = 44
 
     private let effectView: UIVisualEffectView
     private let tintView = UIView()
     private let imageView = UIImageView()
 
-    override var isEnabled: Bool {
+    package override var isEnabled: Bool {
         didSet { alpha = isEnabled ? 1 : 0.4 }
     }
 
-    override var isHighlighted: Bool {
+    package override var isHighlighted: Bool {
         didSet {
             guard oldValue != isHighlighted else { return }
             let scale: CGFloat = isHighlighted ? 0.92 : 1
@@ -35,7 +35,7 @@ final class ExperienceGlassControl: UIControl {
         }
     }
 
-    init(systemImageName: String, accessibilityLabel: String) {
+    package init(systemImageName: String, accessibilityLabel: String) {
         effectView = UIVisualEffectView(effect: Self.makeEffect(prefersLightContent: true))
         super.init(frame: .zero)
 
@@ -80,11 +80,11 @@ final class ExperienceGlassControl: UIControl {
         ])
     }
 
-    required init?(coder: NSCoder) {
+    package required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func apply(_ palette: ExperienceShellPalette) {
+    package func apply(_ palette: ExperienceShellPalette) {
         // The glass renders against the interface style, which the controller
         // forces from the experience's color-scheme mode rather than from the
         // authored background. Pinning the style here keeps a dark surface's
@@ -120,10 +120,10 @@ final class ExperienceGlassControl: UIControl {
 /// surface's side gutters and anchors it near the bottom, rather than centring
 /// it in the middle of the screen where a one-handed reach cannot land.
 @MainActor
-final class ExperienceGlassButton: UIControl {
+package final class ExperienceGlassButton: UIControl {
     /// Minimum height. The control grows past it so an accessibility text size
     /// is not clipped by the effect view's bounds.
-    static let minimumHeight: CGFloat = 56
+    package static let minimumHeight: CGFloat = 56
     /// Vertical breathing room kept around the label at any text size.
     private static let verticalPadding: CGFloat = 12
 
@@ -149,11 +149,11 @@ final class ExperienceGlassButton: UIControl {
         }
     }
 
-    override var isEnabled: Bool {
+    package override var isEnabled: Bool {
         didSet { alpha = isEnabled ? 1 : 0.4 }
     }
 
-    override var isHighlighted: Bool {
+    package override var isHighlighted: Bool {
         didSet {
             guard oldValue != isHighlighted else { return }
             let scale: CGFloat = isHighlighted ? 0.97 : 1
@@ -167,7 +167,7 @@ final class ExperienceGlassButton: UIControl {
     }
 
     /// The label, so a test can prove it fits inside the clipping control.
-    var titleLabelForTesting: UILabel { titleLabel }
+    package var titleLabelForTesting: UILabel { titleLabel }
 
     var title: String? {
         get { titleLabel.text }
@@ -228,11 +228,11 @@ final class ExperienceGlassButton: UIControl {
         self.title = title
     }
 
-    required init?(coder: NSCoder) {
+    package required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layoutSubviews() {
+    package override func layoutSubviews() {
         super.layoutSubviews()
         let available = max(bounds.width - 32, 1)
         let labelHeight = titleLabel.sizeThatFits(
@@ -249,7 +249,7 @@ final class ExperienceGlassButton: UIControl {
         effectView.layer.cornerRadius = bounds.height / 2
     }
 
-    func apply(_ palette: ExperienceShellPalette) {
+    package func apply(_ palette: ExperienceShellPalette) {
         // See `ExperienceGlassControl`: the label has to contrast with the
         // glass, and the glass follows the interface style rather than the
         // authored background.
@@ -286,7 +286,7 @@ final class ExperienceGlassButton: UIControl {
 /// same Liquid Glass material as the floating close, so the two read as one
 /// set of controls.
 @MainActor
-final class ExperienceShellRecoveryView: UIView {
+package final class ExperienceShellRecoveryView: UIView {
     /// Side gutter for the action, and the minimum margin for copy. Narrow
     /// surfaces shrink it rather than demanding a negative content width.
     private static let horizontalGutter: CGFloat = 24
@@ -299,7 +299,7 @@ final class ExperienceShellRecoveryView: UIView {
     /// Breathing room above the copy on a surface tall enough to have it.
     private static let contentTopInset: CGFloat = 24
     /// Smallest gap kept between the copy and the action.
-    static let minimumCopyActionGap: CGFloat = 24
+    package static let minimumCopyActionGap: CGFloat = 24
 
     private let iconView = UIImageView()
     private let titleLabel = UILabel()
@@ -311,16 +311,16 @@ final class ExperienceShellRecoveryView: UIView {
     private var gutterConstraints: [NSLayoutConstraint] = []
     private var stackWidthConstraint: NSLayoutConstraint?
 
-    private(set) var reason: ExperienceShellRecoveryReason = .unavailable
+    package private(set) var reason: ExperienceShellRecoveryReason = .unavailable
 
     /// Retry is in flight.
-    var isRetrying: Bool = false {
+    package var isRetrying: Bool = false {
         didSet { actionButton.isBusy = isRetrying }
     }
 
     private static let actionTitle = "Try Again"
 
-    init(onRetry: @escaping @MainActor () -> Void) {
+    package init(onRetry: @escaping @MainActor () -> Void) {
         actionButton = ExperienceGlassButton(title: Self.actionTitle)
         super.init(frame: .zero)
         accessibilityIdentifier = "nuxie-experience-recovery-shell"
@@ -451,11 +451,11 @@ final class ExperienceShellRecoveryView: UIView {
         apply(reason: reason)
     }
 
-    required init?(coder: NSCoder) {
+    package required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layoutSubviews() {
+    package override func layoutSubviews() {
         super.layoutSubviews()
         // A sheet may be narrower than two full gutters; shrink them rather
         // than requiring a negative content width.
@@ -477,7 +477,7 @@ final class ExperienceShellRecoveryView: UIView {
     /// for the current category, and handing that to `UIFontMetrics` scales it
     /// a second time: at AX5 that turns `.title3` into roughly 143pt instead
     /// of 55pt and overflows the surface.
-    static func scaledFont(
+    package static func scaledFont(
         _ style: UIFont.TextStyle,
         weight: UIFont.Weight,
         compatibleWith traits: UITraitCollection? = nil
@@ -493,27 +493,27 @@ final class ExperienceShellRecoveryView: UIView {
     }
 
     /// The retry action, republished so shell state stays assertable.
-    var primaryActionButton: ExperienceGlassButton { actionButton }
+    package var primaryActionButton: ExperienceGlassButton { actionButton }
 
     /// Bounds of the copy block within the surface, for layout assertions.
-    var copyFrameInSurface: CGRect {
+    package var copyFrameInSurface: CGRect {
         textStack.convert(textStack.bounds, to: self)
     }
 
     /// Total scrollable height, so a test can prove nothing is stranded out of
     /// reach on a short surface.
-    var scrollableContentHeight: CGFloat {
+    package var scrollableContentHeight: CGFloat {
         max(scrollView.contentSize.height, scrollView.bounds.height)
     }
 
     /// The action's frame in the scroll view's content space, comparable with
     /// `scrollableContentHeight`.
-    var actionFrameInScrollableContent: CGRect {
+    package var actionFrameInScrollableContent: CGRect {
         actionButton.convert(actionButton.bounds, to: scrollView)
     }
 
     /// Non-empty copy currently on the surface.
-    var visibleTextLabels: [String] {
+    package var visibleTextLabels: [String] {
         textStack.arrangedSubviews
             .compactMap { $0 as? UILabel }
             .filter { !$0.isHidden }
@@ -528,7 +528,7 @@ final class ExperienceShellRecoveryView: UIView {
     /// anything. A server fault or a verification failure stays neutral,
     /// because telling someone to check their network would be a guess that
     /// sends them to fix something that is not broken.
-    func apply(reason: ExperienceShellRecoveryReason) {
+    package func apply(reason: ExperienceShellRecoveryReason) {
         self.reason = reason
         switch reason {
         case .offline:
@@ -559,7 +559,7 @@ final class ExperienceShellRecoveryView: UIView {
         UIImage(systemName: name) ?? UIImage(systemName: fallback)
     }
 
-    func apply(_ palette: ExperienceShellPalette) {
+    package func apply(_ palette: ExperienceShellPalette) {
         iconView.tintColor = palette.accentTint
         titleLabel.textColor = palette.primary
         messageLabel.textColor = palette.secondary

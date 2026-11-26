@@ -1,4 +1,5 @@
 #if canImport(UIKit) && NUXIE_HOSTED_INPUT_TESTS
+import NuxieRuntime
 import UIKit
 import XCTest
 @_spi(Testing) @testable import Nuxie

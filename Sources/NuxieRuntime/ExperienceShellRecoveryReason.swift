@@ -12,7 +12,7 @@ import Foundation
 /// and a rejected signature read identically to someone waiting for a screen,
 /// so giving them separate cases would be a distinction the product never
 /// draws.
-enum ExperienceShellRecoveryReason: Equatable, Sendable {
+package enum ExperienceShellRecoveryReason: Equatable, Sendable {
     /// The device reports it has no route to the network at all.
     case offline
     /// Everything else: timeouts, dropped connections, server responses,
@@ -25,7 +25,7 @@ enum ExperienceShellRecoveryReason: Equatable, Sendable {
     /// Only `URLError` codes that genuinely mean "this device has no network"
     /// map to `offline`. Transport failures that could equally be a server or
     /// route problem stay neutral rather than guessing.
-    init(error: Error) {
+    package init(error: Error) {
         guard let urlError = error as? URLError else {
             self = .unavailable
             return
