@@ -685,13 +685,14 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     // MARK: A start that did not happen
 
     /// The machine said the start did not happen, and nothing is wrong: the
-    /// record is declined, nothing is shown, no fault is logged and nothing
-    /// is stopped, and the presenter lets go at once. So it is whether the
-    /// report comes first, as the presenter sends it, or after the record's
-    /// start, before anything is shown or asked for.
+    /// record is declined, nothing is shown, the edge is stopped and closed
+    /// as for an end, with no fault to log, and the presenter lets go at
+    /// once. So it is whether the report comes first, as the presenter
+    /// sends it, or after the record's start, before anything is shown or
+    /// asked for.
     func testAStartThatDidNotHappenReleasesWithNoNativesAndNoFault() {
         var first = State()
-        XCTAssertEqual(first.handle(.report(.notStarted(reason: "once"))), [.release])
+        XCTAssertEqual(first.handle(.report(.notStarted(reason: "once"))), [.stop(nil), .release])
         XCTAssertEqual(first.record, .declined)
         XCTAssertEqual(first.natives, [])
         XCTAssertEqual(first.wanted, [])
@@ -699,7 +700,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
 
         var afterStart = State()
         _ = afterStart.handle(.started)
-        XCTAssertEqual(afterStart.handle(.report(.notStarted(reason: "unstarted"))), [.release])
+        XCTAssertEqual(afterStart.handle(.report(.notStarted(reason: "unstarted"))), [.stop(nil), .release])
         XCTAssertEqual(afterStart.record, .declined)
         XCTAssertEqual(afterStart.natives, [])
         assertReleasedForGood(afterStart)

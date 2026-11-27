@@ -75,8 +75,9 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 /// - A start the machine says did not happen, with nothing wrong (no entry
 ///   starts on the event, or one declined it, `once` say), is no fault: the
 ///   host hears `didNotStart` and never `open` first, nothing is presented,
-///   and the presenter lets go. The record is open only once the edge's
-///   first answer to the start is not that one.
+///   the edge is closed as for an end, which cancels its asks of the byte
+///   source, and the presenter lets go. The record is open only once the
+///   edge's first answer to the start is not that one.
 /// - Every fault takes one path: every native presentation is dismissed,
 ///   the code is logged, and everything stops.
 /// - A page whose files have not arrived is presented all the same, over a

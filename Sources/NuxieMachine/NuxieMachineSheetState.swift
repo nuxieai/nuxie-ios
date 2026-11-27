@@ -40,7 +40,9 @@ import Foundation
 /// - An ended, faulted or declined record is final: nothing is shown,
 ///   nothing moves it again, and a fault is never overwritten.
 /// - A start the machine says did not happen is no fault: the record is
-///   declined, nothing was asked of UIKit, and the presenter lets go.
+///   declined, nothing was asked of UIKit, the edge is stopped and closed
+///   as for an end (so the files it asked for are no longer fetched), and
+///   the presenter lets go.
 /// - What the presenter owns (the Screens with their edge and session, the
 ///   wake timer, the display loop) is let go of once: at the moment the
 ///   record is final and no native is on screen or in a transition,
@@ -207,12 +209,13 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
             switch record {
             case .notStarted:
                 record = .declined
+                return [.stop(nil)]
             case .open(wakeAt: nil) where wanted.isEmpty && natives.isEmpty:
                 record = .declined
+                return [.stop(nil)]
             case .open, .ended, .faulted, .declined:
-                break
+                return []
             }
-            return []
         case .report(.delivered(let shown, let rows)):
             guard case .open = record else { return [] }
             wanted = shown
