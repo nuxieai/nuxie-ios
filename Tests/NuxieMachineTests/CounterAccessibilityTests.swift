@@ -257,7 +257,7 @@ final class CounterAccessibilityTests: XCTestCase {
             XCTAssertTrue(reader.controller.reachable, "the cover is in reach while it is on top")
 
             XCTAssertEqual(state.handle(.report(.delivered(shown: [cover, sheet], rows: []))),
-                           [.present(sheet, over: cover.shown)])
+                           [.present([sheet], over: cover.shown)])
             reader.reach(state)
             XCTAssertFalse(count.accessibilityActivate(), "a button under an arriving sheet does not activate")
             XCTAssertEqual(reader.controller.takeSemanticTaps(), [], "nothing was queued as the sheet arrives")

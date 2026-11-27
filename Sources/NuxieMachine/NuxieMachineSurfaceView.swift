@@ -118,11 +118,14 @@ package final class NuxieMachineSurfaceView: UIView {
 
     /// A sheet's swipe is a pan above this view, and UIKit asks this view,
     /// the one under the finger, once the finger has moved about 10 points
-    /// whether it may begin. The answer is [`sheetPanMayBegin`]'s. Any
+    /// whether it may begin. The answer is [`sheetPanMayBegin`]'s. The swipe
+    /// back from the edge is a pan too, but not the sheet's: the machine's
+    /// answer for the page decides it, over a `scroll` as anywhere. Any
     /// other recognizer, or a pan it has no answer for, is answered as
     /// UIKit would.
     override package func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.view !== self,
+              !(pan is UIScreenEdgePanGestureRecognizer),
               let answer = sheetPanMayBegin(moving: pan.translation(in: self))
         else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
         return answer

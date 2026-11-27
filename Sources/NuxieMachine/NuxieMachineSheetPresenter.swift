@@ -35,20 +35,32 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 
 /// Shows what an edge shows with UIKit, and performs the rows it reports.
 ///
-/// - What is shown is each report's stack. Each presentation in it is its
-///   own native presentation, presented from the one below it (the host's
-///   view controller for the bottom one): a sheet presents its Screen as a
-///   native sheet at the heights its row writes (the large detent when it
-///   writes none), and a cover as a native cover over the whole screen,
-///   which has no swipe. Any other presentation is a fault: push and the
-///   rest are not presented.
-/// - When a report no longer shows a presentation, its native presentation
-///   is dismissed, with every one above it, and what is missing is
-///   presented, one at a time, once UIKit has finished the transition
-///   before it ([`NuxieMachineSheetState`]).
-/// - What a swipe down on a sheet does is the machine's answer, read with
-///   what is shown after every delivery and every round, and handed to the
-///   sheet with each report, since UIKit asks before a drag begins:
+/// - What is shown is each report's stack, cut into segments
+///   ([`NuxieMachineSheetState.cut(_:)`]). Each segment is one native
+///   presentation ([`NuxieMachineSegmentController`]), a navigation
+///   controller with its bar hidden, presented from the segment below it
+///   (the host's view controller for the bottom one), holding one page for
+///   each of its entries: a sheet presents its pages as a native sheet at
+///   the heights its row writes (the large detent when it writes none); a
+///   cover, or a first entry that says `push` or nothing, as a native cover
+///   over the whole screen, which has no swipe down. Each later push is a
+///   page pushed inside the segment below it, with the platform's push.
+///   `fade`, `none` and `move` are not presented: a row that says one is a
+///   fault.
+/// - When a report no longer shows a segment, it is dismissed, with every
+///   one above it; when a kept segment's pages differ, they are set in one
+///   change, which UIKit animates as a push when the new top page is new
+///   and as a pop when it is a kept one; and what is missing is presented,
+///   one at a time, once UIKit has finished the transition before it
+///   ([`NuxieMachineSheetState`]).
+/// - Nothing crosses a native push: each page has its own player and its
+///   own instances, so an element on two pages is two instances, and the
+///   page slides in with the platform's push. Going back is the platform's
+///   pop to the page as it was left.
+/// - What a swipe down on a sheet does is the machine's answer for the
+///   sheet's own entry, which reads the page on top of it, read with what
+///   is shown after every delivery and every round, and handed to the
+///   segment with each report, since UIKit asks before a drag begins:
 ///   - stays: the native dismissal is held; UIKit's attempt is delivered as
 ///     a swipe once, and it does nothing;
 ///   - presses: the native dismissal is held; UIKit's attempt is delivered
@@ -61,9 +73,25 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   presenter acts on what the machine did, through what it then shows: a
 ///   held swipe that closes dismisses the sheet natively, and a completed
 ///   one that does not close presents the sheet again
-///   (`machine.swipe.changed`). The screen reader's escape is a swipe down
-///   too, read from the same answer. A cancelled swipe sends nothing, and
-///   so does a swipe or an escape on a sheet whose loading screen is up.
+///   (`machine.swipe.changed`). A cancelled swipe sends nothing, and so
+///   does a swipe or an escape on a sheet whose loading screen is up.
+/// - What a swipe back from the edge on a pushed page does is the
+///   machine's answer for that page, read and handed over the same way, and
+///   asked when the navigation controller's own pop recognizer, which
+///   keeps working with the bar hidden, is about to begin:
+///   - stays or presses: the pop does not begin, and the swipe is
+///     delivered once as held;
+///   - closes: the native pop runs, and when it completes (not when the
+///     person lets go) the swipe is delivered and the machine closes the
+///     page. The answer can change in between: a held swipe that closes
+///     gets the machine's pop, and a completed pop that does not close is
+///     pushed back (`machine.swipe.changed`).
+///   A page at the bottom of its segment takes no edge swipe. A pushed page
+///   inside a sheet can take both gestures: each reads its own answer, and
+///   UIKit gives the touch to one of the two recognizers.
+/// - The screen reader's escape on a page is the gesture it stands for
+///   ([`NuxieMachineSegmentController.escape(from:)`]): a swipe back on a
+///   pushed page, else a swipe down on a sheet, else nothing.
 /// - `wake at` sets a timer that delivers `wake` if the app is still running
 ///   at that moment. A later `wake at` replaces it, and the record's end
 ///   cancels it. The machine takes a wake only at the moment it asked for,
@@ -78,8 +106,8 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   the edge is closed as for an end, which cancels its asks of the byte
 ///   source, and the presenter lets go. The record is open only once the
 ///   edge's first answer to the start is not that one.
-/// - Every fault takes one path: every native presentation is dismissed,
-///   the code is logged, and everything stops.
+/// - Every fault takes one path: every segment is dismissed, the code is
+///   logged, and everything stops.
 /// - A page whose files have not arrived is presented all the same, over a
 ///   loading screen ([`NuxieMachineScreenViewController.assets`]). After
 ///   [`recoveryAffordanceDelay`], or at once when a file fails, the recovery
@@ -101,10 +129,11 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   ([`bodyTextSize(in:)`]), and told with it, once per value, before the
 ///   start and before the first frame after it changes. One `rem` of the
 ///   session's pages is that size.
-/// - Each native presentation is told where it is shown, its place
-///   ([`NuxieMachineScreenViewController.place`]): the insets of what it
-///   is presented in, which its Screen fills to every edge, a cover's the
-///   screen's and a sheet's its own. Its place is told before its first
+/// - Each page is told where it is shown, its place
+///   ([`NuxieMachineScreenViewController.place`]): the insets of the
+///   segment it is in, which its Screen fills to every edge, a cover's the
+///   screen's and a sheet's its own, for a pushed page too. Its place is
+///   told before its first
 ///   frame is drawn, and again before the next frame after a rotation, a
 ///   change of size or of the safe area; the same place is told once, and
 ///   it goes when its presentation does ([`NuxieMachineToldPlaces`]).
@@ -147,8 +176,9 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 /// event (an edge report, a UIKit transition's start or end, the timer, a
 /// failure) goes through [`send`], and the effects it returns are the only
 /// UIKit, timer and edge work the presenter does. The presenter keeps one
-/// Screen controller for each native presentation the state holds, and
-/// nothing else about them. What the host shows is derived from that state.
+/// segment controller for each segment the state holds and one Screen
+/// controller for each of its pages, and nothing else about them. What the
+/// host shows is derived from that state.
 ///
 /// The presenter learns what the machine did only from the edge's reports,
 /// which the edge's owner callback posts to an inbox and the presenter takes
@@ -173,8 +203,11 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// The status the host was last told, so it hears only changes.
     private var told = NuxieMachineSheetStatus(plan: nil, record: .notStarted)
     private var loop: NuxieMachineScreenLoop?
-    /// The Screen controller of each native presentation the state holds.
+    /// The Screen controller of each page the state holds, by its entry.
     private var controllers: [NuxieMachineShown: NuxieMachineScreenViewController] = [:]
+    /// The controller of each segment the state holds, by the segment's
+    /// identity.
+    private var segments: [NuxieMachineShown: NuxieMachineSegmentController] = [:]
     private let reports = NuxieMachineReportInbox()
     /// Events waiting for [`send`], which handles one at a time.
     private var events: [NuxieMachineSheetState.Event] = []
@@ -244,6 +277,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         didSet {
             guard oldValue != colorSchemeMode else { return }
             for controller in controllers.values { applyColorSchemeMode(to: controller) }
+            for segment in segments.values { applyColorSchemeMode(to: segment) }
             loop?.requestFrame()
         }
     }
@@ -327,9 +361,9 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
 
     /// Move the state for `event` and perform its effects, then for every
     /// event those effects raised, in order. The one way the presenter
-    /// changes. Once the state has settled, the presenter keeps a Screen
-    /// controller for each native presentation the state holds and no
-    /// other, and the loop draws those.
+    /// changes. Once the state has settled, the presenter keeps a segment
+    /// controller for each segment the state holds and a Screen controller
+    /// for each of their pages, and no other, and the loop draws those.
     private func send(_ event: NuxieMachineSheetState.Event) {
         events.append(event)
         guard !sending else { return }
@@ -341,11 +375,17 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             }
         }
         sending = false
-        let held = state.natives.map(\.shown)
+        let held = state.segments.flatMap { $0.pages.map(\.shown) }
         controllers = controllers.filter { held.contains($0.key) }
-        // Each sheet holds what a swipe down on it does now, for UIKit to
-        // read when a drag begins.
-        for presented in state.wanted { controllers[presented.shown]?.follow(presented) }
+        let kept = state.segments.map(\.id)
+        segments = segments.filter { kept.contains($0.key) }
+        // Each segment holds what a swipe down on its sheet does now, and
+        // each page what a swipe back on it does, for UIKit to read when a
+        // gesture begins.
+        for presented in state.wanted {
+            controllers[presented.shown]?.follow(presented)
+            for segment in segments.values { segment.follow(presented) }
+        }
         toldPlaces.keep(held)
         loop?.screens = held.compactMap { controllers[$0] }
         let reached = state.reachable
@@ -355,12 +395,14 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
 
     private func perform(_ effect: NuxieMachineSheetState.Effect) {
         switch effect {
-        case .present(let presented, let over):
-            present(presented, over: over)
-        case .dismiss(let shown):
-            dismiss(shown)
-        case .swipe(let shown):
-            swipe(shown)
+        case .present(let pages, let over):
+            present(pages, over: over)
+        case .dismiss(let id):
+            dismiss(id)
+        case .setPages(let id, let pages):
+            setPages(id, pages)
+        case .swipe(let shown, let gesture):
+            swipe(gesture, on: shown)
         case .schedule(let moment):
             schedule(moment)
         case .stop(let fault):
@@ -392,6 +434,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             scheduled.loop = nil
             loop = nil
             controllers = [:]
+            segments = [:]
             toldPlaces = NuxieMachineToldPlaces()
         }
     }
@@ -442,19 +485,47 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         onStatus(now)
     }
 
-    // MARK: Native presentations
+    // MARK: Segments and their pages
 
-    /// Present `presented` in a Screen controller of its own, from the
-    /// native presentation `over`, or from the host for the bottom one.
-    private func present(_ presented: NuxieMachinePresented, over: NuxieMachineShown?) {
-        let below: UIViewController? = over.map { controllers[$0] } ?? host
+    /// Present a segment holding `pages`, bottom first, each in a Screen
+    /// controller of its own, from the segment `over`, or from the host for
+    /// the bottom one.
+    private func present(_ pages: [NuxieMachinePresented], over: NuxieMachineShown?) {
+        let id = pages[0].shown
+        let below: UIViewController?
+        if let over { below = segments[over] } else { below = host }
         guard let loop, let below, below.viewIfLoaded?.window != nil, below.presentedViewController == nil else {
-            send(.presentFailed(presented.shown, NuxieMachineEdgeFault(code: "edge.no-host",
-                detail: "nothing can present \(presented.route): the host is gone, off screen or already presenting")))
+            send(.presentFailed(id, NuxieMachineEdgeFault(code: "edge.no-host",
+                detail: "nothing can present \(pages[0].route): the host is gone, off screen or already presenting")))
             return
         }
+        let routes = pages.map(\.route).joined(separator: " ")
+        logger.info("machine.present \(routes, privacy: .public) \(id.journey).\(id.instance)")
+        let segment = NuxieMachineSegmentController(pages: pages.map { page($0, in: loop) })
+        segment.onHeldSwipe = { [weak self] gesture, shown in
+            self?.send(gesture == .back ? .edgeSwipeRefused(shown) : .swipeRefused(shown))
+        }
+        segment.onPopBegan = { [weak self] page in self?.send(.edgeSwipeBegan(page)) }
+        segment.onPopEnded = { [weak self] page, completed in self?.send(.edgeSwipeEnded(page, completed: completed)) }
+        applyColorSchemeMode(to: segment)
+        segment.presentationController?.delegate = self
+        segments[id] = segment
+        // UIKit takes a sheet's detents shortest first. Until it resolves
+        // one, the order is made for the height the window leaves a sheet;
+        // then the sheet follows what UIKit resolves against.
+        if let window = below.viewIfLoaded?.window {
+            segment.orderDetents(estimatedMaximum: NuxieMachineSegmentController.estimatedSheetMaximum(in: window))
+        }
+        below.present(segment, animated: true) { [weak self] in self?.send(.presented(id)) }
+        loop.requestFrame()
+    }
+
+    /// The Screen controller of the page `presented`, drawn by `loop`: the
+    /// one the presenter holds for it, or a new one.
+    private func page(_ presented: NuxieMachinePresented,
+                      in loop: NuxieMachineScreenLoop) -> NuxieMachineScreenViewController {
         let shown = presented.shown
-        logger.info("machine.present \(presented.route, privacy: .public) \(shown.journey).\(shown.instance)")
+        if let held = controllers[shown] { return held }
         let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop, assets: state.assets,
                                                           recoveryDelay: recoveryAffordanceDelay)
         controller.onRefresh = { [weak self] in self?.send(.refreshTapped) }
@@ -462,79 +533,87 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         controller.statusText = Self.describe(status)
         applyColorSchemeMode(to: controller)
         controller.onEnvironmentChange = { [weak self] in self?.environmentChanged() }
-        controller.onEscape = { [weak self] in self?.send(.swipeRefused(shown)) }
-        controller.presentationController?.delegate = self
         controllers[shown] = controller
-        // UIKit takes a sheet's detents shortest first. Until it resolves
-        // one, the order is made for the height the window leaves a sheet;
-        // then the sheet follows what UIKit resolves against.
-        if let window = below.viewIfLoaded?.window {
-            controller.orderDetents(estimatedMaximum: NuxieMachineScreenViewController.estimatedSheetMaximum(in: window))
+        return controller
+    }
+
+    /// Set the pages of the segment `id` to `pages`, bottom first, in one
+    /// change of UIKit's: the pages it already holds keep their Screens, and
+    /// each new one gets a Screen of its own. UIKit animates it as a push
+    /// when the new top page is new and as a pop when it is a kept one, and
+    /// the change is followed to its end through its coordinator.
+    private func setPages(_ id: NuxieMachineShown, _ pages: [NuxieMachinePresented]) {
+        guard let loop, let segment = segments[id] else {
+            send(.pagesChanged(id))
+            return
         }
-        below.present(controller, animated: true) { [weak self] in self?.send(.presented(shown)) }
+        let routes = pages.map(\.route).joined(separator: " ")
+        logger.info("machine.pages \(id.journey).\(id.instance) \(routes, privacy: .public)")
+        segment.setPages(pages.map { page($0, in: loop) }) { [weak self] in self?.send(.pagesChanged(id)) }
         loop.requestFrame()
     }
 
-    /// Dismiss the native presentation `shown`, with every one above it,
-    /// from the one it was presented from.
-    private func dismiss(_ shown: NuxieMachineShown) {
-        logger.info("machine.dismiss \(shown.journey).\(shown.instance)")
-        guard let below = controllers[shown]?.presentingViewController else {
-            send(.dismissed(shown))
+    /// Dismiss the segment `id`, with every one above it, from the one it
+    /// was presented from.
+    private func dismiss(_ id: NuxieMachineShown) {
+        logger.info("machine.dismiss \(id.journey).\(id.instance)")
+        guard let below = segments[id]?.presentingViewController else {
+            send(.dismissed(id))
             return
         }
-        below.dismiss(animated: true) { [weak self] in self?.send(.dismissed(shown)) }
+        below.dismiss(animated: true) { [weak self] in self?.send(.dismissed(id)) }
     }
 
     /// The person began swiping a sheet down. The swipe is followed to its
     /// end through the transition's coordinator: it takes the sheet, or it
     /// is cancelled and the sheet stays.
     package func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
-        guard let screen = presentationController.presentedViewController as? NuxieMachineScreenViewController
+        guard let segment = presentationController.presentedViewController as? NuxieMachineSegmentController
         else { return }
-        let shown = screen.shown
-        send(.swipeBegan(shown))
-        _ = presentationController.presentedViewController.transitionCoordinator?.animate(alongsideTransition: nil) {
-            [weak self] context in
+        let id = segment.id
+        send(.swipeBegan(id))
+        _ = segment.transitionCoordinator?.animate(alongsideTransition: nil) { [weak self] context in
             let completed = !context.isCancelled
-            MainActor.assumeIsolated { self?.send(.swipeEnded(shown, completed: completed)) }
+            MainActor.assumeIsolated { self?.send(.swipeEnded(id, completed: completed)) }
         }
     }
 
     /// The person's swipe took the sheet. The coordinator says so too; the
     /// state takes whichever comes first.
     package func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        guard let screen = presentationController.presentedViewController as? NuxieMachineScreenViewController
+        guard let segment = presentationController.presentedViewController as? NuxieMachineSegmentController
         else { return }
-        send(.swipeEnded(screen.shown, completed: true))
+        send(.swipeEnded(segment.id, completed: true))
     }
 
     /// The person swiped a sheet UIKit held, because the machine said the
     /// swipe presses a control or does nothing: the swipe is delivered. A
-    /// sheet held by its loading screen takes no swipe: its close is the
-    /// way out, and nothing is delivered.
+    /// sheet held by a page's loading screen takes no swipe: its close is
+    /// the way out, and nothing is delivered.
     package func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
-        guard let screen = presentationController.presentedViewController as? NuxieMachineScreenViewController,
-              !screen.modalReasons.contains(.loading)
+        guard let segment = presentationController.presentedViewController as? NuxieMachineSegmentController,
+              !segment.modalReasons.contains(.loading)
         else { return }
-        send(.swipeRefused(screen.shown))
+        send(.swipeRefused(segment.id))
     }
 
-    /// The machine hears a swipe down on the presentation `shown`, after
-    /// every wake due by then, and its answer is taken: what is shown says
-    /// the rest. `native` says whether the native dismissal ran: when it
-    /// did and the machine did not close the sheet, the sheet comes back.
-    private func swipe(_ shown: NuxieMachineShown) {
+    /// The machine hears `gesture` on the presentation `shown`, after every
+    /// wake due by then, and its answer is taken: what is shown says the
+    /// rest. Down is the sheet's own entry, back the pushed page. `native`
+    /// says whether the native dismissal or pop ran: when it did and the
+    /// machine did not close the sheet or the page, it comes back.
+    private func swipe(_ gesture: NuxieMachineSwipeGesture, on shown: NuxieMachineShown) {
         guard let loop else { return }
         let native = state.closing.contains(shown)
         let how = native ? "completed" : "held"
-        logger.info("machine.swipe \(shown.journey).\(shown.instance) \(how, privacy: .public)")
+        let which = gesture == .back ? "back" : "down"
+        logger.info("machine.swipe \(which, privacy: .public) \(shown.journey).\(shown.instance) \(how, privacy: .public)")
         let edge = loop.edge
         Task { @MainActor [weak self] in
             await loop.inLane {
                 let now = self?.machineNow() ?? nuxieMachineNow()
                 await self?.catchUp(to: now)
-                let did = await edge.swipe(.down, on: shown, now: now)
+                let did = await edge.swipe(gesture, on: shown, now: now)
                 self?.takeReports()
                 self?.swiped(shown, did, native: native)
                 await self?.readPlan()
@@ -759,15 +838,20 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         takeReports()
     }
 
+    /// The bottom segment the presenter holds, on screen while any is.
+    private var bottomSegment: NuxieMachineSegmentController? {
+        state.segments.first.flatMap { segments[$0.id] }
+    }
+
     /// The scheme the session draws in, read from one place: the bottom
-    /// native presentation, as the SDK's experience screens read their own
+    /// segment, as the SDK's experience screens read their own
     /// ([`ExperienceColorScheme.init(drawnBy:host:)`]); every one above it
-    /// is presented over it and has the same. With none presented, the
-    /// scheme one presented now would draw in: the app's fixed scheme, or
-    /// with `system` the host's.
+    /// is presented over it, and every page is inside one, and has the
+    /// same. With none presented, the scheme one presented now would draw
+    /// in: the app's fixed scheme, or with `system` the host's.
     private var colorScheme: ExperienceColorScheme {
         let hostStyle = self.host?.traitCollection.userInterfaceStyle
-        if let bottom = loop?.screens.first {
+        if let bottom = bottomSegment {
             return ExperienceColorScheme(drawnBy: bottom, host: hostStyle)
         }
         let forced = colorSchemeMode.userInterfaceStyle
@@ -775,13 +859,13 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     }
 
     /// The person's body text size the session draws at, read from the
-    /// traits the scheme is read from ([`colorScheme`]): the bottom native
-    /// presentation's while it is in a window, as every one above it is
+    /// traits the scheme is read from ([`colorScheme`]): the bottom
+    /// segment's while it is in a window, as every one above it is
     /// presented over it and has the same; otherwise the host's, which a
-    /// Screen not yet in its window joins. The app forces no text size, so
+    /// segment not yet in its window joins. The app forces no text size, so
     /// unlike the scheme there is no forced value to prefer.
     private var textSize: Double {
-        let bottom = loop?.screens.first
+        let bottom = bottomSegment
         let traits = bottom.flatMap { $0.viewIfLoaded?.window == nil ? nil : $0.traitCollection }
             ?? host?.traitCollection ?? bottom?.traitCollection
         return Self.bodyTextSize(in: traits)
@@ -795,19 +879,20 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         Double(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize)
     }
 
-    /// Force the app's fixed scheme on a native presentation, as the SDK's
+    /// Force the app's fixed scheme on a segment or a page, as the SDK's
     /// experience controller forces it on itself: `system` forces nothing.
     /// Its traits take the style at once, so a frame before it reaches its
     /// window already reads it.
-    private func applyColorSchemeMode(to controller: NuxieMachineScreenViewController) {
+    private func applyColorSchemeMode(to controller: UIViewController) {
         controller.overrideUserInterfaceStyle = colorSchemeMode.userInterfaceStyle
         if #available(iOS 17.0, *) { controller.updateTraitsIfNeeded() }
     }
 
     // MARK: Places
 
-    /// Tell the session where each presented Screen is shown, at `now`,
-    /// bottom first, when it is not where it was last told. Runs inside the
+    /// Tell the session where each page's Screen is shown, at `now`, bottom
+    /// first, when it is not where it was last told. A page under another
+    /// in its segment is off screen and has no place until it shows again. Runs inside the
     /// loop's lane, after the environment, so it reaches the edge between
     /// frames, never inside a step. The frame that draws a Screen first runs
     /// this, so its first frame is drawn in its place; a Screen with no size

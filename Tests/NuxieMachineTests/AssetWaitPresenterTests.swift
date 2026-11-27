@@ -43,7 +43,7 @@ final class AssetWaitPresenterTests: XCTestCase {
         let run = try await Run.presenting(sheet: sheet, delay: 5)
         defer { run.finish() }
         let screen = run.screen
-        XCTAssertEqual(screen.modalPresentationStyle, sheet ? .pageSheet : .fullScreen)
+        XCTAssertEqual(screen.navigationController?.modalPresentationStyle, sheet ? .pageSheet : .fullScreen)
         try Self.expectLoading(screen, "while the picture is coming")
         XCTAssertEqual(screen.framesDrawn, 0)
 
@@ -124,8 +124,9 @@ final class AssetWaitPresenterTests: XCTestCase {
                                 "after the second failure")
         XCTAssertEqual(Self.views("nuxie-experience-recovery-shell", in: run.screen.view).count, 1,
                        "a second recovery screen was stacked")
-        XCTAssertTrue(run.host.presentedViewController === run.screen, "the sheet is not the one presented")
-        XCTAssertNil(run.screen.presentedViewController, "something was presented over the sheet")
+        XCTAssertTrue(run.host.presentedViewController === run.screen.navigationController,
+                      "the sheet is not the one presented")
+        XCTAssertNil(run.screen.navigationController?.presentedViewController, "something was presented over the sheet")
     }
 
     /// A tap on the close reaches the edge, and the record ends in the
@@ -170,7 +171,7 @@ final class AssetWaitPresenterTests: XCTestCase {
         XCTAssertTrue(shimmer.isAnimating || UIAccessibility.isReduceMotionEnabled, "the shimmer is still \(when)")
         XCTAssertTrue(try recovery(screen).isHidden, "the recovery screen shows \(when)")
         XCTAssertTrue(try one("nuxie-experience-close", in: screen).isHidden, "the close shows \(when)")
-        XCTAssertTrue(screen.isModalInPresentation, "the page can be swiped away \(when)")
+        XCTAssertEqual(screen.navigationController?.isModalInPresentation, true, "the page can be swiped away \(when)")
     }
 
     /// The recovery screen in `words`, with the close over it, the loading
@@ -191,7 +192,7 @@ final class AssetWaitPresenterTests: XCTestCase {
         XCTAssertEqual(close.accessibilityLabel, "Close")
         XCTAssertTrue(try one("nuxie-experience-loading-shell", in: screen).isHidden,
                       "the loading screen shows under the recovery screen \(when)")
-        XCTAssertTrue(screen.isModalInPresentation, "the page can be swiped away \(when)")
+        XCTAssertEqual(screen.navigationController?.isModalInPresentation, true, "the page can be swiped away \(when)")
     }
 
     @MainActor
@@ -225,13 +226,16 @@ final class AssetWaitPresenterTests: XCTestCase {
         return (host, window)
     }
 
-    /// The Screen the presenter presented from `host`, once UIKit has it.
+    /// The Screen the presenter presented from `host`, once UIKit has it:
+    /// the page on top of the segment presented.
     @MainActor
     static func presented(on host: UIViewController) async throws -> NuxieMachineScreenViewController {
-        try await waitUntil("the page is presented", seconds: 2) {
-            host.presentedViewController is NuxieMachineScreenViewController
+        func page() -> NuxieMachineScreenViewController? {
+            (host.presentedViewController as? NuxieMachineSegmentController)?.topViewController
+                as? NuxieMachineScreenViewController
         }
-        return try XCTUnwrap(host.presentedViewController as? NuxieMachineScreenViewController)
+        try await waitUntil("the page is presented", seconds: 2) { page() != nil }
+        return try XCTUnwrap(page())
     }
 
     /// A presenter started over the picture page, presented as a sheet or a
