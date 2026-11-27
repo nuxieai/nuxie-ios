@@ -102,7 +102,7 @@ final class AssetWaitPresenterTests: XCTestCase {
         XCTAssertEqual(run.bytes.asked, [Self.hero, Self.hero])
         try await run.bytes.answer(Self.hero)
         try await waitUntil("the Screen is told the picture is in") { run.screen.assets == .ready }
-        try Self.expectLoading(run.screen, "once the picture is in")
+        try Self.expectLoading(run.screen, "once the picture is in", filesIn: true)
     }
 
     /// Try Again while still offline: the source fails again, and the
