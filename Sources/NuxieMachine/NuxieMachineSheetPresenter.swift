@@ -434,10 +434,11 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         controller.onEscape = { [weak self] in self?.send(.swipeRefused(shown)) }
         controller.presentationController?.delegate = self
         controllers[shown] = controller
-        // UIKit takes a sheet's detents shortest first, at the height the
-        // window gives; the sheet follows its container from then on.
+        // UIKit takes a sheet's detents shortest first. Until it resolves
+        // one, the order is made for the height the window leaves a sheet;
+        // then the sheet follows what UIKit resolves against.
         if let window = below.viewIfLoaded?.window {
-            controller.orderDetents(maximum: NuxieMachineScreenViewController.sheetMaximum(in: window))
+            controller.orderDetents(estimatedMaximum: NuxieMachineScreenViewController.estimatedSheetMaximum(in: window))
         }
         below.present(controller, animated: true) { [weak self] in self?.send(.presented(shown)) }
         loop.requestFrame()

@@ -87,9 +87,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package private(set) var contentHeight: CGFloat?
 
     /// The most the sheet can be, in points, that its detents are ordered
-    /// for ([`orderDetents`]); none until the presenter or the container
-    /// says.
+    /// for: the presenter's estimate ([`orderDetents`]) until UIKit has
+    /// resolved a detent of this module's, then what UIKit resolved it
+    /// against ([`resolved`]). None until one of them says.
     private var orderMaximum: CGFloat?
+    /// The `maximumDetentValue` UIKit last resolved a detent of this
+    /// module's against. Once there is one, estimates are not taken.
+    private var resolvedMaximum: CGFloat?
     /// The detents last handed to UIKit, in that order.
     private var appliedDetents: [NuxieMachineDetent]?
 
@@ -257,28 +261,38 @@ package final class NuxieMachineScreenViewController: UIViewController {
         applyDetents()
     }
 
-    /// Order the sheet's detents for UIKit for a sheet that can be at most
-    /// `maximum` points tall: the presenter calls it before it presents the
-    /// sheet, with the height its window gives, and the sheet calls it again
-    /// whenever the height its container gives changes.
-    package func orderDetents(maximum: CGFloat) {
-        guard maximum.isFinite, maximum > 0, maximum != orderMaximum else { return }
+    /// Order the sheet's detents for UIKit for a sheet estimated to be at
+    /// most `maximum` points tall: the presenter calls it before it
+    /// presents the sheet, so its first presentation has an order. Once
+    /// UIKit has resolved a detent ([`resolved`]) the estimate is not taken.
+    package func orderDetents(estimatedMaximum maximum: CGFloat) {
+        guard resolvedMaximum == nil, maximum.isFinite, maximum > 0, maximum != orderMaximum else { return }
         orderMaximum = maximum
         applyDetents()
     }
 
-    /// The most a sheet presented in `view` (a window, or a sheet's
-    /// container) can be: its height below its top inset.
-    package static func sheetMaximum(in view: UIView) -> CGFloat {
-        view.bounds.height - view.safeAreaInsets.top
+    /// The presenter's estimate of the most a sheet presented in `window`
+    /// can be: its height inside its top and bottom insets, as UIKit leaves
+    /// an edge-attached sheet.
+    package static func estimatedSheetMaximum(in window: UIView) -> CGFloat {
+        window.bounds.height - window.safeAreaInsets.top - window.safeAreaInsets.bottom
     }
 
-    /// The order follows the container's height: a turn of the phone, a
-    /// change of size class, or a window resized on iPad.
-    override package func viewWillLayoutSubviews() {
-        super.viewWillLayoutSubviews()
-        guard !routeIsModal, let container = sheetPresentationController?.containerView else { return }
-        orderDetents(maximum: Self.sheetMaximum(in: container))
+    /// UIKit resolved one of this module's detents against `maximum`, its
+    /// `maximumDetentValue`: the order follows it from then on, and the
+    /// detents are worked out again when it changes it (a turn of the
+    /// phone, a change of size class, a window resized on iPad). A sheet
+    /// with only the system's medium and large has nothing to resolve, and
+    /// medium is always the shorter.
+    package func resolved(maximum: CGFloat) {
+        guard maximum.isFinite, maximum > 0, maximum != resolvedMaximum else { return }
+        resolvedMaximum = maximum
+        guard maximum != orderMaximum else { return }
+        orderMaximum = maximum
+        applyDetents()
+        guard #available(iOS 16.0, *), let sheet = sheetPresentationController, sheet.containerView != nil
+        else { return }
+        sheet.animateChanges { sheet.invalidateDetents() }
     }
 
     /// Hand UIKit the sheet's detents in the order they now take, when it
@@ -344,9 +358,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// `detents` each once, the first of equal ones kept, and with a
     /// `maximum`, sorted by the height each rests at when the most a sheet
-    /// can be is `maximum`: medium at half of it, as UIKit's medium is about
-    /// half the screen, large at all of it, and this module's own by
-    /// [`height`]. Equal heights keep the row's order.
+    /// can be is `maximum`: large at all of it, this module's own by
+    /// [`height`], as UIKit resolves them, and medium at half of it. Equal
+    /// heights keep the row's order.
+    ///
+    /// Medium is an approximation: UIKit resolves the system's medium
+    /// itself, and no public API gives its height, so a detent of this
+    /// module's within a few points of half the maximum may be ordered on
+    /// the wrong side of it.
     package nonisolated static func nativeOrder(of detents: [NuxieMachineDetent], maximum: CGFloat?,
                                                 contentHeight: CGFloat?) -> [NuxieMachineDetent] {
         var once: [NuxieMachineDetent] = []
@@ -376,7 +395,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
             // UIKit works a detent out on the main thread.
             return .custom(identifier: Self.identifier(of: detent)) { [weak self] context in
                 MainActor.assumeIsolated {
-                    Self.height(of: detent, maximum: context.maximumDetentValue, contentHeight: self?.contentHeight)
+                    let maximum = context.maximumDetentValue
+                    // The order follows what UIKit resolves against, but not
+                    // while it is resolving: after it, on the main actor.
+                    if let self, maximum != self.resolvedMaximum {
+                        Task { @MainActor [weak self] in self?.resolved(maximum: maximum) }
+                    }
+                    return Self.height(of: detent, maximum: maximum, contentHeight: self?.contentHeight)
                 }
             }
         }

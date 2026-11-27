@@ -593,10 +593,10 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     /// UIKit takes a sheet's detents shortest first, so they are ordered by
     /// the height each rests at for the most the sheet can be, while what
     /// the machine shows keeps the row's order. `medium 40% 320` on a phone
-    /// held upright (790 points at most): 40% is 316, then 320, then medium
-    /// at about 395. On its side (360 at most): 40% is 144, medium about
-    /// 180, then 320. The detent the sheet rests at stays selected when the
-    /// order changes.
+    /// held upright (790 points at most, the presenter's estimate): 40% is
+    /// 316, then 320, then medium at about 395. Turned on its side, UIKit
+    /// resolves against 360: 40% is 144, medium about 180, then 320. The
+    /// detent the sheet rests at stays selected when the order changes.
     @MainActor
     func testUIKitTakesTheDetentsShortestFirstWhileTheRowKeepsItsOrder() throws {
         let authored: [NuxieMachineDetent] = [.medium, .percent(40), .points(320)]
@@ -614,13 +614,42 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         let sheet = try XCTUnwrap(controller.sheetPresentationController)
         let percent = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.percent.40.0")
         let points = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.points.320.0")
-        controller.orderDetents(maximum: 790)
+        controller.orderDetents(estimatedMaximum: 790)
         XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points, .medium])
         XCTAssertEqual(controller.detents, authored, "the row's order was lost")
         sheet.selectedDetentIdentifier = .medium
-        controller.orderDetents(maximum: 360)
+        controller.resolved(maximum: 360)
         XCTAssertEqual(sheet.detents.map(\.identifier), [percent, .medium, points])
         XCTAssertEqual(sheet.selectedDetentIdentifier, .medium, "the sheet moved off the detent it rests at")
+        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        withExtendedLifetime(window) {}
+    }
+
+    /// The order is made with the maximum UIKit resolves against, which for
+    /// a sheet at the bottom of a phone leaves out the bottom inset too. On
+    /// a phone 844 points tall with insets of 59 and 34, a height that left
+    /// out only the top inset (785) puts 320 (as written) below 42% (329.7);
+    /// UIKit resolves against 751, where 42% is 315.4, under 320. Once UIKit
+    /// has resolved, an estimate changes nothing.
+    @MainActor
+    func testTheOrderFollowsTheMaximumUIKitResolvesAgainst() throws {
+        let authored: [NuxieMachineDetent] = [.points(320), .percent(42)]
+        let order = NuxieMachineScreenViewController.nativeOrder(of:maximum:contentHeight:)
+        XCTAssertEqual(order(authored, 844 - 59, nil), [.points(320), .percent(42)])
+        XCTAssertEqual(order(authored, 844 - 59 - 34, nil), [.percent(42), .points(320)])
+
+        guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
+        let loop = try Self.loop()
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
+        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let percent = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.percent.42.0")
+        let points = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.points.320.0")
+        controller.orderDetents(estimatedMaximum: 844 - 59)
+        XCTAssertEqual(sheet.detents.map(\.identifier), [points, percent])
+        controller.resolved(maximum: 844 - 59 - 34)
+        XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points], "not ordered as UIKit resolves")
+        controller.orderDetents(estimatedMaximum: 844 - 59)
+        XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points], "an estimate overrode UIKit")
         XCTAssertEqual(controller.detents, authored, "the row's order was lost")
         withExtendedLifetime(window) {}
     }
