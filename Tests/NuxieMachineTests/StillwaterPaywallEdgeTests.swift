@@ -340,7 +340,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
             let late = await Array(run.edge.log.dropFirst(beforeAnswer))
             let call = try XCTUnwrap(run.store.calls.first)
             XCTAssertEqual(late.filter { if case .wakeAt = $0 { false } else { true } },
-                           [.reply(call.id, .purchase(.failed))], "\(late)")
+                           [.reply(call.id, .purchase(.failed)), .handOver], "\(late)")
             let failed = try await run.edge.slot("purchase_failed")
             XCTAssertEqual(failed, .bool(true), "the answer did not reach the record")
             let afterAnswer = try await run.edge.recordOpen()
