@@ -108,4 +108,9 @@ def nuxie_machine_ui_tests(name):
         test_host = "//:NuxieExperienceRuntimeHostApp",
         deps = [":" + name + "_sources"],
         size = "large",
+        # Measured 2026-11-27: the suite's 34 tests take about 890 s on a
+        # pool simulator, at the 900 s a large test gets, and one more test
+        # takes it past. This limit (3600 s) only stops a hung run; no test
+        # is trimmed for it.
+        timeout = "eternal",
     )
