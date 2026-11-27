@@ -15,10 +15,13 @@ final class OneDeliveryEdgeTests: XCTestCase {
 
     // MARK: Begun and ended in one delivery
 
+    /// A start whose step presents a Screen and dismisses it changed
+    /// nothing, so the machine answers that it did not happen: the start is
+    /// declined and there is no record.
     func testAScreenPresentedAndDismissedInOneDeliveryIsNeverOpened() async throws {
         let run = try OneDelivery(compiled: Self.compiled(["go(clock)", "dismiss(\"gone\")"]))
         await run.edge.start(event: "opened", now: run.now)
-        try await expectNothingShown(run, endedAs: .finished)
+        try await expectDeclinedAndClosed(run)
     }
 
     func testAScreenPresentedThenExitedInOneDeliveryIsNeverOpened() async throws {
@@ -27,10 +30,12 @@ final class OneDeliveryEdgeTests: XCTestCase {
         try await expectNothingShown(run, endedAs: .exited)
     }
 
+    /// A start whose step presents a Screen and goes back changed nothing
+    /// either: declined, with no record.
     func testAScreenPresentedThenPoppedInOneDeliveryIsNeverOpened() async throws {
         let run = try OneDelivery(compiled: Self.compiled(["go(clock)", "back"]))
         await run.edge.start(event: "opened", now: run.now)
-        try await expectNothingShown(run, endedAs: .finished)
+        try await expectDeclinedAndClosed(run)
     }
 
     // MARK: Two presentations that both outlive the delivery
@@ -182,6 +187,42 @@ final class OneDeliveryEdgeTests: XCTestCase {
         XCTAssertEqual(opened, [], "the edge opened \(opened)", file: file, line: line)
         XCTAssertTrue(told.contains(.end(ending)), "the owner was not told the end: \(run.owner.reports)",
                       file: file, line: line)
+        try await run.edge.close()
+    }
+
+    /// The machine declined the start, and the edge stopped on it: the
+    /// owner heard one report, the fault `machine.declined`, and nothing
+    /// about showing; no presentation was opened and none is held; the
+    /// session holds no record; and the stopped edge delivers nothing for a
+    /// later start.
+    private func expectDeclinedAndClosed(_ run: OneDelivery,
+                                         file: StaticString = #filePath, line: UInt = #line) async throws {
+        let fault = await run.edge.fault
+        XCTAssertEqual(fault?.code, "machine.declined", "\(String(describing: fault))", file: file, line: line)
+        guard run.owner.reports.count == 1, case .fault(let told) = run.owner.reports[0] else {
+            XCTFail("one report, the fault: \(run.owner.reports)", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(told, fault, file: file, line: line)
+        let shown = await run.edge.shown
+        XCTAssertNil(shown, "a presentation is under way", file: file, line: line)
+        let stack = await run.edge.stack
+        XCTAssertEqual(stack.map(\.shown), [], "the edge holds \(stack)", file: file, line: line)
+        let player = await run.edge.screen()
+        XCTAssertNil(player, "a player was opened", file: file, line: line)
+        let opened = await run.edge.log.filter { if case .opened = $0 { true } else { false } }
+        XCTAssertEqual(opened, [], "the edge opened \(opened)", file: file, line: line)
+        let open = try await run.edge.recordOpen()
+        XCTAssertFalse(open, "a start that did not happen left a record", file: file, line: line)
+
+        // The edge is stopped: a later start is delivered to no one.
+        let written = await run.edge.log.count
+        await run.edge.start(event: "opened", now: run.now + 1)
+        let later = await Array(run.edge.log.dropFirst(written))
+        XCTAssertEqual(later, [], "the stopped edge did \(later)", file: file, line: line)
+        XCTAssertEqual(run.owner.reports.count, 1, "\(run.owner.reports)", file: file, line: line)
+        let still = await run.edge.fault
+        XCTAssertEqual(still, fault, "the first fault is the one kept", file: file, line: line)
         try await run.edge.close()
     }
 
