@@ -130,6 +130,7 @@ package final class NuxieMachineSegmentController: UINavigationController {
         let bottom = pages[0].presented
         self.id = id ?? bottom.shown
         self.bottom = bottom
+        self.pages = pages
         isSheet = bottom.presentation == .sheet
         detents = isSheet ? bottom.detents : []
         swipeDown = isSheet ? bottom.swipeDown : nil
@@ -158,10 +159,11 @@ package final class NuxieMachineSegmentController: UINavigationController {
         interactivePopGestureRecognizer?.delegate = watcher
     }
 
-    /// The pages, bottom first.
-    package var pages: [NuxieMachineScreenViewController] {
-        viewControllers.compactMap { $0 as? NuxieMachineScreenViewController }
-    }
+    /// The pages, bottom first, as the sync last set them and as a
+    /// completed swipe back left them. Kept here rather than read from
+    /// UIKit, whose own list holds the page leaving until a transition is
+    /// over.
+    package private(set) var pages: [NuxieMachineScreenViewController]
 
     /// Take what the session shows of the segment's first entry now: what
     /// a swipe down does, and the heights it rests at. The presenter calls
@@ -184,6 +186,7 @@ package final class NuxieMachineSegmentController: UINavigationController {
                           completion: @escaping @MainActor () -> Void) {
         guard let first = pages.first else { return completion() }
         bottom = first.presented
+        self.pages = pages
         let animated = viewIfLoaded?.window != nil
         setViewControllers(pages, animated: animated)
         pageLoadingChanged()
@@ -222,8 +225,18 @@ package final class NuxieMachineSegmentController: UINavigationController {
         onPopBegan?(page)
         coordinator.animate(alongsideTransition: nil) { [weak self] context in
             let completed = !context.isCancelled
-            MainActor.assumeIsolated { self?.onPopEnded?(page, completed) }
+            MainActor.assumeIsolated { self?.popEnded(of: leaving, completed: completed) }
         }
+    }
+
+    /// The person's swipe back of `leaving` ended: when UIKit popped it, it
+    /// is no longer a page here.
+    private func popEnded(of leaving: NuxieMachineScreenViewController, completed: Bool) {
+        if completed, pages.last === leaving {
+            pages.removeLast()
+            pageLoadingChanged()
+        }
+        onPopEnded?(leaving.shown, completed)
     }
 
     fileprivate func willAnimate(_ operation: UINavigationController.Operation) {
@@ -256,7 +269,7 @@ package final class NuxieMachineSegmentController: UINavigationController {
     /// there is no native gesture to wait for: the machine acts, and the
     /// next report moves the native pages.
     package func escape(from page: NuxieMachineScreenViewController) -> Bool {
-        if let at = viewControllers.firstIndex(of: page), at > 0 {
+        if let at = pages.firstIndex(of: page), at > 0 {
             guard let back = page.swipeBack, back != .stays, let onHeldSwipe else { return false }
             onHeldSwipe(.back, page.shown)
             return true
