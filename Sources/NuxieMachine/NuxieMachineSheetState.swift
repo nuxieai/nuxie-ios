@@ -6,9 +6,10 @@ import Foundation
 /// with UIKit, its timer and the edge comes out as effects.
 ///
 /// Three facts make up where it is, because they change apart: the record
-/// (not started, open with its wake moment, ended, or faulted), what the
-/// edge last said is shown ([`wanted`]), and the native presentations UIKit
-/// holds, each where UIKit has it ([`natives`]). A record can stay open with
+/// (not started, open with its wake moment, ended, faulted, or declined
+/// when its start did not happen), what the edge last said is shown
+/// ([`wanted`]), and the native presentations UIKit holds, each where UIKit
+/// has it ([`natives`]). A record can stay open with
 /// nothing shown (after "Not now"), and a fault can arrive while a swipe is
 /// under way, so none can stand in for another.
 ///
@@ -36,8 +37,10 @@ import Foundation
 ///   reports ([`assets`]); every native presentation shows it. While a page
 ///   waits, Try Again asks for the failed files again, and the close is the
 ///   host's own fault, which the edge reports back as the record's fault.
-/// - An ended or faulted record is final: nothing is shown, nothing moves it
-///   again, and a fault is never overwritten.
+/// - An ended, faulted or declined record is final: nothing is shown,
+///   nothing moves it again, and a fault is never overwritten.
+/// - A start the machine says did not happen is no fault: the record is
+///   declined, nothing was asked of UIKit, and the presenter lets go.
 /// - What the presenter owns (the Screens with their edge and session, the
 ///   wake timer, the display loop) is let go of once: at the moment the
 ///   record is final and no native is on screen or in a transition,
@@ -45,12 +48,17 @@ import Foundation
 ///   keeps everything, with a presentation or without one.
 package struct NuxieMachineSheetState: Equatable, Sendable {
     package enum Record: Equatable, Sendable {
+        /// Nothing has been asked yet.
         case notStarted
         /// Open, and asking for a wake at this moment (milliseconds since
         /// the Unix epoch) or at none.
         case open(wakeAt: Int64?)
         case ended
         case faulted(NuxieMachineEdgeFault)
+        /// The start was asked for, and the machine said it did not
+        /// happen, with nothing wrong: there is no record, and there will
+        /// be none.
+        case declined
     }
 
     /// Where UIKit has one native presentation.
@@ -79,7 +87,8 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     }
 
     package enum Event: Equatable, Sendable {
-        /// The record started.
+        /// The record started. The presenter sends it once the edge has
+        /// answered the start, unless the answer is `notStarted`.
         case started
         /// The edge's report for one delivery.
         case report(NuxieMachineEdgeReport)
@@ -189,6 +198,21 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
             return []
         case .report(.fault(let fault)), .hostFault(let fault):
             return fail(fault)
+        case .report(.notStarted):
+            // The start did not happen: before anything is open, or with
+            // the record the start would have made showing nothing and
+            // asking for nothing, there is no record. A start that did not
+            // happen changes nothing for a record that is open and shows
+            // or waits for something, or is final.
+            switch record {
+            case .notStarted:
+                record = .declined
+            case .open(wakeAt: nil) where wanted.isEmpty && natives.isEmpty:
+                record = .declined
+            case .open, .ended, .faulted, .declined:
+                break
+            }
+            return []
         case .report(.delivered(let shown, let rows)):
             guard case .open = record else { return [] }
             wanted = shown
@@ -312,7 +336,7 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     /// after it changes nothing. A fault shows nothing.
     private mutating func fail(_ fault: NuxieMachineEdgeFault) -> [Effect] {
         switch record {
-        case .ended, .faulted:
+        case .ended, .faulted, .declined:
             return []
         case .notStarted, .open:
             record = .faulted(fault)
@@ -323,10 +347,10 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
 }
 
 extension NuxieMachineSheetState.Record {
-    /// Ended or faulted: nothing moves it again.
+    /// Ended, faulted or declined: nothing moves it again.
     var isFinal: Bool {
         switch self {
-        case .ended, .faulted: true
+        case .ended, .faulted, .declined: true
         case .notStarted, .open: false
         }
     }

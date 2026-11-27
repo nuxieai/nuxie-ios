@@ -560,7 +560,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
          .swipeEnded(paywall.shown, completed: true), .swipeEnded(paywall.shown, completed: false),
          shows([paywall], [.dismiss(reason: nil), .wakeAt(evening), .end(.finished)]),
          .report(.fault(noView)), .hostFault(noView), .wakeTaken(evening), .started,
-         .presentFailed(paywall.shown, noView)]
+         .presentFailed(paywall.shown, noView), .report(.notStarted(reason: "once"))]
     }
 
     private func assertReleasedForGood(_ state: State, file: StaticString = #filePath, line: UInt = #line) {
@@ -680,6 +680,52 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var started = State()
         XCTAssertEqual(started.handle(.started), [])
         XCTAssertFalse(started.released)
+    }
+
+    // MARK: A start that did not happen
+
+    /// The machine said the start did not happen, and nothing is wrong: the
+    /// record is declined, nothing is shown, no fault is logged and nothing
+    /// is stopped, and the presenter lets go at once. So it is whether the
+    /// report comes first, as the presenter sends it, or after the record's
+    /// start, before anything is shown or asked for.
+    func testAStartThatDidNotHappenReleasesWithNoNativesAndNoFault() {
+        var first = State()
+        XCTAssertEqual(first.handle(.report(.notStarted(reason: "once"))), [.release])
+        XCTAssertEqual(first.record, .declined)
+        XCTAssertEqual(first.natives, [])
+        XCTAssertEqual(first.wanted, [])
+        assertReleasedForGood(first)
+
+        var afterStart = State()
+        _ = afterStart.handle(.started)
+        XCTAssertEqual(afterStart.handle(.report(.notStarted(reason: "unstarted"))), [.release])
+        XCTAssertEqual(afterStart.record, .declined)
+        XCTAssertEqual(afterStart.natives, [])
+        assertReleasedForGood(afterStart)
+    }
+
+    /// A start that did not happen changes nothing for a record that is
+    /// open and shows something, or waits for its wake, or for one that is
+    /// final.
+    func testAStartThatDidNotHappenChangesNothingForARecordThatIsOpenOrFinal() {
+        var up = sheetUp()
+        let shown = up
+        XCTAssertEqual(up.handle(.report(.notStarted(reason: "once"))), [])
+        XCTAssertEqual(up, shown, "a start that did not happen moved the open record")
+
+        var waiting = waitingForEvening()
+        let asked = waiting
+        XCTAssertEqual(waiting.handle(.report(.notStarted(reason: "once"))), [])
+        XCTAssertEqual(waiting, asked, "a start that did not happen moved the record that waits")
+
+        var ended = sheetUp()
+        _ = ended.handle(shows([], [.end(.finished)]))
+        _ = ended.handle(.dismissed(paywall.shown))
+        let over = ended
+        XCTAssertEqual(ended.handle(.report(.notStarted(reason: "once"))), [])
+        XCTAssertEqual(ended, over)
+        XCTAssertEqual(ended.record, .ended)
     }
 }
 #endif
