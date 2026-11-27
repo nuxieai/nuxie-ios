@@ -1,0 +1,41 @@
+component Home
+  props
+    offer: action
+    freeze: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Home" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=offer id="offer"
+        text "Offer" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=freeze id="freeze"
+        text "Frozen" color=#eef3f1 font-size=16
+
+component Plans
+  props
+    closable: boolean
+    locked: boolean
+    allow: action
+    lock: action
+    close: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Plans" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=allow id="allow"
+        text "Allow" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=lock id="lock"
+        text "Lock" color=#eef3f1 font-size=16
+      if closable
+        button padding=12 background-color=#232c30 press=close disabled=locked id="close"
+          text "Close" color=#eef3f1 font-size=16
+
+component Frozen
+  props
+    close: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Frozen" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=close id="done"
+        text "Done" color=#eef3f1 font-size=16
