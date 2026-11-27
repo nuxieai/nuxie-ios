@@ -79,7 +79,15 @@ cannot count as qualification.
 
 The iOS unit and integration suites retain their authored hostless XCTest
 authority. The pinned Apple rules' `ios_xctestrun_runner` creates an XCResult
-and uses `xcodebuild test-without-building` with a disposable simulator.
+and uses `xcodebuild test-without-building` with an isolated simulator clone.
+The host prepares a blank device once per Xcode, runtime build and viewport,
+then clones that blank for each action. Tests never run on the blank device or
+inherit another test's app data. Only boot preparation queues behind a host
+lock; the tests themselves may execute concurrently. At most four shutdown
+blank devices are retained under `~/Library/Caches/nuxie-ios-simulators`.
+Exit and cancellation cleanup removes the action's clone, and subsequent
+preparation reaps controller-owned orphan devices after their runner and
+XCTest have ended. Unowned devices and existing pool jobs remain untouched.
 Xcode's test agent initializes UIKit and Metal; direct `simctl` process spawning
 does not provide the same context. Bazel still compiles and packages every
 Swift target directly, and the authored tests stay unchanged.

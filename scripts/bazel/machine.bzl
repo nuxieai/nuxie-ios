@@ -9,9 +9,8 @@ graph without the machine. Nothing in the Nuxie product depends on them.
 load("@nuxie_machine//:staged.bzl", "MACHINE_STAGED")
 load("@rules_apple//apple:ios.bzl", "ios_ui_test", "ios_unit_test")
 load("@rules_apple//apple:resources.bzl", "apple_resource_group")
-load("@rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl", "ios_xctestrun_runner")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
-load("//scripts/bazel:sdk.bzl", "sdk_test_library")
+load("//scripts/bazel:sdk.bzl", "sdk_ios_test_runner", "sdk_test_library")
 
 def nuxie_machine_module(name):
     """The Swift module over the machine's C interface and the engine."""
@@ -53,7 +52,7 @@ def nuxie_machine_tests(name):
     )
     # The same hostless runner as the SDK's unit suites, which is private
     # to the root package.
-    ios_xctestrun_runner(
+    sdk_ios_test_runner(
         name = name + "_runner",
         create_xcresult_bundle = True,
         reuse_simulator = False,
@@ -95,7 +94,7 @@ def nuxie_machine_ui_tests(name):
     )
     # A simulator of its own for each run, removed after, as the machine
     # suite's runner does.
-    ios_xctestrun_runner(
+    sdk_ios_test_runner(
         name = name + "_runner",
         create_xcresult_bundle = True,
         reuse_simulator = False,

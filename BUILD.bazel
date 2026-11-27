@@ -1,10 +1,9 @@
 load("@rules_apple//apple:ios.bzl", "ios_application", "ios_dynamic_framework", "ios_ui_test", "ios_unit_test")
 load("@rules_apple//apple:macos.bzl", "macos_dynamic_framework", "macos_unit_test")
 load("@rules_apple//apple:resources.bzl", "apple_resource_bundle", "apple_resource_group")
-load("@rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl", "ios_xctestrun_runner")
 load("@rules_apple//apple/testing/default_runner:macos_test_runner.bzl", "macos_test_runner")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
-load("//scripts/bazel:sdk.bzl", "sdk_framework_module", "sdk_machine_host_deps", "sdk_machine_host_resources", "sdk_machine_host_testonly", "sdk_platform_artifact", "sdk_test_library")
+load("//scripts/bazel:sdk.bzl", "sdk_framework_module", "sdk_ios_test_runner", "sdk_machine_host_deps", "sdk_machine_host_resources", "sdk_machine_host_testonly", "sdk_platform_artifact", "sdk_test_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -121,7 +120,7 @@ sdk_test_library(
     defines = ["SWIFT_PACKAGE", "NUXIE_PROVIDER_ADAPTER_TESTS"],
     deps = _TEST_DEPS,
 )
-ios_xctestrun_runner(
+sdk_ios_test_runner(
     name = "sdk_hostless_test_runner",
     visibility = ["//visibility:private"],
     # Creating an XCResult forces the supported test-without-building path.
