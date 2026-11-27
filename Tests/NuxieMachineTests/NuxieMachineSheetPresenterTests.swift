@@ -519,16 +519,24 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime((window, coverWindow)) {}
     }
 
-    /// The reasons combine: while the Screen is loading, a sheet whose swipe
-    /// closes still cannot be swiped away, and a sheet whose swipe is
-    /// refused stays held once loading is over.
+    /// The reasons combine: a sheet presented before its page's files are
+    /// in shows the loading screen, which holds it, so a sheet whose swipe
+    /// closes still cannot be swiped away, and neither a held swipe nor the
+    /// screen reader's escape is delivered; and a sheet whose swipe is
+    /// refused stays held once the loading is over.
     @MainActor
     func testTheReasonsASheetIsHeldCombine() throws {
         let loop = try Self.loop()
         let shown = NuxieMachineShown(journey: 1, instance: 1)
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes)
-        controller.modalReasons.insert(.loading)
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes,
+                                               assets: .waiting(["assets/hero.png"]))
+        controller.loadViewIfNeeded()
+        XCTAssertEqual(controller.modalReasons, [.loading])
         XCTAssertTrue(controller.isModalInPresentation, "a loading sheet whose swipe closes can be swiped away")
+        var delivered = 0
+        controller.onEscape = { delivered += 1 }
+        XCTAssertFalse(controller.accessibilityPerformEscape(), "the escape closed a loading sheet")
+        XCTAssertEqual(delivered, 0)
         controller.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
                                                 swipeDown: .stays))
         XCTAssertEqual(controller.modalReasons, [.loading, .swipeRefused])
@@ -633,11 +641,12 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     private static func screen(
         presenting presentation: NuxieMachinePresentation, loop: NuxieMachineScreenLoop,
         shown: NuxieMachineShown = NuxieMachineShown(journey: 1, instance: 1), route: String = "screen",
-        detents: [NuxieMachineDetent] = [], swipeDown: NuxieMachineSwipeWould? = nil
+        detents: [NuxieMachineDetent] = [], swipeDown: NuxieMachineSwipeWould? = nil,
+        assets: NuxieMachineAssets = .ready
     ) -> (NuxieMachineScreenViewController, UIWindow) {
         let presented = NuxieMachinePresented(shown: shown, route: route, presentation: presentation,
                                               detents: detents, swipeDown: swipeDown)
-        let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop)
+        let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop, assets: assets)
         controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = controller
