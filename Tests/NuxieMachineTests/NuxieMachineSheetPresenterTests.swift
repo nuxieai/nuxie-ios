@@ -92,6 +92,57 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
+    // MARK: A start that did not happen
+
+    /// A plan whose start changes nothing, so the machine answers that it
+    /// did not happen (`unstarted`).
+    private static let changesNothing = """
+        component Quiet
+          platforms ios android
+
+          state n = 0
+
+          entry
+            on event "go"
+            once
+            do look
+
+          action look
+            n = 0
+
+        """
+
+    /// A presenter started on an event that does not start a record
+    /// presents nothing and lets go of its edge at once, and the host hears
+    /// one status, that the record did not start, and never `open` first:
+    /// for an event no entry starts on, and for a start the machine says
+    /// changed nothing. No fault is told.
+    @MainActor
+    func testAStartThatDidNotHappenPresentsNothingAndTellsTheHostOnce() async throws {
+        for (source, event) in [(Self.waitsForTheEvening, "nope"), (Self.changesNothing, "go")] {
+            let plan = NuxieMachinePlanSource(
+                files: [NuxieMachineSourceFile(path: "main.nux", text: source)],
+                assets: [], root: "main", app: "app", experience: "quiet", version: 1)
+            let host = UIViewController()
+            let heard = HostHeard()
+            let presenter = NuxieMachineSheetPresenter(host: host) { heard.statuses.append($0) }
+            weak var edgeStore: ProbeStore?
+            do {
+                let store = ProbeStore()
+                edgeStore = store
+                await presenter.start(plan: plan, store: store, bytes: NoFolderFiles(), event: event)
+            }
+
+            XCTAssertEqual(heard.statuses.map(\.record), [.didNotStart], "the host heard \(heard.statuses) on \(event)")
+            XCTAssertEqual(presenter.status.record, .didNotStart, event)
+            XCTAssertNil(host.presentedViewController, "something was presented on \(event)")
+            XCTAssertNil(presenter.edge, "the presenter kept its edge on \(event)")
+            XCTAssertNil(presenter.scheduledWake, event)
+            try await waitUntil("the edge is freed") { edgeStore == nil }
+            withExtendedLifetime(host) {}
+        }
+    }
+
     // MARK: The clock at its default
 
     /// The test seam for the clock, at its default, leaves the presenter on
@@ -951,6 +1002,12 @@ private final class Gate {
 @MainActor
 private final class HostLines {
     var status: NuxieMachineSheetStatus?
+}
+
+/// Every status the host was told, in order.
+@MainActor
+private final class HostHeard {
+    var statuses: [NuxieMachineSheetStatus] = []
 }
 
 /// The stand-in store as an object, so a check can see when the edge that
