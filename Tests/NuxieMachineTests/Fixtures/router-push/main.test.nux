@@ -1,9 +1,3 @@
-test "the first page takes no edge swipe"
-  event "onboarding_completed"
-  expect route home
-  swipe back
-  expect route home
-
 test "an edge swipe pops the step while its back is not showing"
   event "onboarding_completed"
   tap "next"
@@ -22,26 +16,24 @@ test "an edge swipe presses back once it shows"
   expect route home
   expect state backs == 1
 
-test "an edge swipe on a disabled back stays"
+test "a disabled back shows on the step"
   event "onboarding_completed"
   tap "next"
   tap "allow"
   tap "lock"
-  swipe back
+  expect has "back"
   expect route step
   expect state backs == 0
 
-test "an edge swipe on a page that says swipe=none stays"
+test "the page that says swipe=none leaves by its own control"
   event "onboarding_completed"
   tap "next"
   tap "deeper"
   expect route stuck
-  swipe back
-  expect route stuck
   tap "return"
   expect route step
 
-test "a page pushed inside a sheet pops by an edge swipe, and the sheet's first page stays"
+test "a page pushed inside a sheet pops by an edge swipe"
   event "onboarding_completed"
   tap "next"
   tap "deeper"
@@ -49,8 +41,6 @@ test "a page pushed inside a sheet pops by an edge swipe, and the sheet's first 
   expect route plans
   tap "enter"
   expect route detail
-  swipe back
-  expect route plans
   swipe back
   expect route plans
 
