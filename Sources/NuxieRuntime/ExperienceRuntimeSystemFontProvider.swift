@@ -58,11 +58,18 @@ package enum ExperienceRuntimeSystemFontProvider {
         return "\(ProcessInfo.processInfo.operatingSystemVersionString)|\(CTFontCopyPostScriptName(font))|\(url?.absoluteString ?? "coretext")|\(weight)|\(style)"
     }
 
+    /// The system face for a weight in hundreds and a style, `normal` or
+    /// `italic`: the italic is the upright face of that weight with the
+    /// italic trait, as the platform resolves it.
     private static func selectedFont(weight: String, style: String) throws -> CTFont {
-        guard style == "normal", let value = Int(weight), String(value) == weight,
+        guard style == "normal" || style == "italic", let value = Int(weight), String(value) == weight,
               (100...900).contains(value), value % 100 == 0 else { throw Failure.unsupportedRequest }
         #if canImport(UIKit)
-        return UIFont.systemFont(ofSize: 17, weight: uiWeight(value)) as CTFont
+        let upright = UIFont.systemFont(ofSize: 17, weight: uiWeight(value))
+        guard style == "italic" else { return upright as CTFont }
+        let traits = upright.fontDescriptor.symbolicTraits.union(.traitItalic)
+        guard let italic = upright.fontDescriptor.withSymbolicTraits(traits) else { throw Failure.unavailableFace }
+        return UIFont(descriptor: italic, size: 17) as CTFont
         #else
         throw Failure.unavailableFace
         #endif

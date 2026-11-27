@@ -73,10 +73,27 @@ final class ExperienceRuntimeSystemFontProviderTests: XCTestCase {
             XCTAssertTrue(ExperienceRuntimeFontRegistry.isValidFontData(candidate.bytes))
         }
     }
+
+    /// The italic is the face the platform gives as its italic system font:
+    /// its variation tables are those of `UIFont.italicSystemFont`, and its
+    /// bytes are not the upright face's.
+    func testTheItalicIsThePlatformsItalicSystemFace() throws {
+        let italic = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "italic")
+        let upright = try ExperienceRuntimeSystemFontProvider.prepare(weight: "400", style: "normal")
+        let face = try ExperienceRuntimeFontData.face(in: italic.bytes, at: 0)
+        let native = UIFont.italicSystemFont(ofSize: 17) as CTFont
+        for tag: UInt32 in [0x66766172, 0x67766172, 0x61766172, 0x48564152, 0x4D564152, 0x706F7374] {
+            XCTAssertEqual(face.tables[tag], CTFontCopyTable(native, tag, []) as Data?)
+        }
+        XCTAssertTrue(ExperienceRuntimeFontRegistry.isValidFontData(italic.bytes))
+        XCTAssertNotEqual(italic.contentSHA256, upright.contentSHA256, "the italic is the upright face")
+        XCTAssertNotEqual(try ExperienceRuntimeSystemFontProvider.requestIdentity(weight: "400", style: "italic"),
+                          try ExperienceRuntimeSystemFontProvider.requestIdentity(weight: "400", style: "normal"))
+    }
     #endif
 
     func testUnsupportedRequestsFailBeforeReadingFiles() {
-        for (weight, style) in [("450", "normal"), ("0400", "normal"), ("400", "italic"), ("1000", "normal")] {
+        for (weight, style) in [("450", "normal"), ("0400", "normal"), ("400", "oblique"), ("1000", "normal")] {
             XCTAssertThrowsError(try ExperienceRuntimeSystemFontProvider.prepare(weight: weight, style: style, readFile: { _ in
                 XCTFail("invalid request must not read a font")
                 return Data()
