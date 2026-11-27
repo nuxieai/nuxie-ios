@@ -6,11 +6,11 @@
     "experience": "router-sheet",
     "version": 1
   },
-  "nuxieDevCommit": "96911b5bc09",
+  "nuxieDevCommit": "c9cae14174e",
   "files": {
     "main.nux": {
-      "sha256": "869c0797cf70d3471850d853fda69cd929cb5a3c06c9874cc0fc075740f73980",
-      "sizeBytes": 1091
+      "sha256": "3b1b7cfe8fe2bae8e71892d33c611c6065dc1c1dea3bb578d8cea8372dfc4f0c",
+      "sizeBytes": 1064
     },
     "main.test.nux": {
       "sha256": "16735ce45d2f918ed45c8f1f8911079d1694aa9825071718d8240befe4f8d62d",
