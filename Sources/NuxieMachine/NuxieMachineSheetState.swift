@@ -25,9 +25,13 @@ import Foundation
 ///   runs again when the transition ends. Every UIKit event names the
 ///   presentation it is for, so a completion that arrives late moves only
 ///   its own native and never a newer one.
-/// - The machine hears `closed` only for a swipe that took a sheet the edge
-///   still showed while the record was open. Until the edge's next report
-///   no longer shows it, the sync opens nothing in its place.
+/// - The machine hears a swipe (`swipe`) only on a sheet the edge still
+///   shows while the record is open: once for a swipe UIKit held (the
+///   machine said it presses a control or does nothing, or the screen
+///   reader's escape asked), and once for one that took the sheet
+///   natively. A sheet a swipe took is not opened again until the edge has
+///   answered the swipe ([`closing`]); then the sync shows what the machine
+///   says, which presents it again when the machine kept it.
 /// - Where the files the pages draw stand is the edge's to say, in its
 ///   reports ([`assets`]); every native presentation shows it. While a page
 ///   waits, Try Again asks for the failed files again, and the close is the
@@ -91,6 +95,13 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         /// The person's swipe of this presentation ended: it took it, or it
         /// was cancelled and it is back up.
         case swipeEnded(NuxieMachineShown, completed: Bool)
+        /// UIKit held the person's swipe down on this presentation, because
+        /// the machine said it presses a control or does nothing; or the
+        /// screen reader's escape asked to close it. The sheet stays up.
+        case swipeRefused(NuxieMachineShown)
+        /// The edge answered the swipe on this presentation, its report
+        /// already handed in. What is shown now says whether it stays.
+        case swipeDelivered(NuxieMachineShown)
         /// The presenter is about to deliver the wake at this moment.
         case wakeTaken(Int64)
         /// Something outside the edge failed: the edge would not open, or
@@ -108,8 +119,8 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         case present(NuxieMachinePresented, over: NuxieMachineShown?)
         /// Dismiss this native presentation and every one above it.
         case dismiss(NuxieMachineShown)
-        /// Tell the edge the person closed this presentation.
-        case close(NuxieMachineShown)
+        /// Deliver a swipe down on this presentation to the edge.
+        case swipe(NuxieMachineShown)
         /// Set the wake timer for this moment, or cancel it.
         case schedule(Int64?)
         /// The record is final: stop the loop and close the edge; log the
@@ -133,8 +144,8 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     package private(set) var wanted: [NuxieMachinePresented] = []
     /// The native presentations UIKit holds, bottom first.
     package private(set) var natives: [Native] = []
-    /// Presentations the person swiped away whose close the edge has not
-    /// answered yet: still in [`wanted`], and not to be opened again.
+    /// Presentations the person swiped away natively whose swipe the edge
+    /// has not answered yet: not to be opened again until it has.
     package private(set) var closing: [NuxieMachineShown] = []
     /// Whether [`Effect.release`] has been said.
     package private(set) var released = false
@@ -211,10 +222,18 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
             }
             natives.removeSubrange(index...)
             // A swipe that took a presentation the edge still shows is the
-            // person's close, for the presentation it took.
+            // person's swipe, for the presentation it took.
             guard case .open = record, wanted.contains(where: { $0.shown == shown }) else { return [] }
             closing.append(shown)
-            return [.close(shown)]
+            return [.swipe(shown)]
+        case .swipeRefused(let shown):
+            // Held by UIKit, the sheet is still up: the machine decides.
+            guard let index = index(of: shown), natives[index].phase == .up, case .open = record,
+                  wanted.contains(where: { $0.shown == shown }) else { return [] }
+            return [.swipe(shown)]
+        case .swipeDelivered(let shown):
+            closing.removeAll { $0 == shown }
+            return []
         case .wakeTaken(let moment):
             guard record == .open(wakeAt: moment) else { return [] }
             record = .open(wakeAt: nil)
