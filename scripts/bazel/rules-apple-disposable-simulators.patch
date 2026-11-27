@@ -11,3 +11,29 @@
 +    if reuse_simulator is None:
 +        reuse_setting = os.getenv("SIMULATOR_REUSE_SIMULATOR")
 +        reuse_simulator = True if reuse_setting is None else bool(reuse_setting)
+--- a/apple/testing/default_runner/ios_xctestrun_runner.template.sh
++++ b/apple/testing/default_runner/ios_xctestrun_runner.template.sh
+@@ -400,0 +401,13 @@
++cleanup_owned_simulator() {
++  local result=$?
++  trap - EXIT HUP INT TERM
++  if [[ "$simulator_id" != unused && "$build_for_device" == false ]]; then
++    SIMULATOR_UDID="$simulator_id" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" SIMULATOR_RUNNER_PID="$$" "%(clean_up_simulator_action_binary)s" || echo "Owned simulator cleanup deferred; retaining the original test result" >&2
++  fi
++  if [[ -z "${NO_CLEAN:-}" ]]; then rm -rf "$test_tmp_dir"; fi
++  exit "$result"
++}
++trap cleanup_owned_simulator EXIT
++trap 'exit 129' HUP
++trap 'exit 130' INT
++trap 'exit 143' TERM
+@@ -402 +415 @@
+-  simulator_id="$(SIMULATOR_DEVICE_TYPE="%(device_type)s" SIMULATOR_OS_VERSION="%(os_version)s" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" "%(create_simulator_action_binary)s")"
++  simulator_id="$(SIMULATOR_DEVICE_TYPE="%(device_type)s" SIMULATOR_OS_VERSION="%(os_version)s" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" SIMULATOR_RUNNER_PID="$$" "%(create_simulator_action_binary)s")"
+@@ -660 +672,0 @@
+-SIMULATOR_UDID="$simulator_id" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" "%(clean_up_simulator_action_binary)s"
+--- a/apple/testing/default_runner/ios_xctestrun_runner.bzl
++++ b/apple/testing/default_runner/ios_xctestrun_runner.bzl
+@@ -117 +117 @@
+-            execution_requirements = {"requires-darwin": ""},
++            execution_requirements = {"requires-darwin": "", "no-sandbox": ""},

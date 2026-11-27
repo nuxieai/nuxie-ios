@@ -2,10 +2,24 @@
 load("@nuxie_machine//:staged.bzl", "MACHINE_STAGED")
 load("@nuxie_runtime_release//:source-root.bzl", "SDK_SOURCE_ROOT")
 load("@rules_apple//apple:providers.bzl", "AppleBundleInfo")
+load("@rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl", "ios_xctestrun_runner")
 load("@rules_apple//apple/internal/aspects:swift_dynamic_framework_aspect.bzl", "SwiftDynamicFrameworkInfo")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@rules_swift//swift:providers.bzl", "SwiftInfo")
 load("@rules_swift//swift:swift_library.bzl", "swift_library")
+
+def sdk_ios_test_runner(name, **kwargs):
+    """Run XCTest on an isolated clone of an idle, prepared blank device."""
+    if kwargs.pop("reuse_simulator", False):
+        fail("SDK tests require an isolated simulator for each test action")
+    kwargs.setdefault("testonly", True)
+    ios_xctestrun_runner(
+        name = name,
+        reuse_simulator = False,
+        create_simulator_action = "//scripts/bazel:simulator_create",
+        clean_up_simulator_action = "//scripts/bazel:simulator_cleanup",
+        **kwargs
+    )
 
 def _runtime_imports_aspect_impl(target, ctx):
     files = []

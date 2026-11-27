@@ -10,6 +10,35 @@ py_binary(
     main = "macos-test-home.py",
 )
 
+py_binary(
+    name = "simulator_create",
+    testonly = True,
+    srcs = ["simulator-create.py", "simulator_pool.py"],
+    main = "simulator-create.py",
+)
+
+py_binary(
+    name = "simulator_cleanup",
+    testonly = True,
+    srcs = ["simulator-cleanup.py", "simulator_pool.py"],
+    main = "simulator-cleanup.py",
+)
+
+py_test(
+    name = "simulator_pool_test",
+    size = "small",
+    srcs = ["test_simulator_pool.py", "simulator_pool.py"],
+    main = "test_simulator_pool.py",
+)
+
+py_test(
+    name = "simulator_runner_test",
+    size = "small",
+    srcs = ["test_simulator_runner.py"],
+    main = "test_simulator_runner.py",
+    data = ["@rules_apple//apple/testing/default_runner:ios_xctestrun_runner.template.sh"],
+)
+
 py_test(
     name = "xcresult_test",
     size = "small",
