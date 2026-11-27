@@ -654,6 +654,33 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime(window) {}
     }
 
+    /// A sheet first rests at its shortest detent, whatever order its row
+    /// writes them in. `large 320 30%`, tallest first, on a phone that
+    /// leaves a sheet 751 points: 30% is 225.3, then 320, then large. The
+    /// sheet names no detent to open at, and UIKit opens a sheet that names
+    /// none at the first of its detents, the shortest, so the detent it
+    /// opens at is 30%; and still 30% once UIKit's own maximum orders them.
+    @MainActor
+    func testASheetFirstRestsAtItsShortestDetent() throws {
+        guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
+        let loop = try Self.loop()
+        let authored: [NuxieMachineDetent] = [.large, .points(320), .percent(30)]
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
+        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let percent = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.percent.30.0")
+        let points = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.points.320.0")
+        controller.orderDetents(estimatedMaximum: 751)
+        XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points, .large])
+        XCTAssertNil(sheet.selectedDetentIdentifier, "the sheet names a detent to open at")
+        XCTAssertEqual(sheet.selectedDetentIdentifier ?? sheet.detents.first?.identifier, percent,
+                       "the sheet does not open at its shortest detent")
+        controller.resolved(maximum: 700)
+        XCTAssertEqual(sheet.selectedDetentIdentifier ?? sheet.detents.first?.identifier, percent,
+                       "the sheet does not open at its shortest detent")
+        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        withExtendedLifetime(window) {}
+    }
+
     /// The height each of this module's detents rests at, for a sheet that
     /// can be at most 800 points: points and a percent as written, never
     /// more than the most; the content's height as measured, never more
