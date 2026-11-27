@@ -143,6 +143,26 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         }
     }
 
+    /// A presenter started on an event no entry starts on, over a page that
+    /// draws a picture: the start asked the byte source for the picture
+    /// before the machine said nothing starts. The presenter closes its
+    /// edge as for an end, so that ask is cancelled rather than left
+    /// running, and the host hears only that the record did not start.
+    @MainActor
+    func testAStartThatDidNotHappenCancelsTheFilesItAskedFor() async throws {
+        let host = UIViewController()
+        let heard = HostHeard()
+        let presenter = NuxieMachineSheetPresenter(host: host) { heard.statuses.append($0) }
+        let bytes = CancelledBytes()
+        await presenter.start(plan: try PictureFolder.plan(), store: ProbeStore(), bytes: bytes, event: "nope")
+
+        XCTAssertEqual(heard.statuses.map(\.record), [.didNotStart], "the host heard \(heard.statuses)")
+        XCTAssertNil(presenter.edge, "the presenter kept its edge")
+        try await waitUntil("the picture is asked for") { bytes.asked == ["assets/hero.png"] }
+        try await waitUntil("the ask is cancelled") { bytes.cancelled == ["assets/hero.png"] }
+        withExtendedLifetime(host) {}
+    }
+
     // MARK: The clock at its default
 
     /// The test seam for the clock, at its default, leaves the presenter on
@@ -1008,6 +1028,29 @@ private final class HostLines {
 @MainActor
 private final class HostHeard {
     var statuses: [NuxieMachineSheetStatus] = []
+}
+
+/// A byte source whose asks never answer on their own: each waits until it
+/// is cancelled. It keeps the paths asked for, and those whose ask was
+/// cancelled, in order.
+private final class CancelledBytes: NuxieMachineByteSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var askedPaths: [String] = []
+    private var cancelledPaths: [String] = []
+
+    var asked: [String] { lock.withLock { askedPaths } }
+    var cancelled: [String] { lock.withLock { cancelledPaths } }
+
+    func bytes(for path: String) async throws -> Data {
+        lock.withLock { askedPaths.append(path) }
+        do {
+            try await Task.sleep(nanoseconds: 3_600_000_000_000)
+        } catch {
+            lock.withLock { cancelledPaths.append(path) }
+            throw error
+        }
+        throw NuxieMachineByteSourceFault.noFile(path)
+    }
 }
 
 /// The stand-in store as an object, so a check can see when the edge that
