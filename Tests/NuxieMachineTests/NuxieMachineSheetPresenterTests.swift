@@ -563,38 +563,56 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     }
 
     /// A pushed page fills its segment as its first page does, and is told
-    /// the segment's place: in a cover, the screen's; in a sheet, the
-    /// sheet's own.
+    /// the segment's place, with no bar's height in it: in a cover, the
+    /// window's safe area with the cover's own added, the same place a
+    /// cover's only page is told; in a sheet, the sheet's own.
+    ///
+    /// The window's safe area is the simulator's, which this runner does
+    /// not choose (a window 390 by 844 on a phone 402 by 874 has 62 at the
+    /// top and 4 at the bottom), so the place is checked against it, not
+    /// against fixed numbers.
     @MainActor
-    func testAPushedPageIsPlacedAsItsSegment() throws {
+    func testAPushedPageIsPlacedAsItsSegment() async throws {
         let loop = try Self.loop()
-        let pages = [Self.page(1, .cover), Self.page(2, .push)]
-        let (cover, window) = Self.segment(pages, loop: loop)
-        cover.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+        let added = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+        let (cover, window) = Self.segment([Self.page(1, .cover), Self.page(2, .push)], loop: loop)
+        cover.additionalSafeAreaInsets = added
         window.layoutIfNeeded()
         let pushed = try XCTUnwrap(cover.pages.last)
         XCTAssertTrue(cover.topViewController === pushed)
-        XCTAssertEqual(pushed.place, NuxieMachineScreenPlace(top: 59, right: 0, bottom: 34, left: 0,
-                                                             width: 390, height: 844),
-                       "a pushed page in a cover is not placed as the screen")
+        let screenInsets = window.safeAreaInsets
+        let expected = NuxieMachineScreenPlace(
+            top: Double(screenInsets.top + added.top), right: 0,
+            bottom: Double(screenInsets.bottom + added.bottom), left: 0, width: 390, height: 844)
+        XCTAssertEqual(pushed.place, expected, "a pushed page in a cover is not placed as the cover")
+
+        let (alone, aloneWindow) = Self.segment([Self.page(3, .cover)], loop: loop)
+        alone.additionalSafeAreaInsets = added
+        aloneWindow.layoutIfNeeded()
+        XCTAssertEqual(try XCTUnwrap(alone.pages.first).place, pushed.place,
+                       "a pushed page is placed apart from a cover's only page")
 
         let host = UIViewController()
-        let sheetWindow = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-        sheetWindow.rootViewController = host
-        sheetWindow.isHidden = false
-        let sheet = NuxieMachineSegmentController(pages: [Self.page(3, .sheet), Self.page(4, .push)].map {
+        let sheetWindow = Self.window(host)
+        let sheet = NuxieMachineSegmentController(pages: [Self.page(4, .sheet), Self.page(5, .push)].map {
             NuxieMachineScreenViewController(presenting: $0, loop: loop)
         })
-        host.present(sheet, animated: false)
+        var presented = false
+        host.present(sheet, animated: false) { presented = true }
+        try await waitUntil("the sheet is presented", seconds: 5) { presented }
         sheetWindow.layoutIfNeeded()
         let inSheet = try XCTUnwrap(sheet.pages.last)
+        try await waitUntil("the pushed page in the sheet has a place", seconds: 5) {
+            sheetWindow.layoutIfNeeded()
+            return inSheet.place != nil
+        }
         let place = try XCTUnwrap(inSheet.place, "a pushed page in a sheet has no place")
         let view = try XCTUnwrap(sheet.view)
         XCTAssertEqual(place.width, Double(view.bounds.width))
         XCTAssertEqual(place.height, Double(view.bounds.height), "a pushed page does not fill its sheet")
         XCTAssertEqual(place.top, Double(view.safeAreaInsets.top), "a pushed page is not told its sheet's insets")
         XCTAssertEqual(place.bottom, Double(view.safeAreaInsets.bottom), "a pushed page is not told its sheet's insets")
-        withExtendedLifetime((window, sheetWindow)) {}
+        withExtendedLifetime((window, aloneWindow, sheetWindow)) {}
     }
 
     // MARK: What a swipe down on a sheet does
@@ -790,20 +808,16 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     // MARK: A change of pages
 
     /// A replace of the page on top is one change of the segment's pages,
-    /// which UIKit animates as a push: its new top page is new.
+    /// which UIKit animates as a push: its new top page is new. The change
+    /// is followed to the transition's own end, and then UIKit holds the
+    /// new pages.
     @MainActor
     func testAReplaceIsOneChangeAnimatedAsAPush() async throws {
         let loop = try Self.loop()
         let (segment, window) = Self.segment([Self.page(1, .cover), Self.page(2, .push)], loop: loop)
-        window.layoutIfNeeded()
         let kept = try XCTUnwrap(segment.pages.first)
         let replacing = NuxieMachineScreenViewController(presenting: Self.page(3, .push), loop: loop)
-        var done = false
-        segment.setPages([kept, replacing]) { done = true }
-        XCTAssertEqual(segment.pages.map(\.shown), [Self.page(1, .cover).shown, Self.page(3, .push).shown])
-        try await waitUntil("UIKit asked how to animate the change") { segment.lastOperation != .none }
-        XCTAssertEqual(segment.lastOperation, .push)
-        try await waitUntil("the change is over") { done }
+        try await expectOneChange(segment, to: [kept, replacing], animatedAs: .push)
         withExtendedLifetime(window) {}
     }
 
@@ -814,15 +828,32 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         let loop = try Self.loop()
         let (segment, window) = Self.segment([Self.page(1, .cover), Self.page(2, .push), Self.page(3, .push)],
                                              loop: loop)
-        window.layoutIfNeeded()
         let kept = try XCTUnwrap(segment.pages.first)
-        var done = false
-        segment.setPages([kept]) { done = true }
-        XCTAssertEqual(segment.pages.map(\.shown), [Self.page(1, .cover).shown])
-        try await waitUntil("UIKit asked how to animate the change") { segment.lastOperation != .none }
-        XCTAssertEqual(segment.lastOperation, .pop)
-        try await waitUntil("the change is over") { done }
+        try await expectOneChange(segment, to: [kept], animatedAs: .pop)
         withExtendedLifetime(window) {}
+    }
+
+    /// Set `segment`'s pages to `pages` and check the change: the segment
+    /// holds them at once; UIKit runs one animated transition, asked for as
+    /// `operation`; the completion comes from that transition's end, not
+    /// before it; and once it has come UIKit holds exactly `pages`.
+    @MainActor
+    private func expectOneChange(_ segment: NuxieMachineSegmentController,
+                                 to pages: [NuxieMachineScreenViewController],
+                                 animatedAs operation: UINavigationController.Operation) async throws {
+        XCTAssertNotNil(segment.view.window, "the segment is not on screen, so nothing animates")
+        var done = 0
+        segment.setPages(pages) { done += 1 }
+        XCTAssertEqual(segment.pages.map(\.shown), pages.map(\.shown))
+        XCTAssertNotNil(segment.transitionCoordinator, "the change is not an animated transition")
+        XCTAssertEqual(done, 0, "the change was told over before its transition ran")
+        try await waitUntil("UIKit asked how to animate the change") { segment.lastOperation != .none }
+        XCTAssertEqual(segment.lastOperation, operation)
+        try await waitUntil("the transition is over") { done > 0 }
+        XCTAssertEqual(done, 1)
+        XCTAssertNil(segment.transitionCoordinator, "the change was told over while its transition ran")
+        XCTAssertEqual(segment.viewControllers.map { ($0 as? NuxieMachineScreenViewController)?.shown },
+                       pages.map(\.shown), "UIKit does not hold the pages set")
     }
 
     // MARK: A sheet's heights
@@ -1021,12 +1052,14 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         return (segment, window(segment))
     }
 
-    /// A window at a phone's size with `root` as its root, shown.
+    /// A window at a phone's size with `root` as its root, shown and laid
+    /// out, so a segment's page on top is in it.
     @MainActor
     private static func window(_ root: UIViewController) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root
         window.isHidden = false
+        window.layoutIfNeeded()
         return window
     }
 
@@ -1190,7 +1223,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         let segment = try XCTUnwrap(controller.navigationController as? NuxieMachineSegmentController,
                                     "a \(presentation) is not a page of a segment")
         XCTAssertTrue(segment.isNavigationBarHidden, "a \(presentation) shows a navigation bar")
-        XCTAssertEqual(view.frame, segment.view.bounds, "a \(presentation) does not fill its segment")
+        XCTAssertEqual(view.bounds.size, segment.view.bounds.size, "a \(presentation) does not fill its segment")
         switch presentation {
         case .sheet:
             XCTAssertEqual(segment.modalPresentationStyle, .pageSheet)
