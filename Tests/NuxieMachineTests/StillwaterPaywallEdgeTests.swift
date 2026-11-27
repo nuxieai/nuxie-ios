@@ -1269,6 +1269,53 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
         }
     }
 
+    /// "Not now" closes the paywall and leaves the evening offer owed: the
+    /// record shows nothing, owes nothing on this device and awaits nothing,
+    /// so the machine says `hand over` last, after the dismiss and the wake.
+    /// The record has not ended, and with no server to carry it to this host
+    /// keeps it: the log holds the dismiss, the wake at 18:00 and the hand
+    /// over, in that order; nothing is faulted; the owner hears the one
+    /// dismissal; the record stays open. At 18:00 the wake reaches it, and
+    /// the evening offer opens on this device as before.
+    func testAHandOverAfterACloseKeepsTheRecordAndItsWake() async throws {
+        let run = try Run()
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            try await run.layOut()
+            try await run.settle()
+            let open = try await run.look("open")
+            let written = await run.edge.log.count
+            try await run.tap(open.center(of: "Not now"))
+            let after = await Array(run.edge.log.dropFirst(written))
+            let kept = after.filter {
+                switch $0 {
+                case .dismiss, .wakeAt, .handOver: true
+                default: false
+                }
+            }
+            XCTAssertEqual(kept, [.dismiss(reason: "paywall_closed"), .wakeAt(18 * Self.hour), .handOver],
+                           "\(after)")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            XCTAssertEqual(run.owner.dismissals, [.machine(reason: "paywall_closed")])
+            let waiting = try await run.edge.recordOpen()
+            XCTAssertTrue(waiting, "the record handed over is still open")
+
+            run.jump(to: 18 * Self.hour)
+            await run.edge.wake(now: run.now)
+            let woken = await run.edge.fault
+            XCTAssertNil(woken, "the wake after a hand over faulted")
+            let stack = await run.edge.stack
+            let offer = try XCTUnwrap(stack.last, "the wake presents nothing")
+            XCTAssertEqual(offer.route, "offer")
+            XCTAssertEqual(offer.presentation, .sheet)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
     /// The machine takes a wake only at the moment it asked for. A wake
     /// delivered at another moment, here two days late, changes nothing: no
     /// rows, no fault, the record still open. The wake at the moment asked
