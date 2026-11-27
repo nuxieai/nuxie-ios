@@ -29,10 +29,13 @@ final class OneDeliveryEdgeTests: XCTestCase {
         try await run.edge.close()
     }
 
+    /// A start whose step presents a page and exits changed nothing either:
+    /// it did not happen (`unstarted`), with no fault and no record.
     func testAScreenPresentedThenExitedInOneDeliveryIsNeverOpened() async throws {
         let run = try OneDelivery(compiled: Self.compiled(["go(clock)", "exit"]))
         await run.edge.start(event: "opened", now: run.now)
-        try await expectNothingShown(run, endedAs: .exited)
+        try await expectNotStarted(run, on: "opened", reason: "unstarted")
+        try await run.edge.close()
     }
 
     /// A start whose step presents a page and goes back changed nothing
@@ -246,33 +249,6 @@ final class OneDeliveryEdgeTests: XCTestCase {
         XCTAssertTrue(told.contains(.end(.exited)), "\(told)", file: file, line: line)
         let gone = await run.edge.shown
         XCTAssertNil(gone, file: file, line: line)
-        try await run.edge.close()
-    }
-
-    /// The delivery opened nothing and told the owner nothing about showing:
-    /// no player, no presentation opened, nothing shown in any report, no
-    /// dismissal told, and no fault. The record ended for `ending`, and the
-    /// owner was told so.
-    private func expectNothingShown(_ run: OneDelivery, endedAs ending: NuxieMachineEnding,
-                                    file: StaticString = #filePath, line: UInt = #line) async throws {
-        let fault = await run.edge.fault
-        XCTAssertNil(fault, "a valid ending faulted", file: file, line: line)
-        let shown = await run.edge.shown
-        XCTAssertNil(shown, "a presentation is under way", file: file, line: line)
-        let player = await run.edge.screen()
-        XCTAssertNil(player, "a player was opened", file: file, line: line)
-        let told = run.owner.reports.flatMap { report -> [NuxieMachineHostRow] in
-            if case .delivered(_, let rows) = report { return rows }
-            return []
-        }
-        XCTAssertFalse(told.contains { Self.isShowing($0) }, "the owner was told \(told)", file: file, line: line)
-        for case .delivered(let shownThen, _) in run.owner.reports {
-            XCTAssertEqual(shownThen, [], "the owner was shown \(shownThen)", file: file, line: line)
-        }
-        let opened = await run.edge.log.filter { if case .opened = $0 { true } else { false } }
-        XCTAssertEqual(opened, [], "the edge opened \(opened)", file: file, line: line)
-        XCTAssertTrue(told.contains(.end(ending)), "the owner was not told the end: \(run.owner.reports)",
-                      file: file, line: line)
         try await run.edge.close()
     }
 
