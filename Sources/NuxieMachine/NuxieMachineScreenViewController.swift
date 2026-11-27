@@ -20,6 +20,13 @@ import UIKit
 /// Screens are, and drawn at the display's scale. Where it is shown (its
 /// surface's safe-area insets and size) is its place ([`place`]), which the
 /// presenter tells the session.
+///
+/// A Screen presented before its page's files are in shows the SDK's
+/// loading screen over its surface, the moved views of `NuxieRuntime`
+/// ([`assets`]): the shimmer at once, then the recovery screen and a close
+/// after the delay, or at once when a file fails. Once the files are in,
+/// the loading screen stays until the first frame is drawn under it, and
+/// then goes, with no fade. While it is up, a sheet cannot be swiped away.
 @MainActor
 package final class NuxieMachineScreenViewController: UIViewController {
     /// The presentation this controller shows.
@@ -85,6 +92,54 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// The size the last frame that reached the screen was drawn at.
     private var drawnAt: Size?
 
+    /// Where the files the page draws stand, as the presenter was last told
+    /// ([`NuxieMachineAssets`]). A Screen presented with its files in shows
+    /// no loading screen. One presented before they are in shows it, and
+    /// follows each change until its first frame is drawn:
+    ///
+    /// - waiting: the shimmer; the recovery screen and the close show once
+    ///   the delay has passed, as the SDK's experience screens show them;
+    /// - failed: the recovery screen and the close at once, offline only
+    ///   when every failed file failed offline;
+    /// - ready: the recovery screen and the close go, and the loading screen
+    ///   stays until the first frame drawn under it.
+    ///
+    /// Once its first frame is drawn the loading screen never comes back.
+    package var assets: NuxieMachineAssets {
+        didSet {
+            guard assets != oldValue, isViewLoaded else { return }
+            showAssets()
+        }
+    }
+
+    /// Told when the person taps Try Again on the recovery screen.
+    package var onRefresh: (@MainActor () -> Void)?
+    /// Told when the person taps the close on the recovery screen.
+    package var onExit: (@MainActor () -> Void)?
+
+    /// What shows over the surface.
+    private enum Shell {
+        /// Nothing: the page is drawn.
+        case none
+        /// The loading view, with the shimmer.
+        case loading
+        /// The recovery screen and the close.
+        case recovery
+    }
+
+    private var shell = Shell.none
+    /// Whether the route itself takes no swipe: a cover.
+    private let routeIsModal: Bool
+    /// How long the shimmer shows before the recovery screen and the close.
+    private let recoveryDelay: TimeInterval
+    /// The wait for that delay, while one runs.
+    private var recoveryReveal: Task<Void, Never>?
+    private let loadingView = UIView()
+    private let shimmer = ExperienceShellShimmerView()
+    private lazy var recovery = ExperienceShellRecoveryView(onRetry: { [weak self] in self?.retry() })
+    private let closeControl = ExperienceGlassControl(systemImageName: "xmark", accessibilityLabel: "Close")
+    private var palette = ExperienceShellPalette(prefersLightContent: true)
+
     private weak var loop: NuxieMachineScreenLoop?
     private let surface = NuxieMachineSurfaceView()
     private let container = UIView()
@@ -122,13 +177,23 @@ package final class NuxieMachineScreenViewController: UIViewController {
     ///
     /// Any presentation other than a cover is presented as a sheet; the
     /// presenter refuses the others before they get here.
-    package init(presenting presented: NuxieMachinePresented, loop: NuxieMachineScreenLoop) {
+    ///
+    /// `assets` is where the page's files stand when it is presented, and
+    /// `recoveryDelay` how long the shimmer shows before the recovery screen
+    /// ([`assets`]).
+    package init(presenting presented: NuxieMachinePresented, loop: NuxieMachineScreenLoop,
+                 assets: NuxieMachineAssets = .ready, recoveryDelay: TimeInterval = 5.0) {
         self.presented = presented
         self.loop = loop
-        super.init(nibName: nil, bundle: nil)
+        self.assets = assets
+        self.recoveryDelay = recoveryDelay
         let covers = presented.presentation == .cover
+        routeIsModal = covers
+        super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = covers ? .fullScreen : .pageSheet
-        isModalInPresentation = covers
+        // No swipe takes a page that waits for its files: the close is the
+        // way out ([`assets`]).
+        isModalInPresentation = covers || assets != .ready
         if !covers, let sheet = sheetPresentationController {
             sheet.detents = [.large()]
             sheet.prefersGrabberVisible = false
@@ -170,7 +235,164 @@ package final class NuxieMachineScreenViewController: UIViewController {
             surface.topAnchor.constraint(equalTo: container.topAnchor),
             surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        addShell()
         updateAccessibility()
+    }
+
+    // MARK: The loading screen
+
+    /// The loading view with its shimmer, the recovery screen and the close,
+    /// over the surface, hidden, each set up and pinned as the SDK's
+    /// experience screens set them up; no activity indicator. Then the
+    /// loading screen shows when the page is presented before its files are
+    /// in.
+    private func addShell() {
+        loadingView.backgroundColor = .systemBackground
+        loadingView.isHidden = true
+        loadingView.accessibilityIdentifier = "nuxie-experience-loading-shell"
+        loadingView.accessibilityLabel = "Experience loading"
+        loadingView.isAccessibilityElement = true
+        shimmer.accessibilityIdentifier = "nuxie-experience-shimmer"
+        recovery.backgroundColor = .systemBackground
+        recovery.isHidden = true
+        closeControl.accessibilityIdentifier = "nuxie-experience-close"
+        closeControl.isHidden = true
+        closeControl.addAction(UIAction { [weak self] _ in self?.onExit?() }, for: .touchUpInside)
+        loadingView.addSubview(shimmer)
+        container.addSubview(loadingView)
+        container.addSubview(recovery)
+        container.addSubview(closeControl)
+        for view in [loadingView, shimmer, recovery, closeControl] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+        }
+        NSLayoutConstraint.activate([
+            loadingView.topAnchor.constraint(equalTo: container.topAnchor),
+            loadingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            loadingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            loadingView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            shimmer.topAnchor.constraint(equalTo: loadingView.topAnchor),
+            shimmer.leadingAnchor.constraint(equalTo: loadingView.leadingAnchor),
+            shimmer.trailingAnchor.constraint(equalTo: loadingView.trailingAnchor),
+            shimmer.bottomAnchor.constraint(equalTo: loadingView.bottomAnchor),
+            recovery.topAnchor.constraint(equalTo: container.topAnchor),
+            recovery.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            recovery.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            recovery.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            closeControl.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 12),
+            closeControl.trailingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.trailingAnchor,
+                                                   constant: -16),
+        ])
+        applyPalette()
+        switch assets {
+        case .ready: break
+        case .waiting: showLoading()
+        case .failed(let failures): showRecovery(Self.reason(failures))
+        }
+        isModalInPresentation = routeIsModal || shell != .none
+    }
+
+    /// Follow a change of where the files stand, while the loading screen
+    /// is up ([`assets`]).
+    private func showAssets() {
+        guard shell != .none else { return }
+        switch assets {
+        case .waiting:
+            // Once the delay has shown the recovery screen it stays: the
+            // files are still coming, and Try Again is there.
+            guard shell != .recovery else { return }
+            showLoading()
+        case .failed(let failures):
+            showRecovery(Self.reason(failures))
+        case .ready:
+            recoveryReveal?.cancel()
+            recoveryReveal = nil
+            if framesDrawn > 0 {
+                reveal()
+            } else {
+                showLoading(waitingForRecovery: false)
+            }
+        }
+    }
+
+    /// The loading view with the shimmer running, the recovery screen and
+    /// the close hidden; and, unless the files are in, one wait for the
+    /// delay, after which the recovery screen and the close show.
+    private func showLoading(waitingForRecovery: Bool = true) {
+        shell = .loading
+        recovery.isHidden = true
+        closeControl.isHidden = true
+        loadingView.isHidden = false
+        shimmer.configure(backgroundColor: .systemBackground, palette: palette,
+                          reduceMotion: UIAccessibility.isReduceMotionEnabled)
+        container.bringSubviewToFront(loadingView)
+        isModalInPresentation = true
+        guard waitingForRecovery, recoveryReveal == nil else { return }
+        let delay = max(0, recoveryDelay)
+        recoveryReveal = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard let self, !Task.isCancelled, self.shell == .loading, self.assets != .ready else { return }
+            self.recoveryReveal = nil
+            // Nothing has failed yet: the files are only slow.
+            self.showRecovery(.unavailable)
+        }
+    }
+
+    /// The recovery screen for `reason`, with the close over it, in place
+    /// of the loading view.
+    private func showRecovery(_ reason: ExperienceShellRecoveryReason) {
+        recoveryReveal?.cancel()
+        recoveryReveal = nil
+        shell = .recovery
+        shimmer.stopAnimating()
+        loadingView.isHidden = true
+        recovery.isRetrying = false
+        recovery.apply(reason: reason)
+        recovery.isHidden = false
+        closeControl.isHidden = false
+        container.bringSubviewToFront(recovery)
+        container.bringSubviewToFront(closeControl)
+        isModalInPresentation = true
+    }
+
+    /// Try Again: the loading view comes back at once with the close hidden,
+    /// and the delay starts over, as the SDK's experience screens retry;
+    /// then the presenter is told.
+    private func retry() {
+        showLoading()
+        onRefresh?()
+    }
+
+    /// The first frame is drawn under the loading screen and the files are
+    /// in: the loading screen goes, with no fade, and the route's own swipe
+    /// comes back.
+    private func reveal() {
+        shell = .none
+        shimmer.stopAnimating()
+        loadingView.isHidden = true
+        recovery.isHidden = true
+        closeControl.isHidden = true
+        isModalInPresentation = routeIsModal
+    }
+
+    /// Offline only when every failed file failed offline: one that failed
+    /// for another reason is not the connection's.
+    private static func reason(_ failures: [NuxieMachineAssetFailure]) -> ExperienceShellRecoveryReason {
+        failures.allSatisfy { $0.reason == .offline } ? .offline : .unavailable
+    }
+
+    /// The loading screen's colors from its ground: the system background in
+    /// this Screen's own traits, the scheme the presenter forces on it.
+    private func applyPalette() {
+        let ground = UIColor.systemBackground.resolvedColor(with: traitCollection)
+        palette = ExperienceShellPalette(backgroundCandidates: [ground])
+        recovery.apply(palette)
+        closeControl.apply(palette)
+        if shell == .loading {
+            shimmer.configure(backgroundColor: .systemBackground, palette: palette,
+                              reduceMotion: UIAccessibility.isReduceMotionEnabled)
+        }
     }
 
     override package func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -178,6 +400,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let colors = traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection)
         let textSize = traitCollection.preferredContentSizeCategory
             != previousTraitCollection?.preferredContentSizeCategory
+        if colors, isViewLoaded { applyPalette() }
         guard colors || textSize else { return }
         onEnvironmentChange?()
     }
@@ -282,6 +505,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         guard frame.outcome.disposition == .presented else { return false }
         framesDrawn += 1
         drawnAt = size
+        if shell != .none, assets == .ready { reveal() }
         updateAccessibility()
         if let semantics = frame.semantics { show(semantics) }
         return true

@@ -113,6 +113,33 @@ package enum NuxieMachineHostRow: Equatable, Sendable {
     case wakeAt(Int64?)
     /// The record ended normally: finished or exited.
     case end(NuxieMachineEnding)
+    /// Where the files the shown pages need stand, told when it changes
+    /// ([`NuxieMachineAssets`]).
+    case assets(NuxieMachineAssets)
+}
+
+/// Where the folder's files that the shown pages draw stand, by path: what
+/// the loading and recovery screens show.
+package enum NuxieMachineAssets: Equatable, Sendable {
+    /// A page is held for these paths, whose bytes have not arrived.
+    case waiting([String])
+    /// Every file is in, and no page is held.
+    case ready
+    /// A page is held, and these paths failed; the rest are kept or still
+    /// coming.
+    case failed([NuxieMachineAssetFailure])
+}
+
+/// One file the byte source could not give, and why.
+package struct NuxieMachineAssetFailure: Equatable, Sendable {
+    /// Its path in the folder (`assets/hero.png`).
+    package let path: String
+    package let reason: ExperienceShellRecoveryReason
+
+    package init(path: String, reason: ExperienceShellRecoveryReason) {
+        self.path = path
+        self.reason = reason
+    }
 }
 
 /// What one delivery tells the edge's owner, once, when it is over: what is
@@ -167,8 +194,17 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// owner when the delivery closed something.
     case dismiss(reason: String?)
     /// The sync opened this presentation: the session shows it and the edge
-    /// did not hold it.
+    /// did not hold it. A presentation held for its files is opened when
+    /// they are in.
     case opened(NuxieMachineShown)
+    /// The sync took this presentation with no player: a file its page
+    /// draws has no bytes yet.
+    case held(NuxieMachineShown)
+    /// The owner was told where the files stand.
+    case assets(NuxieMachineAssets)
+    /// The host reported its own fault with no presentation held for its
+    /// files: every page had opened, so there was nothing to give up on.
+    case droppedExit
     /// The sync closed this presentation: the edge held it and the session
     /// no longer shows it, or a fault closed everything.
     case gone(NuxieMachineShown)
@@ -337,6 +373,16 @@ package final class NuxieMachineFrameAsks: @unchecked Sendable {
 ///    writes show (a busy button) before the answer's writes replace it, on
 ///    the step after.
 ///
+///    The byte source is waited on the same way. The start asks it for every
+///    file the views draw, each in a task of its own ([`ask`]), and goes on.
+///    A presentation the session shows before every file is in is held with
+///    no player ([`Screen.player`]), and the owner is told where the files
+///    stand ([`NuxieMachineAssets`]). Each answer is kept as it arrives
+///    ([`assetArrived`], which applies nothing and asks for a frame), and the
+///    next frame's turn opens the held players once every file is in
+///    ([`settleAssets`]). A file the source could not give is a failed path,
+///    told by path; [`refreshAssets`] asks again for those, and only those.
+///
 /// A third says what is shown: what the session's record presents, never
 /// what the rows say one by one. A delivery's rows are a log of what the
 /// machine did during it, and the record's presented stack is where they
@@ -403,8 +449,9 @@ package actor NuxieMachineEdge {
     private struct Screen {
         let presented: NuxieMachinePresented
         /// The presentation's player, with the session's driver for this
-        /// presentation set on it.
-        let player: NuxieNativeRuntime
+        /// presentation set on it. None while the presentation is held for
+        /// its files: nothing is stepped or drawn for it until they are in.
+        var player: NuxieNativeRuntime?
         /// Whether the player has not stepped since it opened, so it has
         /// drawn nothing yet. A step clears it. The writes the session holds
         /// for the presentation are not here: the session is asked for them
@@ -441,12 +488,29 @@ package actor NuxieMachineEdge {
     private var mailbox: [Answer] = []
     /// The store's work in flight, by call, until its answer arrives.
     private var working: [NuxieMachineCallID: Task<Void, Never>] = [:]
+
+    /// The folder paths of the files the views draw, faces and pictures,
+    /// in the scene's order. Read at the start.
+    private var paths: [String] = []
+    /// The bytes the source gave, by path.
+    private var supplied: [String: Data] = [:]
+    /// The paths the source could not give, and why.
+    private var failed: [String: ExperienceShellRecoveryReason] = [:]
+    /// The asks in flight, by path, until their answer arrives.
+    private var fetching: [String: Task<Void, Never>] = [:]
+    /// Whether an answer arrived that no frame's turn has looked at yet.
+    private var assetNews = false
+    /// Where the files stand, as the owner was last told.
+    private var assetsTold: NuxieMachineAssets = .ready
+
     /// Whether work only a frame consumes is waiting for one, the one rule
-    /// a host's frames follow. A frame consumes two things:
+    /// a host's frames follow. A frame consumes three things:
     ///
     /// - a step owed ([`owesStep`]), which only a frame's step pays;
     /// - a store's answer in the mailbox, which only a frame's turn
-    ///   delivers.
+    ///   delivers;
+    /// - a byte source's answer ([`assetNews`]), which only a frame's turn
+    ///   acts on.
     ///
     /// Everything else a frame does is asked for by its host: the pointers
     /// it carries, the engine's own `keepGoing`, a new size. A call still in
@@ -457,11 +521,11 @@ package actor NuxieMachineEdge {
     /// The edge asks for a frame ([`askIfWaiting`]) wherever it can leave
     /// this true: at the end of each delivery, the only place a step comes
     /// to be owed (a frame's rounds included), and when an answer arrives,
-    /// the only place the mailbox fills. So a host that runs a frame for
-    /// each ask never rests while it holds, and keeps no state of its own
-    /// about it.
+    /// the only place the mailbox fills and the byte source's answers are
+    /// kept. So a host that runs a frame for each ask never rests while it
+    /// holds, and keeps no state of its own about it.
     private var waitsForFrame: Bool {
-        fault == nil && !closedScreen && (!mailbox.isEmpty || screens.contains(where: owesStep))
+        fault == nil && !closedScreen && (!mailbox.isEmpty || assetNews || screens.contains(where: owesStep))
     }
 
     /// Whether the presentation `screen` owes a step: something it has not
@@ -475,8 +539,11 @@ package actor NuxieMachineEdge {
     ///
     /// A read that fails for another reason than the two that mean nothing
     /// is held counts as owed: the frame it asks for meets the failure in
-    /// its step, as a fault ([`stepPlayers`]).
+    /// its step, as a fault ([`stepPlayers`]). A presentation held for its
+    /// files owes nothing: it has no player to step, and the writes held for
+    /// it land in its player's first step.
     private func owesStep(_ screen: Screen) -> Bool {
+        guard screen.player != nil else { return false }
         if screen.undrawn { return true }
         return (try? holdsWrites(screen.presented.shown)) ?? true
     }
@@ -554,7 +621,7 @@ package actor NuxieMachineEdge {
     /// Compile the plan, with the rows of its folder's other files, into a
     /// session that draws its own views: each presentation is drawn from
     /// the compiled records by a player the session drives, with the bytes
-    /// of each file it shows asked of `bytes` before it opens. A program
+    /// of each file it shows from `bytes`, asked for at the start. A program
     /// that shows a file no row names is refused (`asset.missing`), as any
     /// refusal is: this throws the compiler's text. `onReport`
     /// hears one report per delivery that did something for it: the fault
@@ -578,15 +645,16 @@ package actor NuxieMachineEdge {
 
     /// What the owner draws for the presentation on top, between
     /// deliveries: the player of its compiled view while one is shown. None
-    /// when nothing is shown, or once the edge has closed.
+    /// when nothing is shown, while it is held for its files, or once the
+    /// edge has closed.
     package func screen() async -> NuxieNativeRuntime? {
         await inTurn { _ in closedScreen ? nil : screens.last?.player }
     }
 
     /// What the owner draws for the presentation `shown`: its player while
-    /// the edge holds it, and none once the sync has closed it. A Screen on
-    /// its way off screen draws nothing more, so a presentation that
-    /// replaced it never shows in it.
+    /// the edge holds it, and none while it is held for its files or once
+    /// the sync has closed it. A Screen on its way off screen draws nothing
+    /// more, so a presentation that replaced it never shows in it.
     package func screen(for shown: NuxieMachineShown) async -> NuxieNativeRuntime? {
         await inTurn { _ in
             guard !closedScreen else { return nil }
@@ -595,10 +663,26 @@ package actor NuxieMachineEdge {
     }
 
     /// The host saw the event `event` at `now` (milliseconds since the Unix
-    /// epoch), and the machine's rows for it are applied.
+    /// epoch), and the machine's rows for it are applied. The byte source is
+    /// asked first for each file the views draw that it has not given yet,
+    /// and the start does not wait for its answers.
     package func start(event: String, now: Int64) async {
         await inTurn { turn in
             await deliver(turn, stopped: ()) { delivery in
+                do {
+                    paths = try session.sceneAssets().compactMap { asset -> String? in
+                        switch asset {
+                        case .platformFont: return nil
+                        case .font(let path), .picture(let path): return path
+                        }
+                    }
+                } catch {
+                    await refused(error, doing: "the scene's assets", now: now, &delivery)
+                    return
+                }
+                for path in paths where supplied[path] == nil && failed[path] == nil && fetching[path] == nil {
+                    ask(path)
+                }
                 let rows: [NuxieMachineRow]
                 do {
                     rows = try session.start(event: event, now: now)
@@ -612,9 +696,12 @@ package actor NuxieMachineEdge {
     }
 
     /// One frame. `now` is the clock the machine reads, and `elapsedSeconds`
-    /// the time the engine advances by. The frame's turn delivers the frame,
-    /// then each store answer that arrived before the turn began, each as
-    /// its own delivery.
+    /// the time the engine advances by. The frame's turn delivers the frame;
+    /// then, when the byte source answered before the turn began, one
+    /// delivery that acts on its answers ([`settleAssets`]); then each store
+    /// answer that arrived before the turn began, each as its own delivery.
+    /// A player that the byte source's answers open is stepped by the next
+    /// frame, so its host can size it first.
     ///
     /// `pointers` touched the Screen of the presentation `touched`: the one
     /// the person's view showed when they arrived. They reach the engine
@@ -653,6 +740,8 @@ package actor NuxieMachineEdge {
             // Answers that arrive during this turn wait for the next frame.
             let answers = mailbox
             mailbox = []
+            let news = assetNews
+            assetNews = false
             let stopped = Stepped(reported: [], keepGoing: false,
                                   scrolled: scrolls.map { NuxieMachineScrolled($0, .refused) })
             let stepped = await deliver(turn, stopped: stopped) { delivery in
@@ -666,6 +755,11 @@ package actor NuxieMachineEdge {
                 var result = await step(forwarded, on: touched, elapsedSeconds: elapsedSeconds, now: now, &delivery)
                 result.scrolled = dropped + result.scrolled
                 return result
+            }
+            if news {
+                await deliver(turn, stopped: ()) { delivery in
+                    await settleAssets(&delivery)
+                }
             }
             for arrived in answers {
                 await deliver(turn, stopped: ()) { delivery in
@@ -808,6 +902,61 @@ package actor NuxieMachineEdge {
         }
     }
 
+    /// The person asked to try again: a delivery that asks the byte source
+    /// again for each path that failed, and only those. The answers kept
+    /// stay kept, and asks still in flight are not made twice. The owner is
+    /// told the files are being waited for again.
+    package func refreshAssets() async {
+        await inTurn { turn in
+            await deliver(turn, stopped: ()) { _ in
+                for path in paths where failed[path] != nil {
+                    failed[path] = nil
+                    ask(path)
+                }
+            }
+        }
+    }
+
+    /// The host cannot go on with the open record, for the reason `fault`,
+    /// at `now`: the person closed the loading screen of a presentation held
+    /// for its files. A delivery like a close: the session's rows (a dismiss,
+    /// then an end in the fault) are applied, so the edge stops on the
+    /// record's own fault and the sync closes everything. The session reads
+    /// no clock for it; `now` is the moment the delivery is made at, as for
+    /// a close.
+    ///
+    /// With no presentation held for its files, every page has opened and
+    /// there is nothing to give up on: it is recorded as dropped and goes to
+    /// no one.
+    package func hostFault(_ fault: NuxieMachineHostFault, now: Int64) async {
+        await inTurn { turn in
+            await deliver(turn, stopped: ()) { delivery in
+                guard screens.contains(where: { $0.player == nil }) else {
+                    log.append(.droppedExit)
+                    return
+                }
+                let rows: [NuxieMachineRow]
+                do {
+                    rows = try session.hostFault(fault)
+                } catch {
+                    await refused(error, doing: "the host's fault \(fault)", now: now, &delivery)
+                    return
+                }
+                await apply(rows, now: now, &delivery)
+            }
+        }
+    }
+
+    /// Returns once the byte source has answered every ask the edge made
+    /// and each answer has been kept. It takes no turn: the answers arrive
+    /// without one. For a check that needs to know which frame acts on
+    /// them.
+    package func assetsAnswered() async {
+        while let work = fetching.values.first {
+            await work.value
+        }
+    }
+
     /// Whether work only a frame consumes waits for one ([`waitsForFrame`]),
     /// between deliveries. For checks: a host runs frames by the edge's asks
     /// ([`frameAsks`]) and never needs to read this.
@@ -852,12 +1001,14 @@ package actor NuxieMachineEdge {
     /// Close the Screen on the engine, after the delivery in progress. The
     /// edge delivers nothing more, and answers that arrive later are not
     /// delivered. Each presentation's player is freed here, from the top,
-    /// before the session, which is freed with the edge.
+    /// before the session, which is freed with the edge. Asks of the byte
+    /// source still in flight are cancelled, and their answers not kept.
     package func close() async throws {
         try await inTurn { _ in
             closedScreen = true
             mailbox = []
-            let players = screens.reversed().map(\.player)
+            stopFetching()
+            let players = screens.reversed().compactMap(\.player)
             screens = []
             for player in players { try await player.close() }
         }
@@ -953,6 +1104,30 @@ package actor NuxieMachineEdge {
                 return
             }
         }
+        tellAssets(&delivery)
+    }
+
+    /// Tell the owner where the files stand, when that changed since it was
+    /// last told: what the edge holds after the sync, never what the
+    /// answers said one by one ([`assetsNow`]).
+    private func tellAssets(_ delivery: inout Delivery) {
+        let now = assetsNow()
+        guard now != assetsTold else { return }
+        assetsTold = now
+        log.append(.assets(now))
+        delivery.told(.assets(now))
+    }
+
+    /// Where the files stand for what the edge holds: ready when no
+    /// presentation is held for them; otherwise the paths that failed, in
+    /// the scene's order, while any has; otherwise the paths still coming.
+    private func assetsNow() -> NuxieMachineAssets {
+        guard screens.contains(where: { $0.player == nil }) else { return .ready }
+        let failures = paths.compactMap { path in
+            failed[path].map { NuxieMachineAssetFailure(path: path, reason: $0) }
+        }
+        guard failures.isEmpty else { return .failed(failures) }
+        return .waiting(paths.filter { supplied[$0] == nil })
     }
 
     /// How many of `wanted`, from the bottom, the edge already holds, by
@@ -966,11 +1141,34 @@ package actor NuxieMachineEdge {
     }
 
     /// Open one presentation the session shows and the edge does not hold,
-    /// over those below it, with a player of its own.
+    /// over those below it, with a player of its own. While a file its views
+    /// draw has no bytes, it is held with no player instead: the session
+    /// shows it all the same, and it opens once the files are in
+    /// ([`settleAssets`]).
     private func open(_ presented: NuxieMachinePresented, _ delivery: inout Delivery) async {
+        guard paths.allSatisfy({ supplied[$0] != nil }) else {
+            screens.append(Screen(presented: presented, player: nil, undrawn: true))
+            log.append(.held(presented.shown))
+            return
+        }
         guard let player = await openPlayer(for: presented, &delivery) else { return }
         screens.append(Screen(presented: presented, player: player, undrawn: true))
         log.append(.opened(presented.shown))
+    }
+
+    /// A frame's delivery for the byte source's answers: once every file is
+    /// in, each presentation held for them opens its player, bottom first.
+    /// Opening that fails is a fault, as in the sync. The sync after it
+    /// tells the owner where the files stand: ready, still coming, or the
+    /// paths that failed.
+    private func settleAssets(_ delivery: inout Delivery) async {
+        guard paths.allSatisfy({ supplied[$0] != nil }) else { return }
+        for index in screens.indices where screens[index].player == nil {
+            let presented = screens[index].presented
+            guard let player = await openPlayer(for: presented, &delivery) else { return }
+            screens[index].player = player
+            log.append(.opened(presented.shown))
+        }
     }
 
     /// Close every presentation the edge holds above the first `keep`, from
@@ -981,7 +1179,7 @@ package actor NuxieMachineEdge {
             let gone = screens.removeLast()
             log.append(.gone(gone.presented.shown))
             do {
-                try await gone.player.close()
+                try await gone.player?.close()
             } catch {
                 fail(NuxieMachineEdgeFault(code: "engine.close", detail: "\(error)"), &delivery)
             }
@@ -1074,7 +1272,10 @@ package actor NuxieMachineEdge {
         var scrolled: [NuxieMachineScrolled] = []
         var settled: [NuxieMachineShown: Bool] = [:]
         var waiting = input
-        let players = screens.map { (shown: $0.presented.shown, player: $0.player) }
+        // A presentation held for its files has no player and is not stepped.
+        let players = screens.compactMap { screen in
+            screen.player.map { (shown: screen.presented.shown, player: $0) }
+        }
         for (shown, player) in players {
             guard fault == nil else { break }
             var forwarded = Input()
@@ -1258,6 +1459,55 @@ package actor NuxieMachineEdge {
         askIfWaiting()
     }
 
+    // MARK: The byte source
+
+    /// Ask the byte source for the file at `path`: the work starts in a task
+    /// of its own, as a store's call does ([`perform`]), and whatever asked
+    /// goes on. Its answer arrives later ([`assetArrived`]).
+    private func ask(_ path: String) {
+        let source = bytes
+        // The task holds the edge weakly: an edge let go of takes no answer.
+        // It is recorded before this method returns, and its answer needs
+        // the actor, so the answer cannot arrive before it is recorded.
+        fetching[path] = Task { [weak self] in
+            let answer: Result<Data, any Error>
+            do {
+                answer = .success(try await source.bytes(for: path))
+            } catch {
+                answer = .failure(error)
+            }
+            await self?.assetArrived(path, answer)
+        }
+    }
+
+    /// The byte source answered for `path`: its bytes are kept, or, when it
+    /// had none, why ([`ExperienceShellRecoveryReason`]). It opens nothing,
+    /// tells the owner nothing and takes no turn; it asks the host for the
+    /// frame whose turn acts on it ([`settleAssets`]). An answer for a
+    /// stopped or closed edge is not kept.
+    private func assetArrived(_ path: String, _ answer: Result<Data, any Error>) {
+        fetching[path] = nil
+        guard fault == nil, !closedScreen else { return }
+        switch answer {
+        case .success(let given) where !given.isEmpty:
+            supplied[path] = given
+        case .success:
+            failed[path] = .unavailable
+        case .failure(let error):
+            failed[path] = ExperienceShellRecoveryReason(error: error)
+        }
+        assetNews = true
+        askIfWaiting()
+    }
+
+    /// Cancel every ask in flight: the edge has stopped or closed, and
+    /// keeps no answer.
+    private func stopFetching() {
+        for work in fetching.values { work.cancel() }
+        fetching = [:]
+        assetNews = false
+    }
+
     // MARK: Rows
 
     /// Apply one call's rows, in order, up to the first that faults, which
@@ -1350,22 +1600,25 @@ package actor NuxieMachineEdge {
     /// The one path for faults: the edge stops, records the code, and the
     /// delivery's report becomes the fault. The first fault is the one
     /// kept; a later one in the same delivery changes nothing, and a stopped
-    /// edge delivers nothing more. Answers waiting for a frame go with it.
-    /// The delivery's sync then closes everything.
+    /// edge delivers nothing more. Answers waiting for a frame go with it,
+    /// and asks of the byte source in flight are cancelled. The delivery's
+    /// sync then closes everything.
     private func fail(_ fault: NuxieMachineEdgeFault, _ delivery: inout Delivery) {
         guard self.fault == nil else { return }
         self.fault = fault
         mailbox = []
+        stopFetching()
         delivery.faulted(fault)
     }
 
     // MARK: Compiled views
 
-    /// A presentation the session shows, opened by the sync: a player on
-    /// the compiled records, at the artboard its component is drawn in,
-    /// with every asset of the records filled ([`openRecords`]) and the
-    /// session's driver for this presentation set on it once. The writes
-    /// the presenting step made are held for that driver and land in the
+    /// A presentation the session shows, opened by the sync or, once its
+    /// files are in, by [`settleAssets`]: a player on the compiled records,
+    /// at the artboard its component is drawn in, with every asset of the
+    /// records filled ([`openRecords`]) and the session's driver for this
+    /// presentation set on it once. The writes the presenting step made, and
+    /// any made while it was held, are held for that driver and land in the
     /// player's first step. None, with the edge stopped, when any of it
     /// fails.
     private func openPlayer(for presented: NuxieMachinePresented,
@@ -1376,7 +1629,7 @@ package actor NuxieMachineEdge {
             let records = try session.sceneRecords()
             let artboard = try session.sceneArtboard(for: presented.shown)
             let assets = try session.sceneAssets()
-            player = try await Self.openRecords(records, artboard: artboard, assets: assets, from: bytes)
+            player = try await Self.openRecords(records, artboard: artboard, assets: assets, supplied: supplied)
         } catch NuxieMachineError.noArtboard {
             fail(NuxieMachineEdgeFault(code: "edge.no-view",
                 detail: "present \(route) as \(presented.shown.instance); its component has no view"), &delivery)
@@ -1421,16 +1674,16 @@ package actor NuxieMachineEdge {
     /// `font-family`, is this device's system face, supplied as the SDK
     /// supplies a published Screen's System font; a scene with no such
     /// text has no platform font and takes no lease of it. Each face and
-    /// each picture is the bytes `source` gives for its path in the
-    /// folder, asked for here, and the import waits for every answer. A
-    /// path the source has no bytes for stops the edge with
-    /// `edge.unsupplied-asset`, naming it. The positions stay here: they
+    /// each picture is the bytes the byte source gave for its path in the
+    /// folder (`supplied`); nothing is asked here, and the edge calls this
+    /// only once every path has its bytes. The positions stay here: they
     /// become the import's asset ordinals and nothing else sees them. The
-    /// records' own catalog
-    /// ([`NuxieNativeRuntime.inspectAssets`]) is read only to give the
-    /// import what it expects.
+    /// records' own catalog ([`NuxieNativeRuntime.inspectAssets`]) is read
+    /// to give the import what it expects. Records that hold an asset the
+    /// session's list does not name, or a path with no bytes, stop the edge
+    /// with `edge.unsupplied-asset`, naming it.
     private static func openRecords(_ records: Data, artboard: Int, assets: [NuxieMachineSceneAsset],
-                                    from source: any NuxieMachineByteSource) async throws -> NuxieNativeRuntime {
+                                    supplied: [String: Data]) async throws -> NuxieNativeRuntime {
         var external: [Int: Data] = [:]
         var platformFont: [Int] = []
         for (position, asset) in assets.enumerated() {
@@ -1438,21 +1691,19 @@ package actor NuxieMachineEdge {
             case .platformFont:
                 platformFont.append(position)
             case .font(let path), .picture(let path):
-                let given: Data
-                do {
-                    given = try await source.bytes(for: path)
-                } catch {
+                guard let given = supplied[path] else {
                     throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
-                        detail: "no bytes for \(path), which a view shows: \(error)")
-                }
-                guard !given.isEmpty else {
-                    throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
-                        detail: "no bytes for \(path), which a view shows: the source gave none")
+                        detail: "no bytes for \(path), which a view shows")
                 }
                 external[position] = given
             }
         }
         let expected = try await NuxieNativeRuntime.inspectAssets(bytes: records)
+        if let unnamed = expected.first(where: { $0.ordinal >= assets.count }) {
+            throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
+                detail: "the records hold asset \(unnamed.ordinal) (\(unnamed.name)), which the session's list "
+                    + "does not name")
+        }
         var leases: [ExperienceRuntimeSystemFontCache.Lease] = []
         do {
             for position in platformFont {

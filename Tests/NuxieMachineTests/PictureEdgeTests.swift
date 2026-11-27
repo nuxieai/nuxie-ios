@@ -10,8 +10,8 @@ import NuxieRuntime
 /// points square, then a "Close" button. The host hands in the folder's
 /// one other file as a row (its path, a picture 120 by 60 pixels, its size
 /// in bytes) and a byte source for the folder; the edge asks the source for
-/// the picture's bytes when it opens the page, and the page is imported
-/// with them.
+/// the picture's bytes at the start, and the page is imported with them
+/// once they are in.
 ///
 /// The picture is four flat quadrants, each 60 by 30 pixels: red
 /// (#d83030) at the top left, green (#30a848) at the top right, blue
@@ -117,43 +117,53 @@ final class PictureEdgeTests: XCTestCase {
         }
     }
 
-    /// A source with no bytes for the picture: the page is never opened,
-    /// and the edge stops with `edge.unsupplied-asset`, naming the path.
-    func testAPictureTheSourceHasNoBytesForStopsTheEdgeNamingIt() async throws {
+    /// A source with no bytes for the picture: the edge does not stop. The
+    /// page is presented and held with no player, nothing is drawn, and the
+    /// owner is told the path failed, unavailable, as the recovery screen
+    /// shows it. The oracle is the recovery reason's own rule: only a
+    /// `URLError` that says the device is offline reads as offline, and
+    /// the folder's "no file" is not one.
+    func testAPictureTheSourceHasNoBytesForShowsTheRecoveryScreenWithThatPathFailed() async throws {
         let run = try PictureRun(bytes: NoFolderFiles())
         await run.edge.start(event: "opened", now: run.now)
+        await run.edge.assetsAnswered()
+        await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
         let fault = await run.edge.fault
-        XCTAssertEqual(fault?.code, "edge.unsupplied-asset", "\(String(describing: fault))")
-        XCTAssertTrue(fault?.detail.contains("assets/hero.png") ?? false, "\(String(describing: fault))")
+        XCTAssertNil(fault, "the edge stopped: \(String(describing: fault))")
         let stack = await run.edge.stack
-        XCTAssertEqual(stack, [], "a page opened without its picture")
-        XCTAssertEqual(run.owner.reports.last, fault.map { NuxieMachineEdgeReport.fault($0) },
-                       "the owner was not told the fault")
+        XCTAssertEqual(stack.map(\.route), ["fits"], "the page was not presented")
+        let screen = await run.edge.screen()
+        XCTAssertNil(screen, "a page opened without its picture")
+        XCTAssertEqual(run.owner.assetsTold.last,
+                       .failed([NuxieMachineAssetFailure(path: "assets/hero.png", reason: .unavailable)]),
+                       "the owner was not told the picture failed: \(run.owner.reports)")
         try await run.close()
     }
 
-    /// A source that answers late: the page opens only once it has, with
-    /// nothing presented, reported or asked a frame for while it waits;
-    /// then the first frame already draws the picture.
-    func testThePageOpensOnlyOnceTheSourceAnswersAndNothingIsDrawnBefore() async throws {
+    /// A source that answers late: the start does not wait for it. The page
+    /// is presented at once and held with no player, nothing is drawn and
+    /// no frame is asked for while the source holds its answer; the answer
+    /// asks for one, which opens the page, and the frames after it draw the
+    /// picture in its colors.
+    func testThePageIsHeldUntilTheSourceAnswersAndNothingIsDrawnBefore() async throws {
         let held = HeldBytes(folder: try PictureFolder.url())
         let run = try PictureRun(bytes: held)
         do {
-            let now = run.now
-            let edge = run.edge
-            let starting = Task { await edge.start(event: "opened", now: now) }
+            await run.edge.start(event: "opened", now: run.now)
             await held.untilAsked()
             XCTAssertEqual(held.asked, ["assets/hero.png"])
             let waiting = await run.edge.stack
-            XCTAssertEqual(waiting, [], "the page opened before its picture's bytes arrived")
-            XCTAssertEqual(run.owner.reports, [], "the owner heard of the page before its picture's bytes arrived")
+            XCTAssertEqual(waiting.map(\.route), ["fits"], "the page was not presented while it waits")
+            let none = await run.edge.screen()
+            XCTAssertNil(none, "the page has a player before its picture's bytes arrived")
+            XCTAssertEqual(run.owner.assetsTold, [.waiting(["assets/hero.png"])])
             XCTAssertFalse(run.asks.take(), "a frame was asked for before the picture's bytes arrived")
 
             held.release()
-            await starting.value
-            let opened = await run.edge.stack
-            XCTAssertEqual(opened.map(\.route), ["fits"], "the page did not open once the bytes arrived")
+            await run.edge.assetsAnswered()
+            XCTAssertTrue(run.asks.take(), "the answer asked for no frame")
             let look = try await run.look("after-the-answer")
+            XCTAssertEqual(run.owner.assetsTold, [.waiting(["assets/hero.png"]), .ready])
             look.expect([("top left", Self.point(Self.fill, 50, 50), Self.red),
                          ("bottom right", Self.point(Self.fill, 150, 150), Self.yellow)], in: "fill")
             try await run.close()
@@ -181,7 +191,7 @@ final class PictureEdgeTests: XCTestCase {
     }
 
     /// The point `x`, `y` points from `box`'s top left.
-    private static func point(_ box: CGRect, _ x: CGFloat, _ y: CGFloat) -> CGPoint {
+    static func point(_ box: CGRect, _ x: CGFloat, _ y: CGFloat) -> CGPoint {
         CGPoint(x: box.minX + x, y: box.minY + y)
     }
 }
@@ -207,11 +217,39 @@ enum PictureFolder {
                                   byteCount: size.uint64Value)]
     }
 
-    /// The folder's plan, handed `assets` as its rows: the folder's own by
-    /// default.
-    static func plan(assets: [NuxieMachineAsset]? = nil) throws -> NuxieMachinePlanSource {
-        let main = try String(contentsOf: url().appendingPathComponent("main.nux"), encoding: .utf8)
-        return NuxieMachinePlanSource(files: [NuxieMachineSourceFile(path: "main.nux", text: main)],
+    static func main() throws -> String {
+        try String(contentsOf: url().appendingPathComponent("main.nux"), encoding: .utf8)
+    }
+
+    struct NotOnce: Error, CustomStringConvertible {
+        let line: String
+        var description: String { "views-picture/main.nux does not have \"\(line)\" exactly once" }
+    }
+
+    /// `main` with `line` replaced by `with`; `line` must be there once.
+    static func replacing(_ line: String, with replacement: String, in main: String) throws -> String {
+        guard main.components(separatedBy: line).count == 2 else { throw NotOnce(line: line) }
+        return main.replacingOccurrences(of: line, with: replacement)
+    }
+
+    /// The page presented as a sheet, where the folder presents it as a
+    /// cover.
+    static func asASheet() throws -> String {
+        try replacing("fits  Fits(close=close)  cover", with: "fits  Fits(close=close)  sheet", in: main())
+    }
+
+    /// The page padded at the top by its place's top inset as well as its
+    /// own 20 points, so a told place moves every box down by that inset.
+    static func paddedBySafeArea() throws -> String {
+        try replacing("padding=20 gap=20",
+                      with: "padding=\"calc(env(safe-area-inset-top) + 20) 20 20 20\" gap=20", in: main())
+    }
+
+    /// The folder's plan, with `main` as its one source file and `assets` as
+    /// its rows: the folder's own by default.
+    static func plan(main: String? = nil, assets: [NuxieMachineAsset]? = nil) throws -> NuxieMachinePlanSource {
+        let text = try main ?? Self.main()
+        return NuxieMachinePlanSource(files: [NuxieMachineSourceFile(path: "main.nux", text: text)],
                                       assets: try assets ?? rows(), root: "main", app: "app",
                                       experience: "gallery", version: 1)
     }
@@ -219,24 +257,27 @@ enum PictureFolder {
 
 // MARK: - One run
 
-/// A fresh session over the folder's plan, its clock, what its owner heard
-/// and its asks for a frame.
-private final class PictureRun {
+/// A fresh session over a plan of the folder (the folder's own by
+/// default), its clock, what its owner heard and its asks for a frame.
+final class PictureRun {
     let edge: NuxieMachineEdge
     let owner = CounterOwner()
     let asks: FrameAskCount
     let now: Int64 = 9 * 3_600_000
 
-    init(bytes: any NuxieMachineByteSource) throws {
+    init(plan: NuxieMachinePlanSource? = nil, bytes: any NuxieMachineByteSource) throws {
         let owner = self.owner
-        edge = try NuxieMachineEdge(plan: PictureFolder.plan(), store: NuxieMachineStandInStore(), bytes: bytes,
-                                    onReport: { owner.heard($0) })
+        edge = try NuxieMachineEdge(plan: plan ?? PictureFolder.plan(), store: NuxieMachineStandInStore(),
+                                    bytes: bytes, onReport: { owner.heard($0) })
         asks = FrameAskCount(edge)
     }
 
     /// The page laid out at a phone's size, two frames stepped, and drawn
-    /// with its semantic snapshot, kept as an attachment.
+    /// with its semantic snapshot, kept as an attachment. The byte source's
+    /// answers are waited for first, and one frame opens the page with them.
     func look(_ name: String) async throws -> Look {
+        await edge.assetsAnswered()
+        await edge.frame(elapsedSeconds: 0, now: now)
         let presented = await edge.screen()
         let screen = try XCTUnwrap(presented, "nothing is presented")
         try await screen.setLayoutSize(width: Float(Look.size.width), height: Float(Look.size.height))

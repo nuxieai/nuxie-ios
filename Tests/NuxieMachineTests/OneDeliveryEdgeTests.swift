@@ -215,7 +215,7 @@ final class OneDeliveryEdgeTests: XCTestCase {
     private static func isShowing(_ row: NuxieMachineHostRow) -> Bool {
         switch row {
         case .dismiss: return true
-        case .wakeAt, .end: return false
+        case .wakeAt, .end, .assets: return false
         }
     }
 

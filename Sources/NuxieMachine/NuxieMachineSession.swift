@@ -98,6 +98,13 @@ package final class NuxieMachineSession {
         try delivered(nux_machine_closed(handle, instance, now))
     }
 
+    /// The host cannot go on with the open record, for the reason `fault`.
+    /// The rows end the session: a dismiss with no reason, then an end in
+    /// that fault. With no record open this throws `noRecord`.
+    package func hostFault(_ fault: NuxieMachineHostFault) throws -> [NuxieMachineRow] {
+        try delivered(nux_machine_host_fault(handle, fault.code))
+    }
+
     /// The reply to the send `call` into a mutation: the fields of its
     /// declaration's answer type, or the failure that kept it from one.
     package func reply(_ call: NuxieMachineCallID, _ reply: NuxieMachineReply, now: Int64) throws
@@ -606,6 +613,19 @@ package struct NuxieMachineScreenPlace: Equatable, Sendable {
     }
 }
 
+/// A fault the host reports itself ([`NuxieMachineSession.hostFault`]).
+package enum NuxieMachineHostFault: Equatable, Sendable {
+    /// The first frame of what the record presents did not come: its files
+    /// never arrived, and the person closed the loading screen.
+    case firstFrameDeadline
+
+    fileprivate var code: UInt32 {
+        switch self {
+        case .firstFrameDeadline: UInt32(NUX_MACHINE_HOST_FAULT_FIRST_FRAME_DEADLINE)
+        }
+    }
+}
+
 /// What the host fills one asset of the compiled records with, as the
 /// session lists them ([`NuxieMachineSession.sceneAssets`]).
 package enum NuxieMachineSceneAsset: Equatable, Sendable {
@@ -687,6 +707,8 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     /// An asset's kind is not one a file of the folder can be, or the
     /// records named an asset of a kind this module does not fill.
     case assetDoesNotFit
+    /// The host's fault is not one of the codes a host may report.
+    case hostFaultDoesNotFit
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
 
@@ -715,6 +737,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .environmentDoesNotFit: "environment_does_not_fit"
         case .placeDoesNotFit: "place_does_not_fit"
         case .assetDoesNotFit: "asset_does_not_fit"
+        case .hostFaultDoesNotFit: "host_fault_does_not_fit"
         case .unknownStatus(let status): "status_\(status)"
         }
     }
@@ -749,6 +772,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         UInt32(NUX_MACHINE_ENVIRONMENT_DOES_NOT_FIT): .environmentDoesNotFit,
         UInt32(NUX_MACHINE_PLACE_DOES_NOT_FIT): .placeDoesNotFit,
         UInt32(NUX_MACHINE_ASSET_DOES_NOT_FIT): .assetDoesNotFit,
+        UInt32(NUX_MACHINE_HOST_FAULT_DOES_NOT_FIT): .hostFaultDoesNotFit,
     ]
 }
 

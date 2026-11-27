@@ -1,6 +1,7 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import XCTest
 import NuxieMachine
+import NuxieRuntime
 
 /// The presenter's state machine with no UIKit: events in, the state and the
 /// UIKit, timer and edge work it asks for out. Each expectation is what a
@@ -124,6 +125,81 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.natives.map(\.phase), [.leaving, .leaving])
         XCTAssertEqual(state.handle(.dismissed(cover.shown)), [.release])
         XCTAssertEqual(state.natives, [])
+    }
+
+    // MARK: A page that waits for its files
+
+    private let hero = "assets/hero.png"
+
+    /// The paywall up, its page waiting for its picture.
+    private func sheetWaiting() -> State {
+        var state = State()
+        _ = state.handle(.started)
+        XCTAssertEqual(state.handle(shows([paywall], [.assets(.waiting([hero]))])),
+                       [.assets(.waiting([hero])), .present(paywall, over: nil)])
+        _ = state.handle(.presented(paywall.shown))
+        return state
+    }
+
+    /// A report that shows a page waiting for its files presents it all
+    /// the same, and says where the files stand: she sees the sheet at once,
+    /// over the loading screen. Every later change is passed on.
+    func testAPageThatWaitsForItsFilesIsPresentedAtOnce() {
+        var state = sheetWaiting()
+        XCTAssertEqual(state.assets, .waiting([hero]))
+        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .up)])
+        let failed = NuxieMachineAssets.failed([NuxieMachineAssetFailure(path: hero, reason: .offline)])
+        XCTAssertEqual(state.handle(shows([paywall], [.assets(failed)])), [.assets(failed)])
+        XCTAssertEqual(state.assets, failed)
+        XCTAssertEqual(state.handle(shows([paywall], [.assets(.ready)])), [.assets(.ready)])
+        XCTAssertEqual(state.assets, .ready)
+    }
+
+    /// The close shows only with the loading and recovery screens: tapped
+    /// while the page waits or a file failed, it is the host's own fault,
+    /// `first_frame.deadline`. Once the files are in, or once the record is
+    /// final, a tap that arrives late does nothing.
+    func testExitWhileAPageWaitsIsTheHostsFault() {
+        var waiting = sheetWaiting()
+        XCTAssertEqual(waiting.handle(.exitTapped), [.hostFault(.firstFrameDeadline)])
+
+        var failed = sheetWaiting()
+        _ = failed.handle(shows([paywall], [.assets(.failed([NuxieMachineAssetFailure(path: hero,
+                                                                                       reason: .unavailable)]))]))
+        XCTAssertEqual(failed.handle(.exitTapped), [.hostFault(.firstFrameDeadline)])
+
+        var ready = sheetWaiting()
+        _ = ready.handle(shows([paywall], [.assets(.ready)]))
+        XCTAssertEqual(ready.handle(.exitTapped), [])
+
+        var ended = sheetWaiting()
+        _ = ended.handle(.report(.fault(NuxieMachineEdgeFault(code: "engine.step", detail: "closed"))))
+        XCTAssertEqual(ended.handle(.exitTapped), [])
+    }
+
+    /// Try Again asks the edge again only while a file failed: a file still
+    /// coming is already asked for, and nothing is missing once they are in.
+    func testTryAgainAsksOnlyWhileAFileFailed() {
+        var state = sheetWaiting()
+        XCTAssertEqual(state.handle(.refreshTapped), [])
+        _ = state.handle(shows([paywall], [.assets(.failed([NuxieMachineAssetFailure(path: hero,
+                                                                                      reason: .offline)]))]))
+        XCTAssertEqual(state.handle(.refreshTapped), [.refresh])
+        _ = state.handle(shows([paywall], [.assets(.ready)]))
+        XCTAssertEqual(state.handle(.refreshTapped), [])
+    }
+
+    /// The fault the close brings back takes the one fault path, as a fault
+    /// while a sheet is up always has
+    /// (`testAFaultWhileTheSheetIsUpDismissesIt`): the record is faulted,
+    /// the sheet is dismissed, and everything is let go once UIKit is done.
+    func testTheCloseFaultDismissesTheSheetAndLetsGo() {
+        var state = sheetWaiting()
+        let deadline = NuxieMachineEdgeFault(code: "first_frame.deadline", detail: "the record ended in a fault")
+        XCTAssertEqual(state.handle(.report(.fault(deadline))),
+                       [.schedule(nil), .stop(deadline), .dismiss(paywall.shown)])
+        XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [.release])
+        XCTAssertEqual(state.record, .faulted(deadline))
     }
 
     // MARK: A machine dismissal during a swipe
