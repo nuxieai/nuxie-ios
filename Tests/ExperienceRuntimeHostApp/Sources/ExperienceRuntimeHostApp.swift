@@ -27,6 +27,9 @@ private struct ExperienceRuntimeHostView: UIViewControllerRepresentable {
         if ProcessInfo.processInfo.arguments.contains("--nuxie-machine-counter") {
             return UINavigationController(rootViewController: NuxieMachineCounterHostViewController())
         }
+        if ProcessInfo.processInfo.arguments.contains("--nuxie-machine-gallery") {
+            return UINavigationController(rootViewController: NuxieMachineGalleryHostViewController())
+        }
         #endif
         if ProcessInfo.processInfo.arguments.contains("--nuxie-accessibility-qualification")
             || ProcessInfo.processInfo.arguments.contains("--nuxie-sheets-qualification") {
