@@ -491,6 +491,10 @@ package actor NuxieMachineEdge {
         /// presentation set on it. None while the presentation is held for
         /// its files: nothing is stepped or drawn for it until they are in.
         var player: NuxieNativeRuntime?
+        /// The color the presentation's surface is cleared to before each
+        /// draw, read with its artboard when its player opened, and set with
+        /// it. 0 while it is held for its files, when nothing is drawn.
+        var canvas: UInt32
         /// Whether the player has not stepped since it opened, so it has
         /// drawn nothing yet. A step clears it. The writes the session holds
         /// for the presentation are not here: the session is asked for them
@@ -699,6 +703,18 @@ package actor NuxieMachineEdge {
         await inTurn { _ in
             guard !closedScreen else { return nil }
             return screens.first(where: { $0.presented.shown == shown })?.player
+        }
+    }
+
+    /// What the owner draws for the presentation `shown` and the color it
+    /// clears its surface to first, in one turn: its player and canvas while
+    /// the edge holds it, and none while it is held for its files or once
+    /// the sync has closed it, as [`screen(for:)`] gives the player.
+    package func drawing(for shown: NuxieMachineShown) async -> (player: NuxieNativeRuntime, canvas: UInt32)? {
+        await inTurn { _ in
+            guard !closedScreen, let screen = screens.first(where: { $0.presented.shown == shown }),
+                  let player = screen.player else { return nil }
+            return (player, screen.canvas)
         }
     }
 
@@ -1228,12 +1244,12 @@ package actor NuxieMachineEdge {
     /// ([`settleAssets`]).
     private func open(_ presented: NuxieMachinePresented, _ delivery: inout Delivery) async {
         guard paths.allSatisfy({ supplied[$0] != nil }) else {
-            screens.append(Screen(presented: presented, player: nil, undrawn: true))
+            screens.append(Screen(presented: presented, player: nil, canvas: 0, undrawn: true))
             log.append(.held(presented.shown))
             return
         }
-        guard let player = await openPlayer(for: presented, &delivery) else { return }
-        screens.append(Screen(presented: presented, player: player, undrawn: true))
+        guard let opened = await openPlayer(for: presented, &delivery) else { return }
+        screens.append(Screen(presented: presented, player: opened.player, canvas: opened.canvas, undrawn: true))
         log.append(.opened(presented.shown))
     }
 
@@ -1246,8 +1262,9 @@ package actor NuxieMachineEdge {
         guard paths.allSatisfy({ supplied[$0] != nil }) else { return }
         for index in screens.indices where screens[index].player == nil {
             let presented = screens[index].presented
-            guard let player = await openPlayer(for: presented, &delivery) else { return }
-            screens[index].player = player
+            guard let opened = await openPlayer(for: presented, &delivery) else { return }
+            screens[index].player = opened.player
+            screens[index].canvas = opened.canvas
             log.append(.opened(presented.shown))
         }
     }
@@ -1702,17 +1719,19 @@ package actor NuxieMachineEdge {
     /// files are in, by [`settleAssets`]: a player on the compiled records,
     /// at the artboard its component is drawn in, with every asset of the
     /// records filled ([`openRecords`]) and the session's driver for this
-    /// presentation set on it once. The writes the presenting step made, and
-    /// any made while it was held, are held for that driver and land in the
-    /// player's first step. None, with the edge stopped, when any of it
-    /// fails.
+    /// presentation set on it once, with the canvas its surface is cleared
+    /// to. The writes the presenting step made, and any made while it was
+    /// held, are held for that driver and land in the player's first step.
+    /// None, with the edge stopped, when any of it fails.
     private func openPlayer(for presented: NuxieMachinePresented,
-                            _ delivery: inout Delivery) async -> NuxieNativeRuntime? {
+                            _ delivery: inout Delivery) async -> (player: NuxieNativeRuntime, canvas: UInt32)? {
         let route = presented.route
         let player: NuxieNativeRuntime
+        let canvas: UInt32
         do {
             let records = try session.sceneRecords()
             let artboard = try session.sceneArtboard(for: presented.shown)
+            canvas = session.sceneCanvas(for: presented)
             let assets = try session.sceneAssets()
             player = try await Self.openRecords(records, artboard: artboard, assets: assets, supplied: supplied)
         } catch NuxieMachineError.noArtboard {
@@ -1740,7 +1759,7 @@ package actor NuxieMachineEdge {
             fail(Self.openFault(error, doing: "read \(route) aloud"), &delivery)
             return nil
         }
-        return player
+        return (player, canvas)
     }
 
     private static func openFault(_ error: any Error, doing what: String) -> NuxieMachineEdgeFault {

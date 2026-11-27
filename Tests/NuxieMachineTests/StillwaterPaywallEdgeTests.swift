@@ -1939,9 +1939,11 @@ enum Fixture {
 
 enum Pixels {
     /// One frame of the engine's Screen into a drawable at `scale` pixels a
-    /// point, read back as BGRA rows, as the SDK's native runtime tests read
-    /// theirs; with `capturesSemantics`, also its semantic snapshot.
+    /// point, cleared to `clearColor` first, read back as BGRA rows, as the
+    /// SDK's native runtime tests read theirs; with `capturesSemantics`,
+    /// also its semantic snapshot.
     static func render(_ runtime: NuxieNativeRuntime, width: Int, height: Int, scale: Float,
+                       clearColor: UInt32 = 0xFF00_0000,
                        capturesSemantics: Bool) async throws -> (Data, NuxieNativeSemanticCapture?) {
         let device = try await runtime.metalDevice().value
         let layer = CAMetalLayer()
@@ -1958,7 +1960,7 @@ enum Pixels {
         let buffer = try XCTUnwrap(device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared))
         let drawn = Signal()
         let frame = try await runtime.renderFrame(layoutScaleFactor: scale,
-            drawable: .available(NuxieNativeDrawable(drawable)), clearColor: 0xFF00_0000,
+            drawable: .available(NuxieNativeDrawable(drawable)), clearColor: clearColor,
             readback: NuxieNativeFrameReadback(buffer: buffer, bytesPerRow: bytesPerRow),
             capturesSemantics: capturesSemantics, completion: { drawn.fire() })
         try await drawn.wait(seconds: 2)

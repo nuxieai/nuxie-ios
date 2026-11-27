@@ -700,17 +700,18 @@ struct DrawnFrame {
         return CGPoint(x: found.midX, y: found.midY)
     }
 
-    /// The Screen drawn at twice `size`, its layout size, read back and
-    /// read with text recognition; with `capturesSemantics`, also read for
-    /// its semantic snapshot.
+    /// The Screen drawn at twice `size`, its layout size, over `clearColor`,
+    /// read back and read with text recognition; with `capturesSemantics`,
+    /// also read for its semantic snapshot.
     static func read(_ runtime: NuxieNativeRuntime, reported: [String], name: String,
                      size: CGSize = CGSize(width: CounterDriverEdgeTests.width, height: CounterDriverEdgeTests.height),
+                     clearColor: UInt32 = 0xFF00_0000,
                      capturesSemantics: Bool = false) async throws -> DrawnFrame {
         let scale = 2
         let width = Int(size.width) * scale
         let height = Int(size.height) * scale
         let (pixels, semantics) = try await Pixels.render(runtime, width: width, height: height, scale: Float(scale),
-                                                          capturesSemantics: capturesSemantics)
+                                                          clearColor: clearColor, capturesSemantics: capturesSemantics)
         try await Pixels.attach(pixels, width: width, height: height, name: name)
         let image = try XCTUnwrap(image(pixels, width: width, height: height))
         let request = VNRecognizeTextRequest()
