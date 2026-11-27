@@ -19,7 +19,7 @@ MAX_SEEDS = 4
 
 
 def pool_directory():
-    return Path(pwd.getpwuid(os.getuid()).pw_dir) / "Library/Caches/nuxie-ios-simulators"
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / "Library/Application Support/NuxieBuild/Simulators"
 
 
 def simctl(arguments):
