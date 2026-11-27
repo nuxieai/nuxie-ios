@@ -33,16 +33,32 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 /// - What is shown is each report's stack. Each presentation in it is its
 ///   own native presentation, presented from the one below it (the host's
 ///   view controller for the bottom one): a sheet presents its Screen as a
-///   native sheet at the large detent, and a cover as a native cover over
-///   the whole screen, which has no swipe. Any other presentation is a
-///   fault: push and the rest are not presented.
+///   native sheet at the heights its row writes (the large detent when it
+///   writes none), and a cover as a native cover over the whole screen,
+///   which has no swipe. Any other presentation is a fault: push and the
+///   rest are not presented.
 /// - When a report no longer shows a presentation, its native presentation
 ///   is dismissed, with every one above it, and what is missing is
 ///   presented, one at a time, once UIKit has finished the transition
 ///   before it ([`NuxieMachineSheetState`]).
-/// - A swipe down by the person is the native dismissal: the presenter tells
-///   the edge `closed` for the presentation the swipe took, and logs what
-///   the machine answers.
+/// - What a swipe down on a sheet does is the machine's answer, read with
+///   what is shown after every delivery and every round, and handed to the
+///   sheet with each report, since UIKit asks before a drag begins:
+///   - stays: the native dismissal is held; UIKit's attempt is delivered as
+///     a swipe once, and it does nothing;
+///   - presses: the native dismissal is held; UIKit's attempt is delivered
+///     as a swipe once: the press of the control its row's `swipe=` names,
+///     then whatever that does (the machine's own pop, say);
+///   - closes: the native dismissal runs, and when it completes (not when
+///     the person lets go) the swipe is delivered and the machine closes
+///     the entry.
+///   The answer can change between the read and the delivery, so the
+///   presenter acts on what the machine did, through what it then shows: a
+///   held swipe that closes dismisses the sheet natively, and a completed
+///   one that does not close presents the sheet again
+///   (`machine.swipe.changed`). The screen reader's escape is a swipe down
+///   too, read from the same answer. A cancelled swipe sends nothing, and
+///   so does a swipe or an escape on a sheet whose loading screen is up.
 /// - `wake at` sets a timer that delivers `wake` if the app is still running
 ///   at that moment. A later `wake at` replaces it, and the record's end
 ///   cancels it. The machine takes a wake only at the moment it asked for,
@@ -315,6 +331,9 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         sending = false
         let held = state.natives.map(\.shown)
         controllers = controllers.filter { held.contains($0.key) }
+        // Each sheet holds what a swipe down on it does now, for UIKit to
+        // read when a drag begins.
+        for presented in state.wanted { controllers[presented.shown]?.follow(presented) }
         toldPlaces.keep(held)
         loop?.screens = held.compactMap { controllers[$0] }
         let reached = state.reachable
@@ -328,8 +347,8 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             present(presented, over: over)
         case .dismiss(let shown):
             dismiss(shown)
-        case .close(let shown):
-            close(shown)
+        case .swipe(let shown):
+            swipe(shown)
         case .schedule(let moment):
             schedule(moment)
         case .stop(let fault):
@@ -412,6 +431,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         controller.statusText = Self.describe(status)
         applyColorSchemeMode(to: controller)
         controller.onEnvironmentChange = { [weak self] in self?.environmentChanged() }
+        controller.onEscape = { [weak self] in self?.send(.swipeRefused(shown)) }
         controller.presentationController?.delegate = self
         controllers[shown] = controller
         below.present(controller, animated: true) { [weak self] in self?.send(.presented(shown)) }
@@ -452,18 +472,34 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         send(.swipeEnded(screen.shown, completed: true))
     }
 
-    /// The machine hears `closed` for the presentation the swipe took, after
-    /// every wake due by then, and its answer is taken.
-    private func close(_ shown: NuxieMachineShown) {
+    /// The person swiped a sheet UIKit held, because the machine said the
+    /// swipe presses a control or does nothing: the swipe is delivered. A
+    /// sheet held by its loading screen takes no swipe: its close is the
+    /// way out, and nothing is delivered.
+    package func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+        guard let screen = presentationController.presentedViewController as? NuxieMachineScreenViewController,
+              !screen.modalReasons.contains(.loading)
+        else { return }
+        send(.swipeRefused(screen.shown))
+    }
+
+    /// The machine hears a swipe down on the presentation `shown`, after
+    /// every wake due by then, and its answer is taken: what is shown says
+    /// the rest. `native` says whether the native dismissal ran: when it
+    /// did and the machine did not close the sheet, the sheet comes back.
+    private func swipe(_ shown: NuxieMachineShown) {
         guard let loop else { return }
-        logger.info("machine.closed \(shown.journey).\(shown.instance)")
+        let native = state.closing.contains(shown)
+        let how = native ? "completed" : "held"
+        logger.info("machine.swipe \(shown.journey).\(shown.instance) \(how, privacy: .public)")
         let edge = loop.edge
         Task { @MainActor [weak self] in
             await loop.inLane {
                 let now = self?.machineNow() ?? nuxieMachineNow()
                 await self?.catchUp(to: now)
-                await edge.closed(shown, now: now)
+                let did = await edge.swipe(.down, on: shown, now: now)
                 self?.takeReports()
+                self?.swiped(shown, did, native: native)
                 await self?.readPlan()
             }
         }
@@ -496,6 +532,16 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
                 self?.takeReports()
             }
         }
+    }
+
+    /// The edge answered the swipe on `shown`, its reports already taken.
+    private func swiped(_ shown: NuxieMachineShown, _ did: NuxieMachineSwipeDid, native: Bool) {
+        let said = String(describing: did)
+        logger.info("machine.swipe.did \(shown.journey).\(shown.instance) \(said, privacy: .public)")
+        if native, case .delivered(let what) = did, what != .closes {
+            logger.info("machine.swipe.changed \(shown.journey).\(shown.instance) \(said, privacy: .public)")
+        }
+        send(.swipeDelivered(shown))
     }
 
     // MARK: Waking

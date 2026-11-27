@@ -206,7 +206,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
 
     /// The machine dismisses while the person is swiping, and the person
     /// lets go: the swipe is cancelled and the sheet comes back, so the sync
-    /// dismisses it then. The machine is not told `closed`.
+    /// dismisses it then. The machine is not told the swipe.
     func testAMachineDismissalDuringACancelledSwipeIsPerformedAfterIt() {
         var state = sheetUp()
         XCTAssertEqual(state.handle(.swipeBegan(paywall.shown)), [])
@@ -221,7 +221,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
 
     /// The machine dismisses while the person is swiping, and the swipe
     /// takes the sheet: it is gone once, and the machine, which already
-    /// dismissed it, is not told `closed`.
+    /// dismissed it, is not told the swipe.
     func testAMachineDismissalDuringACompletedSwipeClosesNothing() {
         var state = sheetUp()
         _ = state.handle(.swipeBegan(paywall.shown))
@@ -235,12 +235,12 @@ final class NuxieMachineSheetStateTests: XCTestCase {
 
     /// The mirror: the person's swipe takes the sheet first, and the
     /// machine's dismissal arrives just after (from a delivery already under
-    /// way). The machine hears `closed` for the presentation the swipe took,
-    /// and the late report dismisses nothing.
+    /// way). The machine hears the swipe on the presentation it took, and
+    /// the late report dismisses nothing.
     func testAMachineDismissalJustAfterASwipeDismissesNothing() {
         var state = sheetUp()
         _ = state.handle(.swipeBegan(paywall.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.close(paywall.shown)])
+        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
         XCTAssertEqual(state.natives, [])
         XCTAssertEqual(state.handle(shows([], [.dismiss(reason: "paywall_closed")])), [])
         XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [.schedule(nil), .stop(nil), .release])
@@ -264,13 +264,109 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testASwipedSheetIsNotPresentedAgainBeforeTheCloseIsAnswered() {
         var state = sheetOverCover()
         _ = state.handle(.swipeBegan(sheet.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(sheet.shown, completed: true)), [.close(sheet.shown)])
+        XCTAssertEqual(state.handle(.swipeEnded(sheet.shown, completed: true)), [.swipe(sheet.shown)])
         XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
         // A report from a delivery that was under way still shows the sheet.
         XCTAssertEqual(state.handle(shows([cover, sheet])), [], "the swiped sheet came back")
         XCTAssertEqual(state.handle(shows([cover])), [])
         XCTAssertEqual(state.closing, [])
         XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
+    }
+
+    // MARK: A swipe the machine decides
+
+    /// A swipe UIKit held (the machine said it presses a control or does
+    /// nothing) is sent to the edge once, and the sheet stays up; a swipe
+    /// that took the sheet is sent once too, at its completion. Either is
+    /// the same effect, so the edge has one path.
+    func testARefusedSwipeAndACompletedSwipeEachSendTheSwipeOnce() {
+        var held = sheetUp()
+        XCTAssertEqual(held.handle(.swipeRefused(paywall.shown)), [.swipe(paywall.shown)])
+        XCTAssertEqual(held.natives, [State.Native(presented: paywall, phase: .up)], "a held swipe moved the sheet")
+        XCTAssertEqual(held.closing, [], "a held sheet is still up")
+
+        var taken = sheetUp()
+        XCTAssertEqual(taken.handle(.swipeBegan(paywall.shown)), [])
+        XCTAssertEqual(taken.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
+        XCTAssertEqual(taken.handle(.swipeEnded(paywall.shown, completed: true)), [], "UIKit's second word sent it again")
+    }
+
+    /// Nothing is sent for a swipe after the record ended, after a fault,
+    /// for a presentation the edge no longer shows, or for a swipe the
+    /// person let go of.
+    func testNoSwipeIsSentOnceItBelongsToNoOne() {
+        var ended = sheetUp()
+        _ = ended.handle(.swipeBegan(paywall.shown))
+        _ = ended.handle(shows([], [.end(.finished)]))
+        XCTAssertEqual(ended.handle(.swipeEnded(paywall.shown, completed: true)), [.release])
+        XCTAssertEqual(ended.handle(.swipeRefused(paywall.shown)), [])
+
+        var faulted = sheetUp()
+        let step = NuxieMachineEdgeFault(code: "engine.step", detail: "closed")
+        _ = faulted.handle(.swipeBegan(paywall.shown))
+        _ = faulted.handle(.report(.fault(step)))
+        XCTAssertEqual(faulted.handle(.swipeEnded(paywall.shown, completed: true)), [.release])
+
+        var faultedUp = sheetUp()
+        _ = faultedUp.handle(.report(.fault(step)))
+        XCTAssertEqual(faultedUp.handle(.swipeRefused(paywall.shown)), [], "a swipe went to a stopped edge")
+
+        var unwanted = sheetOverCover()
+        _ = unwanted.handle(.swipeBegan(sheet.shown))
+        _ = unwanted.handle(shows([cover]))
+        XCTAssertEqual(unwanted.handle(.swipeEnded(sheet.shown, completed: true)), [],
+                       "a swipe went for a sheet the edge no longer shows")
+        var leaving = sheetOverCover()
+        XCTAssertEqual(leaving.handle(shows([cover])), [.dismiss(sheet.shown)])
+        XCTAssertEqual(leaving.handle(.swipeRefused(sheet.shown)), [], "a swipe went for a sheet on its way out")
+
+        var cancelled = sheetUp()
+        _ = cancelled.handle(.swipeBegan(paywall.shown))
+        XCTAssertEqual(cancelled.handle(.swipeEnded(paywall.shown, completed: false)), [])
+        XCTAssertEqual(cancelled.natives, [State.Native(presented: paywall, phase: .up)])
+    }
+
+    /// A native swipe that completed while the machine still keeps the sheet
+    /// (a round between the last read and the completion showed the control
+    /// the row's `swipe=` names, and the swipe pressed it, or the control is
+    /// disabled and it stayed): the edge's answer leaves the sheet in what
+    /// is shown, and the sheet is presented again, over the cover, once the
+    /// edge has answered.
+    func testACompletedSwipeTheMachineKeptPresentsTheSheetAgain() {
+        var state = sheetOverCover()
+        _ = state.handle(.swipeBegan(sheet.shown))
+        XCTAssertEqual(state.handle(.swipeEnded(sheet.shown, completed: true)), [.swipe(sheet.shown)])
+        XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
+        let kept = NuxieMachinePresented(shown: sheet.shown, route: sheet.route, presentation: .sheet,
+                                         swipeDown: .stays)
+        XCTAssertEqual(state.handle(shows([cover, kept])), [], "the sheet came back before the edge answered")
+        XCTAssertEqual(state.handle(.swipeDelivered(sheet.shown)), [.present(kept, over: cover.shown)])
+        XCTAssertEqual(state.closing, [])
+        XCTAssertEqual(state.handle(.presented(sheet.shown)), [])
+        XCTAssertEqual(state.natives.map(\.shown), [cover.shown, sheet.shown])
+    }
+
+    /// A held swipe the machine closed: the edge's report no longer shows
+    /// the sheet, and the sync dismisses it natively.
+    func testAHeldSwipeTheMachineClosedDismissesTheSheet() {
+        var state = sheetOverCover()
+        XCTAssertEqual(state.handle(.swipeRefused(sheet.shown)), [.swipe(sheet.shown)])
+        XCTAssertEqual(state.handle(shows([cover])), [.dismiss(sheet.shown)])
+        XCTAssertEqual(state.handle(.swipeDelivered(sheet.shown)), [])
+        XCTAssertEqual(state.handle(.dismissed(sheet.shown)), [])
+        XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
+    }
+
+    /// The swipe that empties what is shown ends the Experience in the same
+    /// delivery: the edge reports nothing shown and the end, and the
+    /// presenter lets go once the swipe is over.
+    func testASwipeThatEmptiesWhatIsShownEndsTheRecord() {
+        var state = sheetUp()
+        _ = state.handle(.swipeBegan(paywall.shown))
+        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
+        XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [.schedule(nil), .stop(nil), .release])
+        XCTAssertEqual(state.handle(.swipeDelivered(paywall.shown)), [])
+        assertReleasedForGood(state)
     }
 
     /// A dismissal that arrives while the sheet is still going up waits for
@@ -490,12 +586,12 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         assertReleasedForGood(state)
     }
 
-    /// The person's swipe takes the sheet, the machine hears `closed`, and
+    /// The person's swipe takes the sheet, the machine hears the swipe, and
     /// its answer ends the record: the presenter lets go then, with the end.
     func testASwipeThatTookTheSheetThenTheEndReleasesWithTheEnd() {
         var state = sheetUp()
         _ = state.handle(.swipeBegan(paywall.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.close(paywall.shown)])
+        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
         XCTAssertFalse(state.released, "the record is still open")
         XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [.schedule(nil), .stop(nil), .release])
         assertReleasedForGood(state)
