@@ -1,10 +1,12 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
 import NuxieMachine
+import XCTest
 
 /// The byte source of a folder that holds its sources and nothing else:
-/// it has bytes for no file. A plan whose views show no picture never asks
-/// it; one that shows a picture stops at open with `edge.unsupplied-asset`.
+/// it has bytes for no file. A plan whose views show no file never asks
+/// it; one that shows a file has that path failed, and its page waits on
+/// the recovery screen.
 struct NoFolderFiles: NuxieMachineByteSource {
     func bytes(for path: String) async throws -> Data {
         throw NuxieMachineByteSourceFault.noFile(path)
@@ -69,4 +71,86 @@ final class HeldBytes: NuxieMachineByteSource, @unchecked Sendable {
         waiting.forEach { $0.resume() }
     }
 }
+
+/// A byte source the test answers path by path: each ask waits until the
+/// test answers it with the file's bytes ([`answer`]) or fails it
+/// ([`fail`]), and every ask is kept, in order. The bytes are read with
+/// `read`, the folder's own reader unless the test gives another.
+final class AskedBytes: NuxieMachineByteSource, @unchecked Sendable {
+    private typealias Answer = CheckedContinuation<Result<Data, any Error>, Never>
+
+    private let read: @Sendable (String) async throws -> Data
+    private let lock = NSLock()
+    private var askedPaths: [String] = []
+    private var waiting: [(path: String, answer: Answer)] = []
+
+    init(read: @escaping @Sendable (String) async throws -> Data) {
+        self.read = read
+    }
+
+    convenience init(folder: URL) {
+        let source = NuxieMachineFolderByteSource(folder: folder)
+        self.init(read: { try await source.bytes(for: $0) })
+    }
+
+    /// The paths asked for so far, in order, one entry for each ask.
+    var asked: [String] {
+        lock.withLock { askedPaths }
+    }
+
+    func bytes(for path: String) async throws -> Data {
+        let answer = await withCheckedContinuation { (continuation: Answer) in
+            lock.withLock {
+                askedPaths.append(path)
+                waiting.append((path, continuation))
+            }
+        }
+        return try answer.get()
+    }
+
+    /// Returns once `path` has been asked for `times` times in all, or fails
+    /// the test after ten seconds.
+    func untilAsked(_ path: String, times: Int = 1, file: StaticString = #filePath,
+                    line: UInt = #line) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        while asked.filter({ $0 == path }).count < times {
+            guard Date() < deadline else {
+                return XCTFail("\(path) was not asked for \(times) times: \(asked)", file: file, line: line)
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    /// Answer the oldest ask still waiting for `path` with the file's bytes.
+    func answer(_ path: String, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let given = try await read(path)
+        resume(path, .success(given), file: file, line: line)
+    }
+
+    /// Fail the oldest ask still waiting for `path` with `error`.
+    func fail(_ path: String, with error: any Error, file: StaticString = #filePath, line: UInt = #line) {
+        resume(path, .failure(error), file: file, line: line)
+    }
+
+    /// Fail every ask still waiting, so none outlives the test.
+    func dropAll() {
+        let left = lock.withLock { () -> [Answer] in
+            defer { waiting = [] }
+            return waiting.map(\.answer)
+        }
+        left.forEach { $0.resume(returning: .failure(CancellationError())) }
+    }
+
+    private func resume(_ path: String, _ result: Result<Data, any Error>, file: StaticString, line: UInt) {
+        let next = lock.withLock { () -> Answer? in
+            guard let index = waiting.firstIndex(where: { $0.path == path }) else { return nil }
+            return waiting.remove(at: index).answer
+        }
+        guard let next else { return XCTFail("no ask waits for \(path): \(asked)", file: file, line: line) }
+        next.resume(returning: result)
+    }
+}
+
+/// The error a phone's network stack gives with no connection.
+let offlineError = URLError(.notConnectedToInternet)
 #endif

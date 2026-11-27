@@ -28,6 +28,10 @@ import Foundation
 /// - The machine hears `closed` only for a swipe that took a sheet the edge
 ///   still showed while the record was open. Until the edge's next report
 ///   no longer shows it, the sync opens nothing in its place.
+/// - Where the files the pages draw stand is the edge's to say, in its
+///   reports ([`assets`]); every native presentation shows it. While a page
+///   waits, Try Again asks for the failed files again, and the close is the
+///   host's own fault, which the edge reports back as the record's fault.
 /// - An ended or faulted record is final: nothing is shown, nothing moves it
 ///   again, and a fault is never overwritten.
 /// - What the presenter owns (the Screens with their edge and session, the
@@ -92,6 +96,10 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         /// Something outside the edge failed: the edge would not open, or
         /// drawing failed.
         case hostFault(NuxieMachineEdgeFault)
+        /// The person tapped Try Again on the recovery screen.
+        case refreshTapped
+        /// The person tapped the close on the loading or recovery screen.
+        case exitTapped
     }
 
     package enum Effect: Equatable, Sendable {
@@ -110,6 +118,13 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
         /// Let go of everything the presenter owns. Comes once, after the
         /// record's `stop`, when no native is left for UIKit to finish.
         case release
+        /// Show every native presentation where the files stand.
+        case assets(NuxieMachineAssets)
+        /// Ask the edge for the files that failed again.
+        case refresh
+        /// Tell the edge the host's own fault: the person gave up on a page
+        /// whose files never came.
+        case hostFault(NuxieMachineHostFault)
     }
 
     package private(set) var record: Record = .notStarted
@@ -123,6 +138,9 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
     package private(set) var closing: [NuxieMachineShown] = []
     /// Whether [`Effect.release`] has been said.
     package private(set) var released = false
+    /// Where the files the shown pages draw stand, as the edge last
+    /// reported it.
+    package private(set) var assets: NuxieMachineAssets = .ready
 
     /// The native presentation a screen reader reaches: the top one that is
     /// not leaving. Every one under it is covered, from the moment the one
@@ -201,6 +219,17 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
             guard record == .open(wakeAt: moment) else { return [] }
             record = .open(wakeAt: nil)
             return [.schedule(nil)]
+        case .refreshTapped:
+            // Only a failed file is asked for again; one still coming is
+            // already asked for.
+            guard case .open = record, case .failed = assets else { return [] }
+            return [.refresh]
+        case .exitTapped:
+            // The close shows only while a page waits for its files. Its
+            // answer is a fault the edge reports, which takes the one fault
+            // path below like any other.
+            guard case .open = record, assets != .ready else { return [] }
+            return [.hostFault(.firstFrameDeadline)]
         }
     }
 
@@ -254,6 +283,9 @@ package struct NuxieMachineSheetState: Equatable, Sendable {
             record = .ended
             wanted = []
             return [.schedule(nil), .stop(nil)]
+        case .assets(let now):
+            assets = now
+            return [.assets(now)]
         }
     }
 

@@ -12,8 +12,8 @@ import NuxieRuntime
 /// same words at the same size in the phone's own font, then a "Close"
 /// button in the brand face. The host hands in the folder's rows (the face
 /// as a font, its license as another file) and a byte source for the
-/// folder; the edge asks the source for the face's bytes when it opens the
-/// page, and the page is imported with them.
+/// folder; the edge asks the source for the face's bytes at the start, and
+/// the page is imported with them once they are in.
 ///
 /// The face is a subset of Roboto Regular holding Basic Latin. HarfBuzz
 /// shapes the title's words in it with no kerning, no ligature and no
@@ -88,19 +88,58 @@ final class FontEdgeTests: XCTestCase {
         }
     }
 
-    /// A source with no bytes for the face: the page is never opened, and
-    /// the edge stops with `edge.unsupplied-asset`, naming the face's path.
-    func testAFaceTheSourceHasNoBytesForStopsTheEdgeNamingIt() async throws {
+    /// A source with no bytes for the face: the edge does not stop. The
+    /// page is presented and held with no player, and the owner is told the
+    /// face's path failed, unavailable, as the recovery screen shows it. A
+    /// face is the same kind of file as a picture here. The oracle is the
+    /// recovery reason's own rule: only a `URLError` that says the device
+    /// is offline reads as offline, and the folder's "no file" is not one.
+    func testAFaceTheSourceHasNoBytesForShowsTheRecoveryScreenWithThatPathFailed() async throws {
         let run = try FontRun(plan: FontFolder.plan(), bytes: NoFolderFiles())
         await run.edge.start(event: "opened", now: run.now)
+        await run.edge.assetsAnswered()
+        await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
         let fault = await run.edge.fault
-        XCTAssertEqual(fault?.code, "edge.unsupplied-asset", "\(String(describing: fault))")
-        XCTAssertTrue(fault?.detail.contains("assets/brand.ttf") ?? false, "\(String(describing: fault))")
+        XCTAssertNil(fault, "the edge stopped: \(String(describing: fault))")
         let stack = await run.edge.stack
-        XCTAssertEqual(stack, [], "a page opened without its face")
-        XCTAssertEqual(run.owner.reports.last, fault.map { NuxieMachineEdgeReport.fault($0) },
-                       "the owner was not told the fault")
+        XCTAssertEqual(stack.map(\.route), ["words"], "the page was not presented")
+        let screen = await run.edge.screen()
+        XCTAssertNil(screen, "a page opened without its face")
+        XCTAssertEqual(run.owner.assetsTold.last,
+                       .failed([NuxieMachineAssetFailure(path: "assets/brand.ttf", reason: .unavailable)]),
+                       "the owner was not told the face failed: \(run.owner.reports)")
         try await run.close()
+    }
+
+    /// A page whose only missing file is its face: it waits for it, held
+    /// with no player and told waiting for that one path (the phone's own
+    /// font is no file of the folder, and is never waited for). Once the
+    /// source answers, the next frame opens it and the title is drawn in
+    /// the face: its box is as wide as the face's own tables say, read with
+    /// CoreText from the file's bytes (the oracle of the first test here).
+    func testAPageWhoseOnlyMissingFileIsItsFaceWaitsThenDrawsInIt() async throws {
+        let bytes = AskedBytes(folder: try FontFolder.url())
+        let run = try FontRun(plan: FontFolder.plan(), bytes: bytes)
+        do {
+            await run.edge.start(event: "opened", now: run.now)
+            try await bytes.untilAsked("assets/brand.ttf")
+            XCTAssertEqual(bytes.asked, ["assets/brand.ttf"], "the source was asked for more than the face")
+            let none = await run.edge.screen()
+            XCTAssertNil(none, "the page opened before its face arrived")
+            XCTAssertEqual(run.owner.assetsTold, [.waiting(["assets/brand.ttf"])])
+
+            try await bytes.answer("assets/brand.ttf")
+            let look = try await run.look("after-the-face")
+            XCTAssertEqual(run.owner.assetsTold, [.waiting(["assets/brand.ttf"]), .ready])
+            let (brand, _) = try Self.titles(in: look)
+            XCTAssertEqual(brand.bounds.width, try BrandFace(size: Self.size).advanceWidth(of: Self.words),
+                           accuracy: 1, "the title is not drawn in the face that arrived")
+            try await run.close()
+        } catch {
+            bytes.dropAll()
+            try? await run.close()
+            throw error
+        }
     }
 
     /// The page with the line in the phone's font taken out, so every text
@@ -141,6 +180,9 @@ final class FontEdgeTests: XCTestCase {
         let control = try FontRun(plan: written, bytes: NuxieMachineFolderByteSource(folder: FontFolder.url()))
         do {
             await control.edge.start(event: "opened", now: control.now)
+            // The page opens, and takes its lease, once its face is in.
+            await control.edge.assetsAnswered()
+            await control.edge.frame(elapsedSeconds: 0, now: control.now)
             let fault = await control.edge.fault
             XCTAssertNil(fault, "the page as written did not open: \(String(describing: fault))")
             XCTAssertTrue(try SystemFace.kept(), "the page as written took no lease of the phone's face")
@@ -338,8 +380,11 @@ private final class FontRun {
     }
 
     /// The page laid out at a phone's size, two frames stepped, and drawn
-    /// with its semantic snapshot, kept as an attachment.
+    /// with its semantic snapshot, kept as an attachment. The byte source's
+    /// answers are waited for first, and one frame opens the page with them.
     func look(_ name: String) async throws -> Look {
+        await edge.assetsAnswered()
+        await edge.frame(elapsedSeconds: 0, now: now)
         let presented = await edge.screen()
         let screen = try XCTUnwrap(presented, "nothing is presented")
         try await screen.setLayoutSize(width: Float(Look.size.width), height: Float(Look.size.height))

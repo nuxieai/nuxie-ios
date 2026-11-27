@@ -53,6 +53,13 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 /// - `end` stops the loop, cancels the timer and closes the edge.
 /// - Every fault takes one path: every native presentation is dismissed,
 ///   the code is logged, and everything stops.
+/// - A page whose files have not arrived is presented all the same, over a
+///   loading screen ([`NuxieMachineScreenViewController.assets`]). After
+///   [`recoveryAffordanceDelay`], or at once when a file fails, the recovery
+///   screen and a close show; each failed file is logged by path. Try Again
+///   asks the edge for the failed files again. The close tells the edge the
+///   host's own fault, `first_frame.deadline`, and the fault's path takes
+///   everything down.
 /// - The session is drawn in light or dark as the SDK's experiences are:
 ///   the app's fixed scheme ([`colorSchemeMode`]) is forced on each native
 ///   presentation, `system` following the phone, and the scheme is read
@@ -194,6 +201,14 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         nuxieMachineNow() + clockAhead
     }
 
+    /// A test seam, not public API.
+    ///
+    /// How long a page waits for its files on the loading screen before the
+    /// recovery screen and the close show, in seconds. Five, as the SDK's
+    /// experience screens wait; a test sets it to 0. Each Screen takes the
+    /// value when it is presented.
+    package var recoveryAffordanceDelay: TimeInterval = 5.0
+
     /// The scheme the app fixes for its experiences: `system` (the default)
     /// follows the phone, `light` or `dark` overrides it, on every native
     /// presentation, as the SDK's experience controller applies it.
@@ -325,6 +340,18 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             loop.stop()
             let edge = loop.edge
             Task { await loop.inLane { try? await edge.close() } }
+        case .assets(let now):
+            for controller in controllers.values { controller.assets = now }
+            if case .failed(let failures) = now {
+                for failure in failures {
+                    let reason = failure.reason == .offline ? "offline" : "unavailable"
+                    logger.error("machine.assets failed \(failure.path, privacy: .public) \(reason, privacy: .public)")
+                }
+            }
+        case .refresh:
+            refresh()
+        case .hostFault(let fault):
+            tellHostFault(fault)
         case .release:
             // The lane's own work keeps what it uses until it is over; the
             // presenter keeps nothing.
@@ -378,7 +405,10 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         }
         let shown = presented.shown
         logger.info("machine.present \(presented.route, privacy: .public) \(shown.journey).\(shown.instance)")
-        let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop)
+        let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop, assets: state.assets,
+                                                          recoveryDelay: recoveryAffordanceDelay)
+        controller.onRefresh = { [weak self] in self?.send(.refreshTapped) }
+        controller.onExit = { [weak self] in self?.send(.exitTapped) }
         controller.statusText = Self.describe(status)
         applyColorSchemeMode(to: controller)
         controller.onEnvironmentChange = { [weak self] in self?.environmentChanged() }
@@ -435,6 +465,35 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
                 await edge.closed(shown, now: now)
                 self?.takeReports()
                 await self?.readPlan()
+            }
+        }
+    }
+
+    /// The person tapped Try Again: the edge asks again for the files that
+    /// failed, and its answer is taken.
+    private func refresh() {
+        guard let loop else { return }
+        let edge = loop.edge
+        Task { @MainActor [weak self] in
+            await loop.inLane {
+                await edge.refreshAssets()
+                self?.takeReports()
+            }
+        }
+    }
+
+    /// The person closed a page that waits for its files: the edge is told
+    /// the host's fault, after every wake due by then, and its answer is
+    /// taken. The answer is the record's fault, which dismisses everything.
+    private func tellHostFault(_ fault: NuxieMachineHostFault) {
+        guard let loop else { return }
+        let edge = loop.edge
+        Task { @MainActor [weak self] in
+            await loop.inLane {
+                let now = self?.machineNow() ?? nuxieMachineNow()
+                await self?.catchUp(to: now)
+                await edge.hostFault(fault, now: now)
+                self?.takeReports()
             }
         }
     }
