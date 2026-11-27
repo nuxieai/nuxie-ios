@@ -16,6 +16,11 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
         case ended
         /// A fault stopped everything, with its code.
         case fault(String)
+        /// The start did not happen, and nothing is wrong: the machine
+        /// started no record for the event (no entry starts on it, or one
+        /// declined it, `once` say). Nothing was shown, and the host can let
+        /// go of the presenter.
+        case didNotStart
     }
 
     /// The record's root slot `plan`, as last read: an enum value's name.
@@ -67,6 +72,10 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   that fires late (the app was suspended) catches up one wake at a time.
 ///   Waits that outlive the app are not built.
 /// - `end` stops the loop, cancels the timer and closes the edge.
+/// - A start the machine says did not happen, with nothing wrong (no entry
+///   starts on the event, or one declined it, `once` say), is no fault: the
+///   host hears `didNotStart`, nothing is presented, and the presenter lets
+///   go.
 /// - Every fault takes one path: every native presentation is dismissed,
 ///   the code is logged, and everything stops.
 /// - A page whose files have not arrived is presented all the same, over a
@@ -119,8 +128,9 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///
 /// What the presenter owns has one end of life. The edge with its session,
 /// the loop that runs its frames, the Screens, and the wake timer are let
-/// go of exactly once, when the state says `release`: the record is ended
-/// or faulted and no native presentation is on screen or in a transition.
+/// go of exactly once, when the state says `release`: the record is ended,
+/// faulted or declined and no native presentation is on screen or in a
+/// transition.
 /// An open record keeps them all, with nothing shown too (waiting for its
 /// wake after "Not now"). The presenter lets go at once, and work already in
 /// the loop's lane (the edge's close among it) holds what it uses until it
@@ -803,6 +813,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         case .open(let moment): .open(wakeAt: moment)
         case .ended: .ended
         case .faulted(let fault): .fault(fault.code)
+        case .declined: .didNotStart
         }
     }
 
@@ -820,7 +831,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     }
 
     /// The record's state in words: open, with its wake moment when one is
-    /// set, ended, or the fault's code.
+    /// set, ended, the fault's code, or that it did not start.
     package static func describe(_ record: NuxieMachineSheetStatus.Record) -> String {
         switch record {
         case .notStarted: "not started"
@@ -829,6 +840,7 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
             "open, wakes at " + Date(timeIntervalSince1970: Double(moment) / 1000).ISO8601Format()
         case .ended: "ended"
         case .fault(let code): "fault \(code)"
+        case .didNotStart: "did not start"
         }
     }
 }

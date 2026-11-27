@@ -10,18 +10,23 @@ import NuxieRuntime
 /// what the stack holds. A presentation begun and ended in one delivery is
 /// never opened and never reaches the screen, and one that outlives the
 /// delivery is opened once. Every case draws the plan's compiled views.
+///
+/// A start the machine says did not happen is one delivery too: with
+/// nothing wrong it is no fault, nothing is opened, and the edge goes on;
+/// with something wrong it is still a fault.
 final class OneDeliveryEdgeTests: XCTestCase {
     private static let hour: Int64 = 3_600_000
 
     // MARK: Begun and ended in one delivery
 
-    /// A start whose step presents a Screen and dismisses it changed
-    /// nothing, so the machine answers that it did not happen: the start is
-    /// declined and there is no record.
+    /// A start whose step presents a page and dismisses it changed
+    /// nothing, so the machine answers that it did not happen (`unstarted`):
+    /// no fault, no record, and the edge goes on.
     func testAScreenPresentedAndDismissedInOneDeliveryIsNeverOpened() async throws {
         let run = try OneDelivery(compiled: Self.compiled(["go(clock)", "dismiss(\"gone\")"]))
         await run.edge.start(event: "opened", now: run.now)
-        try await expectDeclinedAndClosed(run)
+        try await expectNotStarted(run, on: "opened", reason: "unstarted")
+        try await run.edge.close()
     }
 
     func testAScreenPresentedThenExitedInOneDeliveryIsNeverOpened() async throws {
@@ -30,12 +35,93 @@ final class OneDeliveryEdgeTests: XCTestCase {
         try await expectNothingShown(run, endedAs: .exited)
     }
 
-    /// A start whose step presents a Screen and goes back changed nothing
-    /// either: declined, with no record.
+    /// A start whose step presents a page and goes back changed nothing
+    /// either: it did not happen (`unstarted`), with no fault and no record.
     func testAScreenPresentedThenPoppedInOneDeliveryIsNeverOpened() async throws {
         let run = try OneDelivery(compiled: Self.compiled(["go(clock)", "back"]))
         await run.edge.start(event: "opened", now: run.now)
-        try await expectDeclinedAndClosed(run)
+        try await expectNotStarted(run, on: "opened", reason: "unstarted")
+        try await run.edge.close()
+    }
+
+    // MARK: A start that did not happen
+
+    /// A start on an event no entry starts on did not happen, and nothing
+    /// is wrong: no fault and no reason, and the edge goes on, so a later
+    /// start on the entry's own event is delivered and opens its page.
+    func testAStartOnAnEventNoEntryStartsOnIsQuietAndTheEdgeGoesOn() async throws {
+        let run = try OneDelivery(compiled: Self.compiled(["go(clock)"]))
+        await run.edge.start(event: "nope", now: run.now)
+        try await expectNotStarted(run, on: "nope", reason: nil)
+
+        let heard = run.owner.reports.count
+        await run.edge.start(event: "opened", now: run.now + 2)
+        let fault = await run.edge.fault
+        XCTAssertNil(fault, "the start on the entry's own event faulted")
+        let stack = await run.edge.stack
+        XCTAssertEqual(stack.map(\.route), ["clock"], "the start on the entry's own event opened nothing")
+        let reports = Array(run.owner.reports.dropFirst(heard))
+        guard reports.count == 1, case .delivered(let shown, _) = reports[0] else {
+            return XCTFail("one report for the start: \(reports)")
+        }
+        XCTAssertEqual(shown, stack)
+        try await run.edge.close()
+    }
+
+    /// Stillwater's entry is `once`. A second start on its event while the
+    /// paywall is up did not happen (`once`), and nothing is wrong: the
+    /// owner hears that and nothing else, nothing is applied, and the open
+    /// record keeps what it shows and the player it draws with.
+    func testASecondStartOnAOnceEntryIsQuietAndLeavesTheOpenRecordAsItWas() async throws {
+        let run = try OneDelivery(compiled: Fixture.load())
+        await run.edge.start(event: "onboarding_completed", now: run.now)
+        let stack = await run.edge.stack
+        XCTAssertEqual(stack.map(\.route), ["paywall"], "the first start presents the paywall")
+        let firstScreen = await run.edge.screen()
+        let player = try XCTUnwrap(firstScreen, "the first start opens a player")
+        let heard = run.owner.reports.count
+        let written = await run.edge.log.count
+
+        await run.edge.start(event: "onboarding_completed", now: run.now + 1000)
+        let fault = await run.edge.fault
+        XCTAssertNil(fault, "a second start on a `once` entry faulted")
+        XCTAssertEqual(Array(run.owner.reports.dropFirst(heard)), [.notStarted(reason: "once")])
+        let after = await Array(run.edge.log.dropFirst(written))
+        XCTAssertEqual(after, [], "the start that did not happen applied \(after)")
+        let still = await run.edge.stack
+        XCTAssertEqual(still, stack, "the open record's stack moved")
+        let screen = await run.edge.screen()
+        XCTAssertTrue(screen === player, "the open record's page lost its player")
+        let open = try await run.edge.recordOpen()
+        XCTAssertTrue(open, "the open record was closed")
+        try await run.edge.close()
+    }
+
+    /// A start the machine declines for a reason that says something is
+    /// wrong is still a fault: the event's action needs a value the start
+    /// does not give (`fields`). The owner hears the fault `machine.declined`,
+    /// whose detail names the reason, and the stopped edge delivers nothing
+    /// for a later start.
+    func testAStartDeclinedForAWrongReasonIsStillAFault() async throws {
+        let run = try OneDelivery(compiled: Self.needsAValue)
+        await run.edge.start(event: "signed_up", now: run.now)
+        let fault = await run.edge.fault
+        XCTAssertEqual(fault?.code, "machine.declined", "\(String(describing: fault))")
+        XCTAssertTrue(fault?.detail.contains("fields") == true,
+                      "the detail does not name the reason: \(String(describing: fault))")
+        guard run.owner.reports.count == 1, case .fault(let told) = run.owner.reports[0] else {
+            return XCTFail("one report, the fault: \(run.owner.reports)")
+        }
+        XCTAssertEqual(told, fault)
+        let open = try await run.edge.recordOpen()
+        XCTAssertFalse(open, "a declined start left a record")
+
+        let written = await run.edge.log.count
+        await run.edge.start(event: "signed_up", now: run.now + 1)
+        let later = await Array(run.edge.log.dropFirst(written))
+        XCTAssertEqual(later, [], "the stopped edge did \(later)")
+        XCTAssertEqual(run.owner.reports.count, 1, "\(run.owner.reports)")
+        try await run.edge.close()
     }
 
     // MARK: Two presentations that both outlive the delivery
@@ -190,20 +276,17 @@ final class OneDeliveryEdgeTests: XCTestCase {
         try await run.edge.close()
     }
 
-    /// The machine declined the start, and the edge stopped on it: the
-    /// owner heard one report, the fault `machine.declined`, and nothing
-    /// about showing; no presentation was opened and none is held; the
-    /// session holds no record; and the stopped edge delivers nothing for a
-    /// later start.
-    private func expectDeclinedAndClosed(_ run: OneDelivery,
-                                         file: StaticString = #filePath, line: UInt = #line) async throws {
+    /// The machine said the start on `event` did not happen, for `reason`,
+    /// and nothing is wrong: the owner heard one report, that the start did
+    /// not happen, and nothing about showing; no fault; no presentation was
+    /// opened and none is held; and the session holds no record. The edge
+    /// is not stopped: a later start on `event` is delivered, and the
+    /// machine answers it the same way.
+    private func expectNotStarted(_ run: OneDelivery, on event: String, reason: String?,
+                                  file: StaticString = #filePath, line: UInt = #line) async throws {
         let fault = await run.edge.fault
-        XCTAssertEqual(fault?.code, "machine.declined", "\(String(describing: fault))", file: file, line: line)
-        guard run.owner.reports.count == 1, case .fault(let told) = run.owner.reports[0] else {
-            XCTFail("one report, the fault: \(run.owner.reports)", file: file, line: line)
-            return
-        }
-        XCTAssertEqual(told, fault, file: file, line: line)
+        XCTAssertNil(fault, "a start that did not happen faulted", file: file, line: line)
+        XCTAssertEqual(run.owner.reports, [.notStarted(reason: reason)], file: file, line: line)
         let shown = await run.edge.shown
         XCTAssertNil(shown, "a presentation is under way", file: file, line: line)
         let stack = await run.edge.stack
@@ -215,15 +298,12 @@ final class OneDeliveryEdgeTests: XCTestCase {
         let open = try await run.edge.recordOpen()
         XCTAssertFalse(open, "a start that did not happen left a record", file: file, line: line)
 
-        // The edge is stopped: a later start is delivered to no one.
-        let written = await run.edge.log.count
-        await run.edge.start(event: "opened", now: run.now + 1)
-        let later = await Array(run.edge.log.dropFirst(written))
-        XCTAssertEqual(later, [], "the stopped edge did \(later)", file: file, line: line)
-        XCTAssertEqual(run.owner.reports.count, 1, "\(run.owner.reports)", file: file, line: line)
+        // The edge goes on: a later start is delivered.
+        await run.edge.start(event: event, now: run.now + 1)
+        XCTAssertEqual(run.owner.reports, [.notStarted(reason: reason), .notStarted(reason: reason)],
+                       "the later start was not delivered", file: file, line: line)
         let still = await run.edge.fault
-        XCTAssertEqual(still, fault, "the first fault is the one kept", file: file, line: line)
-        try await run.edge.close()
+        XCTAssertNil(still, "the later start faulted", file: file, line: line)
     }
 
     /// The delivery since the owner's first `written` reports ended `first`
@@ -330,6 +410,26 @@ final class OneDeliveryEdgeTests: XCTestCase {
             exit
 
         """)
+
+    /// A root that hears `signed_up`, whose action takes the event's first
+    /// value. A start with no values cannot give it: declined, `fields`.
+    private static let needsAValue = NuxieMachinePlanSource(
+        files: [NuxieMachineSourceFile(path: "main.nux", text: """
+            event client signed_up(plan: string)
+
+            component Hears
+              platforms ios android
+
+              state chosen = ""
+
+              on signed_up
+                take
+
+              action take(plan: string)
+                chosen = plan
+
+            """)],
+        assets: [], root: "main", app: "app", experience: "hears", version: 1)
 
     private static func compiledPlan(main: String) -> NuxieMachinePlanSource {
         NuxieMachinePlanSource(

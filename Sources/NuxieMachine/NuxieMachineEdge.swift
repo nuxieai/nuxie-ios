@@ -1,6 +1,7 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
 import Foundation
 import NuxieRuntime
+import os
 
 /// One `.nux` source file of a plan.
 package struct NuxieMachineSourceFile: Equatable, Sendable {
@@ -167,9 +168,9 @@ package struct NuxieMachineAssetFailure: Equatable, Sendable {
 }
 
 /// What one delivery tells the edge's owner, once, when it is over: what is
-/// shown and the rows the owner performs, or the fault that stopped the
-/// edge. A fault replaces the rest, since nothing survives it: nothing is
-/// shown once the edge has stopped.
+/// shown and the rows the owner performs, the fault that stopped the edge,
+/// or that a start did not happen. A fault replaces the rest, since nothing
+/// survives it: nothing is shown once the edge has stopped.
 package enum NuxieMachineEdgeReport: Equatable, Sendable {
     /// What the edge shows now that the delivery is over, bottom first, and
     /// the delivery's rows for the owner, in order. At most one row is a
@@ -177,15 +178,23 @@ package enum NuxieMachineEdgeReport: Equatable, Sendable {
     case delivered(shown: [NuxieMachinePresented], rows: [NuxieMachineHostRow])
     /// The edge stopped on this fault in the delivery.
     case fault(NuxieMachineEdgeFault)
+    /// The start did not happen, and nothing is wrong: no entry starts on
+    /// the event (no reason), or the machine declined it for a reason that
+    /// says nothing is wrong (`once`, `if`, `unstarted` and the rest). The
+    /// session holds what it held, nothing was applied, and the edge goes
+    /// on: a later start is delivered.
+    case notStarted(reason: String?)
 
     /// The one dismissal this report tells, if any: the fault's, or the
-    /// machine's `dismiss`.
+    /// machine's `dismiss`. A start that did not happen tells none.
     package var dismissal: NuxieMachineEdgeDismissal? {
         switch self {
         case .fault(let fault):
             return .fault(fault)
         case .delivered(_, let rows):
             for case .dismiss(let reason) in rows { return .machine(reason: reason) }
+            return nil
+        case .notStarted:
             return nil
         }
     }
@@ -458,12 +467,15 @@ package final class NuxieMachineFrameAsks: @unchecked Sendable {
 /// Nothing is ignored silently. A call the session refuses, a row this edge
 /// cannot perform and a call the store cannot perform are faults, and every fault takes one path
 /// ([`fail`]): the edge stops and records the code. A stopped edge, or a
-/// closed one, delivers nothing more.
+/// closed one, delivers nothing more. A start the machine says did not
+/// happen, with nothing wrong, is not a refusal: it is reported, and the
+/// edge goes on ([`start`]).
 ///
 /// The owner hears one report per delivery that did something for it, told
 /// once when the delivery is over ([`deliver`], the only place the owner is
 /// called): what is shown and the rows it performs (`wake at`, a normal
-/// `end`, and the machine's first `dismiss`, for its reason), or the fault.
+/// `end`, and the machine's first `dismiss`, for its reason), the fault, or
+/// that a start did not happen.
 /// A fault in the delivery, from the machine, the store, the engine or this
 /// edge, makes the report the fault, whatever rows came before it, so every
 /// fault reaches the owner and as the fault. The log keeps every row either
@@ -622,6 +634,13 @@ package actor NuxieMachineEdge {
         let before: [NuxieMachinePresented]
         private var rows: [NuxieMachineHostRow] = []
         private var fault: NuxieMachineEdgeFault?
+        /// A start that did not happen, with the machine's reason if it gave
+        /// one: none for any other delivery.
+        private var unstarted: NotStarted?
+
+        struct NotStarted {
+            let reason: String?
+        }
 
         /// Only [`deliver`] makes one.
         fileprivate init(_ turn: Turn, before: [NuxieMachinePresented]) {
@@ -643,14 +662,21 @@ package actor NuxieMachineEdge {
             if self.fault == nil { self.fault = fault }
         }
 
+        /// The delivery was a start that did not happen, for `reason`.
+        mutating func didNotStart(reason: String?) {
+            unstarted = NotStarted(reason: reason)
+        }
+
         /// What the owner hears once the sync has run and the edge shows
-        /// `shown`: the fault; or what is shown and the rows, when either
-        /// changed anything (what a swipe down on a sheet would do among
-        /// it); or nothing. A dismissal is told only when the delivery
-        /// closed a presentation the owner was shown: one begun and
-        /// dismissed in the same delivery never reached it.
+        /// `shown`: the fault; or that the start did not happen; or what is
+        /// shown and the rows, when either changed anything (what a swipe
+        /// down on a sheet would do among it); or nothing. A dismissal is
+        /// told only when the delivery closed a presentation the owner was
+        /// shown: one begun and dismissed in the same delivery never
+        /// reached it.
         func report(showing shown: [NuxieMachinePresented]) -> NuxieMachineEdgeReport? {
             if let fault { return .fault(fault) }
+            if let unstarted { return .notStarted(reason: unstarted.reason) }
             let after = shown.map(\.shown)
             let closed = before.contains { !after.contains($0.shown) }
             let told = rows.filter { row in
@@ -722,6 +748,16 @@ package actor NuxieMachineEdge {
     /// epoch), and the machine's rows for it are applied. The byte source is
     /// asked first for each file the views draw that it has not given yet,
     /// and the start does not wait for its answers.
+    ///
+    /// A start that did not happen is no fault: no entry starts on the
+    /// event, or the machine declined it for a reason that says nothing is
+    /// wrong (`once`, `if`, `unstarted` and the rest). Then nothing is
+    /// applied, the session holds what it held, the files already asked
+    /// for stay asked for, and the owner hears
+    /// [`notStarted`](NuxieMachineEdgeReport.notStarted); the edge is not
+    /// stopped, so a later start is delivered. A start declined for a
+    /// reason that says something is wrong is a fault, `machine.declined`,
+    /// whose detail names the reason.
     package func start(event: String, now: Int64) async {
         await inTurn { turn in
             await deliver(turn, stopped: ()) { delivery in
@@ -742,6 +778,12 @@ package actor NuxieMachineEdge {
                 let rows: [NuxieMachineRow]
                 do {
                     rows = try session.start(event: event, now: now)
+                } catch NuxieMachineError.notStarted(let reason) {
+                    didNotStart(event, reason: reason, said: reason ?? "no reason given", &delivery)
+                    return
+                } catch NuxieMachineError.unknownEvent {
+                    didNotStart(event, reason: nil, said: "no entry starts on it", &delivery)
+                    return
                 } catch {
                     await refused(error, doing: "start on \(event)", now: now, &delivery)
                     return
@@ -750,6 +792,16 @@ package actor NuxieMachineEdge {
             }
         }
     }
+
+    /// The start on `event` did not happen, for `reason` (`said` in words
+    /// for the log), and nothing is wrong: one info line, and the delivery's
+    /// report says so. Nothing is applied and nothing stops.
+    private func didNotStart(_ event: String, reason: String?, said: String, _ delivery: inout Delivery) {
+        Self.logger.info("start on \(event, privacy: .public) did not happen: \(said, privacy: .public)")
+        delivery.didNotStart(reason: reason)
+    }
+
+    private static let logger = Logger(subsystem: "io.nuxie.sdk", category: "NuxieMachine")
 
     /// One frame. `now` is the clock the machine reads, and `elapsedSeconds`
     /// the time the engine advances by. The frame's turn delivers the frame;
