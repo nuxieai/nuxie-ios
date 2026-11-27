@@ -19,7 +19,7 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
         /// The start did not happen, and nothing is wrong: the machine
         /// started no record for the event (no entry starts on it, or one
         /// declined it, `once` say). Nothing was shown, and the host can let
-        /// go of the presenter.
+        /// go of the presenter. Heard on its own, never after `open`.
         case didNotStart
     }
 
@@ -74,8 +74,9 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 /// - `end` stops the loop, cancels the timer and closes the edge.
 /// - A start the machine says did not happen, with nothing wrong (no entry
 ///   starts on the event, or one declined it, `once` say), is no fault: the
-///   host hears `didNotStart`, nothing is presented, and the presenter lets
-///   go.
+///   host hears `didNotStart` and never `open` first, nothing is presented,
+///   and the presenter lets go. The record is open only once the edge's
+///   first answer to the start is not that one.
 /// - Every fault takes one path: every native presentation is dismissed,
 ///   the code is logged, and everything stops.
 /// - A page whose files have not arrived is presented all the same, over a
@@ -302,18 +303,18 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         self.loop = loop
         observePresence()
         logger.info("machine.start \(event, privacy: .public)")
-        send(.started)
         await loop.inLane {
             // The environment goes first, so the start's first frame is
             // drawn in it; then where the person is, which the session
-            // keeps for the start. The start is the lane run for every
-            // notice received before it, so its moment is no earlier than
-            // any of theirs.
+            // keeps for the start. With no record open the session keeps
+            // both and its edge reports nothing for them. The start is the
+            // lane run for every notice received before it, so its moment
+            // is no earlier than any of theirs.
             let now = max(machineNow(), received.last?.at ?? .min)
             await tellEnvironment(at: now)
             await tellPresences(by: now)
             await edge.start(event: event, now: now)
-            takeReports()
+            takeStartReports()
             await readPlan()
         }
         guard case .open = state.record else { return }
@@ -397,7 +398,26 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// Hand the state every report the edge has made since the last take,
     /// in order. Called right after each call to the edge.
     private func takeReports() {
-        for report in reports.take() {
+        hand(reports.take())
+    }
+
+    /// Hand the state the start's reports, after the record's start unless
+    /// the edge's first report says the start did not happen. So the host
+    /// hears `open` only for a record that started, before anything it
+    /// shows, and a start that did not happen once, as `didNotStart`. An
+    /// edge that reported nothing for the start started a record that shows
+    /// nothing yet.
+    private func takeStartReports() {
+        let taken = reports.take()
+        switch taken.first {
+        case .notStarted?: break
+        default: send(.started)
+        }
+        hand(taken)
+    }
+
+    private func hand(_ taken: [NuxieMachineEdgeReport]) {
+        for report in taken {
             logger.info("machine.report \(String(describing: report), privacy: .public)")
             send(.report(report))
         }
