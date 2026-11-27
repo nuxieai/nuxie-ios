@@ -86,6 +86,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// detent then rests at the largest height.
     package private(set) var contentHeight: CGFloat?
 
+    /// The most the sheet can be, in points, that its detents are ordered
+    /// for ([`orderDetents`]); none until the presenter or the container
+    /// says.
+    private var orderMaximum: CGFloat?
+    /// The detents last handed to UIKit, in that order.
+    private var appliedDetents: [NuxieMachineDetent]?
+
     /// Told when the screen reader's escape asks this sheet to close and a
     /// swipe down would do something: the presenter delivers it as a swipe.
     package var onEscape: (@MainActor () -> Void)?
@@ -208,7 +215,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Any presentation other than a cover is presented as a sheet; the
     /// presenter refuses the others before they get here.
     ///
-    /// A sheet rests at the heights its row writes ([`sheetDetents`]), or at
+    /// A sheet rests at the heights its row writes ([`nativeDetents`]), or at
     /// the large detent when it writes none. Whether a swipe may take it is
     /// the machine's answer ([`swipeDown`]): a swipe that would close it
     /// runs natively; one that would press a control, or do nothing, is
@@ -234,7 +241,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         // way out ([`assets`]).
         holdForLoading(assets != .ready)
         if !covers, let sheet = sheetPresentationController {
-            sheet.detents = sheetDetents()
+            applyDetents()
             sheet.prefersGrabberVisible = false
         }
     }
@@ -247,8 +254,51 @@ package final class NuxieMachineScreenViewController: UIViewController {
         if swipeDown != now.swipeDown { swipeDown = now.swipeDown }
         guard detents != now.detents else { return }
         detents = now.detents
-        guard let sheet = sheetPresentationController, presented.presentation != .cover else { return }
-        sheet.animateChanges { sheet.detents = sheetDetents() }
+        applyDetents()
+    }
+
+    /// Order the sheet's detents for UIKit for a sheet that can be at most
+    /// `maximum` points tall: the presenter calls it before it presents the
+    /// sheet, with the height its window gives, and the sheet calls it again
+    /// whenever the height its container gives changes.
+    package func orderDetents(maximum: CGFloat) {
+        guard maximum.isFinite, maximum > 0, maximum != orderMaximum else { return }
+        orderMaximum = maximum
+        applyDetents()
+    }
+
+    /// The most a sheet presented in `view` (a window, or a sheet's
+    /// container) can be: its height below its top inset.
+    package static func sheetMaximum(in view: UIView) -> CGFloat {
+        view.bounds.height - view.safeAreaInsets.top
+    }
+
+    /// The order follows the container's height: a turn of the phone, a
+    /// change of size class, or a window resized on iPad.
+    override package func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        guard !routeIsModal, let container = sheetPresentationController?.containerView else { return }
+        orderDetents(maximum: Self.sheetMaximum(in: container))
+    }
+
+    /// Hand UIKit the sheet's detents in the order they now take, when it
+    /// changed. Each keeps its identifier, so a sheet resting at one still
+    /// rests at it after the order changes.
+    private func applyDetents() {
+        guard !routeIsModal, let sheet = sheetPresentationController else { return }
+        let order = nativeDetents()
+        guard order != appliedDetents else { return }
+        appliedDetents = order
+        let made = order.isEmpty ? [UISheetPresentationController.Detent.large()] : order.map(sheetDetent)
+        let names: [UISheetPresentationController.Detent.Identifier] =
+            order.isEmpty ? [.large] : order.map(Self.identifier(of:))
+        let selected = sheet.selectedDetentIdentifier
+        let change = {
+            sheet.detents = made
+            if let selected, names.contains(selected) { sheet.selectedDetentIdentifier = selected }
+        }
+        // Before the sheet is presented there is nothing to animate.
+        if sheet.containerView == nil { change() } else { sheet.animateChanges(change) }
     }
 
     /// Whether the native dismissal is held: for a cover, which has no
@@ -280,24 +330,41 @@ package final class NuxieMachineScreenViewController: UIViewController {
         return true
     }
 
-    /// The sheet's detents for the heights its row writes, in its order:
-    /// medium and large are the system's; a height in points, a percent of
-    /// the height available and the content's height are detents of this
-    /// module's, each with an identifier its kind and number make, so a
-    /// detent read again keeps its place. A row that writes none rests at
-    /// large. Before iOS 16 a sheet has the system's two alone, and every
-    /// other height rests at large.
-    private func sheetDetents() -> [UISheetPresentationController.Detent] {
-        var made: [UISheetPresentationController.Detent] = []
-        var named: Set<UISheetPresentationController.Detent.Identifier> = []
-        for detent in detents {
-            // Before iOS 16 every height but medium is large.
-            let name: UISheetPresentationController.Detent.Identifier
-            if #available(iOS 16.0, *) { name = Self.identifier(of: detent) } else { name = detent == .medium ? .medium : .large }
-            guard named.insert(name).inserted else { continue }
-            made.append(sheetDetent(detent))
+    /// The heights the sheet rests at, as UIKit takes them: each once, from
+    /// the shortest to the tallest at the most the sheet can be now
+    /// ([`nativeOrder`]); in the order its row writes them until that is
+    /// known. Before iOS 16 a sheet has the system's two alone, and every
+    /// height but medium rests at large. A row that writes none rests at
+    /// large. What the machine shows ([`detents`]) keeps the row's order.
+    private func nativeDetents() -> [NuxieMachineDetent] {
+        var kinds = detents
+        if #unavailable(iOS 16.0) { kinds = kinds.map { $0 == .medium ? .medium : .large } }
+        return Self.nativeOrder(of: kinds, maximum: orderMaximum, contentHeight: contentHeight)
+    }
+
+    /// `detents` each once, the first of equal ones kept, and with a
+    /// `maximum`, sorted by the height each rests at when the most a sheet
+    /// can be is `maximum`: medium at half of it, as UIKit's medium is about
+    /// half the screen, large at all of it, and this module's own by
+    /// [`height`]. Equal heights keep the row's order.
+    package nonisolated static func nativeOrder(of detents: [NuxieMachineDetent], maximum: CGFloat?,
+                                                contentHeight: CGFloat?) -> [NuxieMachineDetent] {
+        var once: [NuxieMachineDetent] = []
+        for detent in detents where !once.contains(detent) { once.append(detent) }
+        guard let maximum else { return once }
+        func resting(_ detent: NuxieMachineDetent) -> CGFloat {
+            switch detent {
+            case .medium: maximum / 2
+            case .large: maximum
+            default: height(of: detent, maximum: maximum, contentHeight: contentHeight) ?? maximum
+            }
         }
-        return made.isEmpty ? [.large()] : made
+        return once.enumerated()
+            .sorted { one, other in
+                let (low, high) = (resting(one.element), resting(other.element))
+                return low != high ? low < high : one.offset < other.offset
+            }
+            .map(\.element)
     }
 
     private func sheetDetent(_ detent: NuxieMachineDetent) -> UISheetPresentationController.Detent {
@@ -353,6 +420,8 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package func measured(contentHeight height: CGFloat?) {
         guard let height, height.isFinite, height > 0, height != contentHeight else { return }
         contentHeight = height
+        // The content's height can move fit-content past another detent.
+        applyDetents()
         guard #available(iOS 16.0, *), let sheet = sheetPresentationController,
               presented.presentation != .cover else { return }
         sheet.animateChanges { sheet.invalidateDetents() }

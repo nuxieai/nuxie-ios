@@ -571,10 +571,10 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime(window) {}
     }
 
-    /// A sheet rests at the heights its row writes, in its order: medium
-    /// and large are the system's, a height in points and a percent are
-    /// detents of this module's, named by their kind and number. A row that
-    /// writes none rests at large.
+    /// A sheet rests at the heights its row writes, in its order until the
+    /// height it can take is known: medium and large are the system's, a
+    /// height in points and a percent are detents of this module's, named by
+    /// their kind and number. A row that writes none rests at large.
     @MainActor
     func testASheetRestsAtTheDetentsItsRowWrites() throws {
         guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
@@ -588,6 +588,41 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         let (plain, plainWindow) = Self.screen(presenting: .sheet, loop: loop)
         XCTAssertEqual(try XCTUnwrap(plain.sheetPresentationController).detents.map(\.identifier), [.large])
         withExtendedLifetime((window, plainWindow)) {}
+    }
+
+    /// UIKit takes a sheet's detents shortest first, so they are ordered by
+    /// the height each rests at for the most the sheet can be, while what
+    /// the machine shows keeps the row's order. `medium 40% 320` on a phone
+    /// held upright (790 points at most): 40% is 316, then 320, then medium
+    /// at about 395. On its side (360 at most): 40% is 144, medium about
+    /// 180, then 320. The detent the sheet rests at stays selected when the
+    /// order changes.
+    @MainActor
+    func testUIKitTakesTheDetentsShortestFirstWhileTheRowKeepsItsOrder() throws {
+        let authored: [NuxieMachineDetent] = [.medium, .percent(40), .points(320)]
+        let order = NuxieMachineScreenViewController.nativeOrder(of:maximum:contentHeight:)
+        XCTAssertEqual(order(authored, 790, nil), [.percent(40), .points(320), .medium])
+        XCTAssertEqual(order(authored, 360, nil), [.percent(40), .medium, .points(320)])
+        XCTAssertEqual(order(authored, nil, nil), authored, "with no height known the row's order stands")
+        XCTAssertEqual(order([.large, .medium, .large], 790, nil), [.medium, .large])
+        XCTAssertEqual(order([.fitContent, .medium], 790, 200), [.fitContent, .medium])
+        XCTAssertEqual(order([.fitContent, .medium], 790, 600), [.medium, .fitContent])
+
+        guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
+        let loop = try Self.loop()
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
+        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let percent = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.percent.40.0")
+        let points = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.points.320.0")
+        controller.orderDetents(maximum: 790)
+        XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points, .medium])
+        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        sheet.selectedDetentIdentifier = .medium
+        controller.orderDetents(maximum: 360)
+        XCTAssertEqual(sheet.detents.map(\.identifier), [percent, .medium, points])
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .medium, "the sheet moved off the detent it rests at")
+        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        withExtendedLifetime(window) {}
     }
 
     /// The height each of this module's detents rests at, for a sheet that
