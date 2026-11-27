@@ -30,10 +30,10 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     private func sheetUp() -> State {
         var state = State()
         XCTAssertEqual(state.handle(.started), [])
-        XCTAssertEqual(state.handle(shows([paywall])), [.present(paywall, over: nil)])
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .arriving)])
+        XCTAssertEqual(state.handle(shows([paywall])), [.present([paywall], over: nil)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .arriving)])
         XCTAssertEqual(state.handle(.presented(paywall.shown)), [])
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .up)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .up)])
         XCTAssertEqual(state.record, .open(wakeAt: nil))
         return state
     }
@@ -44,7 +44,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.handle(shows([], [.dismiss(reason: "paywall_closed"), .wakeAt(evening)])),
                        [.schedule(evening), .dismiss(paywall.shown)])
         XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
         XCTAssertEqual(state.record, .open(wakeAt: evening))
         return state
     }
@@ -53,11 +53,11 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     private func sheetOverCover() -> State {
         var state = State()
         _ = state.handle(.started)
-        XCTAssertEqual(state.handle(shows([cover])), [.present(cover, over: nil)])
+        XCTAssertEqual(state.handle(shows([cover])), [.present([cover], over: nil)])
         XCTAssertEqual(state.handle(.presented(cover.shown)), [])
-        XCTAssertEqual(state.handle(shows([cover, sheet])), [.present(sheet, over: cover.shown)])
+        XCTAssertEqual(state.handle(shows([cover, sheet])), [.present([sheet], over: cover.shown)])
         XCTAssertEqual(state.handle(.presented(sheet.shown)), [])
-        XCTAssertEqual(state.natives.map(\.shown), [cover.shown, sheet.shown])
+        XCTAssertEqual(state.segments.map(\.id), [cover.shown, sheet.shown])
         return state
     }
 
@@ -71,10 +71,10 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = State()
         XCTAssertNil(state.reachable)
         _ = state.handle(.started)
-        XCTAssertEqual(state.handle(shows([cover])), [.present(cover, over: nil)])
+        XCTAssertEqual(state.handle(shows([cover])), [.present([cover], over: nil)])
         XCTAssertEqual(state.reachable, cover.shown, "a cover is in reach as it arrives")
         _ = state.handle(.presented(cover.shown))
-        XCTAssertEqual(state.handle(shows([cover, sheet])), [.present(sheet, over: cover.shown)])
+        XCTAssertEqual(state.handle(shows([cover, sheet])), [.present([sheet], over: cover.shown)])
         XCTAssertEqual(state.reachable, sheet.shown, "the cover is out of reach as the sheet arrives")
         _ = state.handle(.presented(sheet.shown))
         XCTAssertEqual(state.reachable, sheet.shown)
@@ -101,7 +101,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.record, .open(wakeAt: nil))
         XCTAssertEqual(state.handle(.report(.fault(noView))), [.schedule(nil), .stop(noView), .release])
         XCTAssertEqual(state.record, .faulted(noView))
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
         XCTAssertNil(state.dueWake(at: .max))
     }
 
@@ -110,9 +110,9 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = sheetUp()
         let step = NuxieMachineEdgeFault(code: "engine.step", detail: "closed")
         XCTAssertEqual(state.handle(.report(.fault(step))), [.schedule(nil), .stop(step), .dismiss(paywall.shown)])
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .leaving)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .leaving)])
         XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [.release])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
         XCTAssertEqual(state.record, .faulted(step))
     }
 
@@ -122,9 +122,9 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = sheetOverCover()
         let step = NuxieMachineEdgeFault(code: "engine.step", detail: "closed")
         XCTAssertEqual(state.handle(.report(.fault(step))), [.schedule(nil), .stop(step), .dismiss(cover.shown)])
-        XCTAssertEqual(state.natives.map(\.phase), [.leaving, .leaving])
+        XCTAssertEqual(state.segments.map(\.phase), [.leaving, .leaving])
         XCTAssertEqual(state.handle(.dismissed(cover.shown)), [.release])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
     }
 
     // MARK: A page that waits for its files
@@ -136,7 +136,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = State()
         _ = state.handle(.started)
         XCTAssertEqual(state.handle(shows([paywall], [.assets(.waiting([hero]))])),
-                       [.assets(.waiting([hero])), .present(paywall, over: nil)])
+                       [.assets(.waiting([hero])), .present([paywall], over: nil)])
         _ = state.handle(.presented(paywall.shown))
         return state
     }
@@ -147,7 +147,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testAPageThatWaitsForItsFilesIsPresentedAtOnce() {
         var state = sheetWaiting()
         XCTAssertEqual(state.assets, .waiting([hero]))
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .up)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .up)])
         let failed = NuxieMachineAssets.failed([NuxieMachineAssetFailure(path: hero, reason: .offline)])
         XCTAssertEqual(state.handle(shows([paywall], [.assets(failed)])), [.assets(failed)])
         XCTAssertEqual(state.assets, failed)
@@ -212,10 +212,10 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.handle(.swipeBegan(paywall.shown)), [])
         XCTAssertEqual(state.handle(shows([], [.dismiss(reason: "paywall_closed")])), [],
                        "nothing is dismissed while UIKit runs the swipe")
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .swiping)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .swiping)])
         XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: false)), [.dismiss(paywall.shown)])
         XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
         XCTAssertEqual(state.record, .open(wakeAt: nil))
     }
 
@@ -227,7 +227,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         _ = state.handle(.swipeBegan(paywall.shown))
         _ = state.handle(shows([], [.dismiss(reason: "paywall_closed")]))
         XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
         // UIKit's second word on the same swipe changes nothing.
         XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [])
         XCTAssertEqual(state.record, .open(wakeAt: nil))
@@ -240,11 +240,11 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testAMachineDismissalJustAfterASwipeDismissesNothing() {
         var state = sheetUp()
         _ = state.handle(.swipeBegan(paywall.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown, .down)])
+        XCTAssertEqual(state.segments, [])
         XCTAssertEqual(state.handle(shows([], [.dismiss(reason: "paywall_closed")])), [])
         XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [.schedule(nil), .stop(nil), .release])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
         XCTAssertEqual(state.record, .ended)
     }
 
@@ -254,7 +254,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = sheetUp()
         _ = state.handle(.swipeBegan(paywall.shown))
         XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: false)), [])
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .up)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .up)])
         XCTAssertEqual(state.handle(shows([], [.dismiss(reason: nil)])), [.dismiss(paywall.shown)])
     }
 
@@ -264,13 +264,13 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testASwipedSheetIsNotPresentedAgainBeforeTheCloseIsAnswered() {
         var state = sheetOverCover()
         _ = state.handle(.swipeBegan(sheet.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(sheet.shown, completed: true)), [.swipe(sheet.shown)])
-        XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
+        XCTAssertEqual(state.handle(.swipeEnded(sheet.shown, completed: true)), [.swipe(sheet.shown, .down)])
+        XCTAssertEqual(state.segments.map(\.id), [cover.shown])
         // A report from a delivery that was under way still shows the sheet.
         XCTAssertEqual(state.handle(shows([cover, sheet])), [], "the swiped sheet came back")
         XCTAssertEqual(state.handle(shows([cover])), [])
         XCTAssertEqual(state.closing, [])
-        XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
+        XCTAssertEqual(state.segments.map(\.id), [cover.shown])
     }
 
     // MARK: A swipe the machine decides
@@ -281,13 +281,13 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     /// the same effect, so the edge has one path.
     func testARefusedSwipeAndACompletedSwipeEachSendTheSwipeOnce() {
         var held = sheetUp()
-        XCTAssertEqual(held.handle(.swipeRefused(paywall.shown)), [.swipe(paywall.shown)])
-        XCTAssertEqual(held.natives, [State.Native(presented: paywall, phase: .up)], "a held swipe moved the sheet")
+        XCTAssertEqual(held.handle(.swipeRefused(paywall.shown)), [.swipe(paywall.shown, .down)])
+        XCTAssertEqual(held.segments, [State.Segment(pages: [paywall], phase: .up)], "a held swipe moved the sheet")
         XCTAssertEqual(held.closing, [], "a held sheet is still up")
 
         var taken = sheetUp()
         XCTAssertEqual(taken.handle(.swipeBegan(paywall.shown)), [])
-        XCTAssertEqual(taken.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
+        XCTAssertEqual(taken.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown, .down)])
         XCTAssertEqual(taken.handle(.swipeEnded(paywall.shown, completed: true)), [], "UIKit's second word sent it again")
     }
 
@@ -323,7 +323,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var cancelled = sheetUp()
         _ = cancelled.handle(.swipeBegan(paywall.shown))
         XCTAssertEqual(cancelled.handle(.swipeEnded(paywall.shown, completed: false)), [])
-        XCTAssertEqual(cancelled.natives, [State.Native(presented: paywall, phase: .up)])
+        XCTAssertEqual(cancelled.segments, [State.Segment(pages: [paywall], phase: .up)])
     }
 
     /// A native swipe that completed while the machine still keeps the sheet
@@ -335,26 +335,26 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testACompletedSwipeTheMachineKeptPresentsTheSheetAgain() {
         var state = sheetOverCover()
         _ = state.handle(.swipeBegan(sheet.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(sheet.shown, completed: true)), [.swipe(sheet.shown)])
-        XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
+        XCTAssertEqual(state.handle(.swipeEnded(sheet.shown, completed: true)), [.swipe(sheet.shown, .down)])
+        XCTAssertEqual(state.segments.map(\.id), [cover.shown])
         let kept = NuxieMachinePresented(shown: sheet.shown, route: sheet.route, presentation: .sheet,
                                          swipeDown: .stays)
         XCTAssertEqual(state.handle(shows([cover, kept])), [], "the sheet came back before the edge answered")
-        XCTAssertEqual(state.handle(.swipeDelivered(sheet.shown)), [.present(kept, over: cover.shown)])
+        XCTAssertEqual(state.handle(.swipeDelivered(sheet.shown)), [.present([kept], over: cover.shown)])
         XCTAssertEqual(state.closing, [])
         XCTAssertEqual(state.handle(.presented(sheet.shown)), [])
-        XCTAssertEqual(state.natives.map(\.shown), [cover.shown, sheet.shown])
+        XCTAssertEqual(state.segments.map(\.id), [cover.shown, sheet.shown])
     }
 
     /// A held swipe the machine closed: the edge's report no longer shows
     /// the sheet, and the sync dismisses it natively.
     func testAHeldSwipeTheMachineClosedDismissesTheSheet() {
         var state = sheetOverCover()
-        XCTAssertEqual(state.handle(.swipeRefused(sheet.shown)), [.swipe(sheet.shown)])
+        XCTAssertEqual(state.handle(.swipeRefused(sheet.shown)), [.swipe(sheet.shown, .down)])
         XCTAssertEqual(state.handle(shows([cover])), [.dismiss(sheet.shown)])
         XCTAssertEqual(state.handle(.swipeDelivered(sheet.shown)), [])
         XCTAssertEqual(state.handle(.dismissed(sheet.shown)), [])
-        XCTAssertEqual(state.natives.map(\.shown), [cover.shown])
+        XCTAssertEqual(state.segments.map(\.id), [cover.shown])
     }
 
     /// The swipe that empties what is shown ends the Experience in the same
@@ -363,7 +363,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testASwipeThatEmptiesWhatIsShownEndsTheRecord() {
         var state = sheetUp()
         _ = state.handle(.swipeBegan(paywall.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
+        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown, .down)])
         XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [.schedule(nil), .stop(nil), .release])
         XCTAssertEqual(state.handle(.swipeDelivered(paywall.shown)), [])
         assertReleasedForGood(state)
@@ -377,7 +377,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         _ = state.handle(shows([paywall]))
         XCTAssertEqual(state.handle(shows([], [.dismiss(reason: nil)])), [])
         XCTAssertEqual(state.handle(.presented(paywall.shown)), [.dismiss(paywall.shown)])
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .leaving)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .leaving)])
     }
 
     // MARK: A failed presentation stays a fault
@@ -388,11 +388,11 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var state = State()
         _ = state.handle(.started)
         XCTAssertEqual(state.handle(shows([paywall], [.wakeAt(evening)])),
-                       [.schedule(evening), .present(paywall, over: nil)])
+                       [.schedule(evening), .present([paywall], over: nil)])
         let noHost = NuxieMachineEdgeFault(code: "edge.no-host", detail: "the host is off screen")
         XCTAssertEqual(state.handle(.presentFailed(paywall.shown, noHost)), [.schedule(nil), .stop(noHost), .release])
         XCTAssertEqual(state.record, .faulted(noHost))
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
 
         // Nothing later moves it.
         XCTAssertEqual(state.handle(shows([paywall], [.wakeAt(evening)])), [])
@@ -408,7 +408,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testACoverIsPresentedAndTheMachineDismissesIt() {
         var state = State()
         _ = state.handle(.started)
-        XCTAssertEqual(state.handle(shows([offer])), [.present(offer, over: nil)])
+        XCTAssertEqual(state.handle(shows([offer])), [.present([offer], over: nil)])
         XCTAssertEqual(state.handle(.presented(offer.shown)), [])
         XCTAssertEqual(state.handle(shows([], [.dismiss(reason: "closed"), .end(.exited)])),
                        [.schedule(nil), .stop(nil), .dismiss(offer.shown)])
@@ -416,23 +416,25 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.record, .ended)
     }
 
-    /// A presentation that is neither a sheet nor a cover is a fault, and
-    /// what is up goes.
-    func testAPresentationThatIsNotASheetOrACoverFaults() {
-        var state = State()
-        _ = state.handle(.started)
-        let pushed = NuxieMachinePresented(shown: paywall.shown, route: "paywall", presentation: .push)
-        let effects = state.handle(shows([pushed]))
-        guard case .faulted(let fault) = state.record else { return XCTFail("\(state.record)") }
-        XCTAssertEqual(fault.code, "edge.unsupported-presentation")
-        XCTAssertEqual(effects, [.schedule(nil), .stop(fault), .release])
+    /// A row that says `fade`, `none` or `move` is still not presented: it
+    /// is a fault, alone or over a sheet, and what is up goes.
+    func testFadeNoneAndMoveStillFault() {
+        for how in [NuxieMachinePresentation.fade, .none, .move] {
+            var state = State()
+            _ = state.handle(.started)
+            let alone = NuxieMachinePresented(shown: paywall.shown, route: "paywall", presentation: how)
+            let effects = state.handle(shows([alone]))
+            guard case .faulted(let fault) = state.record else { return XCTFail("\(how): \(state.record)") }
+            XCTAssertEqual(fault.code, "edge.unsupported-presentation", "\(how)")
+            XCTAssertEqual(effects, [.schedule(nil), .stop(fault), .release], "\(how)")
 
-        var over = sheetUp()
-        let pushedOver = NuxieMachinePresented(shown: offer.shown, route: "offer", presentation: .push)
-        let overEffects = over.handle(shows([paywall, pushedOver]))
-        guard case .faulted(let second) = over.record else { return XCTFail("\(over.record)") }
-        XCTAssertEqual(second.code, "edge.unsupported-presentation")
-        XCTAssertEqual(overEffects, [.schedule(nil), .stop(second), .dismiss(paywall.shown)])
+            var over = sheetUp()
+            let above = NuxieMachinePresented(shown: offer.shown, route: "offer", presentation: how)
+            let overEffects = over.handle(shows([paywall, above]))
+            guard case .faulted(let second) = over.record else { return XCTFail("\(how): \(over.record)") }
+            XCTAssertEqual(second.code, "edge.unsupported-presentation", "\(how)")
+            XCTAssertEqual(overEffects, [.schedule(nil), .stop(second), .dismiss(paywall.shown)], "\(how)")
+        }
     }
 
     // MARK: Several presentations
@@ -442,9 +444,9 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testASheetOverACoverIsPresentedFromItAndPoppedAlone() {
         var state = sheetOverCover()
         XCTAssertEqual(state.handle(shows([cover])), [.dismiss(sheet.shown)])
-        XCTAssertEqual(state.natives.map(\.phase), [.up, .leaving])
+        XCTAssertEqual(state.segments.map(\.phase), [.up, .leaving])
         XCTAssertEqual(state.handle(.dismissed(sheet.shown)), [])
-        XCTAssertEqual(state.natives, [State.Native(presented: cover, phase: .up)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [cover], phase: .up)])
     }
 
     /// Two presentations shown in one report come up one at a time, each
@@ -452,10 +454,10 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testTwoPresentationsShownTogetherComeUpOneAtATime() {
         var state = State()
         _ = state.handle(.started)
-        XCTAssertEqual(state.handle(shows([cover, sheet])), [.present(cover, over: nil)])
-        XCTAssertEqual(state.handle(.presented(cover.shown)), [.present(sheet, over: cover.shown)])
+        XCTAssertEqual(state.handle(shows([cover, sheet])), [.present([cover], over: nil)])
+        XCTAssertEqual(state.handle(.presented(cover.shown)), [.present([sheet], over: cover.shown)])
         XCTAssertEqual(state.handle(.presented(sheet.shown)), [])
-        XCTAssertEqual(state.natives.map(\.phase), [.up, .up])
+        XCTAssertEqual(state.segments.map(\.phase), [.up, .up])
     }
 
     /// A late completion names its own presentation, so it never moves a
@@ -464,12 +466,202 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testALateCompletionNeverRemovesANewerPresentation() {
         var state = sheetUp()
         XCTAssertEqual(state.handle(shows([offer], [.dismiss(reason: "swapped")])), [.dismiss(paywall.shown)])
-        XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [.present(offer, over: nil)])
+        XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [.present([offer], over: nil)])
         XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [], "the late completion moved something")
         XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [])
-        XCTAssertEqual(state.natives, [State.Native(presented: offer, phase: .arriving)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [offer], phase: .arriving)])
         XCTAssertEqual(state.handle(.presented(offer.shown)), [])
-        XCTAssertEqual(state.natives, [State.Native(presented: offer, phase: .up)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [offer], phase: .up)])
+    }
+
+    // MARK: Pushed pages
+
+    private let home = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 10), route: "home",
+                                             presentation: .push)
+    private let step = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 11), route: "step",
+                                             presentation: .push)
+    private let plans = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 12), route: "plans",
+                                              presentation: .sheet)
+    private let detail = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 13), route: "detail",
+                                               presentation: .push)
+    private let stuck = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 14), route: "stuck",
+                                              presentation: .push)
+
+    /// Home presented as a cover over the whole screen, and Step pushed on
+    /// it as a page of the same segment.
+    private func pushedOnce() -> State {
+        var state = State()
+        _ = state.handle(.started)
+        XCTAssertEqual(state.handle(shows([home])), [.present([home], over: nil)])
+        XCTAssertEqual(state.handle(.presented(home.shown)), [])
+        XCTAssertEqual(state.handle(shows([home, step])), [.setPages(home.shown, [home, step])])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home, step], phase: .changing)])
+        XCTAssertEqual(state.handle(.pagesChanged(home.shown)), [])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home, step], phase: .up)])
+        XCTAssertEqual(state.reachable, step.shown)
+        return state
+    }
+
+    /// Settle every step the sync asks for, as UIKit would.
+    private func settle(_ state: inout State, _ effects: [State.Effect]) {
+        var effects = effects
+        while let effect = effects.first {
+            effects.removeFirst()
+            switch effect {
+            case .present(let pages, _): effects += state.handle(.presented(pages[0].shown))
+            case .dismiss(let id): effects += state.handle(.dismissed(id))
+            case .setPages(let id, _): effects += state.handle(.pagesChanged(id))
+            default: break
+            }
+        }
+    }
+
+    /// What is shown is cut where a sheet or a cover starts; each later
+    /// push is a page of the segment below it.
+    func testWhatIsShownIsCutIntoSegments() {
+        XCTAssertEqual(State.cut([home]), [[home]])
+        XCTAssertEqual(State.cut([home, step]), [[home, step]])
+        XCTAssertEqual(State.cut([home, step, detail]), [[home, step, detail]])
+        XCTAssertEqual(State.cut([home, plans, detail]), [[home], [plans, detail]])
+        XCTAssertEqual(State.cut([cover, step, plans]), [[cover, step], [plans]])
+        XCTAssertEqual(State.cut([]), [])
+    }
+
+    /// A push over a sheet is a page of the sheet, and the cover under it
+    /// keeps its pages.
+    func testAPushOverASheetIsAPageOfTheSheet() {
+        var state = State()
+        _ = state.handle(.started)
+        settle(&state, state.handle(shows([cover, step, plans])))
+        XCTAssertEqual(state.segments, [State.Segment(pages: [cover, step], phase: .up),
+                                        State.Segment(pages: [plans], phase: .up)])
+        XCTAssertEqual(state.handle(shows([cover, step, plans, detail])), [.setPages(plans.shown, [plans, detail])])
+        XCTAssertEqual(state.segments.map(\.phase), [.up, .changing])
+        XCTAssertEqual(state.reachable, detail.shown)
+    }
+
+    /// A replace of the page on top is one change of the segment's pages,
+    /// which UIKit animates as a push: its new top page is new.
+    func testAReplaceIsOneChangeOfPages() {
+        var state = pushedOnce()
+        XCTAssertEqual(state.handle(shows([home, stuck])), [.setPages(home.shown, [home, stuck])])
+        XCTAssertEqual(state.handle(.pagesChanged(home.shown)), [])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home, stuck], phase: .up)])
+    }
+
+    /// A pop to the page two below is one change of pages, which UIKit
+    /// animates as a pop: its new top page is a kept one.
+    func testAPopToAPageIsOneChangeOfPages() {
+        var state = pushedOnce()
+        settle(&state, state.handle(shows([home, step, detail])))
+        XCTAssertEqual(state.handle(shows([home])), [.setPages(home.shown, [home])])
+        XCTAssertEqual(state.handle(.pagesChanged(home.shown)), [])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home], phase: .up)])
+    }
+
+    /// A clear and a push on the first segment keeps the cover and changes
+    /// only its pages, in one change; the segment keeps its identity.
+    func testAClearAndAPushOfTheFirstPageKeepsTheCover() {
+        var state = pushedOnce()
+        XCTAssertEqual(state.handle(shows([stuck])), [.setPages(home.shown, [stuck])])
+        XCTAssertEqual(state.handle(.pagesChanged(home.shown)), [])
+        XCTAssertEqual(state.segments, [State.Segment(id: home.shown, pages: [stuck], phase: .up)])
+        XCTAssertEqual(state.handle(shows([])), [.dismiss(home.shown)], "a clear of everything takes the cover")
+    }
+
+    /// A first page that is a cover is its segment's own entry: a page that
+    /// replaces it is a new presentation, not a change of pages.
+    func testACoverReplacedIsPresentedAgain() {
+        var state = State()
+        _ = state.handle(.started)
+        settle(&state, state.handle(shows([cover, step])))
+        XCTAssertEqual(state.handle(shows([home])), [.dismiss(cover.shown)])
+        XCTAssertEqual(state.handle(.dismissed(cover.shown)), [.present([home], over: nil)])
+    }
+
+    /// The machine's pop across a segment's edge dismisses the sheet first,
+    /// then changes the pages below it in one change.
+    func testAMachinePopAcrossASegmentsEdge() {
+        var state = pushedOnce()
+        settle(&state, state.handle(shows([home, step, plans, detail])))
+        XCTAssertEqual(state.segments.map(\.pages), [[home, step], [plans, detail]])
+        XCTAssertEqual(state.handle(shows([home])), [.dismiss(plans.shown)])
+        XCTAssertEqual(state.handle(.dismissed(plans.shown)), [.setPages(home.shown, [home])])
+        XCTAssertEqual(state.handle(.pagesChanged(home.shown)), [])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home], phase: .up)])
+    }
+
+    /// A swipe back from the edge that the person lets go of sends nothing,
+    /// and the page stays.
+    func testAnEdgeSwipeLetGoSendsNothing() {
+        var state = pushedOnce()
+        XCTAssertEqual(state.handle(.edgeSwipeBegan(step.shown)), [])
+        XCTAssertEqual(state.segments.map(\.phase), [.popping])
+        XCTAssertEqual(state.handle(shows([home, step, detail])), [], "a change waits for the swipe")
+        XCTAssertEqual(state.handle(.edgeSwipeEnded(step.shown, completed: false)),
+                       [.setPages(home.shown, [home, step, detail])])
+        XCTAssertEqual(state.closing, [])
+    }
+
+    /// A swipe back that popped the page is sent once, as a swipe back on
+    /// that page. The machine kept it: the page is pushed again once the
+    /// edge has answered.
+    func testAnEdgeSwipeThatPoppedAKeptPagePushesItAgain() {
+        var state = pushedOnce()
+        _ = state.handle(.edgeSwipeBegan(step.shown))
+        XCTAssertEqual(state.handle(.edgeSwipeEnded(step.shown, completed: true)), [.swipe(step.shown, .back)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home], phase: .up)])
+        XCTAssertEqual(state.closing, [step.shown])
+        XCTAssertEqual(state.handle(.edgeSwipeEnded(step.shown, completed: true)), [], "UIKit's second word sent it again")
+        XCTAssertEqual(state.handle(shows([home, step])), [], "pushed again before the edge answered")
+        XCTAssertEqual(state.handle(.swipeDelivered(step.shown)), [.setPages(home.shown, [home, step])])
+    }
+
+    /// A swipe back that popped the page the machine closes leaves the
+    /// pages as they are.
+    func testAnEdgeSwipeThatPoppedAClosedPageChangesNothing() {
+        var state = pushedOnce()
+        _ = state.handle(.edgeSwipeBegan(step.shown))
+        _ = state.handle(.edgeSwipeEnded(step.shown, completed: true))
+        XCTAssertEqual(state.handle(shows([home])), [])
+        XCTAssertEqual(state.handle(.swipeDelivered(step.shown)), [])
+        XCTAssertEqual(state.closing, [])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home], phase: .up)])
+    }
+
+    /// A swipe back UIKit held is sent once, on the page on top, and the
+    /// page stays; one on a segment's first page is no one's.
+    func testAHeldEdgeSwipeIsSentOnce() {
+        var state = pushedOnce()
+        XCTAssertEqual(state.handle(.edgeSwipeRefused(step.shown)), [.swipe(step.shown, .back)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home, step], phase: .up)])
+        XCTAssertEqual(state.closing, [])
+        XCTAssertEqual(state.handle(.edgeSwipeRefused(home.shown)), [], "the first page has nothing beneath it")
+        XCTAssertEqual(state.handle(.edgeSwipeBegan(home.shown)), [])
+    }
+
+    /// A late change of pages names its own segment, so it never moves
+    /// another: the cover's change heard while the sheet over it changes
+    /// leaves the sheet changing.
+    func testALateChangeOfPagesMovesOnlyItsOwnSegment() {
+        var state = pushedOnce()
+        settle(&state, state.handle(shows([home, step, plans])))
+        XCTAssertEqual(state.handle(shows([home, step, plans, detail])), [.setPages(plans.shown, [plans, detail])])
+        XCTAssertEqual(state.handle(.pagesChanged(home.shown)), [], "the late change moved something")
+        XCTAssertEqual(state.segments.map(\.phase), [.up, .changing])
+        XCTAssertEqual(state.handle(.pagesChanged(plans.shown)), [])
+        XCTAssertEqual(state.segments.map(\.phase), [.up, .up])
+    }
+
+    /// A swipe down on a sheet over pushed pages is the sheet's, at its own
+    /// entry, whatever page is on top of it.
+    func testASwipeDownOnASheetWithPagesIsTheSheets() {
+        var state = pushedOnce()
+        settle(&state, state.handle(shows([home, step, plans, detail])))
+        XCTAssertEqual(state.handle(.swipeRefused(plans.shown)), [.swipe(plans.shown, .down)])
+        _ = state.handle(.swipeBegan(plans.shown))
+        XCTAssertEqual(state.handle(.swipeEnded(plans.shown, completed: true)), [.swipe(plans.shown, .down)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [home, step], phase: .up)])
     }
 
     // MARK: One Screen replaced by another in one delivery
@@ -480,12 +672,12 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testAReplacementComesUpOnceTheSheetItReplacesHasGone() {
         var state = sheetUp()
         XCTAssertEqual(state.handle(shows([offer], [.dismiss(reason: "swapped")])), [.dismiss(paywall.shown)])
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .leaving)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .leaving)])
         XCTAssertEqual(state.record, .open(wakeAt: nil))
-        XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [.present(offer, over: nil)])
-        XCTAssertEqual(state.natives, [State.Native(presented: offer, phase: .arriving)])
+        XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [.present([offer], over: nil)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [offer], phase: .arriving)])
         XCTAssertEqual(state.handle(.presented(offer.shown)), [])
-        XCTAssertEqual(state.natives, [State.Native(presented: offer, phase: .up)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [offer], phase: .up)])
     }
 
     /// The same while the person is swiping the paywall: the replacement
@@ -495,14 +687,14 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         var taken = sheetUp()
         _ = taken.handle(.swipeBegan(paywall.shown))
         XCTAssertEqual(taken.handle(shows([offer])), [])
-        XCTAssertEqual(taken.handle(.swipeEnded(paywall.shown, completed: true)), [.present(offer, over: nil)])
-        XCTAssertEqual(taken.natives, [State.Native(presented: offer, phase: .arriving)])
+        XCTAssertEqual(taken.handle(.swipeEnded(paywall.shown, completed: true)), [.present([offer], over: nil)])
+        XCTAssertEqual(taken.segments, [State.Segment(pages: [offer], phase: .arriving)])
 
         var kept = sheetUp()
         _ = kept.handle(.swipeBegan(paywall.shown))
         _ = kept.handle(shows([offer]))
         XCTAssertEqual(kept.handle(.swipeEnded(paywall.shown, completed: false)), [.dismiss(paywall.shown)])
-        XCTAssertEqual(kept.handle(.dismissed(paywall.shown)), [.present(offer, over: nil)])
+        XCTAssertEqual(kept.handle(.dismissed(paywall.shown)), [.present([offer], over: nil)])
     }
 
     /// A replacement the machine ends before the sheet it replaces has
@@ -513,14 +705,14 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         _ = popped.handle(shows([offer], [.dismiss(reason: "swapped")]))
         XCTAssertEqual(popped.handle(shows([])), [])
         XCTAssertEqual(popped.handle(.dismissed(paywall.shown)), [])
-        XCTAssertEqual(popped.natives, [])
+        XCTAssertEqual(popped.segments, [])
         XCTAssertEqual(popped.record, .open(wakeAt: nil))
 
         var faulted = sheetUp()
         _ = faulted.handle(shows([offer], [.dismiss(reason: "swapped")]))
         XCTAssertEqual(faulted.handle(.report(.fault(noView))), [.schedule(nil), .stop(noView)])
         XCTAssertEqual(faulted.handle(.dismissed(paywall.shown)), [.release])
-        XCTAssertEqual(faulted.natives, [])
+        XCTAssertEqual(faulted.segments, [])
     }
 
     // MARK: Waking and ending
@@ -547,7 +739,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         _ = state.handle(.swipeBegan(paywall.shown))
         XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [.schedule(nil), .stop(nil)])
         XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: false)), [.dismiss(paywall.shown)])
-        XCTAssertEqual(state.natives, [State.Native(presented: paywall, phase: .leaving)])
+        XCTAssertEqual(state.segments, [State.Segment(pages: [paywall], phase: .leaving)])
         XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [.release])
     }
 
@@ -560,7 +752,10 @@ final class NuxieMachineSheetStateTests: XCTestCase {
          .swipeEnded(paywall.shown, completed: true), .swipeEnded(paywall.shown, completed: false),
          shows([paywall], [.dismiss(reason: nil), .wakeAt(evening), .end(.finished)]),
          .report(.fault(noView)), .hostFault(noView), .wakeTaken(evening), .started,
-         .presentFailed(paywall.shown, noView), .report(.notStarted(reason: "once"))]
+         .presentFailed(paywall.shown, noView), .report(.notStarted(reason: "once")),
+         .pagesChanged(paywall.shown), .swipeRefused(paywall.shown),
+         .edgeSwipeBegan(paywall.shown), .edgeSwipeEnded(paywall.shown, completed: true),
+         .edgeSwipeEnded(paywall.shown, completed: false), .edgeSwipeRefused(paywall.shown)]
     }
 
     private func assertReleasedForGood(_ state: State, file: StaticString = #filePath, line: UInt = #line) {
@@ -591,7 +786,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     func testASwipeThatTookTheSheetThenTheEndReleasesWithTheEnd() {
         var state = sheetUp()
         _ = state.handle(.swipeBegan(paywall.shown))
-        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown)])
+        XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [.swipe(paywall.shown, .down)])
         XCTAssertFalse(state.released, "the record is still open")
         XCTAssertEqual(state.handle(shows([], [.end(.finished)])), [.schedule(nil), .stop(nil), .release])
         assertReleasedForGood(state)
@@ -673,7 +868,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         XCTAssertEqual(state.handle(shows([], [.wakeAt(evening + 1)])), [.schedule(evening + 1)])
         XCTAssertEqual(state.handle(.dismissed(paywall.shown)), [])
         XCTAssertEqual(state.handle(.swipeEnded(paywall.shown, completed: true)), [])
-        XCTAssertEqual(state.natives, [])
+        XCTAssertEqual(state.segments, [])
         XCTAssertEqual(state.record, .open(wakeAt: evening + 1))
         XCTAssertFalse(state.released)
 
@@ -690,11 +885,11 @@ final class NuxieMachineSheetStateTests: XCTestCase {
     /// once. So it is whether the report comes first, as the presenter
     /// sends it, or after the record's start, before anything is shown or
     /// asked for.
-    func testAStartThatDidNotHappenReleasesWithNoNativesAndNoFault() {
+    func testAStartThatDidNotHappenReleasesWithNoSegmentsAndNoFault() {
         var first = State()
         XCTAssertEqual(first.handle(.report(.notStarted(reason: "once"))), [.stop(nil), .release])
         XCTAssertEqual(first.record, .declined)
-        XCTAssertEqual(first.natives, [])
+        XCTAssertEqual(first.segments, [])
         XCTAssertEqual(first.wanted, [])
         assertReleasedForGood(first)
 
@@ -702,7 +897,7 @@ final class NuxieMachineSheetStateTests: XCTestCase {
         _ = afterStart.handle(.started)
         XCTAssertEqual(afterStart.handle(.report(.notStarted(reason: "unstarted"))), [.stop(nil), .release])
         XCTAssertEqual(afterStart.record, .declined)
-        XCTAssertEqual(afterStart.natives, [])
+        XCTAssertEqual(afterStart.segments, [])
         assertReleasedForGood(afterStart)
     }
 

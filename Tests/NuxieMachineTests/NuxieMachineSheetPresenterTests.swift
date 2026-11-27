@@ -549,114 +549,276 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
     // MARK: Each presentation laid out as its own style
 
-    /// A sheet and a cover are each a controller of their own, set up as
-    /// their style and laid out alike: the Screen fills its view.
+    /// A sheet and a cover are each a segment of their own, a navigation
+    /// controller with its bar hidden, set up as their style and laid out
+    /// alike: the Screen fills its view.
     @MainActor
     func testASheetAndACoverAreEachLaidOutAsTheirOwnStyle() throws {
         let loop = try Self.loop()
-        for presentation in [NuxieMachinePresentation.sheet, .cover] {
-            let (controller, window) = Self.screen(presenting: presentation, loop: loop)
+        for presentation in [NuxieMachinePresentation.sheet, .cover, .push] {
+            let (_, controller, window) = Self.screen(presenting: presentation, loop: loop)
             try Self.expect(controller, laidOutAs: presentation)
             withExtendedLifetime(window) {}
         }
     }
 
+    /// A pushed page fills its segment as its first page does, and is told
+    /// the segment's place: in a cover, the screen's; in a sheet, the
+    /// sheet's own.
+    @MainActor
+    func testAPushedPageIsPlacedAsItsSegment() throws {
+        let loop = try Self.loop()
+        let pages = [Self.page(1, .cover), Self.page(2, .push)]
+        let (cover, window) = Self.segment(pages, loop: loop)
+        cover.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+        window.layoutIfNeeded()
+        let pushed = try XCTUnwrap(cover.pages.last)
+        XCTAssertTrue(cover.topViewController === pushed)
+        XCTAssertEqual(pushed.place, NuxieMachineScreenPlace(top: 59, right: 0, bottom: 34, left: 0,
+                                                             width: 390, height: 844),
+                       "a pushed page in a cover is not placed as the screen")
+
+        let host = UIViewController()
+        let sheetWindow = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        sheetWindow.rootViewController = host
+        sheetWindow.isHidden = false
+        let sheet = NuxieMachineSegmentController(pages: [Self.page(3, .sheet), Self.page(4, .push)].map {
+            NuxieMachineScreenViewController(presenting: $0, loop: loop)
+        })
+        host.present(sheet, animated: false)
+        sheetWindow.layoutIfNeeded()
+        let inSheet = try XCTUnwrap(sheet.pages.last)
+        let place = try XCTUnwrap(inSheet.place, "a pushed page in a sheet has no place")
+        let view = try XCTUnwrap(sheet.view)
+        XCTAssertEqual(place.width, Double(view.bounds.width))
+        XCTAssertEqual(place.height, Double(view.bounds.height), "a pushed page does not fill its sheet")
+        XCTAssertEqual(place.top, Double(view.safeAreaInsets.top), "a pushed page is not told its sheet's insets")
+        XCTAssertEqual(place.bottom, Double(view.safeAreaInsets.bottom), "a pushed page is not told its sheet's insets")
+        withExtendedLifetime((window, sheetWindow)) {}
+    }
+
     // MARK: What a swipe down on a sheet does
 
     /// Whether UIKit lets the person swipe a sheet away is the machine's
-    /// answer: a swipe that closes runs natively; one that presses a control
-    /// or does nothing is held. The answer each report brings is taken at
-    /// once. A cover has no swipe, whatever is said.
+    /// answer for the sheet's own entry, held on the segment: a swipe that
+    /// closes runs natively; one that presses a control or does nothing is
+    /// held. The answer each report brings is taken at once. A cover has no
+    /// swipe, whatever is said.
     @MainActor
     func testIsModalInPresentationFollowsWhatTheSwipeDoesAfterEachReport() throws {
         let loop = try Self.loop()
         let shown = NuxieMachineShown(journey: 1, instance: 1)
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes)
-        XCTAssertFalse(controller.isModalInPresentation, "a swipe that closes is held")
+        let (segment, _, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes)
+        XCTAssertFalse(segment.isModalInPresentation, "a swipe that closes is held")
         for (answer, held) in [(NuxieMachineSwipeWould.presses, true), (.stays, true), (.closes, false)] {
-            controller.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
-                                                    swipeDown: answer))
-            XCTAssertEqual(controller.swipeDown, answer)
-            XCTAssertEqual(controller.isModalInPresentation, held, "\(answer)")
-            XCTAssertEqual(controller.modalReasons, held ? [.swipeRefused] : [], "\(answer)")
+            segment.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
+                                                 swipeDown: answer))
+            XCTAssertEqual(segment.swipeDown, answer)
+            XCTAssertEqual(segment.isModalInPresentation, held, "\(answer)")
+            XCTAssertEqual(segment.modalReasons, held ? [.swipeRefused] : [], "\(answer)")
         }
         // A report for another presentation changes nothing here.
-        controller.follow(NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 2), route: "other",
-                                                presentation: .sheet, swipeDown: .stays))
-        XCTAssertFalse(controller.isModalInPresentation)
-        let (cover, coverWindow) = Self.screen(presenting: .cover, loop: loop)
+        segment.follow(NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 2), route: "other",
+                                             presentation: .sheet, swipeDown: .stays))
+        XCTAssertFalse(segment.isModalInPresentation)
+        let (cover, _, coverWindow) = Self.screen(presenting: .cover, loop: loop)
         XCTAssertEqual(cover.modalReasons, [.swipeRefused])
         XCTAssertTrue(cover.isModalInPresentation)
         withExtendedLifetime((window, coverWindow)) {}
     }
 
-    /// The reasons combine: a sheet presented before its page's files are
-    /// in shows the loading screen, which holds it, so a sheet whose swipe
-    /// closes still cannot be swiped away, and neither a held swipe nor the
-    /// screen reader's escape is delivered; and a sheet whose swipe is
-    /// refused stays held once the loading is over.
+    /// The reasons combine on the segment: a sheet presented before its
+    /// page's files are in shows the loading screen, which holds it, so a
+    /// sheet whose swipe closes still cannot be swiped away, and the screen
+    /// reader's escape is not delivered; and a sheet whose swipe is refused
+    /// stays held once the loading is over.
     @MainActor
     func testTheReasonsASheetIsHeldCombine() throws {
         let loop = try Self.loop()
         let shown = NuxieMachineShown(journey: 1, instance: 1)
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes,
-                                               assets: .waiting(["assets/hero.png"]))
+        let (segment, controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes,
+                                                        assets: .waiting(["assets/hero.png"]))
         controller.loadViewIfNeeded()
-        XCTAssertEqual(controller.modalReasons, [.loading])
-        XCTAssertTrue(controller.isModalInPresentation, "a loading sheet whose swipe closes can be swiped away")
-        var delivered = 0
-        controller.onEscape = { delivered += 1 }
+        XCTAssertEqual(segment.modalReasons, [.loading])
+        XCTAssertTrue(segment.isModalInPresentation, "a loading sheet whose swipe closes can be swiped away")
+        var delivered: [(NuxieMachineSwipeGesture, NuxieMachineShown)] = []
+        segment.onHeldSwipe = { delivered.append(($0, $1)) }
         XCTAssertFalse(controller.accessibilityPerformEscape(), "the escape closed a loading sheet")
-        XCTAssertEqual(delivered, 0)
-        controller.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
-                                                swipeDown: .stays))
-        XCTAssertEqual(controller.modalReasons, [.loading, .swipeRefused])
-        controller.modalReasons.remove(.loading)
-        XCTAssertTrue(controller.isModalInPresentation, "the refused swipe went with the loading")
-        controller.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
-                                                swipeDown: .closes))
-        XCTAssertFalse(controller.isModalInPresentation)
+        XCTAssertTrue(delivered.isEmpty)
+        segment.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
+                                             swipeDown: .stays))
+        XCTAssertEqual(segment.modalReasons, [.loading, .swipeRefused])
+        segment.modalReasons.remove(.loading)
+        XCTAssertTrue(segment.isModalInPresentation, "the refused swipe went with the loading")
+        segment.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
+                                             swipeDown: .closes))
+        XCTAssertFalse(segment.isModalInPresentation)
         withExtendedLifetime(window) {}
     }
 
-    /// The screen reader's escape is a swipe down, read from the same
-    /// answer: where the swipe does nothing it is passed on and nothing is
-    /// delivered; where it presses or closes, it is delivered once and the
-    /// escape is taken. A cover passes it on.
+    /// A page that waits for its files holds its whole segment, pushed or
+    /// not, while the edge swipe on it reads only its own answer.
     @MainActor
-    func testTheScreenReadersEscapeIsASwipeDownForEachAnswer() throws {
+    func testAPushedPageThatWaitsHoldsItsSegment() throws {
+        let loop = try Self.loop()
+        let pages = [Self.page(1, .sheet, swipeDown: .closes), Self.page(2, .push, swipeBack: .closes)]
+        let screens = pages.enumerated().map { index, page in
+            NuxieMachineScreenViewController(presenting: page, loop: loop,
+                                             assets: index == 1 ? .waiting(["assets/hero.png"]) : .ready)
+        }
+        let segment = NuxieMachineSegmentController(pages: screens)
+        XCTAssertEqual(segment.modalReasons, [.loading])
+        XCTAssertTrue(segment.isModalInPresentation)
+        let window = Self.window(segment)
+        XCTAssertTrue(segment.popMayBegin(), "loading held the edge swipe")
+        withExtendedLifetime(window) {}
+    }
+
+    // MARK: The screen reader's escape
+
+    /// The screen reader's escape on a sheet's first page is a swipe down,
+    /// read from the sheet's answer: where the swipe does nothing it is
+    /// passed on and nothing is delivered; where it presses or closes, it is
+    /// delivered once, for the sheet, and the escape is taken.
+    @MainActor
+    func testTheEscapeOnASheetIsASwipeDownForEachAnswer() throws {
         let loop = try Self.loop()
         for (answer, taken) in [(NuxieMachineSwipeWould.stays, false), (.presses, true), (.closes, true)] {
-            let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: answer)
-            var delivered = 0
-            controller.onEscape = { delivered += 1 }
+            let (segment, controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: answer)
+            var delivered: [(NuxieMachineSwipeGesture, NuxieMachineShown)] = []
+            segment.onHeldSwipe = { delivered.append(($0, $1)) }
             XCTAssertEqual(controller.accessibilityPerformEscape(), taken, "\(answer)")
-            XCTAssertEqual(delivered, taken ? 1 : 0, "\(answer)")
+            XCTAssertEqual(delivered.map(\.0), taken ? [.down] : [], "\(answer)")
+            XCTAssertEqual(delivered.map(\.1), taken ? [segment.id] : [], "\(answer)")
             withExtendedLifetime(window) {}
         }
-        let (cover, window) = Self.screen(presenting: .cover, loop: loop)
+    }
+
+    /// The escape on a cover's first page has no gesture: it is passed on.
+    @MainActor
+    func testTheEscapeOnACoversFirstPageIsPassedOn() throws {
+        let loop = try Self.loop()
+        for presentation in [NuxieMachinePresentation.cover, .push] {
+            let (segment, controller, window) = Self.screen(presenting: presentation, loop: loop)
+            var delivered = 0
+            segment.onHeldSwipe = { _, _ in delivered += 1 }
+            XCTAssertFalse(controller.accessibilityPerformEscape(), "\(presentation)")
+            XCTAssertEqual(delivered, 0)
+            withExtendedLifetime(window) {}
+        }
+    }
+
+    /// The escape on a pushed page, with a page of its segment beneath it,
+    /// is a swipe back, read from the page's own answer, in a sheet as in a
+    /// cover: where it does nothing it is passed on; where it presses or
+    /// closes, it is delivered once, for the page.
+    @MainActor
+    func testTheEscapeOnAPushedPageIsASwipeBackForEachAnswer() throws {
+        let loop = try Self.loop()
+        for bottom in [NuxieMachinePresentation.sheet, .cover] {
+            for (answer, taken) in [(NuxieMachineSwipeWould.stays, false), (.presses, true), (.closes, true)] {
+                let pages = [Self.page(1, bottom, swipeDown: .closes), Self.page(2, .push, swipeBack: answer)]
+                let (segment, window) = Self.segment(pages, loop: loop)
+                var delivered: [(NuxieMachineSwipeGesture, NuxieMachineShown)] = []
+                segment.onHeldSwipe = { delivered.append(($0, $1)) }
+                let pushed = try XCTUnwrap(segment.pages.last)
+                XCTAssertEqual(pushed.accessibilityPerformEscape(), taken, "\(bottom) \(answer)")
+                XCTAssertEqual(delivered.map(\.0), taken ? [.back] : [], "\(bottom) \(answer)")
+                XCTAssertEqual(delivered.map(\.1), taken ? [pages[1].shown] : [], "\(bottom) \(answer)")
+                withExtendedLifetime(window) {}
+            }
+        }
+    }
+
+    // MARK: The edge swipe
+
+    /// The edge swipe is the navigation controller's own pop recognizer,
+    /// whose delegate is not the segment, and it asks the machine's answer
+    /// for the page on top before it begins: a swipe that closes the page
+    /// begins and is not delivered yet; one that presses a control or does
+    /// nothing does not begin, and is delivered once as held. With no page
+    /// beneath, it never begins.
+    @MainActor
+    func testTheEdgeSwipeBeginsOnlyWhereItClosesThePage() throws {
+        let loop = try Self.loop()
+        for (answer, begins) in [(NuxieMachineSwipeWould.stays, false), (.presses, false), (.closes, true)] {
+            let pages = [Self.page(1, .cover), Self.page(2, .push, swipeBack: answer)]
+            let (segment, window) = Self.segment(pages, loop: loop)
+            var delivered: [(NuxieMachineSwipeGesture, NuxieMachineShown)] = []
+            segment.onHeldSwipe = { delivered.append(($0, $1)) }
+            let pop = try XCTUnwrap(segment.interactivePopGestureRecognizer)
+            let delegate = try XCTUnwrap(pop.delegate, "with the bar hidden, the pop needs a delegate")
+            XCTAssertFalse(delegate === segment, "the segment is the pop's delegate")
+            XCTAssertEqual(delegate.gestureRecognizerShouldBegin?(pop), begins, "\(answer)")
+            XCTAssertEqual(delivered.map(\.0), begins ? [] : [.back], "\(answer)")
+            XCTAssertEqual(delivered.map(\.1), begins ? [] : [pages[1].shown], "\(answer)")
+            withExtendedLifetime(window) {}
+        }
+        let (alone, window) = Self.segment([Self.page(1, .cover, swipeBack: .closes)], loop: loop)
         var delivered = 0
-        cover.onEscape = { delivered += 1 }
-        XCTAssertFalse(cover.accessibilityPerformEscape())
+        alone.onHeldSwipe = { _, _ in delivered += 1 }
+        let pop = try XCTUnwrap(alone.interactivePopGestureRecognizer)
+        XCTAssertEqual(pop.delegate?.gestureRecognizerShouldBegin?(pop), false, "a first page popped")
         XCTAssertEqual(delivered, 0)
         withExtendedLifetime(window) {}
     }
+
+    // MARK: A change of pages
+
+    /// A replace of the page on top is one change of the segment's pages,
+    /// which UIKit animates as a push: its new top page is new.
+    @MainActor
+    func testAReplaceIsOneChangeAnimatedAsAPush() async throws {
+        let loop = try Self.loop()
+        let (segment, window) = Self.segment([Self.page(1, .cover), Self.page(2, .push)], loop: loop)
+        window.layoutIfNeeded()
+        let kept = try XCTUnwrap(segment.pages.first)
+        let replacing = NuxieMachineScreenViewController(presenting: Self.page(3, .push), loop: loop)
+        var done = false
+        segment.setPages([kept, replacing]) { done = true }
+        XCTAssertEqual(segment.pages.map(\.shown), [Self.page(1, .cover).shown, Self.page(3, .push).shown])
+        try await waitUntil("UIKit asked how to animate the change") { segment.lastOperation != .none }
+        XCTAssertEqual(segment.lastOperation, .push)
+        try await waitUntil("the change is over") { done }
+        withExtendedLifetime(window) {}
+    }
+
+    /// A pop to the page two below is one change of the segment's pages,
+    /// which UIKit animates as a pop: its new top page is a kept one.
+    @MainActor
+    func testAPopToAPageIsOneChangeAnimatedAsAPop() async throws {
+        let loop = try Self.loop()
+        let (segment, window) = Self.segment([Self.page(1, .cover), Self.page(2, .push), Self.page(3, .push)],
+                                             loop: loop)
+        window.layoutIfNeeded()
+        let kept = try XCTUnwrap(segment.pages.first)
+        var done = false
+        segment.setPages([kept]) { done = true }
+        XCTAssertEqual(segment.pages.map(\.shown), [Self.page(1, .cover).shown])
+        try await waitUntil("UIKit asked how to animate the change") { segment.lastOperation != .none }
+        XCTAssertEqual(segment.lastOperation, .pop)
+        try await waitUntil("the change is over") { done }
+        withExtendedLifetime(window) {}
+    }
+
+    // MARK: A sheet's heights
 
     /// A sheet rests at the heights its row writes, in its order until the
     /// height it can take is known: medium and large are the system's, a
     /// height in points and a percent are detents of this module's, named by
-    /// their kind and number. A row that writes none rests at large.
+    /// their kind and number. A row that writes none rests at large. The
+    /// segment holds them, from its first entry.
     @MainActor
     func testASheetRestsAtTheDetentsItsRowWrites() throws {
         guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
         let loop = try Self.loop()
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop,
+        let (segment, _, window) = Self.screen(presenting: .sheet, loop: loop,
                                                detents: [.medium, .percent(40), .points(320), .fitContent])
-        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let sheet = try XCTUnwrap(segment.sheetPresentationController)
         XCTAssertEqual(sheet.detents.map(\.identifier),
                        [.medium, .init(rawValue: "nuxie.percent.40.0"), .init(rawValue: "nuxie.points.320.0"),
                         .init(rawValue: "nuxie.fit-content")])
-        let (plain, plainWindow) = Self.screen(presenting: .sheet, loop: loop)
+        let (plain, _, plainWindow) = Self.screen(presenting: .sheet, loop: loop)
         XCTAssertEqual(try XCTUnwrap(plain.sheetPresentationController).detents.map(\.identifier), [.large])
         withExtendedLifetime((window, plainWindow)) {}
     }
@@ -671,7 +833,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     @MainActor
     func testUIKitTakesTheDetentsShortestFirstWhileTheRowKeepsItsOrder() throws {
         let authored: [NuxieMachineDetent] = [.medium, .percent(40), .points(320)]
-        let order = NuxieMachineScreenViewController.nativeOrder(of:maximum:contentHeight:)
+        let order = NuxieMachineSegmentController.nativeOrder(of:maximum:contentHeight:)
         XCTAssertEqual(order(authored, 790, nil), [.percent(40), .points(320), .medium])
         XCTAssertEqual(order(authored, 360, nil), [.percent(40), .medium, .points(320)])
         XCTAssertEqual(order(authored, nil, nil), authored, "with no height known the row's order stands")
@@ -681,18 +843,18 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
         guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
         let loop = try Self.loop()
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
-        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let (segment, _, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
+        let sheet = try XCTUnwrap(segment.sheetPresentationController)
         let percent = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.percent.40.0")
         let points = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.points.320.0")
-        controller.orderDetents(estimatedMaximum: 790)
+        segment.orderDetents(estimatedMaximum: 790)
         XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points, .medium])
-        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        XCTAssertEqual(segment.detents, authored, "the row's order was lost")
         sheet.selectedDetentIdentifier = .medium
-        controller.resolved(maximum: 360)
+        segment.resolved(maximum: 360)
         XCTAssertEqual(sheet.detents.map(\.identifier), [percent, .medium, points])
         XCTAssertEqual(sheet.selectedDetentIdentifier, .medium, "the sheet moved off the detent it rests at")
-        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        XCTAssertEqual(segment.detents, authored, "the row's order was lost")
         withExtendedLifetime(window) {}
     }
 
@@ -705,23 +867,23 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     @MainActor
     func testTheOrderFollowsTheMaximumUIKitResolvesAgainst() throws {
         let authored: [NuxieMachineDetent] = [.points(320), .percent(42)]
-        let order = NuxieMachineScreenViewController.nativeOrder(of:maximum:contentHeight:)
+        let order = NuxieMachineSegmentController.nativeOrder(of:maximum:contentHeight:)
         XCTAssertEqual(order(authored, 844 - 59, nil), [.points(320), .percent(42)])
         XCTAssertEqual(order(authored, 844 - 59 - 34, nil), [.percent(42), .points(320)])
 
         guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
         let loop = try Self.loop()
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
-        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let (segment, _, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
+        let sheet = try XCTUnwrap(segment.sheetPresentationController)
         let percent = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.percent.42.0")
         let points = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.points.320.0")
-        controller.orderDetents(estimatedMaximum: 844 - 59)
+        segment.orderDetents(estimatedMaximum: 844 - 59)
         XCTAssertEqual(sheet.detents.map(\.identifier), [points, percent])
-        controller.resolved(maximum: 844 - 59 - 34)
+        segment.resolved(maximum: 844 - 59 - 34)
         XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points], "not ordered as UIKit resolves")
-        controller.orderDetents(estimatedMaximum: 844 - 59)
+        segment.orderDetents(estimatedMaximum: 844 - 59)
         XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points], "an estimate overrode UIKit")
-        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        XCTAssertEqual(segment.detents, authored, "the row's order was lost")
         withExtendedLifetime(window) {}
     }
 
@@ -736,19 +898,19 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
         let loop = try Self.loop()
         let authored: [NuxieMachineDetent] = [.large, .points(320), .percent(30)]
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
-        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        let (segment, _, window) = Self.screen(presenting: .sheet, loop: loop, detents: authored)
+        let sheet = try XCTUnwrap(segment.sheetPresentationController)
         let percent = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.percent.30.0")
         let points = UISheetPresentationController.Detent.Identifier(rawValue: "nuxie.points.320.0")
-        controller.orderDetents(estimatedMaximum: 751)
+        segment.orderDetents(estimatedMaximum: 751)
         XCTAssertEqual(sheet.detents.map(\.identifier), [percent, points, .large])
         XCTAssertNil(sheet.selectedDetentIdentifier, "the sheet names a detent to open at")
         XCTAssertEqual(sheet.selectedDetentIdentifier ?? sheet.detents.first?.identifier, percent,
                        "the sheet does not open at its shortest detent")
-        controller.resolved(maximum: 700)
+        segment.resolved(maximum: 700)
         XCTAssertEqual(sheet.selectedDetentIdentifier ?? sheet.detents.first?.identifier, percent,
                        "the sheet does not open at its shortest detent")
-        XCTAssertEqual(controller.detents, authored, "the row's order was lost")
+        XCTAssertEqual(segment.detents, authored, "the row's order was lost")
         withExtendedLifetime(window) {}
     }
 
@@ -757,7 +919,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     /// more than the most; the content's height as measured, never more
     /// than the most, and the most until it is measured.
     func testEachDetentsHeightAndFitContentFromAMeasuredHeight() {
-        let height = NuxieMachineScreenViewController.height(of:maximum:contentHeight:)
+        let height = NuxieMachineSegmentController.height(of:maximum:contentHeight:)
         XCTAssertEqual(height(.points(320), 800, nil), 320)
         XCTAssertEqual(height(.points(1200), 800, nil), 800)
         XCTAssertEqual(height(.percent(40), 800, nil), 320)
@@ -774,13 +936,14 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     @MainActor
     func testAFitContentSheetTakesTheMeasuredHeight() throws {
         let loop = try Self.loop()
-        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: [.fitContent])
-        XCTAssertNil(controller.contentHeight)
-        controller.measured(contentHeight: 412)
-        XCTAssertEqual(controller.contentHeight, 412)
-        controller.measured(contentHeight: nil)
-        controller.measured(contentHeight: .nan)
-        XCTAssertEqual(controller.contentHeight, 412)
+        let (segment, _, window) = Self.screen(presenting: .sheet, loop: loop, detents: [.fitContent])
+        XCTAssertTrue(segment.fitsContent)
+        XCTAssertNil(segment.contentHeight)
+        segment.measured(contentHeight: 412)
+        XCTAssertEqual(segment.contentHeight, 412)
+        segment.measured(contentHeight: nil)
+        segment.measured(contentHeight: .nan)
+        XCTAssertEqual(segment.contentHeight, 412)
         withExtendedLifetime(window) {}
     }
 
@@ -796,24 +959,51 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         return NuxieMachineScreenLoop(edge: edge)
     }
 
-    /// A Screen for one presentation, the root of a window at a phone's
-    /// size. Its safe areas are the device's, with a status bar's and a home
-    /// indicator's added, so both edges have one.
+    /// A Screen for one presentation, the only page of its segment, the
+    /// root of a window at a phone's size. Its safe areas are the device's,
+    /// with a status bar's and a home indicator's added, so both edges have
+    /// one.
     @MainActor
     private static func screen(
         presenting presentation: NuxieMachinePresentation, loop: NuxieMachineScreenLoop,
         shown: NuxieMachineShown = NuxieMachineShown(journey: 1, instance: 1), route: String = "screen",
         detents: [NuxieMachineDetent] = [], swipeDown: NuxieMachineSwipeWould? = nil,
         assets: NuxieMachineAssets = .ready
-    ) -> (NuxieMachineScreenViewController, UIWindow) {
+    ) -> (NuxieMachineSegmentController, NuxieMachineScreenViewController, UIWindow) {
         let presented = NuxieMachinePresented(shown: shown, route: route, presentation: presentation,
                                               detents: detents, swipeDown: swipeDown)
         let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop, assets: assets)
         controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+        let segment = NuxieMachineSegmentController(pages: [controller])
+        return (segment, controller, window(segment))
+    }
+
+    /// One entry, the `instance`th, shown as `presentation`.
+    private static func page(_ instance: UInt64, _ presentation: NuxieMachinePresentation,
+                             swipeDown: NuxieMachineSwipeWould? = nil,
+                             swipeBack: NuxieMachineSwipeWould? = nil) -> NuxieMachinePresented {
+        NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: instance), route: "page\(instance)",
+                              presentation: presentation, swipeDown: swipeDown, swipeBack: swipeBack)
+    }
+
+    /// A segment holding a page for each of `pages`, bottom first, the root
+    /// of a window at a phone's size.
+    @MainActor
+    private static func segment(_ pages: [NuxieMachinePresented], loop: NuxieMachineScreenLoop)
+        -> (NuxieMachineSegmentController, UIWindow) {
+        let segment = NuxieMachineSegmentController(pages: pages.map {
+            NuxieMachineScreenViewController(presenting: $0, loop: loop)
+        })
+        return (segment, window(segment))
+    }
+
+    /// A window at a phone's size with `root` as its root, shown.
+    @MainActor
+    private static func window(_ root: UIViewController) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-        window.rootViewController = controller
+        window.rootViewController = root
         window.isHidden = false
-        return (controller, window)
+        return window
     }
 
     /// A compiled Screen presented, dismissed and presented again at the
@@ -830,8 +1020,8 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         await loop.inLane { await edge.start(event: "opened", now: 9 * hour) }
         let firstStack = await edge.stack
         let firstShown = try XCTUnwrap(firstStack.last)
-        let (controller, window) = Self.screen(presenting: .cover, loop: loop, shown: firstShown.shown,
-                                               route: firstShown.route)
+        let (_, controller, window) = Self.screen(presenting: .cover, loop: loop, shown: firstShown.shown,
+                                                  route: firstShown.route)
         loop.screens = [controller]
         loop.start()
         let surface = try XCTUnwrap(controller.view.subviews.first, "the Screen's surface")
@@ -955,9 +1145,10 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
 
     /// Lay out `controller`, made for `presentation`, and check it: either
     /// one's Screen fills its view to every edge over no ground, so the
-    /// surface has the view's insets; a cover is full screen with no swipe,
-    /// a sheet a page sheet at the large detent with no grabber, which the
-    /// person can swipe down.
+    /// surface has the view's insets. Its segment is a navigation
+    /// controller with no bar: a cover, or a first page shown as a push, is
+    /// full screen with no swipe; a sheet a page sheet at the large detent
+    /// with no grabber, which the person can swipe down.
     @MainActor
     private static func expect(_ controller: NuxieMachineScreenViewController,
                                laidOutAs presentation: NuxieMachinePresentation) throws {
@@ -972,18 +1163,22 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         XCTAssertEqual(surface.frame, view.bounds, "a \(presentation) does not fill its view")
         XCTAssertEqual(surface.safeAreaInsets, insets, "a \(presentation)'s surface does not have its view's insets")
         XCTAssertEqual(view.backgroundColor, .clear, "a \(presentation) shows a ground of its own")
+        let segment = try XCTUnwrap(controller.navigationController as? NuxieMachineSegmentController,
+                                    "a \(presentation) is not a page of a segment")
+        XCTAssertTrue(segment.isNavigationBarHidden, "a \(presentation) shows a navigation bar")
+        XCTAssertEqual(view.frame, segment.view.bounds, "a \(presentation) does not fill its segment")
         switch presentation {
-        case .cover:
-            XCTAssertEqual(controller.modalPresentationStyle, .fullScreen)
-            XCTAssertTrue(controller.isModalInPresentation, "a cover has no swipe")
-        default:
-            XCTAssertEqual(controller.modalPresentationStyle, .pageSheet)
-            XCTAssertFalse(controller.isModalInPresentation, "the person can swipe a sheet down")
-            let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        case .sheet:
+            XCTAssertEqual(segment.modalPresentationStyle, .pageSheet)
+            XCTAssertFalse(segment.isModalInPresentation, "the person can swipe a sheet down")
+            let sheet = try XCTUnwrap(segment.sheetPresentationController)
             if #available(iOS 16.0, *) {
                 XCTAssertEqual(sheet.detents.map(\.identifier), [.large])
             }
             XCTAssertFalse(sheet.prefersGrabberVisible)
+        default:
+            XCTAssertEqual(segment.modalPresentationStyle, .fullScreen)
+            XCTAssertTrue(segment.isModalInPresentation, "a cover has no swipe")
         }
     }
 
