@@ -258,6 +258,13 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     case wakeAt(Int64?)
     case end(reason: NuxieMachineEnding, fault: String?)
     case note(NuxieMachineNote)
+    /// The machine's `hand over` row: this copy's part on this device is
+    /// over (it shows nothing, owes nothing and awaits nothing), and the
+    /// record has not ended. There is no server to carry it to, so this
+    /// host keeps the record: the row is recorded, and the record stays
+    /// open with its wake. The server's part arrives with the SDK's server
+    /// work.
+    case handOver
 }
 
 /// A screen reader's tap on one node of a presentation's semantic snapshot:
@@ -1554,7 +1561,11 @@ package actor NuxieMachineEdge {
                 delivery.told(.end(reason))
             case .note(let note):
                 log.append(.note(note))
-            case .handOver, .unknown:
+            case .handOver:
+                // This host keeps the record (see the entry): nothing is
+                // faulted and nothing new is told to the owner.
+                log.append(.handOver)
+            case .unknown:
                 fail(NuxieMachineEdgeFault(code: "edge.unhandled-row", detail: "\(row)"), &delivery)
                 return
             }
