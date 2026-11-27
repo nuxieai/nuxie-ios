@@ -71,6 +71,13 @@ import UIKit
 /// as a sheet, in place of Stillwater's: the `views-scroll` paywall, under a
 /// header and with a floating button over its page ([`NuxieMachineScrollSheetFixture`]).
 /// "Finish onboarding" starts its record the same way.
+///
+/// `--nuxie-machine-router-sheet` plays the machine suite's `router-sheet`
+/// in place of Stillwater ([`NuxieMachineRouterSheetFixture`]): "Finish
+/// onboarding" opens its `home` cover, whose "Offer" opens the `plans`
+/// sheet. That sheet rests at its row's detents, and what a swipe down on
+/// it does is the machine's: it closes the sheet while no control is
+/// showing, and presses its `close` once "Allow" has shown it.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
     /// The Darwin notifications that turn the window, with the appearance
@@ -113,6 +120,11 @@ public final class NuxieMachineHostViewController: UIViewController {
     /// Whether the paywall is the `views-scroll` one shown as a sheet.
     private static var showsScrollSheet: Bool {
         ProcessInfo.processInfo.arguments.contains("--nuxie-machine-scroll-sheet")
+    }
+
+    /// Whether the plan is the machine suite's `router-sheet`.
+    private static var showsRouterSheet: Bool {
+        ProcessInfo.processInfo.arguments.contains("--nuxie-machine-router-sheet")
     }
 
     /// Whether a presented sheet is turned to the medium detent once it is
@@ -292,12 +304,19 @@ public final class NuxieMachineHostViewController: UIViewController {
         self.presenter = presenter
         Task { @MainActor [weak self] in
             do {
-                let plan = Self.showsScrollSheet
-                    ? try NuxieMachineScrollSheetFixture.load(from: .main)
-                    : try NuxieMachineStillwaterFixture.load(from: .main, asCover: Self.presentsACover)
-                let folder = try NuxieMachineFolder(named: Self.showsScrollSheet
-                                                        ? NuxieMachineScrollSheetFixture.folder
-                                                        : NuxieMachineStillwaterFixture.folder, in: .main)
+                let plan: NuxieMachinePlanSource
+                let named: String
+                if Self.showsRouterSheet {
+                    plan = try NuxieMachineRouterSheetFixture.load(from: .main)
+                    named = NuxieMachineRouterSheetFixture.folder
+                } else if Self.showsScrollSheet {
+                    plan = try NuxieMachineScrollSheetFixture.load(from: .main)
+                    named = NuxieMachineScrollSheetFixture.folder
+                } else {
+                    plan = try NuxieMachineStillwaterFixture.load(from: .main, asCover: Self.presentsACover)
+                    named = NuxieMachineStillwaterFixture.folder
+                }
+                let folder = try NuxieMachineFolder(named: named, in: .main)
                 await presenter.start(plan: plan, store: NuxieMachineSlowStore(), bytes: folder.bytes,
                                       event: "onboarding_completed")
             } catch {
@@ -438,6 +457,45 @@ extension NuxieMachineStillwaterFixture {
     static func asCover(_ main: String) throws -> String {
         guard main.components(separatedBy: sheetRoute).count == 2 else { throw NoSheetRoute() }
         return main.replacingOccurrences(of: sheetRoute, with: coverRoute)
+    }
+}
+
+/// The machine suite's `router-sheet` as the staged host app bundles it
+/// under `router-sheet/`: its two program files and the plan's header, as
+/// bundled. The bundled `main.test.nux` is there for provenance only.
+enum NuxieMachineRouterSheetFixture {
+    /// The folder in the app bundle.
+    static let folder = "router-sheet"
+
+    private struct Provenance: Decodable {
+        struct Plan: Decodable {
+            let root: String
+            let app: String
+            let experience: String
+            let version: UInt32
+        }
+        let plan: Plan
+    }
+
+    struct Missing: Error, CustomStringConvertible {
+        let name: String
+        var description: String { "router-sheet/\(name) is not in the app bundle" }
+    }
+
+    static func load(from bundle: Bundle) throws -> NuxieMachinePlanSource {
+        func data(_ name: String) throws -> Data {
+            let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
+            guard let url = bundle.url(forResource: parts[0], withExtension: parts[1],
+                                       subdirectory: folder) else { throw Missing(name: name) }
+            return try Data(contentsOf: url)
+        }
+        let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
+        let files = try ["main.nux", "sheets.nux"].map { name in
+            NuxieMachineSourceFile(path: name, text: String(decoding: try data(name), as: UTF8.self))
+        }
+        return NuxieMachinePlanSource(files: files, assets: try NuxieMachineFolder(named: folder, in: bundle).assets(),
+                                      root: provenance.plan.root, app: provenance.plan.app,
+                                      experience: provenance.plan.experience, version: provenance.plan.version)
     }
 }
 

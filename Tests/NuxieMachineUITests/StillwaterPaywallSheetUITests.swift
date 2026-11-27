@@ -1027,8 +1027,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         let screen = try openPaywall(app)
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15), app.debugDescription)
 
-        // A swipe down has no action behind it: the machine hears `closed`,
-        // and pops the paywall. It runs down most of the sheet and stops
+        // The plan's routes close a sheet a swipe takes: UIKit dismisses it
+        // natively, the machine is told of the swipe, and pops the paywall. It runs down most of the sheet and stops
         // short of the screen's bottom inset.
         let sheet = screen.frame
         let screenInsets = try insets(app)
@@ -1078,6 +1078,139 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         app.buttons["Not now"].tap()
         waitUntilGone(screen)
         waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open, " + wake(at: 18, days: 1))
+    }
+
+    // MARK: What a swipe down on a router's sheet does
+
+    /// The `router-sheet` plan's `plans` sheet, whose row says
+    /// `swipe="close"`, with its `close` not showing: the swipe closes the
+    /// sheet, so UIKit takes it natively, and the machine closes its entry.
+    /// The cover under it stays. The sheet rests at the smallest of its
+    /// row's detents, `medium 40% 320`, below the screen's middle.
+    func testASwipeDownWithNoControlShowingTakesTheSheetAndTheMachineClosesItsEntry() throws {
+        let app = launch(routerSheet: true)
+        let sheet = try openRouterSheet(app)
+        XCTAssertGreaterThan(sheet.frame.minY, app.frame.height / 2,
+                             "the sheet is not at its smallest detent: \(sheet.frame) in \(app.frame)")
+        XCTAssertFalse(app.buttons["Close"].exists, app.debugDescription)
+        keep("router-1-plans", app, nil)
+
+        try swipeDown(app, sheet)
+        waitUntilGone(app.buttons["Allow"], "the swipe did not take the sheet")
+        XCTAssertTrue(app.buttons["Offer"].waitForExistence(timeout: 10), "the cover under the sheet went")
+        XCTAssertEqual(screens(app).count, 1, app.debugDescription)
+        waitFor(screens(app)[0], valueContaining: "Record: open")
+        keep("router-2-after-native-swipe", app, nil)
+    }
+
+    /// The same sheet once "Allow" has shown its `close`: UIKit holds the
+    /// swipe, the machine presses `close`, and the sheet goes by the
+    /// machine's own pop. Then, with "Lock" run, the showing `close` is
+    /// disabled, so a swipe down does nothing and the sheet stays.
+    func testASwipeDownWithTheControlShowingPressesItAndOneWithItDisabledStays() throws {
+        let app = launch(routerSheet: true)
+        var sheet = try openRouterSheet(app)
+        app.buttons["Allow"].tap()
+        XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 10), app.debugDescription)
+        keep("router-3-close-showing", app, nil)
+
+        try swipeDown(app, sheet)
+        waitUntilGone(app.buttons["Allow"], "the machine's press did not close the sheet")
+        XCTAssertTrue(app.buttons["Offer"].waitForExistence(timeout: 10), "the cover under the sheet went")
+        keep("router-4-after-pressed-swipe", app, nil)
+
+        app.buttons["Offer"].tap()
+        sheet = try waitForSheet(app, holding: "Allow")
+        app.buttons["Lock"].tap()
+        XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 10), app.debugDescription)
+        let resting = sheet.frame
+        try swipeDown(app, sheet)
+        try settle(sheet, at: resting)
+        XCTAssertTrue(app.buttons["Allow"].exists, "a swipe down took a sheet whose close is disabled")
+        waitFor(sheet, valueContaining: "Record: open")
+        keep("router-5-after-held-swipe", app, nil)
+    }
+
+    /// The `frozen` sheet, whose row says `swipe=none`: a swipe down does
+    /// nothing, and its own "Done" still closes it.
+    func testASwipeDownOnASheetThatTakesNoSwipeKeepsIt() throws {
+        let app = launch(routerSheet: true)
+        let finish = app.buttons["nuxie-machine-finish-onboarding"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 20), app.debugDescription)
+        finish.tap()
+        XCTAssertTrue(app.buttons["Frozen"].waitForExistence(timeout: 30), app.debugDescription)
+        app.buttons["Frozen"].tap()
+        let sheet = try waitForSheet(app, holding: "Done")
+        let resting = sheet.frame
+        try swipeDown(app, sheet)
+        try settle(sheet, at: resting)
+        XCTAssertTrue(app.buttons["Done"].exists, "a swipe down took a sheet that takes no swipe")
+        keep("router-6-frozen-after-swipe", app, nil)
+
+        app.buttons["Done"].tap()
+        waitUntilGone(app.buttons["Done"], "Done did not close the frozen sheet")
+        XCTAssertTrue(app.buttons["Offer"].exists, app.debugDescription)
+    }
+
+    /// Tap "Finish onboarding", which opens the `home` cover, then "Offer",
+    /// and wait for the `plans` sheet over it.
+    private func openRouterSheet(_ app: XCUIApplication) throws -> XCUIElement {
+        let finish = app.buttons["nuxie-machine-finish-onboarding"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 20), app.debugDescription)
+        finish.tap()
+        let offer = app.buttons["Offer"]
+        XCTAssertTrue(offer.waitForExistence(timeout: 30), app.debugDescription)
+        offer.tap()
+        return try waitForSheet(app, holding: "Allow")
+    }
+
+    /// Every Screen a screen reader reaches. A Screen under another is
+    /// covered, so while the sheet is up it is the only one.
+    private func screens(_ app: XCUIApplication) -> [XCUIElement] {
+        app.descendants(matching: .any).matching(identifier: "nuxie-machine-screen").allElementsBoundByIndex
+    }
+
+    /// The sheet once its button `holding` is up, the sheet drawn and its
+    /// frame settled: the Screen that holds that button.
+    private func waitForSheet(_ app: XCUIApplication, holding button: String) throws -> XCUIElement {
+        XCTAssertTrue(app.buttons[button].waitForExistence(timeout: 30), app.debugDescription)
+        let at = app.buttons[button].frame
+        let sheet = try XCTUnwrap(screens(app).first { $0.frame.contains(CGPoint(x: at.midX, y: at.midY)) },
+                                  "no Screen holds \(button): \(app.debugDescription)")
+        waitFor(sheet, valueContaining: "Frames drawn")
+        var last = sheet.frame
+        let deadline = Date().addingTimeInterval(10)
+        repeat {
+            Thread.sleep(forTimeInterval: 0.4)
+            let now = sheet.frame
+            if now == last { break }
+            last = now
+        } while Date() < deadline
+        XCTAssertGreaterThan(last.minY, 0, "the Screen holding \(button) is not a sheet: \(last)")
+        return sheet
+    }
+
+    /// A swipe down most of the way from near the sheet's top, stopping
+    /// short of the screen's bottom inset.
+    private func swipeDown(_ app: XCUIApplication, _ sheet: XCUIElement) throws {
+        let frame = sheet.frame
+        let from = CGPoint(x: frame.midX, y: frame.minY + 24)
+        let bottom = try insets(app).bottom
+        let to = CGPoint(x: from.x, y: min(app.frame.maxY - bottom - 8, from.y + frame.height * 0.8))
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: from.x, dy: from.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)))
+    }
+
+    /// Wait for a held sheet to settle back where it rested.
+    private func settle(_ sheet: XCUIElement, at resting: CGRect) throws {
+        let deadline = Date().addingTimeInterval(10)
+        Thread.sleep(forTimeInterval: 1)
+        while sheet.exists, sheet.frame != resting, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertTrue(sheet.exists, "the swipe took the sheet")
+        XCTAssertEqual(sheet.frame, resting, "the sheet did not settle back")
     }
 
     // MARK: Leaving the app and coming back
@@ -1213,9 +1346,12 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// the evening offer's 18:00 or 20:00 cannot change a test.
     private func launch(_ appearance: Ground? = nil, asCover: Bool = false,
                         mediumSheet: Bool = false, textSize: String? = nil,
-                        clock: String = "09:00") -> XCUIApplication {
+                        clock: String = "09:00", routerSheet: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--nuxie-machine-paywall", "--nuxie-machine-clock", clock]
+        if routerSheet {
+            app.launchArguments += ["--nuxie-machine-router-sheet"]
+        }
         if asCover {
             app.launchArguments += ["--nuxie-machine-paywall-cover"]
         }
