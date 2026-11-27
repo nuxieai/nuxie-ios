@@ -132,6 +132,13 @@ package final class NuxieMachineScreenViewController: UIViewController {
     fileprivate var sized: Size?
     /// The size the last frame that reached the screen was drawn at.
     private var drawnAt: Size?
+    /// The color the surface is cleared to before each draw: the
+    /// presentation's canvas, as the edge holds it. The loop sets it from
+    /// the edge in the same turn it reads the player, before the frame that
+    /// sizes, steps and draws it ([`NuxieMachineScreenLoop`]), so no frame
+    /// is drawn before it is set. Opaque, so premultiplied and straight are
+    /// the same value.
+    fileprivate var canvas: UInt32 = 0
 
     /// Where the files the page draws stand, as the presenter was last told
     /// ([`NuxieMachineAssets`]). A Screen presented with its files in shows
@@ -755,7 +762,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let completion = NuxieMachineFrameCompletion()
         let frame = try await runtime.renderFrame(
             layoutScaleFactor: size.scale, drawable: .available(NuxieNativeDrawable(drawable)),
-            capturesSemantics: true, completion: { completion.fire() })
+            clearColor: canvas, capturesSemantics: true, completion: { completion.fire() })
         await completion.wait()
         try Self.requireHealthy(frame.outcome, doing: "render")
         guard frame.outcome.disposition == .presented else { return false }
@@ -1238,7 +1245,9 @@ package final class NuxieMachineScreenLoop {
             // it is on screen.
             var stepped: [(screen: NuxieMachineScreenViewController, runtime: NuxieNativeRuntime)] = []
             for screen in screens where screen.hasSize {
-                guard let runtime = await edge.screen(for: screen.shown) else { continue }
+                guard let drawing = await edge.drawing(for: screen.shown) else { continue }
+                let runtime = drawing.player
+                screen.canvas = drawing.canvas
                 try await screen.applySize(runtime)
                 stepped.append((screen, runtime))
             }

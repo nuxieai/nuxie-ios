@@ -290,6 +290,14 @@ package final class NuxieMachineSession {
         return artboard
     }
 
+    /// The color the presented surface is cleared to before each draw: its
+    /// component's canvas. 0, a clear surface, when the plan gives none.
+    package func sceneCanvas(for presented: NuxieMachinePresented) -> UInt32 {
+        var argb: UInt32 = 0
+        let status = nux_machine_scene_canvas(handle, presented.shown.journey, presented.shown.instance, &argb)
+        return status == NuxieMachineStatus.ok ? argb : 0
+    }
+
     /// The records' assets, in the order the records hold them (an asset's
     /// index here is its position, the ordinal the engine's import takes),
     /// and what the host fills each with: the platform font, first when
