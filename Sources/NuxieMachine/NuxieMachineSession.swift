@@ -79,7 +79,12 @@ package final class NuxieMachineSession {
     // MARK: Calls that deliver something
 
     /// The host saw the event `event` at `now` (milliseconds since the Unix
-    /// epoch): the first entry that starts on it makes the record.
+    /// epoch): the first entry that starts on it makes the record. When none
+    /// starts, the machine's reason says which of two things happened. A
+    /// reason below `NUX_MACHINE_DECLINED_WRONG` means the start did not
+    /// happen and nothing is wrong (`notStarted`); one at or above it, or a
+    /// reason that cannot be read, means something is wrong (`declined`).
+    /// Either carries the reason's text.
     package func start(event: String, now: Int64) throws -> [NuxieMachineRow] {
         var declined = NuxMachineStr(ptr: nil, len: 0)
         let status = NuxieMachineStrings.lend([event]) { views in
@@ -87,7 +92,15 @@ package final class NuxieMachineSession {
         }
         if status == NuxieMachineStatus.declined {
             // The reason is a static string: it does not expire.
-            throw NuxieMachineError.declined(NuxieMachineStrings.copy(declined))
+            let text = NuxieMachineStrings.copy(declined)
+            var reason: UInt32 = 0
+            let read = nux_machine_declined_reason(handle, &reason)
+            // 0 is no reason: the header writes it only when there is none to
+            // read. A reason that cannot be read stays on the safe side.
+            if read == NuxieMachineStatus.ok, reason != 0, reason < UInt32(NUX_MACHINE_DECLINED_WRONG) {
+                throw NuxieMachineError.notStarted(text)
+            }
+            throw NuxieMachineError.declined(text)
         }
         return try delivered(status)
     }
@@ -782,6 +795,11 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case refused(String)
     /// `begin` started nothing for the event, with the last entry's reason.
     case declined(String?)
+    /// The start did not happen and nothing is wrong: the machine declined
+    /// it for a reason below `NUX_MACHINE_DECLINED_WRONG` (`once`, `if`,
+    /// `unstarted` and the rest), whose text this carries. Only
+    /// [`NuxieMachineSession.start`] throws it.
+    case notStarted(String?)
     /// A fault ended the session earlier.
     case ended
     /// This call met something the session cannot carry and ended the
@@ -835,6 +853,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .notUTF8: "not_utf8"
         case .refused: "refused"
         case .declined: "declined"
+        case .notStarted: "not_started"
         case .ended: "ended"
         case .faulted: "faulted"
         case .noRecord: "no_record"
