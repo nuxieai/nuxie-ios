@@ -83,8 +83,9 @@ package final class NuxieMachineScreenViewController: UIViewController {
 
     /// Told when the session's environment would change with this Screen's
     /// traits: its colors (the phone turned dark or light, or a style was
-    /// forced on it or lifted) or the person's text size. The presenter
-    /// reads the session's environment again then.
+    /// forced on it or lifted), the person's text size, or Bold Text, which
+    /// the text styles' weights follow. The presenter reads the session's
+    /// environment again then.
     package var onEnvironmentChange: (@MainActor () -> Void)?
 
     /// Pointers that arrived and wait for the next frame.
@@ -425,8 +426,10 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let colors = traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection)
         let textSize = traitCollection.preferredContentSizeCategory
             != previousTraitCollection?.preferredContentSizeCategory
+        // Bold Text: the text styles' fonts, and so their weights, follow it.
+        let boldText = traitCollection.legibilityWeight != previousTraitCollection?.legibilityWeight
         if colors, isViewLoaded { applyPalette() }
-        guard colors || textSize else { return }
+        guard colors || textSize || boldText else { return }
         onEnvironmentChange?()
     }
 

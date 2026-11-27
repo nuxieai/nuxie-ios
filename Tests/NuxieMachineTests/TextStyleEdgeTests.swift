@@ -165,6 +165,13 @@ final class TextStyleEdgeTests: XCTestCase {
         styles.map { Double(font($0, traits).pointSize) }
     }
 
+    /// Each style's weight as a CSS number, for the font UIKit gives the
+    /// style in `traits`, in the header's order.
+    @MainActor
+    static func weights(in traits: UITraitCollection) -> [Double] {
+        styles.map { NuxieMachineSheetPresenter.cssWeight(of: font($0, traits)) }
+    }
+
     /// The one line a screen reader reads as `words`.
     static func line(_ words: String, in look: Look) throws -> NuxieNativeSemanticNode {
         let lines = look.nodes.filter { $0.label == words }

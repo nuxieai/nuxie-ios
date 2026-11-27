@@ -438,6 +438,102 @@ final class MachineColorSchemeTests: XCTestCase {
         withExtendedLifetime(window) {}
     }
 
+    /// A Screen says when Bold Text is turned on or off, as it says when its
+    /// text size changes, since the text styles' weights follow it: the
+    /// window's legibility weight going bold is a change, and back to
+    /// regular is another. The same weight again is not.
+    @MainActor
+    func testAScreenSaysWhenBoldTextChanges() async throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("trait overrides need iOS 17") }
+        let edge = try NuxieMachineEdge(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
+                                        bytes: NoFolderFiles(), onReport: { _ in })
+        let loop = NuxieMachineScreenLoop(edge: edge)
+        let presented = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 1), route: "screen",
+                                              presentation: .sheet)
+        let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.overrideUserInterfaceStyle = .light
+        window.traitOverrides.preferredContentSizeCategory = .large
+        window.traitOverrides.legibilityWeight = .regular
+        window.rootViewController = controller
+        window.isHidden = false
+        window.layoutIfNeeded()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        var changes = 0
+        controller.onEnvironmentChange = { changes += 1 }
+
+        window.traitOverrides.legibilityWeight = .bold
+        window.layoutIfNeeded()
+        try await waitUntil("the Screen says Bold Text was turned on") { changes == 1 }
+        XCTAssertEqual(controller.traitCollection.legibilityWeight, .bold)
+
+        window.traitOverrides.legibilityWeight = .bold
+        window.layoutIfNeeded()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(changes, 1, "a Screen said Bold Text changed when it did not")
+
+        window.traitOverrides.legibilityWeight = .regular
+        window.layoutIfNeeded()
+        try await waitUntil("the Screen says Bold Text was turned off") { changes == 2 }
+        loop.stop()
+        withExtendedLifetime(window) {}
+    }
+
+    /// With Bold Text turned on while the session runs, the presenter tells
+    /// the text styles UIKit gives the host's traits then, before the next
+    /// frame, with no reopening.
+    ///
+    /// Oracle: `UIFont.preferredFont(forTextStyle:compatibleWith:)` for the
+    /// host's traits with the regular and then the bold legibility weight,
+    /// each font's size and its weight as a CSS number
+    /// (`cssWeight(of:)`, held to UIKit's nine weights by
+    /// `TextStyleEdgeTests.testEachOfUIKitsWeightsIsItsCSSNumber`). Where
+    /// UIKit gives the bold traits other fonts than the regular ones, a
+    /// second environment is told, carrying them; where it gives the same,
+    /// the same environment is not told again, and the Screen's ask to read
+    /// it (`testAScreenSaysWhenBoldTextChanges`) is all that happens.
+    @MainActor
+    func testThePresenterTellsTheStylesAgainWhenBoldTextChanges() async throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("trait overrides need iOS 17") }
+        let (host, window) = Self.host(.light)
+        window.traitOverrides.preferredContentSizeCategory = .large
+        window.traitOverrides.legibilityWeight = .regular
+        host.updateTraitsIfNeeded()
+        let presenter = NuxieMachineSheetPresenter(host: host) { _ in }
+        await presenter.start(plan: Self.waitsForTheEvening, store: NuxieMachineStandInStore(),
+                              bytes: NoFolderFiles(), event: "go")
+        let edge = try XCTUnwrap(presenter.edge)
+        let regular = try XCTUnwrap(presenter.environment, "nothing was told before the start")
+        XCTAssertEqual(regular.styleSizes, TextStyleEdgeTests.sizes(in: host.traitCollection))
+        XCTAssertEqual(regular.styleWeights, TextStyleEdgeTests.weights(in: host.traitCollection))
+
+        window.traitOverrides.legibilityWeight = .bold
+        window.layoutIfNeeded()
+        host.updateTraitsIfNeeded()
+        XCTAssertEqual(host.traitCollection.legibilityWeight, .bold, "the host did not take Bold Text")
+        let boldSizes = TextStyleEdgeTests.sizes(in: host.traitCollection)
+        let boldWeights = TextStyleEdgeTests.weights(in: host.traitCollection)
+        presenter.environmentChanged()
+        try await waitUntil("the session is told the styles with Bold Text") {
+            presenter.environment?.styleSizes == boldSizes && presenter.environment?.styleWeights == boldWeights
+        }
+        for _ in 0..<3 {
+            presenter.environmentChanged()
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let told = await Self.styleWeights(edge)
+        if boldSizes != regular.styleSizes || boldWeights != regular.styleWeights {
+            XCTAssertEqual(told, [regular.styleWeights, boldWeights],
+                           "Bold Text's styles were not told once, after the regular ones")
+        } else {
+            XCTAssertEqual(told, [regular.styleWeights],
+                           "UIKit gives Bold Text the same styles here, and the same environment was told again")
+        }
+        let schemes = await Self.environments(edge)
+        XCTAssertEqual(Set(schemes), [false], "Bold Text changed the scheme")
+        withExtendedLifetime(window) {}
+    }
+
     // MARK: Helpers
 
     /// The paywall's headline, as the fallback arm writes it.
@@ -456,6 +552,14 @@ final class MachineColorSchemeTests: XCTestCase {
     private static func textSizes(_ edge: NuxieMachineEdge) async -> [Double] {
         await edge.log.compactMap { entry in
             if case .environment(let environment) = entry { return environment.textSize }
+            return nil
+        }
+    }
+
+    /// The text styles' weights of each environment the edge took, in order.
+    private static func styleWeights(_ edge: NuxieMachineEdge) async -> [[Double]] {
+        await edge.log.compactMap { entry in
+            if case .environment(let environment) = entry { return environment.styleWeights }
             return nil
         }
     }

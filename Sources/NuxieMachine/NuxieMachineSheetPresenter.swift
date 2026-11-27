@@ -813,9 +813,9 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     // MARK: The environment: light and dark, and the text size
 
     /// The session's environment may have changed: the phone turned dark or
-    /// light, or the person changed their text size. Each Screen calls this
-    /// when UIKit says so; the environment is read again, and told if it
-    /// changed, before the next frame.
+    /// light, or the person changed their text size or Bold Text. Each
+    /// Screen calls this when UIKit says so; the environment is read again,
+    /// and told if it changed, before the next frame.
     package func environmentChanged() {
         loop?.requestFrame()
     }
