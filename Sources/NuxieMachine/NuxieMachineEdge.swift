@@ -89,18 +89,42 @@ package struct NuxieMachineShown: Hashable, Sendable {
     }
 }
 
-/// One presentation of what is shown: its identity, its route, and how the
-/// route is presented.
+/// One presentation of what is shown: its identity, its route, how the
+/// route is presented, the heights a sheet may rest at, and what a swipe
+/// down on a sheet does now.
 package struct NuxieMachinePresented: Equatable, Sendable {
     package let shown: NuxieMachineShown
     package let route: String
     package let presentation: NuxieMachinePresentation
+    /// The heights the presentation may rest at, in the order its row of
+    /// the router's table writes them. None when the row writes none, and
+    /// for every presentation of a plan with `routes`.
+    package let detents: [NuxieMachineDetent]
+    /// What a swipe down on the sheet does now, as the machine answers it
+    /// (`nux_machine_swipe_would`), read with what is shown after every
+    /// delivery and every round. `nil` for anything that is not a sheet.
+    package let swipeDown: NuxieMachineSwipeWould?
 
-    package init(shown: NuxieMachineShown, route: String, presentation: NuxieMachinePresentation) {
+    package init(shown: NuxieMachineShown, route: String, presentation: NuxieMachinePresentation,
+                 detents: [NuxieMachineDetent] = [], swipeDown: NuxieMachineSwipeWould? = nil) {
         self.shown = shown
         self.route = route
         self.presentation = presentation
+        self.detents = detents
+        self.swipeDown = swipeDown
     }
+}
+
+/// What came of a swipe the edge was asked to deliver.
+package enum NuxieMachineSwipeDid: Equatable, Sendable {
+    /// It was delivered, and this is what the machine did with it, which
+    /// can differ from what the presentation's `swipeDown` last said.
+    case delivered(NuxieMachineSwipeWould)
+    /// The edge no longer holds the presentation: nothing was delivered.
+    case dropped
+    /// Nothing was delivered: the edge had stopped or closed, or the
+    /// session refused the swipe, which stopped it.
+    case stopped
 }
 
 /// A row the edge tells its owner, as the edge applied it.
@@ -223,6 +247,12 @@ package enum NuxieMachineEdgeEntry: Equatable, Sendable {
     /// The person closed a presentation the edge no longer holds. The close
     /// belongs to it, so it goes to no one.
     case droppedClose(NuxieMachineShown)
+    /// A swipe on this presentation was delivered, and the machine did
+    /// this with it.
+    case swipe(NuxieMachineShown, NuxieMachineSwipeGesture, did: NuxieMachineSwipeWould)
+    /// A swipe on a presentation the edge no longer holds. It belongs to
+    /// that presentation, so it goes to no one.
+    case droppedSwipe(NuxieMachineShown)
     /// Pointers or a screen reader's taps that touched the presentation
     /// named (none when nothing was shown) arrived in a frame where the edge
     /// does not hold it. They belong to the Screen the person touched, so
@@ -454,7 +484,9 @@ package actor NuxieMachineEdge {
     /// closes it ([`sync`]). What outlives a presentation (the session, the
     /// record's calls, the mailbox, the log) is kept outside it.
     private struct Screen {
-        let presented: NuxieMachinePresented
+        /// What the session last showed of it: its identity never changes,
+        /// and the sync takes its `swipeDown` afresh after every delivery.
+        var presented: NuxieMachinePresented
         /// The presentation's player, with the session's driver for this
         /// presentation set on it. None while the presentation is held for
         /// its files: nothing is stepped or drawn for it until they are in.
@@ -583,12 +615,12 @@ package actor NuxieMachineEdge {
     /// apply and told once when it is over.
     private struct Delivery {
         /// What the edge showed when the delivery began.
-        let before: [NuxieMachineShown]
+        let before: [NuxieMachinePresented]
         private var rows: [NuxieMachineHostRow] = []
         private var fault: NuxieMachineEdgeFault?
 
         /// Only [`deliver`] makes one.
-        fileprivate init(_ turn: Turn, before: [NuxieMachineShown]) {
+        fileprivate init(_ turn: Turn, before: [NuxieMachinePresented]) {
             self.before = before
         }
 
@@ -609,18 +641,19 @@ package actor NuxieMachineEdge {
 
         /// What the owner hears once the sync has run and the edge shows
         /// `shown`: the fault; or what is shown and the rows, when either
-        /// changed anything; or nothing. A dismissal is told only when the
-        /// delivery closed a presentation the owner was shown: one begun and
+        /// changed anything (what a swipe down on a sheet would do among
+        /// it); or nothing. A dismissal is told only when the delivery
+        /// closed a presentation the owner was shown: one begun and
         /// dismissed in the same delivery never reached it.
         func report(showing shown: [NuxieMachinePresented]) -> NuxieMachineEdgeReport? {
             if let fault { return .fault(fault) }
             let after = shown.map(\.shown)
-            let closed = before.contains { !after.contains($0) }
+            let closed = before.contains { !after.contains($0.shown) }
             let told = rows.filter { row in
                 if case .dismiss = row { return closed }
                 return true
             }
-            guard !told.isEmpty || after != before else { return nil }
+            guard !told.isEmpty || shown != before else { return nil }
             return .delivered(shown: shown, rows: told)
         }
     }
@@ -954,6 +987,40 @@ package actor NuxieMachineEdge {
         }
     }
 
+    /// The person swiped the presentation `swiped` with `gesture`: a
+    /// delivery like a close. The swipe goes to the presentation at its
+    /// place in what the session shows now, found by its identity, and the
+    /// machine decides what it does: a press of the control its row's
+    /// `swipe=` names, a close, or nothing. What it did is given back, as
+    /// the machine says it; the next sync shows the rest. A host calls this
+    /// once for a gesture: at the gesture when the native dismissal was
+    /// held, or at its completion when it ran, and never `closed` beside
+    /// it. One the edge no longer holds takes no swipe: it is recorded as
+    /// dropped.
+    @discardableResult
+    package func swipe(_ gesture: NuxieMachineSwipeGesture, on swiped: NuxieMachineShown,
+                       now: Int64) async -> NuxieMachineSwipeDid {
+        await inTurn { turn in
+            await deliver(turn, stopped: .stopped) { delivery in
+                guard holds(swiped), let index = showing().firstIndex(where: { $0.shown == swiped }) else {
+                    log.append(.droppedSwipe(swiped))
+                    return .dropped
+                }
+                let did: NuxieMachineSwipeWould
+                let rows: [NuxieMachineRow]
+                do {
+                    (did, rows) = try session.swipe(at: index, gesture, now: now)
+                } catch {
+                    await refused(error, doing: "the swipe \(gesture) on \(swiped.instance)", now: now, &delivery)
+                    return .stopped
+                }
+                log.append(.swipe(swiped, gesture, did: did))
+                await apply(rows, now: now, &delivery)
+                return .delivered(did)
+            }
+        }
+    }
+
     /// Returns once the byte source has answered every ask the edge made
     /// and each answer has been kept. It takes no turn: the answers arrive
     /// without one. For a check that needs to know which frame acts on
@@ -1057,7 +1124,7 @@ package actor NuxieMachineEdge {
         _ body: (inout Delivery) async -> Value
     ) async -> Value {
         guard fault == nil, !closedScreen else { return stopped }
-        var delivery = Delivery(turn, before: screens.map(\.presented.shown))
+        var delivery = Delivery(turn, before: stack)
         let result = await body(&delivery)
         await sync(&delivery)
         if let report = delivery.report(showing: stack) {
@@ -1099,6 +1166,9 @@ package actor NuxieMachineEdge {
     private func sync(_ delivery: inout Delivery) async {
         let wanted = showing()
         let keep = held(of: wanted)
+        // What a swipe down would do is read again with what is shown: a
+        // kept presentation takes the session's answer as it is now.
+        for index in 0..<keep { screens[index].presented = wanted[index] }
         await closeScreens(keeping: keep, &delivery)
         guard fault == nil else {
             await closeScreens(keeping: 0, &delivery)

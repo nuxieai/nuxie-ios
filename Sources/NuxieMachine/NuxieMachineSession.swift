@@ -105,6 +105,21 @@ package final class NuxieMachineSession {
         try delivered(nux_machine_host_fault(handle, fault.code))
     }
 
+    /// Deliver `gesture` on the presentation at `index` of what is shown,
+    /// bottom first, at `now`: what it did, and the rows it left. The
+    /// machine works the answer out again here, so it may differ from what
+    /// [`swipeWould`] last said; a host acts on what it did. A press or a
+    /// close replaces the rows; a swipe that stays delivers nothing, and
+    /// gives none (the session's rows are still the last call's).
+    package func swipe(at index: Int, _ gesture: NuxieMachineSwipeGesture, now: Int64) throws
+        -> (did: NuxieMachineSwipeWould, rows: [NuxieMachineRow])
+    {
+        var did: UInt32 = 0
+        let rows = try delivered(nux_machine_swipe(handle, index, gesture.carried, now, &did))
+        let answer = try NuxieMachineSwipeWould(did)
+        return (answer, answer == .stays ? [] : rows)
+    }
+
     /// The reply to the send `call` into a mutation: the fields of its
     /// declaration's answer type, or the failure that kept it from one.
     package func reply(_ call: NuxieMachineCallID, _ reply: NuxieMachineReply, now: Int64) throws
@@ -200,11 +215,41 @@ package final class NuxieMachineSession {
             var presentation: UInt32 = 0
             try NuxieMachineError.check(
                 nux_machine_presented(handle, index, &journey, &instance, &route, &presentation))
+            // The route is copied before the next call lends anything else.
+            let name = NuxieMachineStrings.copy(route) ?? ""
+            let how = NuxieMachinePresentation(rawValue: presentation) ?? .unknown
             return NuxieMachinePresented(
                 shown: NuxieMachineShown(journey: journey, instance: instance),
-                route: NuxieMachineStrings.copy(route) ?? "",
-                presentation: NuxieMachinePresentation(rawValue: presentation) ?? .unknown)
+                route: name,
+                presentation: how,
+                detents: try detents(at: index),
+                swipeDown: how == .sheet ? try swipeWould(at: index, .down) : nil)
         }
+    }
+
+    /// The heights the presentation at `index` of what is shown may rest
+    /// at, in the order its row of the router's table writes them: none
+    /// when the row writes none, and for every presentation of a plan with
+    /// `routes`.
+    package func detents(at index: Int) throws -> [NuxieMachineDetent] {
+        var count = 0
+        try NuxieMachineError.check(nux_machine_presented_detent_count(handle, index, &count))
+        return try (0..<count).map { nth in
+            var kind: UInt32 = 0
+            var value: Double = 0
+            try NuxieMachineError.check(nux_machine_presented_detent(handle, index, nth, &kind, &value))
+            return try NuxieMachineDetent(kind: kind, value: value)
+        }
+    }
+
+    /// What `gesture` on the presentation at `index` of what is shown,
+    /// bottom first, would do now. For a swipe down, `index` is the sheet
+    /// dragged, and the machine reads the page on top of it. Reads only:
+    /// it delivers nothing and leaves the rows as they are.
+    package func swipeWould(at index: Int, _ gesture: NuxieMachineSwipeGesture) throws -> NuxieMachineSwipeWould {
+        var does: UInt32 = 0
+        try NuxieMachineError.check(nux_machine_swipe_would(handle, index, gesture.carried, &does))
+        return try NuxieMachineSwipeWould(does)
     }
 
     /// The route presented on top and its instance, or none.
@@ -536,6 +581,63 @@ package enum NuxieMachinePresentation: UInt32, Sendable {
     case unknown = 0xFFFF_FFFF
 }
 
+/// A height a sheet may rest at, as its row of the router's table writes
+/// it: the system's medium and large, a height in points, a percent of the
+/// height available, or the height of its content.
+package enum NuxieMachineDetent: Equatable, Sendable {
+    case medium
+    case large
+    /// A height in points, finite and above zero.
+    case points(Double)
+    /// A percent of the height available, above zero and at most 100.
+    case percent(Double)
+    case fitContent
+
+    fileprivate init(kind: UInt32, value: Double) throws {
+        switch kind {
+        case UInt32(NUX_MACHINE_DETENT_MEDIUM): self = .medium
+        case UInt32(NUX_MACHINE_DETENT_LARGE): self = .large
+        case UInt32(NUX_MACHINE_DETENT_POINTS): self = .points(value)
+        case UInt32(NUX_MACHINE_DETENT_PERCENT): self = .percent(value)
+        case UInt32(NUX_MACHINE_DETENT_FIT_CONTENT): self = .fitContent
+        default: throw NuxieMachineError.unknownAnswer(kind)
+        }
+    }
+}
+
+/// A swipe a host lets a person make on a presentation: down on a sheet,
+/// or back from the edge on a pushed page.
+package enum NuxieMachineSwipeGesture: Equatable, Sendable {
+    case down
+    case back
+
+    fileprivate var carried: UInt32 {
+        switch self {
+        case .down: UInt32(NUX_MACHINE_GESTURE_DOWN.rawValue)
+        case .back: UInt32(NUX_MACHINE_GESTURE_BACK.rawValue)
+        }
+    }
+}
+
+/// What a swipe does, as the machine works it out: the presentation stays
+/// and nothing is delivered, the control its row's `swipe=` names is
+/// pressed, or the presentation closes. The rule is the machine's; a host
+/// only asks it and acts on the answer.
+package enum NuxieMachineSwipeWould: Equatable, Sendable {
+    case stays
+    case presses
+    case closes
+
+    fileprivate init(_ answer: UInt32) throws {
+        switch answer {
+        case UInt32(NUX_MACHINE_SWIPE_STAYS.rawValue): self = .stays
+        case UInt32(NUX_MACHINE_SWIPE_PRESSES.rawValue): self = .presses
+        case UInt32(NUX_MACHINE_SWIPE_CLOSES.rawValue): self = .closes
+        default: throw NuxieMachineError.unknownAnswer(answer)
+        }
+    }
+}
+
 package enum NuxieMachinePlace: UInt32, Sendable {
     case client = 0, server = 1
     case unknown = 0xFFFF_FFFF
@@ -711,6 +813,9 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     case hostFaultDoesNotFit
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
+    /// An answer this module does not know (a detent's kind, or what a
+    /// swipe does): the header grew.
+    case unknownAnswer(UInt32)
 
     /// The header's name for the status, as a fault code reads it.
     package var code: String {
@@ -739,6 +844,7 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
         case .assetDoesNotFit: "asset_does_not_fit"
         case .hostFaultDoesNotFit: "host_fault_does_not_fit"
         case .unknownStatus(let status): "status_\(status)"
+        case .unknownAnswer(let answer): "answer_\(answer)"
         }
     }
 
