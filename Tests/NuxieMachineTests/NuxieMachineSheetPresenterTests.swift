@@ -674,6 +674,30 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         withExtendedLifetime(window) {}
     }
 
+    /// A sheet and a page pushed on it arrive together while their files
+    /// are coming, so both wait and the sheet is held. The files arrive:
+    /// both stop waiting, the page under the top one too, though it has
+    /// never drawn a frame, and the sheet is no longer held for loading.
+    @MainActor
+    func testFilesArrivingFreeEveryWaitingPageOfASegment() throws {
+        let loop = try Self.loop()
+        let coming = NuxieMachineAssets.waiting(["assets/hero.png"])
+        let pages = [Self.page(1, .sheet, swipeDown: .closes), Self.page(2, .push, swipeBack: .closes)].map {
+            NuxieMachineScreenViewController(presenting: $0, loop: loop, assets: coming)
+        }
+        let segment = NuxieMachineSegmentController(pages: pages)
+        let window = Self.window(segment)
+        window.layoutIfNeeded()
+        XCTAssertTrue(pages.allSatisfy(\.waitsForFiles))
+        XCTAssertEqual(segment.modalReasons, [.loading])
+        for page in pages { page.assets = .ready }
+        XCTAssertEqual(pages[0].framesDrawn, 0, "the page under the top one drew")
+        XCTAssertFalse(pages[0].waitsForFiles, "the page under the top one still waits")
+        XCTAssertEqual(segment.modalReasons, [], "the sheet is still held for loading")
+        XCTAssertFalse(segment.isModalInPresentation)
+        withExtendedLifetime(window) {}
+    }
+
     // MARK: The screen reader's escape
 
     /// The screen reader's escape on a sheet's first page is a swipe down,

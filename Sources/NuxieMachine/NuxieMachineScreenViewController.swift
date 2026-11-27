@@ -72,17 +72,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// ([`NuxieMachineSegmentController.popMayBegin()`]).
     package private(set) var swipeBack: NuxieMachineSwipeWould?
 
-    /// Whether the loading screen or the recovery screen holds this page:
-    /// while either is up, or before the view loads while the files are
-    /// not in. The segment that holds the page reads it: a sheet with a
+    /// Whether this page waits for its files: while the edge says they are
+    /// not all in ([`assets`]), coming or failed. It follows the files, not
+    /// what the page drew, so a page under another in its segment, which
+    /// draws nothing, stops waiting when the files arrive, as the page on
+    /// top does. The segment that holds the page reads it: a sheet with a
     /// page that waits cannot be swiped away, since the close is the way
     /// out ([`NuxieMachineModalReason.loading`]).
-    package private(set) var waitsForFiles: Bool {
-        didSet {
-            guard waitsForFiles != oldValue else { return }
-            (navigationController as? NuxieMachineSegmentController)?.pageLoadingChanged()
-        }
-    }
+    package var waitsForFiles: Bool { assets != .ready }
 
     /// Told when the session's environment would change with this Screen's
     /// traits: its colors (the phone turned dark or light, or a style was
@@ -138,7 +135,11 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Once its first frame is drawn the loading screen never comes back.
     package var assets: NuxieMachineAssets {
         didSet {
-            guard assets != oldValue, isViewLoaded else { return }
+            guard assets != oldValue else { return }
+            if (oldValue != .ready) != waitsForFiles {
+                (navigationController as? NuxieMachineSegmentController)?.pageLoadingChanged()
+            }
+            guard isViewLoaded else { return }
             showAssets()
         }
     }
@@ -208,9 +209,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
         self.assets = assets
         self.recoveryDelay = recoveryDelay
         self.swipeBack = presented.swipeBack
-        // No swipe down takes a sheet whose page waits for its files: the
-        // close is the way out ([`assets`]).
-        self.waitsForFiles = assets != .ready
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -219,11 +217,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
     package func follow(_ now: NuxieMachinePresented) {
         guard now.shown == shown, swipeBack != now.swipeBack else { return }
         swipeBack = now.swipeBack
-    }
-
-    /// Whether the loading screen holds the page ([`waitsForFiles`]).
-    private func holdForLoading(_ held: Bool) {
-        waitsForFiles = held
     }
 
     /// The screen reader's escape (the two-finger Z) on this page: the
@@ -324,7 +317,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
         case .waiting: showLoading()
         case .failed(let failures): showRecovery(Self.reason(failures))
         }
-        holdForLoading(shell != .none)
     }
 
     /// Follow a change of where the files stand, while the loading screen
@@ -361,7 +353,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
         shimmer.configure(backgroundColor: .systemBackground, palette: palette,
                           reduceMotion: UIAccessibility.isReduceMotionEnabled)
         container.bringSubviewToFront(loadingView)
-        holdForLoading(true)
         guard waitingForRecovery, recoveryReveal == nil else { return }
         let delay = max(0, recoveryDelay)
         recoveryReveal = Task { @MainActor [weak self] in
@@ -389,7 +380,6 @@ package final class NuxieMachineScreenViewController: UIViewController {
         closeControl.isHidden = false
         container.bringSubviewToFront(recovery)
         container.bringSubviewToFront(closeControl)
-        holdForLoading(true)
     }
 
     /// Try Again: the loading view comes back at once with the close hidden,
@@ -401,15 +391,14 @@ package final class NuxieMachineScreenViewController: UIViewController {
     }
 
     /// The first frame is drawn under the loading screen and the files are
-    /// in: the loading screen goes, with no fade, and the route's own swipe
-    /// comes back.
+    /// in: the loading screen goes, with no fade. The route's own swipe
+    /// came back when the files did ([`waitsForFiles`]).
     private func reveal() {
         shell = .none
         shimmer.stopAnimating()
         loadingView.isHidden = true
         recovery.isHidden = true
         closeControl.isHidden = true
-        holdForLoading(false)
     }
 
     /// Offline only when every failed file failed offline: one that failed
@@ -799,8 +788,8 @@ package enum NuxieMachineModalReason: Hashable, Sendable {
     /// A swipe down would not close it: it is a cover, which has no swipe,
     /// or the machine says the swipe presses a control or does nothing.
     case swipeRefused
-    /// The loading screen or the recovery screen is up on a page of the
-    /// segment: the page waits for its files, and the close is the way out.
+    /// A page of the segment waits for its files, coming or failed: the
+    /// loading or recovery screen is its, and the close is the way out.
     case loading
 }
 
