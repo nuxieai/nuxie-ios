@@ -1,0 +1,27 @@
+component Hours
+  platforms ios android
+
+  entry
+    on event "opened"
+    do open
+
+  routes
+    words  Words(close=close)  cover
+
+  action open
+    go(words)
+
+  action close
+    dismiss("closed")
+    exit
+
+component Words
+  props
+    close: action
+
+  view
+    column width=100% height=100% padding=20 gap=20 align-items=flex-start background-color=#0d1214
+      text "Quiet hours begin at nine" font-size=17 font-style=italic color=#eef3f1 id="italic"
+      text "Quiet hours begin at nine" font-size=17 color=#eef3f1 id="upright"
+      button id="close" press=close
+        text "Close" font-size=16 color=#eef3f1

@@ -47,7 +47,7 @@ final class FontEdgeTests: XCTestCase {
             XCTAssertNil(fault, "the page did not open: \(String(describing: fault))")
             let look = try await run.look("widths")
             let (brand, phone) = try Self.titles(in: look)
-            let face = try BrandFace(size: Self.size)
+            let face = try FaceTables.brand(size: Self.size)
 
             XCTAssertEqual(brand.bounds.width, try face.advanceWidth(of: Self.words), accuracy: 1,
                            "the brand title's box is not as wide as its letters' advances")
@@ -132,7 +132,7 @@ final class FontEdgeTests: XCTestCase {
             let look = try await run.look("after-the-face")
             XCTAssertEqual(run.owner.assetsTold, [.waiting(["assets/brand.ttf"]), .ready])
             let (brand, _) = try Self.titles(in: look)
-            XCTAssertEqual(brand.bounds.width, try BrandFace(size: Self.size).advanceWidth(of: Self.words),
+            XCTAssertEqual(brand.bounds.width, try FaceTables.brand(size: Self.size).advanceWidth(of: Self.words),
                            accuracy: 1, "the title is not drawn in the face that arrived")
             try await run.close()
         } catch {
@@ -153,7 +153,7 @@ final class FontEdgeTests: XCTestCase {
         let written = try FontFolder.plan()
         let faced = try FontFolder.plan(main: FontFolder.withoutThePhonesLine(FontFolder.main()))
         XCTAssertEqual(try FontFolder.session(written).sceneAssets(),
-                       [.platformFont, .font(path: "assets/brand.ttf")])
+                       [.platformFont(.normal), .font(path: "assets/brand.ttf")])
         XCTAssertEqual(try FontFolder.session(faced).sceneAssets(), [.font(path: "assets/brand.ttf")])
 
         try SystemFace.forget()
@@ -291,16 +291,21 @@ enum FontFolder {
 
 // MARK: - The oracle
 
-/// The brand face at a size, read with CoreText from the folder's own
-/// `assets/brand.ttf`: what its tables say a run of words is.
-struct BrandFace {
+/// A face at a size, read with CoreText: what its tables say a run of
+/// words is.
+struct FaceTables {
     let font: CTFont
 
-    init(size: CGFloat) throws {
+    init(font: CTFont) {
+        self.font = font
+    }
+
+    /// The brand face, from the folder's own `assets/brand.ttf`.
+    static func brand(size: CGFloat) throws -> FaceTables {
         let bytes = try Data(contentsOf: FontFolder.url().appendingPathComponent("assets/brand.ttf"))
         let provider = try XCTUnwrap(CGDataProvider(data: bytes as CFData))
         let graphics = try XCTUnwrap(CGFont(provider), "assets/brand.ttf is not a face CoreText reads")
-        font = CTFontCreateWithGraphicsFont(graphics, size, nil, nil)
+        return FaceTables(font: CTFontCreateWithGraphicsFont(graphics, size, nil, nil))
     }
 
     /// Each letter's glyph: one for each, as the face maps it.
@@ -339,20 +344,21 @@ struct BrandFace {
     }
 }
 
-/// The phone's regular face in the process's system font cache, where an
-/// edge's lease of it is kept once the scene it filled is imported.
+/// The phone's regular face, upright or italic, in the process's system
+/// font cache, where an edge's lease of it is kept once the scene it filled
+/// is imported.
 enum SystemFace {
     private struct NotKept: Error {}
 
-    /// Drop the regular face from the cache.
-    static func forget() throws {
-        let lease = try ExperienceRuntimeSystemFontCache.shared.prepare(weight: "400", style: "normal")
+    /// Drop the regular face in `style` from the cache.
+    static func forget(_ style: NuxieMachineFontStyle = .normal) throws {
+        let lease = try ExperienceRuntimeSystemFontCache.shared.prepare(weight: "400", style: style.rawValue)
         ExperienceRuntimeSystemFontCache.shared.didFailImport([lease])
     }
 
-    /// Whether the cache holds the regular face.
-    static func kept() throws -> Bool {
-        let identity = try ExperienceRuntimeSystemFontProvider.requestIdentity(weight: "400", style: "normal")
+    /// Whether the cache holds the regular face in `style`.
+    static func kept(_ style: NuxieMachineFontStyle = .normal) throws -> Bool {
+        let identity = try ExperienceRuntimeSystemFontProvider.requestIdentity(weight: "400", style: style.rawValue)
         do {
             _ = try ExperienceRuntimeSystemFontCache.shared.candidate(for: identity) { throw NotKept() }
             return true
@@ -366,7 +372,7 @@ enum SystemFace {
 
 /// A fresh session over a plan of the folder, its clock, what its owner
 /// heard and its asks for a frame.
-private final class FontRun {
+final class FontRun {
     let edge: NuxieMachineEdge
     let owner = CounterOwner()
     let asks: FrameAskCount
