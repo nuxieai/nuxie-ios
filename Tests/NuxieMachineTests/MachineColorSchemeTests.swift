@@ -333,7 +333,9 @@ final class MachineColorSchemeTests: XCTestCase {
     /// The presenter tells the text size the host's traits give, before the
     /// start, and again before the next frame after it changes; the same
     /// size is told once, however many times a Screen says its traits
-    /// changed. The scheme stays as it was throughout. A window's trait
+    /// changed. The text styles' sizes are told with it, each the one
+    /// `UIFont.preferredFont(forTextStyle:compatibleWith:)` gives the host's
+    /// traits. The scheme stays as it was throughout. A window's trait
     /// override stands in for the person's setting (iOS 17 or later).
     @MainActor
     func testThePresenterTellsEachTextSizeOnce() async throws {
@@ -347,6 +349,8 @@ final class MachineColorSchemeTests: XCTestCase {
         let edge = try XCTUnwrap(presenter.edge)
         let first = try XCTUnwrap(presenter.environment, "nothing was told before the start")
         XCTAssertEqual(first.textSize, 17, accuracy: 0.5, "the default size was not told before the start")
+        XCTAssertEqual(first.styleSizes, TextStyleEdgeTests.sizes(in: host.traitCollection),
+                       "the text styles' sizes were not told before the start")
         let log = await edge.log
         XCTAssertEqual(log.first, .environment(first), "the environment was not told before the start: \(log)")
 
@@ -355,6 +359,8 @@ final class MachineColorSchemeTests: XCTestCase {
         host.updateTraitsIfNeeded()
         presenter.environmentChanged()
         try await waitUntil("the session is told 23") { abs((presenter.environment?.textSize ?? 0) - 23) < 0.5 }
+        XCTAssertEqual(presenter.environment?.styleSizes, TextStyleEdgeTests.sizes(in: host.traitCollection),
+                       "the text styles' sizes were not told with 23")
 
         // Said again and again, with frames running between: nothing more.
         for _ in 0..<3 {

@@ -683,9 +683,35 @@ package enum NuxieMachineNote: UInt32, Sendable {
     case unknown = 0xFFFF_FFFF
 }
 
+/// The phone's eleven text styles, in the order the header numbers them
+/// (`NUX_MACHINE_TEXT_STYLE_*`). A page's `font=title1` draws its text at
+/// the size and weight the environment gives Title 1.
+package enum NuxieMachineTextStyle: Int, CaseIterable, Sendable {
+    case largeTitle, title1, title2, title3, headline, body, callout, subheadline, footnote, caption1, caption2
+
+    /// The style's place in the environment's two lists, as the header
+    /// names it.
+    fileprivate var slot: Int {
+        switch self {
+        case .largeTitle: Int(NUX_MACHINE_TEXT_STYLE_LARGE_TITLE)
+        case .title1: Int(NUX_MACHINE_TEXT_STYLE_TITLE1)
+        case .title2: Int(NUX_MACHINE_TEXT_STYLE_TITLE2)
+        case .title3: Int(NUX_MACHINE_TEXT_STYLE_TITLE3)
+        case .headline: Int(NUX_MACHINE_TEXT_STYLE_HEADLINE)
+        case .body: Int(NUX_MACHINE_TEXT_STYLE_BODY)
+        case .callout: Int(NUX_MACHINE_TEXT_STYLE_CALLOUT)
+        case .subheadline: Int(NUX_MACHINE_TEXT_STYLE_SUBHEADLINE)
+        case .footnote: Int(NUX_MACHINE_TEXT_STYLE_FOOTNOTE)
+        case .caption1: Int(NUX_MACHINE_TEXT_STYLE_CAPTION1)
+        case .caption2: Int(NUX_MACHINE_TEXT_STYLE_CAPTION2)
+        }
+    }
+}
+
 /// The client's environment, as a session is told it: what is the same for
-/// every presentation of the session, the scheme and the person's text
-/// size. Where each presentation is shown is its own
+/// every presentation of the session, the scheme, the person's text size
+/// and the size and weight of each of the phone's text styles at that
+/// setting. Where each presentation is shown is its own
 /// ([`NuxieMachineScreenPlace`]).
 package struct NuxieMachineEnvironment: Equatable, Sendable {
     /// Whether the client shows in the dark scheme.
@@ -694,19 +720,58 @@ package struct NuxieMachineEnvironment: Equatable, Sendable {
     /// pages. 17 at an iPhone's default size, and larger or smaller as the
     /// person sets it.
     package var textSize: Double
+    /// Each text style's size, in points, one for each of
+    /// [`NuxieMachineTextStyle`] in its order.
+    package var styleSizes: [Double]
+    /// Each text style's weight, as CSS numbers it (400 regular, 600
+    /// semibold), one for each of [`NuxieMachineTextStyle`] in its order.
+    package var styleWeights: [Double]
 
-    package init(dark: Bool, textSize: Double) {
+    /// An iPhone's sizes at the default text size setting, the machine's own
+    /// when it is told none.
+    package static let defaultStyleSizes: [Double] = [34, 28, 22, 20, 17, 17, 16, 15, 13, 12, 11]
+    /// An iPhone's weights at the default setting: regular, and `headline`
+    /// semibold. The machine's own when it is told none.
+    package static let defaultStyleWeights: [Double] = [400, 400, 400, 400, 600, 400, 400, 400, 400, 400, 400]
+
+    /// An environment with the scheme and the text size given, and each
+    /// style as given, or as an iPhone draws it at the default setting.
+    package init(dark: Bool, textSize: Double, styleSizes: [Double] = defaultStyleSizes,
+                 styleWeights: [Double] = defaultStyleWeights) {
+        let count = NuxieMachineTextStyle.allCases.count
+        precondition(styleSizes.count == count && styleWeights.count == count,
+                     "an environment has one size and one weight for each of the \(count) text styles")
         self.dark = dark
         self.textSize = textSize
+        self.styleSizes = styleSizes
+        self.styleWeights = styleWeights
     }
 
     /// The environment as the header lays it out: the one place the struct
-    /// is made.
+    /// is made. Each style's size and weight goes in the place the header
+    /// gives that style.
     fileprivate var carried: NuxMachineEnvironment {
-        NuxMachineEnvironment(
-            struct_size: UInt32(MemoryLayout<NuxMachineEnvironment>.size),
-            dark: dark,
-            text_size: textSize)
+        var carried = NuxMachineEnvironment()
+        carried.struct_size = UInt32(MemoryLayout<NuxMachineEnvironment>.size)
+        carried.dark = dark
+        carried.text_size = textSize
+        Self.fill(&carried.style_sizes, with: styleSizes)
+        Self.fill(&carried.style_weights, with: styleWeights)
+        return carried
+    }
+
+    /// Write each style's number into the header's fixed list of
+    /// `NUX_MACHINE_TEXT_STYLE_COUNT` doubles, at the style's place.
+    private static func fill<List>(_ list: inout List, with numbers: [Double]) {
+        withUnsafeMutableBytes(of: &list) { bytes in
+            let stride = MemoryLayout<Double>.stride
+            precondition(bytes.count == Int(NUX_MACHINE_TEXT_STYLE_COUNT) * stride
+                             && numbers.count == NuxieMachineTextStyle.allCases.count,
+                         "the header's text styles are not the eleven this file names")
+            for style in NuxieMachineTextStyle.allCases {
+                bytes.storeBytes(of: numbers[style.rawValue], toByteOffset: style.slot * stride, as: Double.self)
+            }
+        }
     }
 }
 

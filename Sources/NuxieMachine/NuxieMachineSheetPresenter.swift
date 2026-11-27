@@ -1,4 +1,5 @@
 #if os(iOS) && !targetEnvironment(macCatalyst)
+import CoreText
 import Foundation
 import NuxieRuntime
 import os
@@ -125,10 +126,13 @@ package struct NuxieMachineSheetStatus: Equatable, Sendable {
 ///   over one another share it.
 /// - The person's body text size is told on the same path, as one more
 ///   field of the environment: read from the same traits as the scheme
-///   ([`textSize`]), the way the SDK's experience screens read it
+///   ([`textTraits`]), the way the SDK's experience screens read it
 ///   ([`bodyTextSize(in:)`]), and told with it, once per value, before the
 ///   start and before the first frame after it changes. One `rem` of the
 ///   session's pages is that size.
+/// - Each of the phone's eleven text styles is told with it, from the same
+///   traits ([`environment(dark:in:)`]): the size and weight UIKit gives the
+///   style there, which a page's `font=title1` draws at.
 /// - Each page is told where it is shown, its place
 ///   ([`NuxieMachineScreenViewController.place`]): the insets of the
 ///   segment it is in, which its Screen fills to every edge, a cover's the
@@ -829,11 +833,14 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// background) are two environments, and each is told.
     private func tellEnvironment(at now: Int64) async {
         guard let edge = loop?.edge else { return }
-        let current = NuxieMachineEnvironment(dark: colorScheme == .dark, textSize: textSize)
+        let current = Self.environment(dark: colorScheme == .dark, in: textTraits)
         guard current != environment else { return }
         environment = current
         let scheme = current.dark ? "dark" : "light"
-        logger.info("machine.environment \(scheme, privacy: .public) \(current.textSize, privacy: .public)")
+        logger.info("""
+            machine.environment \(scheme, privacy: .public) \(current.textSize, privacy: .public) \
+            sizes \(current.styleSizes, privacy: .public) weights \(current.styleWeights, privacy: .public)
+            """)
         await edge.environment(current, now: now)
         takeReports()
     }
@@ -858,17 +865,30 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
         return ExperienceColorScheme(own: forced, forced: forced, inWindow: false, host: hostStyle)
     }
 
-    /// The person's body text size the session draws at, read from the
-    /// traits the scheme is read from ([`colorScheme`]): the bottom
-    /// segment's while it is in a window, as every one above it is
-    /// presented over it and has the same; otherwise the host's, which a
-    /// segment not yet in its window joins. The app forces no text size, so
-    /// unlike the scheme there is no forced value to prefer.
-    private var textSize: Double {
+    /// The traits the session's text sizes are read from, the ones the
+    /// scheme is read from ([`colorScheme`]): the bottom segment's while it
+    /// is in a window, as every one above it is presented over it and has
+    /// the same; otherwise the host's, which a segment not yet in its window
+    /// joins. The app forces no text size, so unlike the scheme there is no
+    /// forced value to prefer.
+    private var textTraits: UITraitCollection? {
         let bottom = bottomSegment
-        let traits = bottom.flatMap { $0.viewIfLoaded?.window == nil ? nil : $0.traitCollection }
+        return bottom.flatMap { $0.viewIfLoaded?.window == nil ? nil : $0.traitCollection }
             ?? host?.traitCollection ?? bottom?.traitCollection
-        return Self.bodyTextSize(in: traits)
+    }
+
+    /// The environment for the scheme `dark` and the text sizes of `traits`:
+    /// the body text size ([`bodyTextSize(in:)`]), and for each of the
+    /// eleven text styles the font UIKit gives the style in `traits`, its
+    /// point size and its weight ([`cssWeight(of:)`]). With no traits, the
+    /// app's own.
+    package static func environment(dark: Bool, in traits: UITraitCollection?) -> NuxieMachineEnvironment {
+        let fonts = NuxieMachineTextStyle.allCases.map { style in
+            UIFont.preferredFont(forTextStyle: style.uiKit, compatibleWith: traits)
+        }
+        return NuxieMachineEnvironment(dark: dark, textSize: bodyTextSize(in: traits),
+                                       styleSizes: fonts.map { Double($0.pointSize) },
+                                       styleWeights: fonts.map { cssWeight(of: $0) })
     }
 
     /// The body text size UIKit gives `traits`, in points, as the SDK's
@@ -877,6 +897,22 @@ package final class NuxieMachineSheetPresenter: NSObject, UIAdaptivePresentation
     /// largest accessibility one. With no traits, the app's own.
     package static func bodyTextSize(in traits: UITraitCollection?) -> Double {
         Double(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize)
+    }
+
+    /// `font`'s weight as CSS numbers it, 100 to 900: the weight its own
+    /// traits give (`kCTFontWeightTrait`, the traits of its descriptor), as
+    /// the nearest of UIKit's nine weights, ultra light 100 through regular
+    /// 400 and semibold 600 to black 900. A font whose traits give no weight
+    /// is regular.
+    package static func cssWeight(of font: UIFont) -> Double {
+        let traits = CTFontCopyTraits(font as CTFont) as NSDictionary
+        guard let given = traits[kCTFontWeightTrait as String] as? NSNumber else { return 400 }
+        let weight = CGFloat(given.doubleValue)
+        let nearest = stride(from: 100, through: 900, by: 100).min { one, other in
+            abs(ExperienceRuntimeSystemFontProvider.uiWeight(one).rawValue - weight)
+                < abs(ExperienceRuntimeSystemFontProvider.uiWeight(other).rawValue - weight)
+        }
+        return Double(nearest ?? 400)
     }
 
     /// Force the app's fixed scheme on a segment or a page, as the SDK's
@@ -1090,6 +1126,25 @@ private final class NuxieMachineReportInbox: @unchecked Sendable {
         lock.withLock {
             defer { reports = [] }
             return reports
+        }
+    }
+}
+
+extension NuxieMachineTextStyle {
+    /// UIKit's name for the style.
+    var uiKit: UIFont.TextStyle {
+        switch self {
+        case .largeTitle: .largeTitle
+        case .title1: .title1
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .body: .body
+        case .callout: .callout
+        case .subheadline: .subheadline
+        case .footnote: .footnote
+        case .caption1: .caption1
+        case .caption2: .caption2
         }
     }
 }
