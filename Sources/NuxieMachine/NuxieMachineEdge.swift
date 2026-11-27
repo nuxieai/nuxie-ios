@@ -182,7 +182,10 @@ package enum NuxieMachineEdgeReport: Equatable, Sendable {
     /// the event (no reason), or the machine declined it for a reason that
     /// says nothing is wrong (`once`, `if`, `unstarted` and the rest). The
     /// session holds what it held, nothing was applied, and the edge goes
-    /// on: a later start is delivered.
+    /// on: a later start is delivered. With a record already open, what it
+    /// shows is as the owner was last told, and the delivery tells nothing
+    /// else: where the files stand, if that changed meanwhile, is told by
+    /// the next delivery.
     case notStarted(reason: String?)
 
     /// The one dismissal this report tells, if any: the fault's, or the
@@ -666,6 +669,9 @@ package actor NuxieMachineEdge {
         mutating func didNotStart(reason: String?) {
             unstarted = NotStarted(reason: reason)
         }
+
+        /// Whether the delivery was a start that did not happen.
+        var isUnstarted: Bool { unstarted != nil }
 
         /// What the owner hears once the sync has run and the edge shows
         /// `shown`: the fault; or that the start did not happen; or what is
@@ -1255,8 +1261,13 @@ package actor NuxieMachineEdge {
     /// Tell the owner where the files stand, when that changed since it was
     /// last told: what the edge holds after the sync, never what the
     /// answers said one by one ([`assetsNow`]).
+    ///
+    /// A start that did not happen tells nothing but that, so it does not
+    /// take this as told: the next delivery tells it. A change to where the
+    /// files stand comes from a byte source's answer, which asks for a
+    /// frame, and that frame's delivery tells it.
     private func tellAssets(_ delivery: inout Delivery) {
-        guard let now = assetsNow(), now != assetsTold else { return }
+        guard !delivery.isUnstarted, let now = assetsNow(), now != assetsTold else { return }
         assetsTold = now
         log.append(.assets(now))
         delivery.told(.assets(now))

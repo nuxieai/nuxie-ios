@@ -141,6 +141,47 @@ final class AssetWaitEdgeTests: XCTestCase {
         }
     }
 
+    /// The picture fails while the page waits, and before the frame that
+    /// would tell it, a start on an event no entry starts on is delivered.
+    /// That start did not happen: the owner hears only that, and the page
+    /// stays as it was. The failure is not lost: the next frame tells it,
+    /// by path.
+    ///
+    /// The oracle is what she sees: the recovery screen once the picture
+    /// cannot come, whatever else the app asked meanwhile.
+    func testAFailureIsStillToldAfterAStartThatDidNotHappen() async throws {
+        let bytes = AskedBytes(folder: try PictureFolder.url())
+        let run = try PictureRun(bytes: bytes)
+        do {
+            await run.edge.start(event: "opened", now: run.now)
+            let stack = await run.edge.stack
+            XCTAssertEqual(stack.map(\.route), ["fits"])
+            XCTAssertEqual(run.owner.assetsTold, [.waiting([Self.hero])])
+            try await bytes.untilAsked(Self.hero)
+            _ = run.asks.take()
+
+            bytes.fail(Self.hero, with: offlineError)
+            try await waitForAsk(run.asks)
+            let heard = run.owner.reports.count
+            await run.edge.start(event: "nope", now: run.now)
+            XCTAssertEqual(Array(run.owner.reports.dropFirst(heard)), [.notStarted(reason: nil)],
+                           "the start that did not happen told more than that")
+            let still = await run.edge.stack
+            XCTAssertEqual(still, stack, "the start that did not happen moved the page")
+
+            await run.edge.frame(elapsedSeconds: Self.tick, now: run.now)
+            let failed = NuxieMachineAssets.failed([NuxieMachineAssetFailure(path: Self.hero, reason: .offline)])
+            XCTAssertEqual(run.owner.assetsTold, [.waiting([Self.hero]), failed], "the failure was lost")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault, "\(String(describing: fault))")
+            try await run.close()
+        } catch {
+            bytes.dropAll()
+            try? await run.close()
+            throw error
+        }
+    }
+
     /// Closing a page that waits: the session's rows are exactly a dismiss
     /// with no reason and an end in the fault `first_frame.deadline`, the
     /// owner hears that fault, and nothing is shown after it.
