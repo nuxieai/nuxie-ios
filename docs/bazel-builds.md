@@ -84,7 +84,9 @@ The host prepares a blank device once per Xcode, runtime build and viewport,
 then clones that blank for each action. Tests never run on the blank device or
 inherit another test's app data. Only boot preparation queues behind a host
 lock; the tests themselves may execute concurrently. At most four shutdown
-blank devices are retained under `~/Library/Caches/nuxie-ios-simulators`.
+blank device profiles are retained. Their ownership and preparation records live
+in `~/Library/Application Support/NuxieBuild/Simulators`; CoreSimulator keeps the
+device data in its normal device directory.
 Exit and cancellation cleanup removes the action's clone, and subsequent
 preparation reaps controller-owned orphan devices after their runner and
 XCTest have ended. Unowned devices and existing pool jobs remain untouched.

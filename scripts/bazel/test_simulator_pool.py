@@ -5,6 +5,7 @@ import tempfile
 import subprocess
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from simulator_pool import MAX_SEEDS, Pool, device_in_use, wait_quiet
 
@@ -164,6 +165,20 @@ class SimulatorPoolTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'simulator boot failed'):
                 self.pool.create('27.0', 'iPhone 17 Pro', 101)
         self.assertEqual(len(list((self.root / 'seeds').glob('*.json'))), 1)
+
+    def test_control_state_is_shared_across_isolated_test_home_directories(self):
+        homes = self.root / 'account'; homes.mkdir()
+        options = dict(control=self.sim, identity=self.owners.get, quiet=self.quiet.append,
+                       in_use=lambda d: d in self.busy, developer=lambda: 'xcode-a')
+        with patch('simulator_pool.pwd.getpwuid', return_value=SimpleNamespace(pw_dir=str(homes))):
+            with patch.dict('os.environ', {'HOME': str(self.root / 'first-test-home')}):
+                first = Pool(**options); identifier = first.create('27.0', 'iPhone 17 Pro', 101)
+            with patch.dict('os.environ', {'HOME': str(self.root / 'second-test-home')}):
+                second = Pool(**options)
+                self.assertEqual(first.root, second.root)
+                self.assertTrue(second.cleanup(identifier, 101))
+        self.assertFalse((self.root / 'first-test-home').exists())
+        self.assertFalse((self.root / 'second-test-home').exists())
 
     def test_pool_and_receipts_cannot_be_symlinks(self):
         with tempfile.TemporaryDirectory() as target:
