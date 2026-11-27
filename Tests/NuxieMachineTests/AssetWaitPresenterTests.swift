@@ -154,7 +154,7 @@ final class AssetWaitPresenterTests: XCTestCase {
             !screen.isBeingPresented && screen.transitionCoordinator == nil
         }
 
-        let close =try XCTUnwrap(Self.views("nuxie-experience-close", in: screen.view).first as? UIControl)
+        let close = try XCTUnwrap(Self.views("nuxie-experience-close", in: screen.view).first as? UIControl)
         close.sendActions(for: .touchUpInside)
         try await waitUntil("the record ends in the fault") {
             presenter.status.record == .fault("first_frame.deadline")
