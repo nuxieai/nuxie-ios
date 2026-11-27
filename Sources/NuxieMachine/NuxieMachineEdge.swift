@@ -1848,10 +1848,12 @@ package actor NuxieMachineEdge {
     /// machine, with no view model, and every asset the records hold filled
     /// before the import, as the session lists them by position
     /// (`assets`): nothing is drawn with a face or a picture missing, and
-    /// nothing arrives later. The platform font, the face of a text with no
-    /// `font-family`, is this device's system face, supplied as the SDK
-    /// supplies a published Screen's System font; a scene with no such
-    /// text has no platform font and takes no lease of it. Each face and
+    /// nothing arrives later. A platform font, the face of a text with no
+    /// `font-family`, is this device's system face in the style the row
+    /// names, upright or italic, supplied as the SDK supplies a published
+    /// Screen's System font; a scene with no such text has no platform font
+    /// and takes no lease of it, and one with only italic such text takes
+    /// only the italic face. Each face and
     /// each picture is the bytes the byte source gave for its path in the
     /// folder (`supplied`); nothing is asked here, and the edge calls this
     /// only once every path has its bytes. The positions stay here: they
@@ -1863,11 +1865,11 @@ package actor NuxieMachineEdge {
     private static func openRecords(_ records: Data, artboard: Int, assets: [NuxieMachineSceneAsset],
                                     supplied: [String: Data]) async throws -> NuxieNativeRuntime {
         var external: [Int: Data] = [:]
-        var platformFont: [Int] = []
+        var platformFont: [(position: Int, style: NuxieMachineFontStyle)] = []
         for (position, asset) in assets.enumerated() {
             switch asset {
-            case .platformFont:
-                platformFont.append(position)
+            case .platformFont(let style):
+                platformFont.append((position, style))
             case .font(let path), .picture(let path):
                 guard let given = supplied[path] else {
                     throw NuxieMachineEdgeFault(code: "edge.unsupplied-asset",
@@ -1884,9 +1886,9 @@ package actor NuxieMachineEdge {
         }
         var leases: [ExperienceRuntimeSystemFontCache.Lease] = []
         do {
-            for position in platformFont {
-                // The regular face: a compiled view names no weight.
-                let lease = try ExperienceRuntimeSystemFontCache.shared.prepare(weight: "400", style: "normal")
+            for (position, style) in platformFont {
+                // The regular weight: a compiled view names no weight.
+                let lease = try ExperienceRuntimeSystemFontCache.shared.prepare(weight: "400", style: style.rawValue)
                 leases.append(lease)
                 external[position] = lease.candidate.bytes
             }

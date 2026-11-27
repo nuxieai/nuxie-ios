@@ -317,10 +317,13 @@ package final class NuxieMachineSession {
 
     /// The records' assets, in the order the records hold them (an asset's
     /// index here is its position, the ordinal the engine's import takes),
-    /// and what the host fills each with: the platform font, first when
-    /// some text has no face of its own; then each face a text draws in,
-    /// once, by its file's path in the folder; then each picture once, by
-    /// its path. Empty when no view shows text or a picture.
+    /// and what the host fills each with: the platform's upright font,
+    /// first when some upright text has no face of its own, and its italic
+    /// font next when some italic text has none; then each face a text
+    /// draws in, once, by its file's path in the folder; then each picture
+    /// once, by its path. Empty when no view shows text or a picture. A kind
+    /// this module does not know is an answer it does not know, naming the
+    /// kind: the header grew.
     package func sceneAssets() throws -> [NuxieMachineSceneAsset] {
         var count = 0
         try NuxieMachineError.check(nux_machine_scene_asset_count(handle, &count))
@@ -330,7 +333,9 @@ package final class NuxieMachineSession {
             try NuxieMachineError.check(nux_machine_scene_asset(handle, position, &kind, &path))
             switch kind {
             case NuxieMachineStatus.assetPlatformFont:
-                return .platformFont
+                return .platformFont(.normal)
+            case NuxieMachineStatus.assetPlatformFontItalic:
+                return .platformFont(.italic)
             case NuxieMachineStatus.assetFont:
                 guard let path = NuxieMachineStrings.copy(path) else { throw NuxieMachineError.assetDoesNotFit }
                 return .font(path: path)
@@ -338,7 +343,7 @@ package final class NuxieMachineSession {
                 guard let path = NuxieMachineStrings.copy(path) else { throw NuxieMachineError.assetDoesNotFit }
                 return .picture(path: path)
             default:
-                throw NuxieMachineError.assetDoesNotFit
+                throw NuxieMachineError.unknownAnswer(kind)
             }
         }
     }
@@ -757,13 +762,19 @@ package enum NuxieMachineHostFault: Equatable, Sendable {
 /// session lists them ([`NuxieMachineSession.sceneAssets`]).
 package enum NuxieMachineSceneAsset: Equatable, Sendable {
     /// The face a text with no font of its own is drawn in: the
-    /// platform's own.
-    case platformFont
+    /// platform's own, in the style the text asks for.
+    case platformFont(NuxieMachineFontStyle)
     /// A face a text draws in: the bytes of the folder's TTF file at
     /// `path`.
     case font(path: String)
     /// A picture: the bytes of the folder's file at `path`.
     case picture(path: String)
+}
+
+/// The two words `font-style` takes, as the system font cache takes them.
+package enum NuxieMachineFontStyle: String, Equatable, Sendable {
+    case normal
+    case italic
 }
 
 extension NuxieMachineAsset {
@@ -837,14 +848,14 @@ package enum NuxieMachineError: Error, Equatable, Sendable {
     /// or a number in it is not finite.
     case placeDoesNotFit
     /// An asset's kind is not one a file of the folder can be, or the
-    /// records named an asset of a kind this module does not fill.
+    /// records named a face or a picture with no path.
     case assetDoesNotFit
     /// The host's fault is not one of the codes a host may report.
     case hostFaultDoesNotFit
     /// A status this module does not know: the header grew.
     case unknownStatus(UInt32)
-    /// An answer this module does not know (a detent's kind, or what a
-    /// swipe does): the header grew.
+    /// An answer this module does not know (a detent's kind, what a swipe
+    /// does, or the kind of an asset of the records): the header grew.
     case unknownAnswer(UInt32)
 
     /// The header's name for the status, as a fault code reads it.
@@ -936,6 +947,7 @@ private enum NuxieMachineStatus {
     static let assetFont = UInt32(NUX_MACHINE_ASSET_FONT)
     static let assetOther = UInt32(NUX_MACHINE_ASSET_OTHER)
     static let assetPlatformFont = UInt32(NUX_MACHINE_ASSET_PLATFORM_FONT)
+    static let assetPlatformFontItalic = UInt32(NUX_MACHINE_ASSET_PLATFORM_FONT_ITALIC)
 }
 
 /// Strings across the interface: lent in for the length of one call, copied
