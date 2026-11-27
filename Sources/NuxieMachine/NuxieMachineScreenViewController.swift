@@ -60,6 +60,36 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Frames drawn to the screen.
     package private(set) var framesDrawn = 0
 
+    /// What a swipe down on this sheet does now, as the machine last
+    /// answered it: `nil` for anything that is not a sheet. The presenter
+    /// sets it from every report ([`follow`]), so it is never older than
+    /// the frame on screen, and UIKit reads it at once when the person
+    /// starts to drag: while it says the sheet stays or a control is
+    /// pressed, the native dismissal is held ([`modalReasons`]).
+    package private(set) var swipeDown: NuxieMachineSwipeWould? {
+        didSet { holdSwipe() }
+    }
+
+    /// Why this presentation does not let the person swipe it away now.
+    /// `isModalInPresentation` is true exactly while the set is not empty,
+    /// and nothing else writes it.
+    package var modalReasons: Set<NuxieMachineModalReason> = [] {
+        didSet { isModalInPresentation = !modalReasons.isEmpty }
+    }
+
+    /// The heights this sheet may rest at, as its row writes them.
+    package private(set) var detents: [NuxieMachineDetent]
+
+    /// The height of the content, in points, at the sheet's width, as the
+    /// engine last measured it: what a `fit-content` detent rests at. None
+    /// until it is measured, or when the engine cannot measure it; the
+    /// detent then rests at the largest height.
+    package private(set) var contentHeight: CGFloat?
+
+    /// Told when the screen reader's escape asks this sheet to close and a
+    /// swipe down would do something: the presenter delivers it as a swipe.
+    package var onEscape: (@MainActor () -> Void)?
+
     /// Told when the session's environment would change with this Screen's
     /// traits: its colors (the phone turned dark or light, or a style was
     /// forced on it or lifted) or the person's text size. The presenter
@@ -178,6 +208,12 @@ package final class NuxieMachineScreenViewController: UIViewController {
     /// Any presentation other than a cover is presented as a sheet; the
     /// presenter refuses the others before they get here.
     ///
+    /// A sheet rests at the heights its row writes ([`sheetDetents`]), or at
+    /// the large detent when it writes none. Whether a swipe may take it is
+    /// the machine's answer ([`swipeDown`]): a swipe that would close it
+    /// runs natively; one that would press a control, or do nothing, is
+    /// held, and the presenter delivers it.
+    ///
     /// `assets` is where the page's files stand when it is presented, and
     /// `recoveryDelay` how long the shimmer shows before the recovery screen
     /// ([`assets`]).
@@ -187,18 +223,144 @@ package final class NuxieMachineScreenViewController: UIViewController {
         self.loop = loop
         self.assets = assets
         self.recoveryDelay = recoveryDelay
+        self.detents = presented.detents
+        self.swipeDown = presented.swipeDown
         let covers = presented.presentation == .cover
         routeIsModal = covers
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = covers ? .fullScreen : .pageSheet
+        holdSwipe()
         // No swipe takes a page that waits for its files: the close is the
         // way out ([`assets`]).
-        isModalInPresentation = covers || assets != .ready
+        holdForLoading(assets != .ready)
         if !covers, let sheet = sheetPresentationController {
-            sheet.detents = [.large()]
+            sheet.detents = sheetDetents()
             sheet.prefersGrabberVisible = false
         }
     }
+
+    /// Take what the session shows of this presentation now: what a swipe
+    /// down does, and the heights it rests at. The presenter calls it with
+    /// every report.
+    package func follow(_ now: NuxieMachinePresented) {
+        guard now.shown == shown else { return }
+        if swipeDown != now.swipeDown { swipeDown = now.swipeDown }
+        guard detents != now.detents else { return }
+        detents = now.detents
+        guard let sheet = sheetPresentationController, presented.presentation != .cover else { return }
+        sheet.animateChanges { sheet.detents = sheetDetents() }
+    }
+
+    /// Whether the native dismissal is held: for a cover, which has no
+    /// swipe, and for a sheet whose swipe down would press a control or do
+    /// nothing. A sheet whose swipe closes it lets UIKit run it.
+    private func holdSwipe() {
+        let refused = routeIsModal || swipeDown == .stays || swipeDown == .presses
+        if refused { modalReasons.insert(.swipeRefused) } else { modalReasons.remove(.swipeRefused) }
+    }
+
+    /// Whether the loading screen holds the native dismissal: while it or
+    /// the recovery screen is up, or before the view loads while the files
+    /// are not in. Its close is the way out, so no swipe is delivered then.
+    private func holdForLoading(_ held: Bool) {
+        if held { modalReasons.insert(.loading) } else { modalReasons.remove(.loading) }
+    }
+
+    /// The screen reader's escape (the two-finger Z) on this sheet: a swipe
+    /// down, read from the same answer UIKit reads. Where the swipe would do
+    /// nothing, or the loading screen is up, the escape is passed on and
+    /// nothing is delivered; otherwise
+    /// the presenter delivers it once, and on a close there is no native
+    /// swipe to wait for: the machine closes the entry and the next report
+    /// dismisses the sheet.
+    override package func accessibilityPerformEscape() -> Bool {
+        guard !routeIsModal, !modalReasons.contains(.loading), swipeDown == .presses || swipeDown == .closes,
+              let onEscape else { return false }
+        onEscape()
+        return true
+    }
+
+    /// The sheet's detents for the heights its row writes, in its order:
+    /// medium and large are the system's; a height in points, a percent of
+    /// the height available and the content's height are detents of this
+    /// module's, each with an identifier its kind and number make, so a
+    /// detent read again keeps its place. A row that writes none rests at
+    /// large. Before iOS 16 a sheet has the system's two alone, and every
+    /// other height rests at large.
+    private func sheetDetents() -> [UISheetPresentationController.Detent] {
+        var made: [UISheetPresentationController.Detent] = []
+        var named: Set<UISheetPresentationController.Detent.Identifier> = []
+        for detent in detents {
+            // Before iOS 16 every height but medium is large.
+            let name: UISheetPresentationController.Detent.Identifier
+            if #available(iOS 16.0, *) { name = Self.identifier(of: detent) } else { name = detent == .medium ? .medium : .large }
+            guard named.insert(name).inserted else { continue }
+            made.append(sheetDetent(detent))
+        }
+        return made.isEmpty ? [.large()] : made
+    }
+
+    private func sheetDetent(_ detent: NuxieMachineDetent) -> UISheetPresentationController.Detent {
+        switch detent {
+        case .medium: return .medium()
+        case .large: return .large()
+        case .points, .percent, .fitContent:
+            guard #available(iOS 16.0, *) else { return .large() }
+            // UIKit works a detent out on the main thread.
+            return .custom(identifier: Self.identifier(of: detent)) { [weak self] context in
+                MainActor.assumeIsolated {
+                    Self.height(of: detent, maximum: context.maximumDetentValue, contentHeight: self?.contentHeight)
+                }
+            }
+        }
+    }
+
+    /// The identifier of one of this module's detents: its kind and its
+    /// number, the same each time it is read.
+    package static func identifier(of detent: NuxieMachineDetent) -> UISheetPresentationController.Detent.Identifier {
+        switch detent {
+        case .medium: .medium
+        case .large: .large
+        case .points(let points): .init(rawValue: "nuxie.points.\(points)")
+        case .percent(let percent): .init(rawValue: "nuxie.percent.\(percent)")
+        case .fitContent: .init(rawValue: "nuxie.fit-content")
+        }
+    }
+
+    /// The height one of this module's detents rests at, in points, when
+    /// the most a sheet can be is `maximum`: a height in points, never more
+    /// than that; a percent of it; or the content's measured height, never
+    /// more than that, and that whole height until it is measured. None
+    /// for the system's medium and large, which UIKit works out.
+    package nonisolated static func height(of detent: NuxieMachineDetent, maximum: CGFloat, contentHeight: CGFloat?) -> CGFloat? {
+        switch detent {
+        case .medium, .large:
+            return nil
+        case .points(let points):
+            return min(CGFloat(points), maximum)
+        case .percent(let percent):
+            return maximum * CGFloat(percent) / 100
+        case .fitContent:
+            guard let contentHeight, contentHeight.isFinite, contentHeight > 0 else { return maximum }
+            return min(contentHeight, maximum)
+        }
+    }
+
+    /// The content's height as the engine measured it after a frame, for a
+    /// sheet that rests at it: when it changes, UIKit works the sheet's
+    /// detents out again. A height the engine cannot give leaves the
+    /// detent where it is.
+    package func measured(contentHeight height: CGFloat?) {
+        guard let height, height.isFinite, height > 0, height != contentHeight else { return }
+        contentHeight = height
+        guard #available(iOS 16.0, *), let sheet = sheetPresentationController,
+              presented.presentation != .cover else { return }
+        sheet.animateChanges { sheet.invalidateDetents() }
+    }
+
+    /// Whether this sheet rests at its content's height, so each frame it
+    /// draws measures that height.
+    fileprivate var fitsContent: Bool { detents.contains(.fitContent) }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
@@ -288,7 +450,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         case .waiting: showLoading()
         case .failed(let failures): showRecovery(Self.reason(failures))
         }
-        isModalInPresentation = routeIsModal || shell != .none
+        holdForLoading(shell != .none)
     }
 
     /// Follow a change of where the files stand, while the loading screen
@@ -325,7 +487,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         shimmer.configure(backgroundColor: .systemBackground, palette: palette,
                           reduceMotion: UIAccessibility.isReduceMotionEnabled)
         container.bringSubviewToFront(loadingView)
-        isModalInPresentation = true
+        holdForLoading(true)
         guard waitingForRecovery, recoveryReveal == nil else { return }
         let delay = max(0, recoveryDelay)
         recoveryReveal = Task { @MainActor [weak self] in
@@ -353,7 +515,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         closeControl.isHidden = false
         container.bringSubviewToFront(recovery)
         container.bringSubviewToFront(closeControl)
-        isModalInPresentation = true
+        holdForLoading(true)
     }
 
     /// Try Again: the loading view comes back at once with the close hidden,
@@ -373,7 +535,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         loadingView.isHidden = true
         recovery.isHidden = true
         closeControl.isHidden = true
-        isModalInPresentation = routeIsModal
+        holdForLoading(false)
     }
 
     /// Offline only when every failed file failed offline: one that failed
@@ -508,6 +670,7 @@ package final class NuxieMachineScreenViewController: UIViewController {
         if shell != .none, assets == .ready { reveal() }
         updateAccessibility()
         if let semantics = frame.semantics { show(semantics) }
+        if fitsContent { measured(contentHeight: try? await runtime.contentHeight()) }
         return true
     }
 
@@ -749,6 +912,17 @@ package final class NuxieMachineScreenViewController: UIViewController {
         let value = ceil(Double(points * scale))
         return value < Double(UInt32.max) ? UInt32(value) : UInt32.max
     }
+}
+
+/// Why a presentation does not let the person swipe it away now
+/// ([`NuxieMachineScreenViewController.modalReasons`]).
+package enum NuxieMachineModalReason: Hashable, Sendable {
+    /// A swipe down would not close it: it is a cover, which has no swipe,
+    /// or the machine says the swipe presses a control or does nothing.
+    case swipeRefused
+    /// The loading screen or the recovery screen is up: the page waits for
+    /// its files, and the close is the way out.
+    case loading
 }
 
 /// A Screen's surface as it is and as it last drew, for checks: its bounds

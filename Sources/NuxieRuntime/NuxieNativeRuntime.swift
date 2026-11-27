@@ -1511,6 +1511,20 @@ package actor NuxieNativeRuntime {
         }
     }
 
+    /// The height, in points, the top expanded Screen's content takes at
+    /// the player's layout width, after a step. Reads only: it advances
+    /// nothing and changes nothing drawn. The engine answers it for a page;
+    /// for any other artboard the call fails.
+    package func contentHeight() async throws -> CGFloat {
+        let state = try requireState()
+        return try await executor.call {
+            var height: Float = 0
+            try requireOK(nux_player_content_height(try state.player.require(), &height),
+                operation: "read player content height")
+            return CGFloat(height)
+        }
+    }
+
     package func resize(pixelWidth: UInt32, pixelHeight: UInt32) async throws
         -> NuxieNativeRendererOutcome
     {
