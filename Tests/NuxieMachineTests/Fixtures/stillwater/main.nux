@@ -1,5 +1,5 @@
 use products, purchase, restore, store, owns, Purchase, PurchaseStatus from "nuxie/store"
-use customer, access, count, event from "nuxie/person"
+use customer, access, count, track from "nuxie/person"
 use assigned, exposed from "nuxie/experiments"
 use Paywall, Plan, Choice from "paywall"
 use Offer, Thanks from "screens"
