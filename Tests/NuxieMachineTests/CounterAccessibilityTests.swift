@@ -610,8 +610,10 @@ final class ScreenReaderScrollingTests: XCTestCase {
     /// three-finger swipe up (it names the way the scroll indicator moves),
     /// shows what is below: one page, `max(h - 48, h / 2, 1)` points of the
     /// page's box, which here is more than the page's range, so it stops at
-    /// its end. `.up` brings it back to its top. The headline, scrolled off the surface, keeps
-    /// its element there.
+    /// its end. `.up` brings it back to its top. Yearly, the page's first
+    /// plan, scrolled out of the page keeps its element at its own box. The
+    /// page is the `scroll` below Stillwater's header, found by Yearly's
+    /// region; the header, which holds the headline, does not move.
     @MainActor
     func testAScrollGestureMovesThePageOnePageAndAtAnEndAnswersFalse() async throws {
         let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
@@ -621,18 +623,20 @@ final class ScreenReaderScrollingTests: XCTestCase {
             let opened = try await reader.screenReaderFrames(kept: "2-at-rest")
             var posted: [Any?] = []
             reader.controller.pageScrolled = { posted.append($0) }
-            let title = try reader.element(startingWith: "Ten quiet minutes,")
+            let plan = try reader.element(startingWith: "Yearly")
             let capture = try XCTUnwrap(opened.last.semantics)
-            let page = capture.scrollRegions[0]
+            let index = try Self.pageRegion(capture)
+            let headline = try XCTUnwrap(capture.tree.nodes.first { $0.label.hasPrefix("Ten quiet minutes,") })
+            let page = capture.scrollRegions[index]
             let range = try XCTUnwrap(page.range, "the runtime reads the page's range").height
             XCTAssertGreaterThan(range, 0, "the page scrolls at \(Self.footerSize)")
             let step = NuxieMachineScreenReaderScroll.pageStep(page.bounds.height)
 
-            XCTAssertFalse(title.accessibilityScroll(.up), "at its top the page shows nothing above")
+            XCTAssertFalse(plan.accessibilityScroll(.up), "at its top the page shows nothing above")
             XCTAssertTrue(posted.isEmpty, "nothing is told at an end")
             XCTAssertFalse(reader.controller.screenReaderScrolling.wantsFrames, "nothing is queued at an end")
 
-            XCTAssertTrue(title.accessibilityScroll(.down), "down shows what is below")
+            XCTAssertTrue(plan.accessibilityScroll(.down), "down shows what is below")
             XCTAssertTrue(posted.isEmpty, "nothing is told before the page moved")
             let pages = 1 + Int(((range - 0.5) / step).rounded(.up))
             XCTAssertGreaterThan(pages, 1)
@@ -643,30 +647,32 @@ final class ScreenReaderScrollingTests: XCTestCase {
             guard case .page(_, let region, let dx, let dy) = down.scrolled.first?.request else {
                 return XCTFail("no page went: \(down.scrolled)")
             }
-            XCTAssertEqual(region, 0)
+            XCTAssertEqual(region, index)
             XCTAssertEqual([dx, dy], [0, -Float(step)], "one page of the page's box")
             XCTAssertEqual(down.scrolled.first?.outcome, .moved)
             let end = try XCTUnwrap(down.last.semantics)
-            XCTAssertEqual(try XCTUnwrap(end.scrollRegions[0].scroll).y, min(step, range), accuracy: 0.5)
-            XCTAssertEqual(end.scrollRegions[0].canScroll & NuxieNativeScrollRegion.towardBottom, 0, "at its end")
-            let headline = try XCTUnwrap(end.tree.nodes.first { $0.label.hasPrefix("Ten quiet minutes,") })
-            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,") === title, "the same element")
-            if headline.bounds.maxY <= 0 {
-                XCTAssertEqual(title.accessibilityFrameInContainerSpace, headline.bounds,
-                               "the headline off the surface is at its own box")
+            XCTAssertEqual(try XCTUnwrap(end.scrollRegions[index].scroll).y, min(step, range), accuracy: 0.5)
+            XCTAssertEqual(end.scrollRegions[index].canScroll & NuxieNativeScrollRegion.towardBottom, 0, "at its end")
+            let card = try XCTUnwrap(end.tree.nodes.first { $0.label.hasPrefix("Yearly") })
+            XCTAssertTrue(try reader.element(startingWith: "Yearly") === plan, "the same element")
+            if card.bounds.maxY <= page.bounds.minY {
+                XCTAssertEqual(plan.accessibilityFrameInContainerSpace, card.bounds,
+                               "Yearly out of the page is at its own box")
             }
+            let still = try XCTUnwrap(end.tree.nodes.first { $0.label.hasPrefix("Ten quiet minutes,") })
+            XCTAssertEqual(still.bounds, headline.bounds, "the headline, in the header, did not move")
 
-            XCTAssertFalse(title.accessibilityScroll(.down), "at its end the page shows nothing more below")
+            XCTAssertFalse(plan.accessibilityScroll(.down), "at its end the page shows nothing more below")
             XCTAssertEqual(posted.count, 1, "nothing is told at an end")
             XCTAssertFalse(reader.controller.screenReaderScrolling.wantsFrames)
 
-            XCTAssertTrue(title.accessibilityScroll(.up), "up shows what is above")
+            XCTAssertTrue(plan.accessibilityScroll(.up), "up shows what is above")
             let back = try await reader.screenReaderFrames(kept: "4-paged-up")
             XCTAssertEqual(back.scrolled.map(\.outcome), [.moved])
             XCTAssertEqual(posted.map { $0 as? String }, ["Page \(pages) of \(pages)", "Page 1 of \(pages)"],
                            "back at its top")
             let top = try XCTUnwrap(back.last.semantics)
-            XCTAssertEqual(try XCTUnwrap(top.scrollRegions[0].scroll).y, 0, accuracy: 0.5)
+            XCTAssertEqual(try XCTUnwrap(top.scrollRegions[index].scroll).y, 0, accuracy: 0.5)
             try await reader.close()
         } catch {
             try? await reader.close()
@@ -712,6 +718,101 @@ final class ScreenReaderScrollingTests: XCTestCase {
             XCTAssertEqual(picked, .text(out.label), "the card reached `choose` with its own plan")
             let reminded = try await reader.run.edge.slot("reminded")
             XCTAssertEqual(reminded, .bool(false), "the header was not pressed")
+            try await reader.close()
+        } catch {
+            try? await reader.close()
+            throw error
+        }
+    }
+
+    /// The largest accessibility text size, body 53, at which Stillwater's
+    /// header holds more than its 40% of the surface and scrolls.
+    static let largestSize = 53.0
+
+    /// At body 53 Stillwater's paywall is two `scroll`s: the header, 40% of
+    /// the surface, holding the headline, which starts inside it and runs
+    /// past its bottom, and the page below it, from the header's bottom edge
+    /// to the surface's, holding the plans. Focus on the headline sends one
+    /// reveal, which moves the header until the headline's top is on the
+    /// header's top (the headline is taller than the header, so it cannot
+    /// show whole), and the page stays. A scroll gesture on Yearly then moves
+    /// the page one page down, which leaves Yearly wholly above the page, and
+    /// the header stays. Focus on Yearly sends one reveal, which moves the
+    /// page back until Yearly is whole inside it, its top on the page's top,
+    /// and the header stays where the headline's reveal left it.
+    @MainActor
+    func testAtTheLargestSizeFocusBringsTheHeadlineIntoTheHeaderAndThePlanIntoThePage() async throws {
+        let reader = try await Reader.open(Fixture.load(), event: "onboarding_completed",
+                                           textSize: Self.largestSize, name: "stillwater-53-two-scrolls")
+        do {
+            _ = try await reader.frame(name: "1-open")
+            let opened = try await reader.screenReaderFrames(kept: "2-at-rest")
+            let capture = try XCTUnwrap(opened.last.semantics)
+            func node(_ words: String, in capture: NuxieNativeSemanticCapture) throws -> NuxieNativeSemanticNode {
+                try XCTUnwrap(capture.tree.nodes.first { $0.label.hasPrefix(words) }, "\(words) is not read")
+            }
+            func scroll(_ region: Int, in capture: NuxieNativeSemanticCapture) throws -> CGFloat {
+                CGFloat(try XCTUnwrap(capture.scrollRegions[region].scroll, "the runtime reads the scroll").y)
+            }
+            let headline = try node("Ten quiet minutes,", in: capture)
+            let plan = try node("Yearly", in: capture)
+            let header = try XCTUnwrap(headline.scrollRegion, "the headline is inside the header's scroll")
+            let page = try XCTUnwrap(plan.scrollRegion, "Yearly is inside the page's scroll")
+            XCTAssertNotEqual(header, page, "the headline and the plans are in two scrolls")
+            let headerBox = capture.scrollRegions[header].bounds
+            let pageBox = capture.scrollRegions[page].bounds
+            XCTAssertEqual(headerBox.height, reader.surface.bounds.height * 0.4, accuracy: 0.5,
+                           "the header is 40% of the surface: \(headerBox)")
+            XCTAssertEqual(pageBox.minY, headerBox.maxY, accuracy: 0.5, "the page starts where the header ends")
+            XCTAssertEqual(pageBox.maxY, reader.surface.bounds.maxY, accuracy: 0.5, "and ends with the surface")
+            XCTAssertGreaterThan(try XCTUnwrap(capture.scrollRegions[header].range).height, 0, "the header scrolls")
+            XCTAssertGreaterThan(headline.bounds.minY, headerBox.minY, "\(headline.bounds) starts inside the header")
+            XCTAssertGreaterThan(headline.bounds.maxY, headerBox.maxY, "and runs past its bottom \(headerBox)")
+            XCTAssertTrue(NuxieMachineScreenReaderScroll.isShown(plan, in: capture.scrollRegions),
+                          "Yearly is whole inside the page at its top: \(plan.bounds) in \(pageBox)")
+            XCTAssertEqual(try scroll(header, in: capture), 0, accuracy: 0.5)
+            XCTAssertEqual(try scroll(page, in: capture), 0, accuracy: 0.5)
+
+            let title = try reader.element(startingWith: "Ten quiet minutes,")
+            title.accessibilityElementDidBecomeFocused()
+            let read = try await reader.screenReaderFrames(kept: "3-headline-revealed")
+            let reveals = read.scrolled.filter { if case .reveal = $0.request { true } else { false } }
+            XCTAssertEqual(reveals.map(\.outcome), [.moved], "one reveal, which moved: \(read.scrolled)")
+            let revealed = try XCTUnwrap(read.last.semantics)
+            let shown = try node("Ten quiet minutes,", in: revealed)
+            XCTAssertEqual(shown.bounds.minY, headerBox.minY, accuracy: 0.5,
+                           "the headline's top is on the header's top: \(shown.bounds) in \(headerBox)")
+            let moved = try scroll(header, in: revealed)
+            XCTAssertEqual(moved, headline.bounds.minY - headerBox.minY, accuracy: 0.5,
+                           "the header moved by where the headline started in it")
+            XCTAssertEqual(try scroll(page, in: revealed), 0, accuracy: 0.5, "the page stayed")
+            XCTAssertEqual(title.accessibilityFrameInContainerSpace, shown.bounds, "its element is where it is drawn")
+
+            let card = try reader.element(startingWith: "Yearly")
+            XCTAssertTrue(card.accessibilityScroll(.down), "the page shows what is below")
+            let down = try await reader.screenReaderFrames(kept: "4-page-down")
+            guard case .page(_, let region, _, _) = down.scrolled.first?.request else {
+                return XCTFail("no page went: \(down.scrolled)")
+            }
+            XCTAssertEqual(region, page, "the page of the plans moved, not the header")
+            XCTAssertEqual(down.scrolled.map(\.outcome), [.moved])
+            let paged = try XCTUnwrap(down.last.semantics)
+            let above = try node("Yearly", in: paged)
+            XCTAssertLessThanOrEqual(above.bounds.maxY, pageBox.minY + 0.5,
+                                     "Yearly at \(above.bounds) is wholly above the page \(pageBox)")
+            XCTAssertEqual(try scroll(header, in: paged), moved, accuracy: 0.5, "the header stayed")
+
+            card.accessibilityElementDidBecomeFocused()
+            let back = try await reader.screenReaderFrames(kept: "5-plan-revealed")
+            let planReveals = back.scrolled.filter { if case .reveal = $0.request { true } else { false } }
+            XCTAssertEqual(planReveals.map(\.outcome), [.moved], "one reveal, which moved: \(back.scrolled)")
+            let end = try XCTUnwrap(back.last.semantics)
+            let inView = try node("Yearly", in: end)
+            XCTAssertTrue(NuxieMachineScreenReaderScroll.isShown(inView, in: end.scrollRegions),
+                          "\(inView.bounds) is whole inside the page \(pageBox)")
+            XCTAssertEqual(inView.bounds.minY, pageBox.minY, accuracy: 0.5, "its top is on the page's top")
+            XCTAssertEqual(try scroll(header, in: end), moved, accuracy: 0.5, "the header stayed")
+            XCTAssertNotEqual(inView.actions & 1, 0, "in view it offers its tap")
             try await reader.close()
         } catch {
             try? await reader.close()
@@ -859,14 +960,14 @@ final class ScreenReaderScrollingTests: XCTestCase {
         do {
             _ = try await reader.frame(name: "1-open")
             _ = try await reader.screenReaderFrames(kept: "2-at-rest")
-            let title = try reader.element(startingWith: "Ten quiet minutes,")
-            XCTAssertTrue(title.accessibilityScroll(.down))
+            let plan = try reader.element(startingWith: "Yearly")
+            XCTAssertTrue(plan.accessibilityScroll(.down))
             _ = try await reader.screenReaderFrames(kept: "3-at-the-end")
             func link(_ drawn: DrawnFrame?) throws -> NuxieNativeSemanticNode {
                 try XCTUnwrap(drawn?.semantics?.tree.nodes.first { $0.label == "Restore purchases" })
             }
 
-            XCTAssertTrue(title.accessibilityScroll(.up), "back up the page")
+            XCTAssertTrue(plan.accessibilityScroll(.up), "back up the page")
             try reader.element("Restore purchases").accessibilityElementDidBecomeFocused()
             var boxes: [CGRect] = []
             var revealedAt: [Int] = []
@@ -910,13 +1011,15 @@ final class ScreenReaderScrollingTests: XCTestCase {
             let opened = try await reader.screenReaderFrames(kept: "2-at-rest")
             var posted: [Any?] = []
             reader.controller.pageScrolled = { posted.append($0) }
-            let page = try XCTUnwrap(opened.last.semantics).scrollRegions[0]
+            let capture = try XCTUnwrap(opened.last.semantics)
+            let index = try Self.pageRegion(capture)
+            let page = capture.scrollRegions[index]
             let range = try XCTUnwrap(page.range).height
             let step = NuxieMachineScreenReaderScroll.pageStep(page.bounds.height)
             let pages = 1 + Int(((range - 0.5) / step).rounded(.up))
             XCTAssertGreaterThan(pages, 1)
 
-            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.down))
+            XCTAssertTrue(try reader.element(startingWith: "Yearly").accessibilityScroll(.down))
             let undrawn = try await reader.screenReaderFrame(drawn: false)
             XCTAssertEqual(undrawn.frame.scrolled.map(\.outcome), [.moved], "the page moved")
             XCTAssertTrue(posted.isEmpty, "a frame not drawn tells nothing: \(posted)")
@@ -925,7 +1028,7 @@ final class ScreenReaderScrollingTests: XCTestCase {
             let drawn = try await reader.screenReaderFrame()
             XCTAssertEqual(posted.map { $0 as? String }, ["Page \(pages) of \(pages)"],
                            "told after the drawn frame, from its snapshot")
-            let shown = try XCTUnwrap(drawn.drawn?.semantics).scrollRegions[0]
+            let shown = try XCTUnwrap(drawn.drawn?.semantics).scrollRegions[index]
             XCTAssertEqual(try XCTUnwrap(shown.scroll).y, min(step, range), accuracy: 0.5)
             try await reader.close()
         } catch {
@@ -947,7 +1050,7 @@ final class ScreenReaderScrollingTests: XCTestCase {
             let link = try reader.element("About the trial")
             link.accessibilityElementDidBecomeFocused()
             XCTAssertTrue(link.accessibilityActivate())
-            XCTAssertTrue(try reader.element(startingWith: "Ten quiet minutes,").accessibilityScroll(.down))
+            XCTAssertTrue(try reader.element(startingWith: "Yearly").accessibilityScroll(.down))
             XCTAssertTrue(reader.controller.screenReaderScrolling.wantsFrames)
             reader.loop.screens = [reader.controller]
             reader.loop.stop()
@@ -1070,6 +1173,13 @@ final class ScreenReaderScrollingTests: XCTestCase {
             try? await reader.close()
             throw error
         }
+    }
+
+    /// The page's `scroll` in `capture`: the region holding Yearly, the
+    /// first plan, below the header's.
+    private static func pageRegion(_ capture: NuxieNativeSemanticCapture) throws -> Int {
+        let plan = try XCTUnwrap(capture.tree.nodes.first { $0.label.hasPrefix("Yearly") }, "Yearly is not read")
+        return try XCTUnwrap(plan.scrollRegion, "Yearly is inside the page's scroll")
     }
 
     /// A button wholly on the surface and offering a tap in `frame`.
