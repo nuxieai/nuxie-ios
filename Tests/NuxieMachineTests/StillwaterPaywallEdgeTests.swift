@@ -1135,7 +1135,7 @@ final class StillwaterPaywallEdgeTests: XCTestCase {
                 return XCTFail("\(run.owner.reports)")
             }
             let paywall = NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: instance),
-                                                route: "paywall", presentation: .sheet)
+                                                route: "paywall", presentation: .sheet, swipeDown: .closes)
             XCTAssertEqual(shown, [paywall])
             XCTAssertTrue(started.contains(.wakeAt(Self.evening)), "the start asks for the offer's 18:00: \(started)")
             try await run.layOut()
