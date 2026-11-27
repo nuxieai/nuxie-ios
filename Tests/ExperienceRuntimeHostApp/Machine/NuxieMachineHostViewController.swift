@@ -78,6 +78,13 @@ import UIKit
 /// sheet. That sheet rests at its row's detents, and what a swipe down on
 /// it does is the machine's: it closes the sheet while no control is
 /// showing, and presses its `close` once "Allow" has shown it.
+///
+/// `--nuxie-machine-push-stack` plays the machine suite's `router-push` in
+/// its place: "Finish onboarding" opens its `home` page, a push shown as a
+/// cover; "Next", "Deeper" and "Offer" push `step`, then `stuck`, then
+/// open the `plans` sheet, where "Enter" pushes `detail` inside the sheet.
+/// What a swipe back from the edge, or down on the sheet, does is the
+/// machine's.
 @MainActor
 public final class NuxieMachineHostViewController: UIViewController {
     /// The Darwin notifications that turn the window, with the appearance
@@ -125,6 +132,11 @@ public final class NuxieMachineHostViewController: UIViewController {
     /// Whether the plan is the machine suite's `router-sheet`.
     private static var showsRouterSheet: Bool {
         ProcessInfo.processInfo.arguments.contains("--nuxie-machine-router-sheet")
+    }
+
+    /// Whether the plan is the machine suite's `router-push`.
+    private static var showsPushStack: Bool {
+        ProcessInfo.processInfo.arguments.contains("--nuxie-machine-push-stack")
     }
 
     /// Whether a presented sheet is turned to the medium detent once it is
@@ -216,10 +228,10 @@ public final class NuxieMachineHostViewController: UIViewController {
     /// medium detent: its detents set to medium alone and that one chosen,
     /// as UIKit animates a change of detent.
     private func turnTheSheetMedium() {
-        guard let screen = presentedViewController as? NuxieMachineScreenViewController, screen !== turnedSheet,
-              !screen.isBeingPresented, screen.transitionCoordinator == nil,
-              let sheet = screen.sheetPresentationController else { return }
-        turnedSheet = screen
+        guard let segment = presentedViewController as? NuxieMachineSegmentController, segment.isSheet,
+              segment !== turnedSheet, !segment.isBeingPresented, segment.transitionCoordinator == nil,
+              let sheet = segment.sheetPresentationController else { return }
+        turnedSheet = segment
         sheet.animateChanges {
             sheet.detents = [.medium()]
             sheet.selectedDetentIdentifier = .medium
@@ -306,7 +318,11 @@ public final class NuxieMachineHostViewController: UIViewController {
             do {
                 let plan: NuxieMachinePlanSource
                 let named: String
-                if Self.showsRouterSheet {
+                if Self.showsPushStack {
+                    plan = try NuxieMachineRouterSheetFixture.load(from: .main, folder: "router-push",
+                                                                   files: ["main.nux", "pages.nux"])
+                    named = "router-push"
+                } else if Self.showsRouterSheet {
                     plan = try NuxieMachineRouterSheetFixture.load(from: .main)
                     named = NuxieMachineRouterSheetFixture.folder
                 } else if Self.showsScrollSheet {
@@ -478,19 +494,23 @@ enum NuxieMachineRouterSheetFixture {
     }
 
     struct Missing: Error, CustomStringConvertible {
+        let folder: String
         let name: String
-        var description: String { "router-sheet/\(name) is not in the app bundle" }
+        var description: String { "\(folder)/\(name) is not in the app bundle" }
     }
 
-    static func load(from bundle: Bundle) throws -> NuxieMachinePlanSource {
+    /// The plan of the router fixture in `folder` (`router-sheet` unless
+    /// another is named), from its program `files` and its provenance.
+    static func load(from bundle: Bundle, folder: String = NuxieMachineRouterSheetFixture.folder,
+                     files programFiles: [String] = ["main.nux", "sheets.nux"]) throws -> NuxieMachinePlanSource {
         func data(_ name: String) throws -> Data {
             let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
             guard let url = bundle.url(forResource: parts[0], withExtension: parts[1],
-                                       subdirectory: folder) else { throw Missing(name: name) }
+                                       subdirectory: folder) else { throw Missing(folder: folder, name: name) }
             return try Data(contentsOf: url)
         }
         let provenance = try JSONDecoder().decode(Provenance.self, from: data("provenance.json"))
-        let files = try ["main.nux", "sheets.nux"].map { name in
+        let files = try programFiles.map { name in
             NuxieMachineSourceFile(path: name, text: String(decoding: try data(name), as: UTF8.self))
         }
         return NuxieMachinePlanSource(files: files, assets: try NuxieMachineFolder(named: folder, in: bundle).assets(),
@@ -736,7 +756,8 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             for window in scene?.windows ?? [] where !(window is NuxieMachineSafeAreaWindow) {
                 var controller = window.rootViewController
                 while let next = controller?.presentedViewController {
-                    if let screen = next as? NuxieMachineScreenViewController { return screen }
+                    if let segment = next as? NuxieMachineSegmentController,
+                       let screen = segment.topViewController as? NuxieMachineScreenViewController { return screen }
                     controller = next
                 }
             }
