@@ -51,12 +51,17 @@ import XCTest
 ///
 /// Every place check reads UIKit's own values (the screen's insets, the
 /// frames, the view's insets), so the tests hold on any iPhone, one with a
-/// home button among them, where the bottom inset is 0. Stillwater's page is
-/// a `scroll`. Where it is taller than what it is presented in, its content
-/// runs past the bottom edge until it is scrolled: the footer and the bottom
+/// home button among them, where the bottom inset is 0. Stillwater's paywall
+/// is two `scroll`s: a header holding the mark and the headline, at most 40%
+/// of the Screen, and below it the page holding the plans, the buy button and
+/// the footer, which takes the rest. The header stays while the page scrolls.
+/// Where the page is taller than what it is presented in, its content runs
+/// past the bottom edge until it is scrolled: the footer and the bottom
 /// edge's ground are then noted, not checked ([`expectFooter`]). At the
 /// largest standard text size a drag up brings the footer into view
-/// ([`testAtTheLargestStandardTextSizeADragUpBringsTheFooterIntoView`]).
+/// ([`testAtTheLargestStandardTextSizeADragUpBringsTheFooterIntoView`]), and
+/// the plans scroll under the header, which a drag down then takes the sheet
+/// by. At the largest accessibility size the header scrolls too.
 final class StillwaterPaywallSheetUITests: XCTestCase {
     private static let errorLine = "The purchase did not go through. Try again in a moment."
     private static let termsLine = "Billed through the store after the trial. Cancel any time."
@@ -415,7 +420,8 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
     /// sheet: its footer, "Not now" and "Restore purchases", is on screen
     /// with nothing scrolled, inside the sheet and above the home indicator,
     /// and can be tapped where it is, and a drag up over the page moves
-    /// nothing, since there is nothing to scroll. Where the sheet is shorter
+    /// nothing, neither the plans nor the footer, since there is nothing to
+    /// scroll. Where the sheet is shorter
     /// than the page needs ([`pageHeight`] and the home indicator's inset,
     /// which a large sheet is told), the page scrolls on a drag up: that is
     /// kept as the note `footer-17-fit` and neither part is checked. On every
@@ -429,11 +435,14 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         let screen = try openPaywall(app)
         let title = text(app, beginningWith: "Ten quiet minutes,")
         XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
-        let top = try settledTitle(app, title, told: 17)
+        _ = try settledTitle(app, title, told: 17)
         let sheet = screen.frame
         let screenInsets = try insets(app)
         let bottom = sheet.maxY - screenInsets.bottom
         let restore = app.buttons["Restore purchases"]
+        let yearly = button(app, beginningWith: "Yearly")
+        XCTAssertTrue(yearly.exists, "the plans are not read: \(app.debugDescription)")
+        let plans = try settled(yearly)
         let needed = Self.pageHeight + screenInsets.bottom
         let fits = sheet.height + 0.5 >= needed
         if fits {
@@ -454,11 +463,11 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         XCTAssertTrue(restore.exists, "the footer's links are not read: \(app.debugDescription)")
         let footer = restore.frame
         dragUp(app, over: sheet)
-        let after = try settled(title)
+        let after = try settled(yearly)
         keep("footer-17-after-drag-up", app, screen)
         XCTAssertEqual(screen.frame, sheet, "the drag moved the sheet")
         if fits {
-            XCTAssertEqual(after.minY, top.minY, accuracy: 1, "the page scrolled with nothing to scroll")
+            XCTAssertEqual(after.minY, plans.minY, accuracy: 1, "the page scrolled with nothing to scroll")
             XCTAssertEqual(restore.frame.minY, footer.minY, accuracy: 1, "the footer moved with nothing to scroll")
         }
         waitFor(screen, valueContaining: "Record: open")
@@ -526,14 +535,15 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
 
     /// At body 23, the page scrolled and back: a drag up brings the footer
     /// into view, and a tap on "About the trial" there shows the terms line
-    /// with the sheet in place. A drag down over the page, which went down
-    /// while the page was scrolled, brings the page back to its top and the
-    /// sheet stays. That drag runs at least 100 points farther than the drag
-    /// up, as far down as the screen allows above the home indicator, so the
-    /// page stops at its top whatever its height on the phone, and the sheet
-    /// still stays once the page has reached it. A drag down from the top of
-    /// the page at its top then takes the sheet, and the record stays open.
-    /// Kept as
+    /// with the sheet in place. A drag down over the page, from just below
+    /// the header, which went down while the page was scrolled, brings the
+    /// page back to its top (the plans where they were) and the sheet stays.
+    /// That drag runs at least 100 points farther than the drag up, as far
+    /// down as the screen allows above the home indicator, so the page stops
+    /// at its top whatever its height on the phone, and the sheet still stays
+    /// once the page has reached it. The headline, in the header, does not
+    /// move throughout. A drag down from the top of the header then takes
+    /// the sheet, and the record stays open. Kept as
     /// `scrolled-23-details-open`, `scrolled-23-back-at-top` and
     /// `scrolled-23-after-swipe`. The path of the film
     /// `stillwater-paywall-text-23`.
@@ -547,6 +557,9 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         let sheet = screen.frame
         let screenInsets = try insets(app)
         let bottom = sheet.maxY - screenInsets.bottom
+        let yearly = button(app, beginningWith: "Yearly")
+        XCTAssertTrue(yearly.exists, "the plans are not read: \(app.debugDescription)")
+        let plans = try settled(yearly)
 
         let details = app.buttons["About the trial"]
         XCTAssertTrue(details.exists, "before the drag the footer's links are not read: \(app.debugDescription)")
@@ -561,8 +574,12 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         keep("scrolled-23-details-open", app, screen)
         XCTAssertEqual(screen.frame, sheet, "the tap moved the sheet")
 
+        // The header ends where the headline does (it has no bottom
+        // padding), and the page's top padding is 40: 20 below the headline
+        // is on the page, clear of every button.
         let origin = app.coordinate(withNormalizedOffset: .zero)
-        let from = CGPoint(x: sheet.minX + 12, y: sheet.minY + sheet.height * 0.3)
+        XCTAssertEqual(title.frame.minY, top.minY, accuracy: 0.01, "the headline moved with the page")
+        let from = CGPoint(x: sheet.minX + 12, y: title.frame.maxY + 20)
         let downTo = CGPoint(x: from.x, y: app.frame.maxY - screenInsets.bottom - 8)
         XCTAssertGreaterThanOrEqual(downTo.y - from.y, Self.dragUpDistance + 100,
                                     "the screen leaves no room to drag down from \(from) 100 points farther than "
@@ -570,12 +587,13 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         origin.withOffset(CGVector(dx: from.x, dy: from.y))
             .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: downTo.x, dy: downTo.y)),
                    withVelocity: .slow, thenHoldForDuration: 0.3)
-        let back = try settled(title)
+        let back = try settled(yearly)
         keep("scrolled-23-back-at-top", app, screen)
         XCTAssertTrue(screen.exists, "the drag down over the scrolled page took the sheet")
         XCTAssertEqual(screen.frame, sheet, "the drag down over the scrolled page moved the sheet")
-        XCTAssertEqual(back.minY, top.minY, accuracy: 0.01,
-                       "the page did not come back to its top: the headline was at \(top), and is at \(back)")
+        XCTAssertEqual(back.minY, plans.minY, accuracy: 0.01,
+                       "the page did not come back to its top: Yearly was at \(plans), and is at \(back)")
+        XCTAssertEqual(title.frame.minY, top.minY, accuracy: 0.01, "the headline moved with the page")
 
         let swipe = try swipeStart(app, sheet)
         let end = CGPoint(x: swipe.x, y: min(app.frame.maxY - screenInsets.bottom - 8, swipe.y + sheet.height * 0.8))
@@ -584,6 +602,121 @@ final class StillwaterPaywallSheetUITests: XCTestCase {
         waitUntilGone(screen, "the drag down from the top of the page at its top did not take the sheet")
         waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open")
         keep("scrolled-23-after-swipe", app, nil)
+    }
+
+    /// At body 23 the plans scroll under the header: a drag up over the page
+    /// moves Yearly up by more than 20 points, and the headline, in the
+    /// header, stays where it was, as does the sheet. A drag down that starts
+    /// on the headline, with the page still scrolled, then takes the sheet:
+    /// the header has nothing to scroll, so a drag down over it is the
+    /// sheet's whatever the page below it holds. The record stays open. Kept
+    /// as `header-23-open`, `header-23-plans-scrolled` and
+    /// `header-23-after-drag`. The path of the recording
+    /// `stillwater-paywall-fixed-header-sheet`.
+    func testAtTheLargestStandardTextSizeThePlansScrollUnderTheHeaderAndADragDownOnItTakesTheSheet() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
+        let app = launch(.light, textSize: Self.largestStandardSize)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+        let top = try settledTitle(app, title, told: 23)
+        let sheet = screen.frame
+        let screenInsets = try insets(app)
+        let yearly = button(app, beginningWith: "Yearly")
+        XCTAssertTrue(yearly.exists, "the plans are not read: \(app.debugDescription)")
+        let plans = try settled(yearly)
+        XCTAssertGreaterThan(plans.minY, top.maxY, "Yearly is not below the headline at the start")
+        keep("header-23-open", app, screen)
+        Thread.sleep(forTimeInterval: 1)
+
+        dragUp(app, over: sheet)
+        let scrolled = try settled(yearly)
+        keep("header-23-plans-scrolled", app, screen)
+        XCTAssertEqual(screen.frame, sheet, "the drag up moved the sheet")
+        XCTAssertLessThan(scrolled.minY, plans.minY - 20,
+                          "the plans did not scroll: Yearly was at \(plans), and is at \(scrolled)")
+        XCTAssertEqual(title.frame, top, "the headline moved with the plans")
+        Thread.sleep(forTimeInterval: 1)
+
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let from = CGPoint(x: sheet.midX, y: top.midY)
+        let to = CGPoint(x: from.x, y: min(app.frame.maxY - screenInsets.bottom - 8, from.y + sheet.height * 0.8))
+        origin.withOffset(CGVector(dx: from.x, dy: from.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)))
+        waitUntilGone(screen, "the drag down on the headline from \(from) to \(to) did not take the sheet; the "
+                          + "Screen is \(screen.exists ? "\(screen.frame)" : "gone")")
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open")
+        keep("header-23-after-drag", app, nil)
+    }
+
+    /// At body 53 the header holds more than its 40% of the sheet and
+    /// scrolls. A slow drag up over the header, from just above its bottom
+    /// edge, scrolls it: the headline moves up by more than 20 points, and
+    /// the page below, Yearly with it, stays. A slow drag down from the
+    /// header's upper part, with the header scrolled away from its top,
+    /// scrolls the header back and leaves the sheet in place: it runs at
+    /// least 100 points farther than the drag up, so the header stops at its
+    /// top. Once the header is at its top, a drag down from the same place
+    /// takes the sheet, and the record stays open. The host is opened at 23,
+    /// where its button to start the record is on screen on every iPhone,
+    /// then changed to 53. Kept as `header-53-open`, `header-53-scrolled`,
+    /// `header-53-back-at-top` and `header-53-after-drag`.
+    func testAtTheLargestAccessibilityTextSizeADragDownOnTheScrolledHeaderScrollsItAndAtItsTopTakesTheSheet()
+        throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("the host sets a text size with trait overrides, which need iOS 17") }
+        let app = launch(.light, textSize: Self.largestStandardSize)
+        let screen = try openPaywall(app)
+        let title = text(app, beginningWith: "Ten quiet minutes,")
+        XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
+        _ = try settledTitle(app, title, told: 23)
+        changeTextSize(to: Self.largestAccessibilitySize)
+        let top = try settledTitle(app, title, told: 53)
+        let sheet = screen.frame
+        let screenInsets = try insets(app)
+        let yearly = button(app, beginningWith: "Yearly")
+        XCTAssertTrue(yearly.exists, "the plans are not read: \(app.debugDescription)")
+        let plans = try settled(yearly)
+        // The header is at most 40% of the sheet, which its Screen fills.
+        let headerBottom = sheet.minY + sheet.height * 0.4
+        XCTAssertGreaterThan(top.maxY, headerBottom, "at 53 the headline does not run past the header")
+        keep("header-53-open", app, screen)
+
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let upFrom = CGPoint(x: sheet.minX + 12, y: headerBottom - 24)
+        let upTo = CGPoint(x: upFrom.x, y: upFrom.y - Self.dragUpDistance)
+        origin.withOffset(CGVector(dx: upFrom.x, dy: upFrom.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: upTo.x, dy: upTo.y)),
+                   withVelocity: .slow, thenHoldForDuration: 0.3)
+        let scrolled = try settled(title)
+        keep("header-53-scrolled", app, screen)
+        XCTAssertEqual(screen.frame, sheet, "the drag up on the header moved the sheet")
+        XCTAssertLessThan(scrolled.minY, top.minY - 20,
+                          "the header did not scroll: the headline was at \(top), and is at \(scrolled)")
+        XCTAssertEqual(yearly.frame, plans, "the page moved with the header")
+
+        let from = CGPoint(x: sheet.minX + 12, y: sheet.minY + sheet.height * 0.2)
+        let downTo = CGPoint(x: from.x, y: app.frame.maxY - screenInsets.bottom - 8)
+        XCTAssertGreaterThanOrEqual(downTo.y - from.y, Self.dragUpDistance + 100,
+                                    "the screen leaves no room to drag down from \(from) 100 points farther than "
+                                        + "the drag up's \(Self.dragUpDistance)")
+        origin.withOffset(CGVector(dx: from.x, dy: from.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: downTo.x, dy: downTo.y)),
+                   withVelocity: .slow, thenHoldForDuration: 0.3)
+        let back = try settled(title)
+        keep("header-53-back-at-top", app, screen)
+        XCTAssertTrue(screen.exists, "the drag down on the scrolled header took the sheet")
+        XCTAssertEqual(screen.frame, sheet, "the drag down on the scrolled header moved the sheet")
+        XCTAssertEqual(back.minY, top.minY, accuracy: 0.01,
+                       "the header did not come back to its top: the headline was at \(top), and is at \(back)")
+        XCTAssertEqual(yearly.frame, plans, "the page moved with the header")
+
+        let to = CGPoint(x: from.x, y: min(app.frame.maxY - screenInsets.bottom - 8, from.y + sheet.height * 0.8))
+        origin.withOffset(CGVector(dx: from.x, dy: from.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to.x, dy: to.y)))
+        waitUntilGone(screen, "the drag down on the header at its top from \(from) to \(to) did not take the "
+                          + "sheet; the Screen is \(screen.exists ? "\(screen.frame)" : "gone")")
+        waitFor(app.staticTexts["nuxie-machine-record"], labelContaining: "Record: open")
+        keep("header-53-after-drag", app, nil)
     }
 
     /// How far [`dragUp(_:over:)`] drags, in points.
