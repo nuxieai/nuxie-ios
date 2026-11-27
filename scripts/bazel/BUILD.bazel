@@ -12,6 +12,7 @@ py_binary(
 
 py_binary(
     name = "simulator_create",
+    imports = ["."],
     testonly = True,
     srcs = ["simulator-create.py", "simulator_pool.py"],
     main = "simulator-create.py",
@@ -19,6 +20,7 @@ py_binary(
 
 py_binary(
     name = "simulator_cleanup",
+    imports = ["."],
     testonly = True,
     srcs = ["simulator-cleanup.py", "simulator_pool.py"],
     main = "simulator-cleanup.py",
@@ -26,6 +28,7 @@ py_binary(
 
 py_test(
     name = "simulator_pool_test",
+    imports = ["."],
     size = "small",
     srcs = ["test_simulator_pool.py", "simulator_pool.py"],
     main = "test_simulator_pool.py",
