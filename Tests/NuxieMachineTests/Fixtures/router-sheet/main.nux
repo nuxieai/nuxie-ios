@@ -44,12 +44,11 @@ component Sheets
       exit
 
   view
-    column
-      for e in stack(nav) key=e.id
-        match e.name
-          case home
-            Home(offer=offer, freeze=freeze)  presentation=cover
-          case plans
-            Plans(closable=closable, locked=locked, allow=allow, lock=lock, close=close)  presentation=sheet detent="medium 40% 320" swipe="close"
-          case frozen
-            Frozen(close=close)  presentation=sheet swipe=none
+    for e in stack(nav) key=e.id
+      match e.name
+        case home
+          Home(offer=offer, freeze=freeze)  presentation=cover
+        case plans
+          Plans(closable=closable, locked=locked, allow=allow, lock=lock, close=close)  presentation=sheet detent="medium 40% 320" swipe="close"
+        case frozen
+          Frozen(close=close)  presentation=sheet swipe=none
