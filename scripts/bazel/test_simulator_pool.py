@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import subprocess
@@ -7,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from simulator_pool import MAX_SEEDS, Pool, device_in_use, wait_quiet
+from simulator_pool import MAX_SEEDS, Pool, device_in_use, process_identity, wait_quiet
 
 
 class CoreSimulator:
@@ -179,6 +180,14 @@ class SimulatorPoolTests(unittest.TestCase):
                 self.assertTrue(second.cleanup(identifier, 101))
         self.assertFalse((self.root / 'first-test-home').exists())
         self.assertFalse((self.root / 'second-test-home').exists())
+
+    def test_live_owner_identity_is_independent_of_request_timezone(self):
+        with patch.dict(os.environ, {'TZ': 'UTC'}):
+            first = process_identity(os.getpid())
+        with patch.dict(os.environ, {'TZ': 'Asia/Tokyo'}):
+            second = process_identity(os.getpid())
+        self.assertIsNotNone(first)
+        self.assertEqual(first, second)
 
     def test_pool_and_receipts_cannot_be_symlinks(self):
         with tempfile.TemporaryDirectory() as target:

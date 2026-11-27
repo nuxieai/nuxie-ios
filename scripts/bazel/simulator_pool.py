@@ -34,7 +34,8 @@ def process_identity(pid):
     except ProcessLookupError:
         return None
     result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "lstart="],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, timeout=30,
+                            env={**os.environ, "TZ": "UTC", "LC_ALL": "C"})
     if result.returncode == 1 and not result.stdout.strip():
         try:
             os.kill(pid, 0)
