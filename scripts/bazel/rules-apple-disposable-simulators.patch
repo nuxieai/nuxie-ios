@@ -1,9 +1,19 @@
+diff --git a/apple/testing/default_runner/simulator_creator.py b/apple/testing/default_runner/simulator_creator.py
 --- a/apple/testing/default_runner/simulator_creator.py
 +++ b/apple/testing/default_runner/simulator_creator.py
-@@ -165 +165 @@
+@@ -162,7 +162,7 @@
+     parser.add_argument(
+         "--reuse-simulator",
+         action=argparse.BooleanOptionalAction,
 -        default=True,
 +        default=None,
-@@ -179,3 +179,4 @@
+         help="Toggle simulator reuse; default is True",
+     )
+     return parser
+@@ -176,9 +176,10 @@
+     os_version = args.os_version or os.getenv("SIMULATOR_OS_VERSION")
+     device_type = args.device_type or os.getenv("SIMULATOR_DEVICE_TYPE")
+     simulator_name = args.name
 -    reuse_simulator: bool = args.reuse_simulator or (
 -        os.getenv("SIMULATOR_REUSE_SIMULATOR") is not None
 -    )
@@ -11,9 +21,18 @@
 +    if reuse_simulator is None:
 +        reuse_setting = os.getenv("SIMULATOR_REUSE_SIMULATOR")
 +        reuse_simulator = True if reuse_setting is None else bool(reuse_setting)
+-
++
+     if not os_version:
+         parser.error(
+diff --git a/apple/testing/default_runner/ios_xctestrun_runner.template.sh b/apple/testing/default_runner/ios_xctestrun_runner.template.sh
 --- a/apple/testing/default_runner/ios_xctestrun_runner.template.sh
 +++ b/apple/testing/default_runner/ios_xctestrun_runner.template.sh
-@@ -400,0 +401,13 @@
+@@ -398,8 +398,21 @@
+ fi
+-
++
+ simulator_id="unused"
 +cleanup_owned_simulator() {
 +  local result=$?
 +  trap - EXIT HUP INT TERM
@@ -27,13 +46,32 @@
 +trap 'exit 129' HUP
 +trap 'exit 130' INT
 +trap 'exit 143' TERM
-@@ -402 +415 @@
+ if [[ "$build_for_device" == false ]]; then
 -  simulator_id="$(SIMULATOR_DEVICE_TYPE="%(device_type)s" SIMULATOR_OS_VERSION="%(os_version)s" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" "%(create_simulator_action_binary)s")"
 +  simulator_id="$(SIMULATOR_DEVICE_TYPE="%(device_type)s" SIMULATOR_OS_VERSION="%(os_version)s" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" SIMULATOR_RUNNER_PID="$$" "%(create_simulator_action_binary)s")"
-@@ -660 +672,0 @@
+ fi
+-
++
+ test_exit_code=0
+@@ -657,7 +670,6 @@
+   rm -r "$result_bundle_path"
+ fi
+-
++
 -SIMULATOR_UDID="$simulator_id" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" "%(clean_up_simulator_action_binary)s"
+-
++
+ if [[ "$post_action_determines_exit_code" == true ]]; then
+   if [[ "$post_action_exit_code" -ne 0 ]]; then
+diff --git a/apple/testing/default_runner/ios_xctestrun_runner.bzl b/apple/testing/default_runner/ios_xctestrun_runner.bzl
 --- a/apple/testing/default_runner/ios_xctestrun_runner.bzl
 +++ b/apple/testing/default_runner/ios_xctestrun_runner.bzl
-@@ -117 +117 @@
+@@ -123,7 +123,7 @@
+     return [
+         apple_provider.make_apple_test_runner_info(
+             execution_environment = _get_execution_environment(ctx),
 -            execution_requirements = {"requires-darwin": ""},
 +            execution_requirements = {"requires-darwin": "", "no-sandbox": ""},
+             test_runner_template = ctx.outputs.test_runner_template,
+         ),
+         AppleDeviceTestRunnerInfo(
