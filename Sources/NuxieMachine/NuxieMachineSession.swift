@@ -215,7 +215,10 @@ package final class NuxieMachineSession {
     }
 
     /// What is shown: the record's presented stack, bottom first, each
-    /// with its identity, its route and how it is presented. Empty before
+    /// with its identity, its route and how it is presented, and what each
+    /// swipe a host lets a person make on it would do now: down on a sheet,
+    /// and back from the edge on a page shown as a push (every push but the
+    /// first entry, which arrives as a cover). Empty before
     /// the first start, once the record has ended, and once a fault has
     /// ended the session.
     package func presented() throws -> [NuxieMachinePresented] {
@@ -236,7 +239,8 @@ package final class NuxieMachineSession {
                 route: name,
                 presentation: how,
                 detents: try detents(at: index),
-                swipeDown: how == .sheet ? try swipeWould(at: index, .down) : nil)
+                swipeDown: how == .sheet ? try swipeWould(at: index, .down) : nil,
+                swipeBack: how == .push && index > 0 ? try swipeWould(at: index, .back) : nil)
         }
     }
 

@@ -91,8 +91,9 @@ package struct NuxieMachineShown: Hashable, Sendable {
 }
 
 /// One presentation of what is shown: its identity, its route, how the
-/// route is presented, the heights a sheet may rest at, and what a swipe
-/// down on a sheet does now.
+/// route is presented, the heights a sheet may rest at, what a swipe down
+/// on a sheet does now, and what a swipe back from the edge on a pushed
+/// page does now.
 package struct NuxieMachinePresented: Equatable, Sendable {
     package let shown: NuxieMachineShown
     package let route: String
@@ -105,21 +106,30 @@ package struct NuxieMachinePresented: Equatable, Sendable {
     /// (`nux_machine_swipe_would`), read with what is shown after every
     /// delivery and every round. `nil` for anything that is not a sheet.
     package let swipeDown: NuxieMachineSwipeWould?
+    /// What a swipe back from the edge on the page does now, as the machine
+    /// answers it (`nux_machine_swipe_would` with the back gesture), read
+    /// with what is shown after every delivery and every round. `nil` for
+    /// anything not shown as a push: a sheet, a cover, and the first page
+    /// of the Experience, which arrives as a cover.
+    package let swipeBack: NuxieMachineSwipeWould?
 
     package init(shown: NuxieMachineShown, route: String, presentation: NuxieMachinePresentation,
-                 detents: [NuxieMachineDetent] = [], swipeDown: NuxieMachineSwipeWould? = nil) {
+                 detents: [NuxieMachineDetent] = [], swipeDown: NuxieMachineSwipeWould? = nil,
+                 swipeBack: NuxieMachineSwipeWould? = nil) {
         self.shown = shown
         self.route = route
         self.presentation = presentation
         self.detents = detents
         self.swipeDown = swipeDown
+        self.swipeBack = swipeBack
     }
 }
 
 /// What came of a swipe the edge was asked to deliver.
 package enum NuxieMachineSwipeDid: Equatable, Sendable {
     /// It was delivered, and this is what the machine did with it, which
-    /// can differ from what the presentation's `swipeDown` last said.
+    /// can differ from what the presentation's `swipeDown` or `swipeBack`
+    /// last said.
     case delivered(NuxieMachineSwipeWould)
     /// The edge no longer holds the presentation: nothing was delivered.
     case dropped
@@ -500,7 +510,8 @@ package actor NuxieMachineEdge {
     /// record's calls, the mailbox, the log) is kept outside it.
     private struct Screen {
         /// What the session last showed of it: its identity never changes,
-        /// and the sync takes its `swipeDown` afresh after every delivery.
+        /// and the sync takes its `swipeDown` and `swipeBack` afresh after
+        /// every delivery.
         var presented: NuxieMachinePresented
         /// The presentation's player, with the session's driver for this
         /// presentation set on it. None while the presentation is held for
@@ -676,10 +687,10 @@ package actor NuxieMachineEdge {
         /// What the owner hears once the sync has run and the edge shows
         /// `shown`: the fault; or that the start did not happen; or what is
         /// shown and the rows, when either changed anything (what a swipe
-        /// down on a sheet would do among it); or nothing. A dismissal is
-        /// told only when the delivery closed a presentation the owner was
-        /// shown: one begun and dismissed in the same delivery never
-        /// reached it.
+        /// down on a sheet, or back on a pushed page, would do among it); or
+        /// nothing. A dismissal is told only when the delivery closed a
+        /// presentation the owner was shown: one begun and dismissed in the
+        /// same delivery never reached it.
         func report(showing shown: [NuxieMachinePresented]) -> NuxieMachineEdgeReport? {
             if let fault { return .fault(fault) }
             if let unstarted { return .notStarted(reason: unstarted.reason) }
