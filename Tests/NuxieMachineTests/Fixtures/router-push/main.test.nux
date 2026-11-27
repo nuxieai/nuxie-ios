@@ -1,0 +1,83 @@
+test "the first page takes no edge swipe"
+  event "onboarding_completed"
+  expect route home
+  swipe back
+  expect route home
+
+test "an edge swipe pops the step while its back is not showing"
+  event "onboarding_completed"
+  tap "next"
+  expect route step
+  expect missing "back"
+  swipe back
+  expect route home
+  expect state backs == 0
+
+test "an edge swipe presses back once it shows"
+  event "onboarding_completed"
+  tap "next"
+  tap "allow"
+  expect has "back"
+  swipe back
+  expect route home
+  expect state backs == 1
+
+test "an edge swipe on a disabled back stays"
+  event "onboarding_completed"
+  tap "next"
+  tap "allow"
+  tap "lock"
+  swipe back
+  expect route step
+  expect state backs == 0
+
+test "an edge swipe on a page that says swipe=none stays"
+  event "onboarding_completed"
+  tap "next"
+  tap "deeper"
+  expect route stuck
+  swipe back
+  expect route stuck
+  tap "return"
+  expect route step
+
+test "a page pushed inside a sheet pops by an edge swipe, and the sheet's first page stays"
+  event "onboarding_completed"
+  tap "next"
+  tap "deeper"
+  tap "offer"
+  expect route plans
+  tap "enter"
+  expect route detail
+  swipe back
+  expect route plans
+  swipe back
+  expect route plans
+
+test "a swipe down on the sheet alone presses its close"
+  event "onboarding_completed"
+  tap "next"
+  tap "deeper"
+  tap "offer"
+  swipe
+  expect route stuck
+  expect state closes == 1
+
+test "a swipe down on the sheet with a page pushed inside it closes the sheet"
+  event "onboarding_completed"
+  tap "next"
+  tap "deeper"
+  tap "offer"
+  tap "enter"
+  swipe
+  expect route stuck
+  expect state closes == 0
+
+test "a swipe back that empties the stack ends the Experience"
+  event "onboarding_completed"
+  tap "next"
+  tap "allow"
+  tap "leave"
+  swipe back
+  expect route none
+  expect ended
