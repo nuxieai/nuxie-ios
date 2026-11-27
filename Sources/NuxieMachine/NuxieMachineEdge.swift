@@ -1111,8 +1111,7 @@ package actor NuxieMachineEdge {
     /// last told: what the edge holds after the sync, never what the
     /// answers said one by one ([`assetsNow`]).
     private func tellAssets(_ delivery: inout Delivery) {
-        let now = assetsNow()
-        guard now != assetsTold else { return }
+        guard let now = assetsNow(), now != assetsTold else { return }
         assetsTold = now
         log.append(.assets(now))
         delivery.told(.assets(now))
@@ -1121,13 +1120,18 @@ package actor NuxieMachineEdge {
     /// Where the files stand for what the edge holds: ready when no
     /// presentation is held for them; otherwise the paths that failed, in
     /// the scene's order, while any has; otherwise the paths still coming.
-    private func assetsNow() -> NuxieMachineAssets {
+    /// Nothing while every file is in and the presentations held for them
+    /// have not opened yet: the frame's next delivery opens them
+    /// ([`settleAssets`]) and says ready, and until then nothing the owner
+    /// shows would change.
+    private func assetsNow() -> NuxieMachineAssets? {
         guard screens.contains(where: { $0.player == nil }) else { return .ready }
         let failures = paths.compactMap { path in
             failed[path].map { NuxieMachineAssetFailure(path: path, reason: $0) }
         }
         guard failures.isEmpty else { return .failed(failures) }
-        return .waiting(paths.filter { supplied[$0] == nil })
+        let coming = paths.filter { supplied[$0] == nil }
+        return coming.isEmpty ? nil : .waiting(coming)
     }
 
     /// How many of `wanted`, from the bottom, the edge already holds, by

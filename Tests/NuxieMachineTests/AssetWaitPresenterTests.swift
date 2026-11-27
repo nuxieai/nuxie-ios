@@ -148,8 +148,13 @@ final class AssetWaitPresenterTests: XCTestCase {
         bytes.fail(Self.hero, with: offlineError)
         try await waitUntil("the recovery screen shows") { try !Self.recovery(screen).isHidden }
         XCTAssertEqual(presenter.status.record, .open(wakeAt: nil))
+        // The presenter follows a UIKit transition to its end before it
+        // dismisses anything, so the sheet must have come to rest first.
+        try await waitUntil("UIKit finishes presenting the sheet") {
+            !screen.isBeingPresented && screen.transitionCoordinator == nil
+        }
 
-        let close = try XCTUnwrap(Self.views("nuxie-experience-close", in: screen.view).first as? UIControl)
+        let close =try XCTUnwrap(Self.views("nuxie-experience-close", in: screen.view).first as? UIControl)
         close.sendActions(for: .touchUpInside)
         try await waitUntil("the record ends in the fault") {
             presenter.status.record == .fault("first_frame.deadline")
