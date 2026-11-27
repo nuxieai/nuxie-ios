@@ -50,7 +50,7 @@ final class AssetWaitPresenterTests: XCTestCase {
         try await run.bytes.untilAsked(Self.hero)
         try await run.bytes.answer(Self.hero)
         try await waitUntil("the Screen is told the picture is in") { screen.assets == .ready }
-        try Self.expectLoading(screen, "once the picture is in, with no frame drawn")
+        try Self.expectLoading(screen, "once the picture is in, with no frame drawn", filesIn: true)
     }
 
     /// With the delay at 0, the recovery screen and the close show in place
@@ -161,9 +161,12 @@ final class AssetWaitPresenterTests: XCTestCase {
     // MARK: Looking at a Screen
 
     /// The loading view and its shimmer up, the recovery screen and the
-    /// close hidden, and no swipe.
+    /// close hidden; and no swipe until the files are in. Once they are,
+    /// the loading view stays until the first frame, but the page no
+    /// longer holds its segment: only the route's own swipe decides.
     @MainActor
-    private static func expectLoading(_ screen: NuxieMachineScreenViewController, _ when: String) throws {
+    private static func expectLoading(_ screen: NuxieMachineScreenViewController, _ when: String,
+                                      filesIn: Bool = false) throws {
         let loading = try one("nuxie-experience-loading-shell", in: screen)
         let shimmer = try XCTUnwrap(one("nuxie-experience-shimmer", in: screen) as? ExperienceShellShimmerView)
         XCTAssertFalse(loading.isHidden, "the loading screen is hidden \(when)")
@@ -171,7 +174,12 @@ final class AssetWaitPresenterTests: XCTestCase {
         XCTAssertTrue(shimmer.isAnimating || UIAccessibility.isReduceMotionEnabled, "the shimmer is still \(when)")
         XCTAssertTrue(try recovery(screen).isHidden, "the recovery screen shows \(when)")
         XCTAssertTrue(try one("nuxie-experience-close", in: screen).isHidden, "the close shows \(when)")
-        XCTAssertEqual(screen.navigationController?.isModalInPresentation, true, "the page can be swiped away \(when)")
+        let segment = try XCTUnwrap(screen.navigationController as? NuxieMachineSegmentController)
+        XCTAssertEqual(screen.waitsForFiles, !filesIn, when)
+        XCTAssertEqual(segment.modalReasons.contains(.loading), !filesIn, "the loading hold \(when)")
+        if !filesIn {
+            XCTAssertTrue(segment.isModalInPresentation, "the page can be swiped away \(when)")
+        }
     }
 
     /// The recovery screen in `words`, with the close over it, the loading
